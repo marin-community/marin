@@ -11,11 +11,16 @@
 //! - `log` is privileged and undroppable.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use arrow::array::{Array, StringArray, UInt32Array};
+use arrow::compute::take;
 use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
@@ -30,16 +35,17 @@ use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     merge_schemas, resolve_key_column, stamp_cluster_column, stored_form, validate_and_align_batch,
-    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
+    validate_and_align_forwarded_batch, validate_index_policies, Column, Schema,
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
-use crate::telemetry_policy::logical_namespace_for_storage;
+use crate::telemetry_policy::{logical_namespace_for_storage, telemetry_storage_namespace};
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
 /// Its on-disk subdirectory.
 pub const LOG_NAMESPACE_DIR: &str = "log";
+const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
 
 /// Bounded budget for stopping + joining a namespace's background tasks during a
 /// live lifecycle transition (re-register replacement, drop). Runs inside the
@@ -47,12 +53,6 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// this window is aborted rather than wedging the worker. Distinct from the
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[derive(Clone, Copy)]
-enum WriteSchemaPolicy {
-    Strict,
-    IgnoreUnknownNullable,
-}
 
 struct QueryAliasSnapshot {
     schema: SchemaRef,
@@ -65,7 +65,7 @@ struct QueryAliasSnapshot {
 /// Result of appending one schema-compatible federated batch.
 pub struct ForwardedWrite {
     pub rows_written: i64,
-    pub last_seq: i64,
+    pub persisted_targets: Vec<(String, i64)>,
     pub ignored_columns: Vec<String>,
 }
 
@@ -149,6 +149,47 @@ pub struct Store {
     query_visibility: Arc<tokio::sync::RwLock<()>>,
     index_cache: Arc<IndexCache>,
     index_backfill_slot: Arc<Mutex<()>>,
+    _store_lock: Option<File>,
+}
+
+pub(crate) fn acquire_exclusive_store_lock(data_dir: &Path) -> Result<File, StatsError> {
+    let path = data_dir.join(STORE_LOCK_FILENAME);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| {
+            StatsError::Internal(format!("open store lock {}: {error}", path.display()))
+        })?;
+    // SAFETY: `file` owns this valid descriptor for the duration of the call and
+    // retains it until the returned lock guard is dropped.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        return Err(StatsError::Internal(format!(
+            "Finelog store is open in another process: {}",
+            data_dir.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn decode_bounded_write_batch(arrow_ipc: &[u8]) -> Result<RecordBatch, StatsError> {
+    if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
+            arrow_ipc.len()
+        )));
+    }
+    let batch = decode_one_record_batch(arrow_ipc)?;
+    if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
+            batch.num_rows()
+        )));
+    }
+    Ok(batch)
 }
 
 impl Store {
@@ -170,6 +211,10 @@ impl Store {
                 StatsError::Internal(format!("create data_dir {}: {e}", dir.display()))
             })?;
         }
+        let store_lock = data_dir
+            .as_deref()
+            .map(acquire_exclusive_store_lock)
+            .transpose()?;
         let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
@@ -194,6 +239,7 @@ impl Store {
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
+            _store_lock: store_lock,
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
         // rehydrate builds the engines, so the log engine is opened exactly once
@@ -463,14 +509,14 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        let outcome = self.write_rows_with_policy(
-            name,
-            arrow_ipc,
-            origin_cluster,
-            WriteSchemaPolicy::Strict,
-        )?;
+        let outcome = self.write_rows_with_policy(name, arrow_ipc, origin_cluster)?;
         debug_assert!(outcome.ignored_columns.is_empty());
-        Ok((outcome.rows_written, outcome.last_seq))
+        let last_seq = outcome
+            .persisted_targets
+            .first()
+            .map(|(_, seq)| *seq)
+            .unwrap_or(-1);
+        Ok((outcome.rows_written, last_seq))
     }
 
     /// Append telemetry forwarded by another Finelog while preserving the hub's
@@ -482,12 +528,77 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
-        self.write_rows_with_policy(
-            name,
-            arrow_ipc,
-            Some(origin_cluster),
-            WriteSchemaPolicy::IgnoreUnknownNullable,
-        )
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        let services = batch
+            .column_by_name("service")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| {
+                StatsError::SchemaValidation(
+                    "forwarded telemetry requires a non-null UTF-8 service column".to_string(),
+                )
+            })?;
+        let names = batch
+            .column_by_name("name")
+            .and_then(|column| column.as_any().downcast_ref::<StringArray>())
+            .ok_or_else(|| {
+                StatsError::SchemaValidation(
+                    "forwarded telemetry requires a non-null UTF-8 name column".to_string(),
+                )
+            })?;
+        let mut rows_by_namespace: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        for row in 0..batch.num_rows() {
+            if services.is_null(row) || names.is_null(row) {
+                return Err(StatsError::SchemaValidation(
+                    "forwarded telemetry service and name must be non-null".to_string(),
+                ));
+            }
+            let destination =
+                telemetry_storage_namespace(name, services.value(row), names.value(row))
+                    .ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "namespace {name:?} is not present in the telemetry stream policy"
+                        ))
+                    })?;
+            rows_by_namespace
+                .entry(destination)
+                .or_default()
+                .push(row as u32);
+        }
+
+        let mut prepared_shards = Vec::with_capacity(rows_by_namespace.len());
+        let mut ignored_columns = std::collections::BTreeSet::new();
+        for (destination, rows) in rows_by_namespace {
+            let indices = UInt32Array::from(rows);
+            let columns = batch
+                .columns()
+                .iter()
+                .map(|column| take(column.as_ref(), &indices, None))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    StatsError::Internal(format!("split forwarded telemetry: {error}"))
+                })?;
+            let shard = RecordBatch::try_new(batch.schema(), columns).map_err(|error| {
+                StatsError::Internal(format!("build forwarded telemetry shard: {error}"))
+            })?;
+            let engine = self.require_engine(&destination)?;
+            let (mut aligned, ignored) =
+                validate_and_align_forwarded_batch(&shard, engine.schema())?;
+            stamp_cluster_column(&mut aligned, origin_cluster);
+            ignored_columns.extend(ignored);
+            prepared_shards.push((destination, engine, aligned));
+        }
+        let persisted_targets = prepared_shards
+            .into_iter()
+            .map(|(destination, engine, aligned)| {
+                let last_seq = engine.append_aligned_batch(&aligned);
+                (destination, last_seq)
+            })
+            .collect();
+        Ok(ForwardedWrite {
+            rows_written: batch.num_rows() as i64,
+            persisted_targets,
+            ignored_columns: ignored_columns.into_iter().collect(),
+        })
     }
 
     fn write_rows_with_policy(
@@ -495,31 +606,10 @@ impl Store {
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
-        schema_policy: WriteSchemaPolicy,
     ) -> Result<ForwardedWrite, StatsError> {
-        if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
-                arrow_ipc.len()
-            )));
-        }
-        let batch = decode_one_record_batch(arrow_ipc)?;
-        if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
-                batch.num_rows()
-            )));
-        }
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
         let engine = self.require_engine(name)?;
-        let (mut aligned, ignored_columns): (AlignedBatch, Vec<String>) = match schema_policy {
-            WriteSchemaPolicy::Strict => (
-                validate_and_align_batch(&batch, engine.schema())?,
-                Vec::new(),
-            ),
-            WriteSchemaPolicy::IgnoreUnknownNullable => {
-                validate_and_align_forwarded_batch(&batch, engine.schema())?
-            }
-        };
+        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
@@ -527,8 +617,8 @@ impl Store {
         let last_seq = engine.append_aligned_batch(&aligned);
         Ok(ForwardedWrite {
             rows_written: n,
-            last_seq,
-            ignored_columns,
+            persisted_targets: vec![(name.to_string(), last_seq)],
+            ignored_columns: Vec::new(),
         })
     }
 
@@ -630,6 +720,7 @@ impl Store {
                 provider,
             });
         }
+        out.retain(|provider| !aliases.contains_key(&provider.name));
         for (name, alias) in aliases {
             let provider =
                 NamespaceProvider::build(alias.schema, &alias.paths, Arc::clone(&self.index_cache))

@@ -30,9 +30,7 @@ RUN npm run build
 
 
 # ── Stage: rustbuild ─────────────────────────────────────────────────
-# Compile the release `finelog-server` and offline `finelog-migrate` binaries
-# from finelog's own Rust workspace.
-# workspace at lib/finelog/rust (no top-level rust/ tree). `connectrpc-build`
+# The Rust workspace lives at lib/finelog/rust (there is no top-level rust/ tree). `connectrpc-build`
 # fetches a vendored protoc from the crate registry at build time, so no
 # system protoc is needed.
 FROM rust:1-bookworm AS rustbuild

@@ -383,7 +383,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
 
     stalled_at = now - timedelta(minutes=20)
@@ -532,7 +532,7 @@ def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', ?, 'train_loss', ?, ?)",
         [(run_id, loss, int(at.timestamp() * 1000)) for run_id, at, loss in samples],
@@ -784,7 +784,7 @@ def test_loss_jump_reads_one_attempt_so_a_restore_is_not_a_rise():
         )
         """
     )
-    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
 
     def at(minutes: float) -> int:
         return int((now - timedelta(minutes=minutes)).timestamp() * 1000)
@@ -927,6 +927,7 @@ def _signal_database(samples: list[tuple[str, str, float, datetime, int]]) -> du
         )
         """
     )
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, '0', ?, ?, ?, ?)",
@@ -1064,6 +1065,7 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
         )
         """
     )
+    database.execute('CREATE VIEW "telemetry_v1.zephyr" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [

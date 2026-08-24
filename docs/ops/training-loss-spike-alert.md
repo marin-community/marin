@@ -38,7 +38,7 @@ Verify what the rule saw with a bounded Finelog query:
 SELECT
   to_timestamp_millis(timestamp_ms) AS observed_at,
   value AS train_loss
-FROM "telemetry_v1"
+FROM "telemetry_v1.levanter"
 WHERE service = 'levanter'
   AND name = 'train_loss'
   AND run_id = '<hero-run-id>'

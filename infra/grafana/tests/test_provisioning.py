@@ -69,7 +69,7 @@ def _panel_sql(dashboard: dict) -> list[str]:
 
 
 def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
-    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1 WHERE FALSE')
+    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
 
 
 def _load(path: Path) -> dict:
@@ -627,7 +627,7 @@ def test_telemetry_queries_bound_their_window_with_foldable_macros():
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
-            if '"telemetry_v1"' not in sql:
+            if '"telemetry_v1' not in sql:
                 continue
             if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
                 unbounded.append((name, sql))

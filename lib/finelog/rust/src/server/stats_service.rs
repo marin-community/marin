@@ -206,14 +206,14 @@ impl StatsService for StatsServiceImpl {
                 store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
             Ok(ForwardedWrite {
                 rows_written,
-                last_seq,
+                persisted_targets: vec![(ns, last_seq)],
                 ignored_columns: Vec::new(),
             })
         })
         .await?;
         let ForwardedWrite {
             rows_written,
-            last_seq,
+            persisted_targets,
             ignored_columns,
         } = outcome;
         self.report_ignored_forwarded_telemetry_columns(ignored_columns);
@@ -221,10 +221,12 @@ impl StatsService for StatsServiceImpl {
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
         // back to DEFAULT_PERSIST_TIMEOUT).
-        let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
-        self.store
-            .await_persisted(&namespace, last_seq, budget)
-            .await?;
+        for (destination, last_seq) in persisted_targets {
+            let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
+            self.store
+                .await_persisted(&destination, last_seq, budget)
+                .await?;
+        }
 
         connectrpc::Response::ok(WriteRowsResponse::default().with_rows_written(rows_written))
     }

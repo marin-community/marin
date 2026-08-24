@@ -19,7 +19,7 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
-use crate::server::telemetry::{normalize_test_batch, telemetry_schema};
+use crate::server::telemetry::normalize_test_batch;
 use crate::server::test_support::{disk_store, serve, PUB_A};
 use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
@@ -236,6 +236,13 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 #[tokio::test]
 async fn router_registers_index_policy_before_first_telemetry_request() {
     let store = disk_store("telemetry-startup-registration");
+    store
+        .register_table(
+            "telemetry_v1",
+            super::telemetry::telemetry_schema(),
+            StoragePolicy::default(),
+        )
+        .unwrap();
     let health = Arc::new(IngestHealth::new());
     let _router = super::telemetry::router(
         Arc::clone(&store),
@@ -464,11 +471,15 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
         assert_eq!(response.status, StatusCode::OK);
     }
     store
-        .maintain_namespace("telemetry_v1", true)
+        .maintain_namespace("telemetry_storage_v1.levanter.status", true)
+        .await
+        .unwrap();
+    store
+        .maintain_namespace("telemetry_storage_v1.levanter.detail", true)
         .await
         .unwrap();
 
-    const FILTER_AND_ORDER: &str = "FROM telemetry_v1 \
+    const FILTER_AND_ORDER: &str = "FROM \"telemetry_v1.levanter\" \
         WHERE service = 'levanter' \
           AND name IN ('step', 'train_loss') \
           AND run_id = 'run-projection' \
@@ -524,7 +535,7 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     // A `name` column of the wrong type: no additive merge reconciles it.
     store
         .register_table(
-            "telemetry_v1",
+            "telemetry_storage_v1.levanter.detail",
             Schema::new(
                 vec![
                     Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
@@ -551,16 +562,22 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     })
     .await
     .expect("the wedged registration never reached /health");
-    assert!(health.contains("telemetry_v1"), "{health}");
+    assert!(
+        health.contains("telemetry_storage_v1.levanter.detail"),
+        "{health}"
+    );
 
     let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
     let namespace = info["ingest"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|namespace| namespace["namespace"] == "telemetry_v1")
+        .find(|namespace| namespace["namespace"] == "telemetry_storage_v1.levanter.detail")
         .unwrap();
-    assert_eq!(namespace["namespace"], "telemetry_v1");
+    assert_eq!(
+        namespace["namespace"],
+        "telemetry_storage_v1.levanter.detail"
+    );
     assert_eq!(namespace["state"], "failed");
     assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
     assert!(namespace["error"].as_str().unwrap().contains("name"));
@@ -568,7 +585,10 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     let posted = post(
         &client,
         addr,
-        batch("11111111-1111-4111-8111-111111111111"),
+        batch_in_namespace(
+            "11111111-1111-4111-8111-111111111111",
+            "telemetry_v1.levanter",
+        ),
         Some("11111111-1111-4111-8111-111111111111"),
         Some("application/json"),
         None,
@@ -610,13 +630,13 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
         .await
         .unwrap();
     let rows = query(
         &store,
         "SELECT name, value, body_json, resource_attributes_json, attributes_json \
-         FROM telemetry_v1 ORDER BY record_index",
+         FROM \"telemetry_v1.legacy\" ORDER BY record_index",
     )
     .await;
     assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
@@ -642,7 +662,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let bounded = query(
         &store,
         "SELECT name, to_timestamp_millis(timestamp_ms) AS observed_at, run_id \
-         FROM telemetry_v1 \
+         FROM \"telemetry_v1.legacy\" \
          WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:20') * 1000 AS BIGINT) \
          AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2023-11-14 22:13:21') * 1000 AS BIGINT)",
     )
@@ -738,17 +758,14 @@ async fn semantic_namespace_routes_to_server_owned_storage() {
         &batch_in_namespace(legacy_batch_id, "telemetry_v1.levanter"),
     );
     store
-        .register_table(
-            "telemetry_v1.levanter.priority",
-            telemetry_schema(),
-            StoragePolicy::default(),
+        .write_forwarded_telemetry_rows("telemetry_v1.levanter.priority", &legacy_ipc, "marin")
+        .unwrap();
+    store
+        .await_persisted(
+            "telemetry_storage_v1.levanter.detail",
+            3,
+            Duration::from_secs(5),
         )
-        .unwrap();
-    store
-        .write_rows("telemetry_v1.levanter.priority", &legacy_ipc, None)
-        .unwrap();
-    store
-        .await_persisted("telemetry_v1.levanter.priority", 2, Duration::from_secs(5))
         .await
         .unwrap();
     let combined = query(
@@ -761,14 +778,7 @@ async fn semantic_namespace_routes_to_server_owned_storage() {
         4
     );
 
-    let legacy = query(&store, "SELECT count(*) FROM telemetry_v1").await;
-    assert_eq!(
-        legacy[0]
-            .column(0)
-            .as_primitive::<arrow::datatypes::Int64Type>()
-            .value(0),
-        0
-    );
+    assert!(store.get_table_schema("telemetry_v1").is_err());
 }
 
 #[tokio::test]
@@ -899,13 +909,17 @@ async fn explicit_resource_dimensions_override_attribute_fallbacks() {
     .await;
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted(
+            "telemetry_storage_v1.levanter.detail",
+            1,
+            Duration::from_secs(5),
+        )
         .await
         .unwrap();
     let rows = query(
         &store,
         "SELECT run_id, job_id, execution_uid, region, node_name, process_index \
-         FROM telemetry_v1",
+         FROM \"telemetry_v1.levanter\"",
     )
     .await;
     let values: Vec<&str> = (0..6)
@@ -946,10 +960,10 @@ async fn zstd_batch_is_accepted_and_queryable() {
 
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.legacy\"").await;
     assert_eq!(
         rows[0]
             .column(0)
@@ -1006,10 +1020,10 @@ async fn repeated_and_concurrent_requests_append_once_but_changed_content_confli
     assert_eq!(response.payload["error"]["code"], "idempotency_conflict");
 
     store
-        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.legacy", 1, Duration::from_secs(5))
         .await
         .unwrap();
-    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    let rows = query(&store, "SELECT count(*) AS n FROM \"telemetry_v1.legacy\"").await;
     assert_eq!(
         rows[0]
             .column(0)
@@ -1249,7 +1263,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
     let store = disk_store("telemetry-schema-conflict");
     store
         .register_table(
-            "telemetry_v1",
+            "telemetry_storage_v1.levanter.detail",
             Schema::new(
                 vec![Column::new("other", ColumnType::COLUMN_TYPE_STRING, false)],
                 "other",
@@ -1261,7 +1275,7 @@ async fn admission_and_store_unavailability_are_retryable_json_errors() {
     let response = post(
         &client,
         addr,
-        batch(batch_id),
+        batch_in_namespace(batch_id, "telemetry_v1.levanter"),
         Some(batch_id),
         Some("application/json"),
         None,

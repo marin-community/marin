@@ -4,7 +4,7 @@
 """Bounded finelog queries and alert projections for hero-run health.
 
 Beyond the progress and loss rules: the telemetry path itself, the optimizer, MoE
-routing, throughput, evaluation, and Iris retries. One `telemetry_v1` scan per
+routing, throughput, evaluation, and Iris retries. One `telemetry_v1.levanter` scan per
 bridge cache interval feeds all three projections. The telemetry and optimizer
 ones page; the health one announces in Slack without opening a triage session.
 See docs/ops/hero-run-health-alerts.md.
@@ -70,6 +70,7 @@ _SIGNAL_METRICS = (
 )
 # The floor each throughput check compares its window against.
 _FLOORS = {_TOKENS_PER_SECOND: TOKENS_PER_SECOND_MIN, _MFU: MFU_MIN}
+_LEVANTER_TELEMETRY_TABLE = '"telemetry_v1.levanter"'
 
 _SIGNAL_LOOKBACK = timedelta(minutes=65)
 # The phase heartbeat and the evaluations need their own window: an outage is
@@ -142,7 +143,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
         "ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn "
-        'FROM "telemetry_v1" '
+        f"FROM {_LEVANTER_TELEMETRY_TABLE} "
         f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
         f"AND {run_predicate} AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
@@ -151,7 +152,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "), samples AS ("
         "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
         "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
-        'FROM "telemetry_v1" AS telemetry JOIN execution '
+        f"FROM {_LEVANTER_TELEMETRY_TABLE} AS telemetry JOIN execution "
         "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
         "AND telemetry.run_id = execution.run_id "
         "AND telemetry.execution_uid = execution.execution_uid "

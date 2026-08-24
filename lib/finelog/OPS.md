@@ -161,14 +161,15 @@ Finelog maps that stable name to the server-owned
 Levanter storage shards. Status metrics (`train_loss`, `step`, `global_step`,
 `phase`, and `progress_time_seconds`) and detailed metrics are separate
 physical tables, but query registration exposes one semantic name over both
-and any compatible legacy shards. Neither clients nor SQL name a retention
+physical shards. Neither clients nor SQL name a retention
 class. Moving a metric between physical shards therefore changes one Finelog
 policy and leaves writers and dashboards alone. Requests outside the configured
 `telemetry_v1.<scope>` form are rejected. Client-defined semantic scopes use a
 2 GiB physical table unless Finelog has a more specific routing policy. The
-legacy root is not part of a semantic provider; consumers that need its history
-union it explicitly. Issue #8563 owns removal of those branches after the root
-write rate reaches zero.
+temporary old-client root form is classified from `service` and `name` by the
+same policy. Unrecognized old-client rows enter `telemetry_v1.legacy`; they are
+never appended to the root. A forwarded physical namespace is preserved, while
+a forwarded root or superseded semantic namespace is classified row by row.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -179,7 +180,8 @@ An explicit field wins over an attribute and replaces the same key in
 both conflicting values. Selectors and groupings should use the structured
 columns.
 
-The physical `telemetry_v1` table retains up to 50 GiB.
+An existing physical `telemetry_v1` root retains up to 50 GiB until migration
+retirement; a retired or fresh store does not recreate that table.
 The internal storage shards have independent limits: Levanter status has 22
 GiB, Levanter detail has 10 GiB, node-agent telemetry has 15 GiB, Iris RPC has
 1 GiB, and vLLM has 2 GiB. These server-owned shards total 50 GiB. Changing an
@@ -187,68 +189,70 @@ allocation or routing rule does not change a writer or query namespace.
 
 ### Migrate the legacy telemetry hot set
 
-`finelog-migrate` builds a replacement store from a frozen hub snapshot. It
-streams the legacy telemetry Parquets, routes each row through the current
-server policy, and writes the physical storage shards. Rows whose service does
-not identify a known semantic stream remain in `telemetry_v1`. Existing rows in
-the physical shards and every non-telemetry namespace are carried forward.
+`finelog-migrate` rewrites the legacy hot set inside the existing hub store. It
+uses the same row-aware policy as HTTP ingestion and forwarding. Deploy that
+policy to the whole Finelog fleet first: recognized old clients and forwarding
+backlogs then stop adding root rows even before those clients send semantic
+names themselves.
 
-The source must be an offline filesystem or volume snapshot. The migrator
-rejects stores with forwarding cursors, so it cannot be run against a `cw-*`
-sender. Run it on the `marin` or `marin-dev` hub store. Do not point it at a
-mounted directory that a Finelog process can still modify.
-
-Prepare the replacement in a sibling directory on the same filesystem. Files
-outside the legacy telemetry namespaces are hard-linked when possible and
-copied across filesystems. `--final-log-dir` is the path the replacement will
-occupy after cutover; catalog segment paths are written for that location.
+The migrator rejects stores with forwarding cursors, so run it on the `marin`
+or `marin-dev` hub, not a `cw-*` sender. Preparation may run while Finelog is
+serving. It takes a consistent SQLite snapshot and hard-links exactly the local
+legacy Parquets named by that catalog under
+`.finelog-telemetry-v1-migration/source`. If compaction removes one during the
+snapshot, preparation retries from a newer catalog. Rewritten Parquets land
+under `.finelog-telemetry-v1-migration/staged` with a negative `seq` range
+disjoint from live ingestion.
 
 ```bash
 finelog-migrate prepare-telemetry-v1 \
-  --source-dir /var/cache/finelog-before-telemetry-v1 \
-  --output-dir /var/cache/finelog-after-telemetry-v1 \
-  --final-log-dir /var/cache/finelog
+  --store-dir /var/cache/finelog
 
 finelog-migrate verify-telemetry-v1 \
-  --source-dir /var/cache/finelog-before-telemetry-v1 \
-  --output-dir /var/cache/finelog-after-telemetry-v1
+  --store-dir /var/cache/finelog
 ```
 
-The manifest at
-`/var/cache/finelog-after-telemetry-v1/.finelog-telemetry-v1-migration.json`
+The staged manifest
 records every source checksum, destination sequence range, row count, stable
 row-identity checksum, output checksum, and the source catalog checksum.
-Re-running `prepare-telemetry-v1` resumes from verified output segments. It
-fails if the source snapshot or its catalog changed.
+Re-running preparation resumes from verified outputs.
 
-For an in-place volume cutover, stop the Finelog deployment first, then move the
-current store aside before running the commands above:
+Publish is the first short cutover. Stop Finelog, publish, and restart it:
 
 ```bash
-mv /var/cache/finelog /var/cache/finelog-before-telemetry-v1
+finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
-`prepare-telemetry-v1` writes catalog paths for the missing final location. Move
-the verified replacement into place:
+Publish hard-links the staged Parquets into their physical namespace directories
+and replaces a catalog derived from the latest live catalog. It leaves every
+legacy namespace queryable. Old root-only queries and new semantic-only queries
+therefore each see one copy of the rows; a root-plus-semantic union would count
+them twice. Deploy the semantic-only Grafana and Iris queries after publish.
+
+Once those queries are live, stop Finelog for the second short cutover:
 
 ```bash
-mv /var/cache/finelog-after-telemetry-v1 /var/cache/finelog
+finelog-migrate retire-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
-Start the candidate image and check `/health`, `finelog namespaces`, and the
-training, cluster-capacity, RPC, and vLLM dashboards. Roll back while the
-deployment is stopped:
+Retirement moves legacy local files into the migration rollback directory and
+replaces the catalog again, removing the old namespaces and their remote-only
+catalog rows. A restart does not recreate the root. The pre-cutover catalogs
+stay under the `rollback` subdirectory; the hard-linked source snapshot stays
+under `source`. Keep the migration directory until the new layout has passed
+the training, cluster-capacity, RPC, and vLLM dashboard checks. Do not run
+publish or retirement while a Finelog process has the catalog open; the store
+lock rejects either command if it is.
 
-```bash
-mv /var/cache/finelog /var/cache/finelog-migration-failed
-mv /var/cache/finelog-before-telemetry-v1 /var/cache/finelog
-```
+The rollout order is:
 
-The replacement catalog preserves the archive state of unchanged segments.
-Migrated segments start as local data and upload under their new physical
-namespaces. Catalog entries for migrated legacy objects become remote-only, so
-boot reconciliation does not re-adopt them into the queryable hot set. The
-legacy objects remain unchanged in the archive.
+1. Deploy the row-aware Finelog policy to the hubs and every forwarding edge.
+2. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on each hub while it is serving.
+3. Stop the hub, run `publish-telemetry-v1`, and restart it.
+4. Deploy the semantic-only Grafana and Iris queries and verify their panels.
+5. Stop the hub, run `retire-telemetry-v1`, and restart it.
+6. Let client-scoped writers roll out independently. Old root requests are
+   already classified by the server policy, so they do not postpone retirement.
 
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete

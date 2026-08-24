@@ -55,8 +55,6 @@ function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
 WITH telemetry AS (
-  SELECT * FROM "telemetry_v1"
-  UNION ALL
   SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
@@ -84,8 +82,6 @@ function proxySql(): string {
   const names = Object.values(PROXY_METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
 WITH telemetry AS (
-  SELECT * FROM "telemetry_v1"
-  UNION ALL
   SELECT * FROM "telemetry_v1.iris.rpc"
 ), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,

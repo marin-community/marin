@@ -1,7 +1,7 @@
-//! Offline migration from legacy telemetry namespaces into semantic storage shards.
+//! In-place migration from legacy telemetry namespaces into semantic storage shards.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +12,6 @@ use arrow::compute::{cast, filter_record_batch};
 use arrow::datatypes::{DataType, SchemaRef};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -24,16 +23,38 @@ use crate::store::schema::{schema_to_arrow, stored_form, IMPLICIT_SEQ_COLUMN};
 use crate::store::segment::{
     discover_segments, read_segment_footer, segment_writer_properties_with_max_rows,
 };
+use crate::store::store::acquire_exclusive_store_lock;
 use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
 use crate::telemetry_policy::{
-    ingest_storage_namespace, legacy_storage_namespace, migration_source_logical_namespace,
-    migration_source_namespaces, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
+    migration_source_namespaces, storage_max_bytes, telemetry_storage_namespace, LEGACY_NAMESPACE,
+    TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
 };
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
 const MANIFEST_VERSION: u32 = 1;
-const POLICY_REVISION: &str = "semantic-storage-v1";
+const POLICY_REVISION: &str = "semantic-storage-v2";
 const OUTPUT_LEVEL: i32 = 0;
+const MIGRATION_DIRECTORY: &str = ".finelog-telemetry-v1-migration";
+const SOURCE_SNAPSHOT_DIRECTORY: &str = "source";
+const STAGED_DIRECTORY: &str = "staged";
+const ROLLBACK_DIRECTORY: &str = "rollback";
+const CATALOG_BUILD_DIRECTORY: &str = "catalog-build";
+const MIGRATED_SEQ_START: i64 = -4_000_000_000_000_000_000;
+const SNAPSHOT_ATTEMPTS: usize = 8;
+
+#[derive(Debug, Clone)]
+pub struct InPlaceConfig {
+    pub store_dir: PathBuf,
+    pub batch_rows: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationPhase {
+    Staged,
+    Published,
+    Retired,
+}
 
 #[derive(Debug, Clone)]
 pub struct PrepareConfig {
@@ -51,10 +72,15 @@ pub struct MigrationManifest {
     pub source_catalog_sha256: String,
     pub final_log_dir: String,
     pub complete: bool,
+    pub phase: MigrationPhase,
     pub input_rows: i64,
     pub output_rows: i64,
     pub residual_rows: i64,
     pub source_segments: Vec<SourceSegment>,
+    #[serde(default)]
+    pub published_files: Vec<String>,
+    #[serde(default)]
+    pub retired_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,11 +150,13 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
         manifest
     };
 
-    clone_unchanged_store(config)?;
     verify_source_segments(&config.source_dir, &manifest)?;
+    if manifest.complete {
+        return verify_store(&config.source_dir, &config.output_dir, config.batch_rows);
+    }
     write_planned_outputs(config, &mut manifest)?;
-    finalize_catalog(config, &manifest)?;
     manifest.complete = true;
+    manifest.phase = MigrationPhase::Staged;
     write_manifest(&manifest_path, &manifest)?;
     verify_store(&config.source_dir, &config.output_dir, config.batch_rows)
 }
@@ -160,108 +188,470 @@ pub fn verify_store(
             manifest.input_rows, manifest.output_rows
         )));
     }
-    let catalog_path = output_dir.join(CATALOG_DB_FILENAME);
-    if !catalog_path.is_file() {
-        return Err(validation_error(format!(
-            "prepared store has no catalog at {}",
-            catalog_path.display()
-        )));
-    }
-    verify_catalog(output_dir, &manifest)?;
     Ok(manifest)
 }
 
-fn verify_catalog(output_dir: &Path, manifest: &MigrationManifest) -> Result<(), StatsError> {
-    let connection = rusqlite::Connection::open_with_flags(
-        output_dir.join(CATALOG_DB_FILENAME),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(sqlite_error("open replacement catalog read-only"))?;
-    let check: String = connection
-        .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .map_err(sqlite_error("check replacement catalog"))?;
-    if check != "ok" {
-        return Err(validation_error(format!(
-            "replacement catalog quick_check failed: {check}"
-        )));
+/// Stage the complete legacy hot set while Finelog remains available.
+///
+/// Deploy the row-aware ingestion policy first so no new rows enter the legacy
+/// namespaces after preparation begins. Repeated calls resume the same stage.
+pub fn prepare_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
+    if config.batch_rows == 0 {
+        return Err(validation_error("batch_rows must be positive"));
+    }
+    let store_dir = std::fs::canonicalize(&config.store_dir)
+        .map_err(io_error("resolve in-place telemetry store"))?;
+    let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
+    let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
+    let staged_dir = migration_dir.join(STAGED_DIRECTORY);
+    if !source_dir.exists() {
+        snapshot_migration_sources(&store_dir, &source_dir)?;
+    }
+    prepare_store(&PrepareConfig {
+        source_dir,
+        output_dir: staged_dir,
+        final_log_dir: store_dir,
+        batch_rows: config.batch_rows,
+    })
+}
+
+/// Verify the current in-place phase without modifying the store.
+pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
+    let store_dir = std::fs::canonicalize(&config.store_dir)
+        .map_err(io_error("resolve in-place telemetry store"))?;
+    let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
+    let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
+    let staged_dir = migration_dir.join(STAGED_DIRECTORY);
+    let manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
+    if manifest.phase != MigrationPhase::Staged {
+        verify_published_catalog(&store_dir, &manifest)?;
+    }
+    if manifest.phase == MigrationPhase::Retired {
+        verify_legacy_namespaces_retired(&store_dir)?;
+    }
+    Ok(manifest)
+}
+
+/// Make the staged semantic rows queryable during a stopped-server cutover.
+pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
+    let store_dir = std::fs::canonicalize(&config.store_dir)
+        .map_err(io_error("resolve in-place telemetry store"))?;
+    let _store_lock = acquire_exclusive_store_lock(&store_dir)?;
+    let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
+    let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
+    let staged_dir = migration_dir.join(STAGED_DIRECTORY);
+    let manifest_path = staged_dir.join(MANIFEST_FILENAME);
+    let mut manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
+    if manifest.phase != MigrationPhase::Staged {
+        return Err(validation_error(
+            "telemetry migration has already been published",
+        ));
     }
 
-    let final_log_dir = Path::new(&manifest.final_log_dir);
-    for source in &manifest.source_segments {
-        for output in &source.outputs {
-            let catalog_path = final_log_dir.join(&output.relative_path);
-            let row: Option<(i64, i64, i64, String)> = connection
-                .query_row(
-                    "SELECT min_seq, max_seq, row_count, location FROM segments \
-                     WHERE namespace = ?1 AND path = ?2",
-                    rusqlite::params![output.namespace, catalog_path.to_string_lossy()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .optional()
-                .map_err(sqlite_error("read migrated catalog row"))?;
-            if row
-                != Some((
-                    output.min_seq,
-                    output.max_seq,
-                    output.rows,
-                    SegmentLocation::Local.as_str().to_string(),
+    let mut published_files = Vec::new();
+    for output in manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+    {
+        let source = staged_dir.join(&output.relative_path);
+        let destination = store_dir.join(&output.relative_path);
+        link_verified_file(&source, &destination, output.file_sha256.as_deref())?;
+        published_files.push(output.relative_path.clone());
+    }
+    let publish_backup = catalog_backup_path(&migration_dir, "pre-publish");
+    if publish_backup.exists() {
+        verify_published_catalog(&store_dir, &manifest)?;
+    } else {
+        replace_catalog_for_publish(&store_dir, &migration_dir, &manifest)?;
+    }
+    manifest.published_files = published_files;
+    manifest.phase = MigrationPhase::Published;
+    write_manifest(&manifest_path, &manifest)?;
+    verify_published_catalog(&store_dir, &manifest)?;
+    Ok(manifest)
+}
+
+/// Remove legacy namespaces after every query has switched to semantic names.
+///
+/// Stop Finelog before this command and restart it after the command returns.
+pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
+    let store_dir = std::fs::canonicalize(&config.store_dir)
+        .map_err(io_error("resolve in-place telemetry store"))?;
+    let _store_lock = acquire_exclusive_store_lock(&store_dir)?;
+    let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
+    let staged_dir = migration_dir.join(STAGED_DIRECTORY);
+    let manifest_path = staged_dir.join(MANIFEST_FILENAME);
+    let mut manifest = read_manifest(&manifest_path)?;
+    if manifest.phase != MigrationPhase::Published {
+        return Err(validation_error(
+            "telemetry migration must be published before legacy retirement",
+        ));
+    }
+    verify_published_catalog(&store_dir, &manifest)?;
+
+    let rollback_sources = migration_dir.join(ROLLBACK_DIRECTORY).join("legacy-files");
+    for namespace in migration_source_namespaces() {
+        let namespace_dir = store_dir.join(namespace);
+        for source in discover_segments(&namespace_dir) {
+            let filename = source.file_name().ok_or_else(|| {
+                validation_error(format!(
+                    "legacy segment has no filename: {}",
+                    source.display()
                 ))
-            {
+            })?;
+            let destination = rollback_sources.join(namespace).join(filename);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(io_error("create legacy rollback directory"))?;
+            }
+            std::fs::rename(&source, &destination)
+                .map_err(io_error("move legacy segment into rollback"))?;
+        }
+    }
+    let retired_files = migration_source_namespaces()
+        .flat_map(|namespace| {
+            discover_segments(&rollback_sources.join(namespace))
+                .into_iter()
+                .map(move |path| {
+                    Path::new(namespace)
+                        .join(path.file_name().expect("discovered segment has a filename"))
+                        .to_string_lossy()
+                        .into_owned()
+                })
+        })
+        .collect();
+    let retire_backup = catalog_backup_path(&migration_dir, "pre-retire");
+    if retire_backup.exists() {
+        verify_legacy_namespaces_retired(&store_dir)?;
+    } else {
+        replace_catalog_for_retirement(&store_dir, &migration_dir)?;
+    }
+    manifest.retired_files = retired_files;
+    manifest.phase = MigrationPhase::Retired;
+    write_manifest(&manifest_path, &manifest)?;
+    verify_legacy_namespaces_retired(&store_dir)?;
+    Ok(manifest)
+}
+
+fn snapshot_migration_sources(store_dir: &Path, source_dir: &Path) -> Result<(), StatsError> {
+    let migration_dir = source_dir
+        .parent()
+        .ok_or_else(|| validation_error("migration source snapshot has no parent"))?;
+    std::fs::create_dir_all(migration_dir).map_err(io_error("create migration directory"))?;
+    let temporary = migration_dir.join(format!("{SOURCE_SNAPSHOT_DIRECTORY}.tmp"));
+    for attempt in 0..SNAPSHOT_ATTEMPTS {
+        if temporary.exists() {
+            std::fs::remove_dir_all(&temporary)
+                .map_err(io_error("remove interrupted source snapshot"))?;
+        }
+        std::fs::create_dir_all(&temporary).map_err(io_error("create source snapshot"))?;
+        copy_catalog_consistently(
+            &store_dir.join(CATALOG_DB_FILENAME),
+            &temporary.join(CATALOG_DB_FILENAME),
+        )?;
+        if link_catalog_snapshot_segments(store_dir, &temporary)? {
+            std::fs::rename(&temporary, source_dir).map_err(io_error("publish source snapshot"))?;
+            return Ok(());
+        }
+        if attempt + 1 == SNAPSHOT_ATTEMPTS {
+            return Err(validation_error(
+                "telemetry segments kept changing while the migration snapshot was taken",
+            ));
+        }
+    }
+    unreachable!()
+}
+
+/// Link exactly the local files named by the copied catalog.
+///
+/// Compaction publishes its catalog replacement before unlinking old files. If
+/// one disappears after the catalog copy, the caller retries from a newer copy.
+/// A successful pass is therefore a coherent catalog-and-Parquet snapshot even
+/// while the live store continues compacting.
+fn link_catalog_snapshot_segments(
+    store_dir: &Path,
+    snapshot_dir: &Path,
+) -> Result<bool, StatsError> {
+    let catalog = Catalog::open(Some(snapshot_dir))?;
+    for namespace in migration_source_namespaces() {
+        let expected_directory = store_dir.join(namespace);
+        for segment in catalog.list_segments(namespace)? {
+            if segment.location == SegmentLocation::Remote {
+                continue;
+            }
+            let source = Path::new(&segment.path);
+            if !source.starts_with(&expected_directory) {
                 return Err(validation_error(format!(
-                    "replacement catalog does not expose migrated output {}",
-                    output.relative_path
+                    "catalog segment escaped namespace directory: {}",
+                    source.display()
                 )));
             }
+            let filename = source.file_name().ok_or_else(|| {
+                validation_error(format!(
+                    "source segment has no filename: {}",
+                    source.display()
+                ))
+            })?;
+            let destination = snapshot_dir.join(namespace).join(filename);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(io_error("create snapshot namespace directory"))?;
+            }
+            match std::fs::hard_link(source, destination) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => {
+                    return Err(StatsError::Internal(format!(
+                        "hard-link source telemetry segment: {error}"
+                    )))
+                }
+            }
         }
+    }
+    Ok(true)
+}
 
-        let source_filename = Path::new(&source.relative_path)
-            .file_name()
-            .ok_or_else(|| validation_error("source segment has no filename"))?;
-        let legacy_path = final_log_dir
-            .join(&source.namespace)
-            .join(source_filename)
-            .to_string_lossy()
-            .into_owned();
-        let location: Option<String> = connection
+fn copy_catalog_consistently(source: &Path, destination: &Path) -> Result<(), StatsError> {
+    if destination.exists() {
+        std::fs::remove_file(destination).map_err(io_error("remove old catalog snapshot"))?;
+    }
+    let connection =
+        rusqlite::Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(sqlite_error("open catalog for snapshot"))?;
+    connection
+        .execute(
+            "VACUUM main INTO ?1",
+            [destination.to_string_lossy().as_ref()],
+        )
+        .map_err(sqlite_error("snapshot catalog"))?;
+    Ok(())
+}
+
+fn link_verified_file(
+    source: &Path,
+    destination: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<(), StatsError> {
+    let expected_sha256 = expected_sha256
+        .ok_or_else(|| validation_error("staged telemetry output has no checksum"))?;
+    if destination.exists() {
+        if file_sha256(destination)? == expected_sha256 {
+            return Ok(());
+        }
+        return Err(validation_error(format!(
+            "publish destination already exists with different content: {}",
+            destination.display()
+        )));
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(io_error("create physical namespace"))?;
+    }
+    std::fs::hard_link(source, destination).map_err(io_error("publish migrated segment"))?;
+    Ok(())
+}
+
+fn replace_catalog_for_publish(
+    store_dir: &Path,
+    migration_dir: &Path,
+    manifest: &MigrationManifest,
+) -> Result<(), StatsError> {
+    let build_dir = reset_catalog_build_directory(migration_dir)?;
+    copy_catalog_consistently(
+        &store_dir.join(CATALOG_DB_FILENAME),
+        &build_dir.join(CATALOG_DB_FILENAME),
+    )?;
+    let catalog = Catalog::open(Some(&build_dir))?;
+    let stored_schema = stored_form(telemetry_schema());
+    catalog.upsert(LEGACY_NAMESPACE, &stored_schema)?;
+    catalog.upsert_policy(
+        LEGACY_NAMESPACE,
+        &StoragePolicy {
+            max_bytes: storage_max_bytes(LEGACY_NAMESPACE),
+            ..StoragePolicy::default()
+        },
+    )?;
+    for shard in TELEMETRY_STORAGE_SHARDS {
+        catalog.upsert(shard.storage_namespace, &stored_schema)?;
+        catalog.upsert_policy(
+            shard.storage_namespace,
+            &StoragePolicy {
+                max_bytes: Some(shard.max_bytes),
+                ..StoragePolicy::default()
+            },
+        )?;
+    }
+    let output_namespaces: BTreeSet<_> = manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+        .map(|output| output.namespace.as_str())
+        .collect();
+    for namespace in output_namespaces {
+        catalog.upsert(namespace, &stored_schema)?;
+        catalog.upsert_policy(
+            namespace,
+            &StoragePolicy {
+                max_bytes: storage_max_bytes(namespace),
+                ..StoragePolicy::default()
+            },
+        )?;
+    }
+    let created_at_ms = now_ms();
+    let rows = manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+        .map(|output| {
+            let path = store_dir.join(&output.relative_path);
+            Ok(SegmentRow {
+                namespace: output.namespace.clone(),
+                path: path.to_string_lossy().into_owned(),
+                level: OUTPUT_LEVEL,
+                min_seq: output.min_seq,
+                max_seq: output.max_seq,
+                row_count: output.rows,
+                byte_size: std::fs::metadata(&path)
+                    .map_err(io_error("stat published telemetry segment"))?
+                    .len() as i64,
+                created_at_ms,
+                min_key_value: Some(output.min_timestamp_ms.to_string()),
+                max_key_value: Some(output.max_timestamp_ms.to_string()),
+                location: SegmentLocation::Local,
+            })
+        })
+        .collect::<Result<Vec<_>, StatsError>>()?;
+    catalog.upsert_segments(&rows)?;
+    drop(catalog);
+    replace_catalog_file(store_dir, migration_dir, &build_dir, "pre-publish")
+}
+
+fn replace_catalog_for_retirement(
+    store_dir: &Path,
+    migration_dir: &Path,
+) -> Result<(), StatsError> {
+    let build_dir = reset_catalog_build_directory(migration_dir)?;
+    copy_catalog_consistently(
+        &store_dir.join(CATALOG_DB_FILENAME),
+        &build_dir.join(CATALOG_DB_FILENAME),
+    )?;
+    let catalog = Catalog::open(Some(&build_dir))?;
+    for namespace in migration_source_namespaces() {
+        catalog.delete(namespace)?;
+    }
+    drop(catalog);
+    replace_catalog_file(store_dir, migration_dir, &build_dir, "pre-retire")
+}
+
+fn reset_catalog_build_directory(migration_dir: &Path) -> Result<PathBuf, StatsError> {
+    let build_dir = migration_dir.join(CATALOG_BUILD_DIRECTORY);
+    if build_dir.exists() {
+        std::fs::remove_dir_all(&build_dir)
+            .map_err(io_error("remove interrupted catalog build"))?;
+    }
+    std::fs::create_dir_all(&build_dir).map_err(io_error("create catalog build directory"))?;
+    Ok(build_dir)
+}
+
+fn replace_catalog_file(
+    store_dir: &Path,
+    migration_dir: &Path,
+    build_dir: &Path,
+    backup_name: &str,
+) -> Result<(), StatsError> {
+    let rollback_dir = migration_dir.join(ROLLBACK_DIRECTORY);
+    std::fs::create_dir_all(&rollback_dir)
+        .map_err(io_error("create catalog rollback directory"))?;
+    let current = store_dir.join(CATALOG_DB_FILENAME);
+    let candidate = build_dir.join(CATALOG_DB_FILENAME);
+    let backup = catalog_backup_path(migration_dir, backup_name);
+    if backup.exists() {
+        return Err(validation_error(format!(
+            "catalog rollback already exists: {}",
+            backup.display()
+        )));
+    }
+    std::fs::rename(&current, &backup).map_err(io_error("save catalog rollback"))?;
+    if let Err(publish_error) = std::fs::rename(&candidate, &current) {
+        if let Err(rollback_error) = std::fs::rename(&backup, &current) {
+            return Err(StatsError::Internal(format!(
+                "publish telemetry catalog: {publish_error}; restore original catalog: {rollback_error}"
+            )));
+        }
+        return Err(StatsError::Internal(format!(
+            "publish telemetry catalog: {publish_error}"
+        )));
+    }
+    let journal = store_dir.join(format!("{CATALOG_DB_FILENAME}-journal"));
+    if journal.exists() {
+        let backup_journal = rollback_dir.join(format!("{backup_name}.sqlite-journal"));
+        std::fs::rename(&journal, backup_journal)
+            .map_err(io_error("save catalog rollback journal"))?;
+    }
+    Ok(())
+}
+
+fn catalog_backup_path(migration_dir: &Path, backup_name: &str) -> PathBuf {
+    migration_dir
+        .join(ROLLBACK_DIRECTORY)
+        .join(format!("{backup_name}.sqlite"))
+}
+
+fn verify_published_catalog(
+    store_dir: &Path,
+    manifest: &MigrationManifest,
+) -> Result<(), StatsError> {
+    let connection = rusqlite::Connection::open_with_flags(
+        store_dir.join(CATALOG_DB_FILENAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(sqlite_error("open published catalog"))?;
+    for output in manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+    {
+        let path = store_dir.join(&output.relative_path);
+        if !path.is_file() {
+            return Err(validation_error(format!(
+                "published telemetry file is missing: {}",
+                path.display()
+            )));
+        }
+        let count: i64 = connection
             .query_row(
-                "SELECT location FROM segments WHERE namespace = ?1 AND path = ?2",
-                rusqlite::params![source.namespace, legacy_path],
+                "SELECT COUNT(*) FROM segments WHERE namespace = ?1 AND path = ?2 AND row_count = ?3",
+                rusqlite::params![output.namespace, path.to_string_lossy(), output.rows],
                 |row| row.get(0),
             )
-            .optional()
-            .map_err(sqlite_error("read legacy catalog row"))?;
-        if location.is_some_and(|value| value != SegmentLocation::Remote.as_str()) {
+            .map_err(sqlite_error("verify published telemetry catalog row"))?;
+        if count != 1 {
             return Err(validation_error(format!(
-                "legacy source remains locally queryable: {}",
-                source.relative_path
+                "published telemetry catalog row is missing for {}",
+                path.display()
             )));
         }
     }
+    Ok(())
+}
 
-    let mut statement = connection
-        .prepare("SELECT namespace, path FROM segments WHERE location != 'REMOTE'")
-        .map_err(sqlite_error("prepare local catalog verification"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(sqlite_error("read local catalog paths"))?;
-    for row in rows {
-        let (namespace, path) = row.map_err(sqlite_error("decode local catalog path"))?;
-        let filename = Path::new(&path)
-            .file_name()
-            .ok_or_else(|| validation_error(format!("catalog segment has no filename: {path}")))?;
-        let expected_path = final_log_dir.join(&namespace).join(filename);
-        if Path::new(&path) != expected_path {
+fn verify_legacy_namespaces_retired(store_dir: &Path) -> Result<(), StatsError> {
+    let connection = rusqlite::Connection::open_with_flags(
+        store_dir.join(CATALOG_DB_FILENAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(sqlite_error("open retired telemetry catalog"))?;
+    for namespace in migration_source_namespaces() {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM namespaces WHERE namespace = ?1",
+                [namespace],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error("verify retired telemetry namespace"))?;
+        if count != 0 || !discover_segments(&store_dir.join(namespace)).is_empty() {
             return Err(validation_error(format!(
-                "catalog segment path is outside final_log_dir: {path}"
-            )));
-        }
-        let prepared_path = output_dir.join(namespace).join(filename);
-        if !prepared_path.is_file() {
-            return Err(validation_error(format!(
-                "catalogued local segment is absent from replacement store: {}",
-                prepared_path.display()
+                "legacy telemetry namespace {namespace:?} is still visible"
             )));
         }
     }
@@ -280,7 +670,7 @@ fn validate_config(config: &PrepareConfig) -> Result<(), StatsError> {
     let output = absolute_path(&config.output_dir)?;
     if source == output || output.starts_with(&source) {
         return Err(validation_error(
-            "output_dir must be outside source_dir so the source remains a rollback",
+            "staged output must be outside the immutable source snapshot",
         ));
     }
     if !config.source_dir.join(CATALOG_DB_FILENAME).is_file() {
@@ -321,74 +711,18 @@ fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
         .map_err(sqlite_error("inspect forwarding state"))?;
     if forwarding_rows != 0 {
         return Err(validation_error(
-            "telemetry replacement-store migration is hub-only; source catalog has forwarding state",
+            "telemetry migration is hub-only; source catalog has forwarding state",
         ));
     }
     Ok(())
 }
 
-fn clone_unchanged_store(config: &PrepareConfig) -> Result<(), StatsError> {
-    let migration_sources: BTreeSet<&str> = migration_source_namespaces().collect();
-    for entry in std::fs::read_dir(&config.source_dir).map_err(io_error("list source store"))? {
-        let entry = entry.map_err(io_error("read source store entry"))?;
-        let name = entry.file_name();
-        let name_text = name.to_string_lossy();
-        if name_text.starts_with(CATALOG_DB_FILENAME)
-            || name_text == MANIFEST_FILENAME
-            || migration_sources.contains(name_text.as_ref())
-        {
-            continue;
-        }
-        clone_path(&entry.path(), &config.output_dir.join(name))?;
-    }
-    Ok(())
-}
-
-fn clone_path(source: &Path, destination: &Path) -> Result<(), StatsError> {
-    let metadata = std::fs::symlink_metadata(source).map_err(io_error("stat source entry"))?;
-    if metadata.is_dir() {
-        std::fs::create_dir_all(destination).map_err(io_error("create output directory"))?;
-        for entry in std::fs::read_dir(source).map_err(io_error("list source directory"))? {
-            let entry = entry.map_err(io_error("read source directory entry"))?;
-            clone_path(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-        return Ok(());
-    }
-    if !metadata.is_file() {
-        return Err(validation_error(format!(
-            "source store contains unsupported entry {}",
-            source.display()
-        )));
-    }
-    if destination.exists() {
-        let existing = std::fs::metadata(destination).map_err(io_error("stat cloned file"))?;
-        if existing.len() != metadata.len() {
-            return Err(validation_error(format!(
-                "existing clone {} has {} bytes; expected {}",
-                destination.display(),
-                existing.len(),
-                metadata.len()
-            )));
-        }
-        return Ok(());
-    }
-    let temporary = temporary_path(destination);
-    if temporary.exists() {
-        std::fs::remove_file(&temporary).map_err(io_error("remove interrupted clone"))?;
-    }
-    if std::fs::hard_link(source, &temporary).is_err() {
-        std::fs::copy(source, &temporary).map_err(io_error("copy source file"))?;
-    }
-    std::fs::rename(&temporary, destination).map_err(io_error("publish cloned file"))?;
-    Ok(())
-}
-
 fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsError> {
-    let mut next_seq = destination_next_sequences(&config.source_dir)?;
+    let mut next_seq = BTreeMap::new();
     let mut source_segments = Vec::new();
     let mut input_rows = 0_i64;
     let mut output_rows = 0_i64;
-    let mut residual_rows = 0_i64;
+    let residual_rows = 0_i64;
 
     for namespace in migration_source_namespaces() {
         let namespace_dir = config.source_dir.join(namespace);
@@ -414,24 +748,34 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
                 if item.rows == 0 {
                     continue;
                 }
-                let min_seq = *next_seq.entry(destination.clone()).or_insert(1);
+                let min_seq = *next_seq
+                    .entry(destination.clone())
+                    .or_insert(MIGRATED_SEQ_START);
                 let max_seq = min_seq + item.rows - 1;
                 next_seq.insert(destination.clone(), max_seq + 1);
                 let relative_path = Path::new(&destination)
                     .join(seg_filename(OUTPUT_LEVEL, min_seq))
                     .to_string_lossy()
                     .into_owned();
-                if destination == TELEMETRY_NAMESPACE {
-                    residual_rows += item.rows;
-                }
+                let min_timestamp_ms = item.min_timestamp_ms.ok_or_else(|| {
+                    validation_error(format!(
+                        "destination {destination:?} has rows but no minimum timestamp"
+                    ))
+                })?;
+                let max_timestamp_ms = item.max_timestamp_ms.ok_or_else(|| {
+                    validation_error(format!(
+                        "destination {destination:?} has rows but no maximum timestamp"
+                    ))
+                })?;
+                debug_assert_ne!(destination, TELEMETRY_NAMESPACE);
                 outputs.push(PlannedOutput {
                     namespace: destination,
                     relative_path,
                     min_seq,
                     max_seq,
                     rows: item.rows,
-                    min_timestamp_ms: item.min_timestamp_ms.unwrap_or_default(),
-                    max_timestamp_ms: item.max_timestamp_ms.unwrap_or_default(),
+                    min_timestamp_ms,
+                    max_timestamp_ms,
                     identity_sha256: digest_hex(item.identity),
                     file_sha256: None,
                 });
@@ -464,48 +808,14 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         source_catalog_sha256: file_sha256(&config.source_dir.join(CATALOG_DB_FILENAME))?,
         final_log_dir: config.final_log_dir.to_string_lossy().into_owned(),
         complete: false,
+        phase: MigrationPhase::Staged,
         input_rows,
         output_rows,
         residual_rows,
         source_segments,
+        published_files: Vec::new(),
+        retired_files: Vec::new(),
     })
-}
-
-fn destination_next_sequences(source_dir: &Path) -> Result<BTreeMap<String, i64>, StatsError> {
-    let connection = rusqlite::Connection::open_with_flags(
-        source_dir.join(CATALOG_DB_FILENAME),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(sqlite_error("open source catalog for sequence planning"))?;
-    let mut next = BTreeMap::new();
-    for namespace in std::iter::once(TELEMETRY_NAMESPACE).chain(
-        TELEMETRY_STORAGE_SHARDS
-            .iter()
-            .map(|shard| shard.storage_namespace),
-    ) {
-        let catalog_max_seq: Option<i64> = connection
-            .query_row(
-                "SELECT MAX(max_seq) FROM segments WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_error("read destination sequence high-water"))?;
-        let mut max_seq = catalog_max_seq.unwrap_or(0);
-        let namespace_dir = source_dir.join(namespace);
-        if namespace_dir.is_dir() {
-            for path in discover_segments(&namespace_dir) {
-                let footer = read_segment_footer(&path, Some("timestamp_ms")).ok_or_else(|| {
-                    validation_error(format!(
-                        "could not read destination segment {}",
-                        path.display()
-                    ))
-                })?;
-                max_seq = max_seq.max(footer.max_seq);
-            }
-        }
-        next.insert(namespace.to_string(), max_seq + 1);
-    }
-    Ok(next)
 }
 
 fn scan_source_segment(
@@ -556,17 +866,7 @@ fn row_destination(
     service: &str,
     name: &str,
 ) -> Result<String, StatsError> {
-    if source_namespace == TELEMETRY_NAMESPACE {
-        return Ok(legacy_storage_namespace(service, name)
-            .unwrap_or(TELEMETRY_NAMESPACE)
-            .to_string());
-    }
-    let logical = migration_source_logical_namespace(source_namespace).ok_or_else(|| {
-        validation_error(format!(
-            "unsupported migration source namespace {source_namespace:?}"
-        ))
-    })?;
-    ingest_storage_namespace(logical, name).ok_or_else(|| {
+    telemetry_storage_namespace(source_namespace, service, name).ok_or_else(|| {
         validation_error(format!(
             "could not route legacy namespace {source_namespace:?}"
         ))
@@ -754,201 +1054,6 @@ fn align_migrated_batch(
     }
     RecordBatch::try_new(Arc::clone(target_schema), columns)
         .map_err(arrow_error("build migrated telemetry batch"))
-}
-
-fn finalize_catalog(
-    config: &PrepareConfig,
-    manifest: &MigrationManifest,
-) -> Result<(), StatsError> {
-    let build_dir = config.output_dir.join(".finelog-catalog-build");
-    if build_dir.exists() {
-        std::fs::remove_dir_all(&build_dir)
-            .map_err(io_error("remove interrupted catalog build"))?;
-    }
-    std::fs::create_dir_all(&build_dir).map_err(io_error("create catalog build directory"))?;
-    std::fs::copy(
-        config.source_dir.join(CATALOG_DB_FILENAME),
-        build_dir.join(CATALOG_DB_FILENAME),
-    )
-    .map_err(io_error("copy source catalog"))?;
-
-    let catalog = Catalog::open(Some(&build_dir))?;
-    remap_catalog_paths(&catalog, &config.final_log_dir)?;
-    for namespace in migration_source_namespaces() {
-        for row in catalog.list_segments(namespace)? {
-            match row.location {
-                SegmentLocation::Local => {
-                    catalog.remove_segments(namespace, &[row.path])?;
-                }
-                SegmentLocation::Both => {
-                    catalog.set_location(namespace, &row.path, SegmentLocation::Remote)?;
-                }
-                SegmentLocation::Remote => {}
-            }
-        }
-    }
-    let stored_schema = stored_form(telemetry_schema());
-    catalog.upsert(TELEMETRY_NAMESPACE, &stored_schema)?;
-    catalog.upsert_policy(
-        TELEMETRY_NAMESPACE,
-        &StoragePolicy {
-            max_bytes: storage_max_bytes(TELEMETRY_NAMESPACE),
-            ..StoragePolicy::default()
-        },
-    )?;
-    for shard in TELEMETRY_STORAGE_SHARDS {
-        catalog.upsert(shard.storage_namespace, &stored_schema)?;
-        catalog.upsert_policy(
-            shard.storage_namespace,
-            &StoragePolicy {
-                max_bytes: Some(shard.max_bytes),
-                ..StoragePolicy::default()
-            },
-        )?;
-    }
-    adopt_unchanged_physical_segments(config, &catalog)?;
-
-    let created_at_ms = now_ms();
-    let rows = manifest
-        .source_segments
-        .iter()
-        .flat_map(|source| source.outputs.iter())
-        .map(|output| {
-            let relative = Path::new(&output.relative_path);
-            let actual = config.output_dir.join(relative);
-            let byte_size = std::fs::metadata(&actual)
-                .map_err(io_error("stat migrated segment"))?
-                .len() as i64;
-            Ok(SegmentRow {
-                namespace: output.namespace.clone(),
-                path: config
-                    .final_log_dir
-                    .join(relative)
-                    .to_string_lossy()
-                    .into_owned(),
-                level: OUTPUT_LEVEL,
-                min_seq: output.min_seq,
-                max_seq: output.max_seq,
-                row_count: output.rows,
-                byte_size,
-                created_at_ms,
-                min_key_value: Some(output.min_timestamp_ms.to_string()),
-                max_key_value: Some(output.max_timestamp_ms.to_string()),
-                location: SegmentLocation::Local,
-            })
-        })
-        .collect::<Result<Vec<_>, StatsError>>()?;
-    catalog.upsert_segments(&rows)?;
-    drop(catalog);
-
-    let built_catalog = build_dir.join(CATALOG_DB_FILENAME);
-    let final_catalog = config.output_dir.join(CATALOG_DB_FILENAME);
-    let temporary_catalog = temporary_path(&final_catalog);
-    if temporary_catalog.exists() {
-        std::fs::remove_file(&temporary_catalog)
-            .map_err(io_error("remove interrupted catalog publication"))?;
-    }
-    std::fs::rename(&built_catalog, &temporary_catalog)
-        .map_err(io_error("stage replacement catalog"))?;
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&temporary_catalog)
-        .map_err(io_error("open replacement catalog"))?;
-    file.sync_all()
-        .map_err(io_error("fsync replacement catalog"))?;
-    std::fs::rename(&temporary_catalog, &final_catalog)
-        .map_err(io_error("publish replacement catalog"))?;
-    std::fs::remove_dir_all(&build_dir).map_err(io_error("remove catalog build directory"))?;
-    Ok(())
-}
-
-fn adopt_unchanged_physical_segments(
-    config: &PrepareConfig,
-    catalog: &Catalog,
-) -> Result<(), StatsError> {
-    for shard in TELEMETRY_STORAGE_SHARDS {
-        let namespace = shard.storage_namespace;
-        let known_paths = catalog
-            .list_segments(namespace)?
-            .into_iter()
-            .map(|row| row.path)
-            .collect::<BTreeSet<_>>();
-        let namespace_dir = config.output_dir.join(namespace);
-        if !namespace_dir.is_dir() {
-            continue;
-        }
-        for path in discover_segments(&namespace_dir) {
-            let filename = path.file_name().ok_or_else(|| {
-                validation_error(format!(
-                    "physical segment has no filename: {}",
-                    path.display()
-                ))
-            })?;
-            let final_path = config
-                .final_log_dir
-                .join(namespace)
-                .join(filename)
-                .to_string_lossy()
-                .into_owned();
-            if known_paths.contains(&final_path) {
-                continue;
-            }
-            let footer = read_segment_footer(&path, Some("timestamp_ms")).ok_or_else(|| {
-                validation_error(format!(
-                    "could not read physical segment {}",
-                    path.display()
-                ))
-            })?;
-            let metadata = std::fs::metadata(&path).map_err(io_error("stat physical segment"))?;
-            let created_at_ms = metadata
-                .modified()
-                .ok()
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis() as i64)
-                .unwrap_or_else(now_ms);
-            catalog.upsert_segment(&SegmentRow {
-                namespace: namespace.to_string(),
-                path: final_path,
-                level: footer.level,
-                min_seq: footer.min_seq,
-                max_seq: footer.max_seq,
-                row_count: footer.row_count,
-                byte_size: metadata.len() as i64,
-                created_at_ms,
-                min_key_value: footer.min_key_value.map(|value| value.to_string()),
-                max_key_value: footer.max_key_value.map(|value| value.to_string()),
-                location: SegmentLocation::Local,
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn remap_catalog_paths(catalog: &Catalog, final_log_dir: &Path) -> Result<(), StatsError> {
-    for (namespace, _schema) in catalog.list_all()? {
-        let existing = catalog.list_segments(&namespace)?;
-        let mut removed = Vec::new();
-        let mut added = Vec::new();
-        for mut row in existing {
-            let path = Path::new(&row.path);
-            let filename = path.file_name().ok_or_else(|| {
-                validation_error(format!(
-                    "catalog segment has no filename: {}",
-                    path.display()
-                ))
-            })?;
-            removed.push(row.path.clone());
-            row.path = final_log_dir
-                .join(&namespace)
-                .join(filename)
-                .to_string_lossy()
-                .into_owned();
-            added.push(row);
-        }
-        catalog.replace_segments(&namespace, &removed, &added)?;
-    }
-    Ok(())
 }
 
 fn verify_source_segments(
@@ -1240,7 +1345,7 @@ fn arrow_error(context: &'static str) -> impl FnOnce(arrow::error::ArrowError) -
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, OpenOptions};
     use std::time::Duration;
 
     use arrow::array::{Float64Array, Int32Array};
@@ -1249,17 +1354,17 @@ mod tests {
     use crate::store::segment::write_segment_to_dir;
     use crate::store::store::{ServeMode, Store};
     use crate::telemetry_policy::{
-        IRIS_RPC_NAMESPACE, LEVANTER_DETAIL_STORAGE_NAMESPACE, LEVANTER_NAMESPACE,
-        LEVANTER_STATUS_STORAGE_NAMESPACE, NODE_AGENT_NAMESPACE, VLLM_NAMESPACE,
+        IRIS_RPC_NAMESPACE, LEGACY_NAMESPACE, LEVANTER_DETAIL_STORAGE_NAMESPACE,
+        LEVANTER_NAMESPACE, LEVANTER_STATUS_STORAGE_NAMESPACE, NODE_AGENT_NAMESPACE,
+        VLLM_NAMESPACE, ZEPHYR_NAMESPACE,
     };
 
     struct TestDirs {
         root: PathBuf,
-        source: PathBuf,
-        output: PathBuf,
+        store: PathBuf,
     }
 
-    struct PreparedStore {
+    struct PreparedMigration {
         dirs: TestDirs,
         manifest: MigrationManifest,
         source_sha: String,
@@ -1273,14 +1378,9 @@ mod tests {
                 .as_nanos();
             let root =
                 std::env::temp_dir().join(format!("finelog_telemetry_migration_{name}_{nonce}"));
-            let source = root.join("source");
-            let output = root.join("output");
-            fs::create_dir_all(&source).unwrap();
-            Self {
-                root,
-                source,
-                output,
-            }
+            let store = root.join("store");
+            fs::create_dir_all(&store).unwrap();
+            Self { root, store }
         }
     }
 
@@ -1372,12 +1472,12 @@ mod tests {
             .0
     }
 
-    fn prepared_store() -> PreparedStore {
+    fn prepared_migration() -> PreparedMigration {
         let dirs = TestDirs::new("prepare");
-        let catalog = Catalog::open(Some(&dirs.source)).unwrap();
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
         let root = add_segment(
             &catalog,
-            &dirs.source,
+            &dirs.store,
             TELEMETRY_NAMESPACE,
             1,
             1,
@@ -1388,6 +1488,7 @@ mod tests {
                     "iris-node-agent",
                     "iris-controller",
                     "vllm",
+                    "zephyr",
                     "unowned-service",
                 ],
                 &[
@@ -1396,14 +1497,22 @@ mod tests {
                     "node_cpu_utilization_percent",
                     "rpc_requests_total",
                     "vllm_request_latency",
+                    "progress_time_seconds",
                     "custom_metric",
                 ],
                 1,
             ),
         );
+        add_orphan_segment(
+            &dirs.store,
+            TELEMETRY_NAMESPACE,
+            0,
+            100,
+            &telemetry_batch(&["levanter"], &["orphan_root_row"], 100),
+        );
         add_segment(
             &catalog,
-            &dirs.source,
+            &dirs.store,
             "telemetry_v1.levanter.extra",
             1,
             1,
@@ -1411,31 +1520,27 @@ mod tests {
         );
         add_segment(
             &catalog,
-            &dirs.source,
+            &dirs.store,
             "telemetry_storage_v1.levanter.detail",
             1,
             1,
             &telemetry_batch(&["levanter"], &["existing_detail"], 1),
         );
         add_orphan_segment(
-            &dirs.source,
+            &dirs.store,
             "telemetry_storage_v1.levanter.detail",
             0,
             100,
             &telemetry_batch(&["levanter"], &["orphan_detail"], 100),
         );
         drop(catalog);
-        fs::create_dir_all(dirs.source.join("iris.task")).unwrap();
-        fs::write(dirs.source.join("iris.task/unchanged.marker"), b"preserved").unwrap();
         let source_sha = file_sha256(&root).unwrap();
-        let manifest = prepare_store(&PrepareConfig {
-            source_dir: dirs.source.clone(),
-            output_dir: dirs.output.clone(),
-            final_log_dir: dirs.output.clone(),
+        let manifest = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
             batch_rows: 2,
         })
         .unwrap();
-        PreparedStore {
+        PreparedMigration {
             dirs,
             manifest,
             source_sha,
@@ -1443,105 +1548,82 @@ mod tests {
     }
 
     #[test]
-    fn prepare_store_routes_every_legacy_row_and_preserves_the_source() {
-        let PreparedStore {
+    fn prepare_in_place_routes_every_legacy_row_and_preserves_the_live_store() {
+        let PreparedMigration {
             dirs,
             manifest,
             source_sha,
-        } = prepared_store();
+        } = prepared_migration();
 
-        assert_eq!(manifest.input_rows, 7);
-        assert_eq!(manifest.output_rows, 7);
-        assert_eq!(manifest.residual_rows, 1);
+        assert_eq!(manifest.input_rows, 8);
+        assert_eq!(manifest.output_rows, 8);
+        assert_eq!(manifest.residual_rows, 0);
         assert!(manifest.complete);
-        assert_eq!(
-            fs::read(dirs.output.join("iris.task/unchanged.marker")).unwrap(),
-            b"preserved"
-        );
+        assert_eq!(manifest.phase, MigrationPhase::Staged);
         assert_eq!(
             file_sha256(
                 &dirs
-                    .source
+                    .store
                     .join("telemetry_v1/seg_L1_0000000000000000001.parquet")
             )
             .unwrap(),
             source_sha
         );
-
-        let catalog = Catalog::open(Some(&dirs.output)).unwrap();
-        let local_rows = |namespace: &str| {
-            catalog
-                .list_segments(namespace)
-                .unwrap()
-                .iter()
-                .filter(|segment| segment.location != SegmentLocation::Remote)
-                .map(|segment| segment.row_count)
-                .sum::<i64>()
-        };
-        assert_eq!(local_rows("telemetry_v1"), 1);
-        assert_eq!(local_rows("telemetry_storage_v1.levanter.status"), 2);
-        assert_eq!(local_rows("telemetry_storage_v1.levanter.detail"), 3);
-        assert_eq!(local_rows("telemetry_storage_v1.node_agent"), 1);
-        assert_eq!(local_rows("telemetry_storage_v1.iris_rpc"), 1);
-        assert_eq!(local_rows("telemetry_storage_v1.vllm"), 1);
-        assert!(catalog
-            .list_segments("telemetry_v1.levanter.extra")
-            .unwrap()
+        assert!(manifest
+            .source_segments
             .iter()
-            .all(|segment| segment.location == SegmentLocation::Remote));
-        let detail = catalog
-            .list_segments("telemetry_storage_v1.levanter.detail")
-            .unwrap();
-        assert_eq!(
-            detail
-                .iter()
-                .map(|segment| (segment.min_seq, segment.max_seq, segment.location))
-                .collect::<Vec<_>>(),
-            vec![
-                (1, 1, SegmentLocation::Both),
-                (100, 100, SegmentLocation::Local),
-                (101, 101, SegmentLocation::Local)
-            ]
-        );
-        assert!(detail
+            .flat_map(|source| source.outputs.iter())
+            .all(|output| output.min_seq < 0 && output.max_seq < 0));
+        let staged_dir = dirs.store.join(MIGRATION_DIRECTORY).join(STAGED_DIRECTORY);
+        assert!(manifest
+            .source_segments
             .iter()
-            .all(|segment| Path::new(&segment.path).starts_with(&dirs.output)));
+            .flat_map(|source| source.outputs.iter())
+            .all(|output| staged_dir.join(&output.relative_path).is_file()));
     }
 
     #[test]
-    fn prepare_store_resume_reuses_verified_outputs_without_duplicates() {
-        let PreparedStore {
+    fn prepare_in_place_resume_reuses_verified_outputs_without_duplicates() {
+        let PreparedMigration {
             dirs,
             manifest: first,
             ..
-        } = prepared_store();
-        let second = prepare_store(&PrepareConfig {
-            source_dir: dirs.source.clone(),
-            output_dir: dirs.output.clone(),
-            final_log_dir: dirs.output.clone(),
+        } = prepared_migration();
+        let second = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
             batch_rows: 3,
         })
         .unwrap();
 
         assert_eq!(second, first);
-        let catalog = Catalog::open(Some(&dirs.output)).unwrap();
-        assert_eq!(
-            catalog
-                .list_segments("telemetry_storage_v1.levanter.status")
-                .unwrap()
-                .iter()
-                .filter(|segment| segment.location != SegmentLocation::Remote)
-                .map(|segment| segment.row_count)
-                .sum::<i64>(),
-            2
-        );
     }
 
     #[tokio::test]
-    async fn prepared_store_boots_with_semantic_query_aliases() {
-        let PreparedStore { dirs, .. } = prepared_store();
+    async fn publish_then_retire_switches_visibility_without_rewriting_again() {
+        let PreparedMigration { dirs, .. } = prepared_migration();
+        let published = publish_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+        assert_eq!(published.phase, MigrationPhase::Published);
+        assert_eq!(
+            published.published_files.len(),
+            published
+                .source_segments
+                .iter()
+                .map(|source| source.outputs.len())
+                .sum::<usize>()
+        );
+        let repeated_prepare = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+        assert_eq!(repeated_prepare.phase, MigrationPhase::Published);
+
         let store = Store::new(
-            Some(dirs.output.clone()),
+            Some(dirs.store.clone()),
             String::new(),
             1,
             ServeMode::Shadow,
@@ -1559,53 +1641,94 @@ mod tests {
         assert!(provider_names.contains(NODE_AGENT_NAMESPACE));
         assert!(provider_names.contains(IRIS_RPC_NAMESPACE));
         assert!(provider_names.contains(VLLM_NAMESPACE));
+        assert!(provider_names.contains(ZEPHYR_NAMESPACE));
+        assert!(provider_names.contains(LEGACY_NAMESPACE));
         assert!(!provider_names.contains(LEVANTER_STATUS_STORAGE_NAMESPACE));
         assert!(!provider_names.contains(LEVANTER_DETAIL_STORAGE_NAMESPACE));
 
         store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+
+        let retired = retire_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+        assert_eq!(retired.phase, MigrationPhase::Retired);
+        assert!(!retired.retired_files.is_empty());
+        verify_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+
+        let store = Store::new(
+            Some(dirs.store.clone()),
+            String::new(),
+            1,
+            ServeMode::Shadow,
+        )
+        .expect("retired store should boot");
+        let provider_names = store
+            .query_providers()
+            .unwrap()
+            .into_iter()
+            .map(|provider| provider.name)
+            .collect::<BTreeSet<_>>();
+        assert!(!provider_names.contains(TELEMETRY_NAMESPACE));
+        assert!(provider_names.contains(LEVANTER_NAMESPACE));
+        store.shutdown(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn publish_refuses_a_store_held_by_a_running_server() {
+        let PreparedMigration { dirs, .. } = prepared_migration();
+        let store = Store::new(
+            Some(dirs.store.clone()),
+            String::new(),
+            1,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+
+        assert!(publish_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .is_err());
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
     }
 
     #[test]
-    fn verify_store_rejects_a_changed_source_snapshot() {
-        let PreparedStore { dirs, .. } = prepared_store();
+    fn verify_in_place_rejects_a_changed_source_snapshot() {
+        let PreparedMigration { dirs, .. } = prepared_migration();
         let root = dirs
-            .source
+            .store
+            .join(MIGRATION_DIRECTORY)
+            .join(SOURCE_SNAPSHOT_DIRECTORY)
             .join("telemetry_v1/seg_L1_0000000000000000001.parquet");
         let mut file = OpenOptions::new().append(true).open(root).unwrap();
         file.write_all(b"changed").unwrap();
 
-        assert!(verify_store(&dirs.source, &dirs.output, 2).is_err());
+        assert!(verify_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .is_err());
     }
 
     #[test]
-    fn verify_store_rejects_a_missing_migrated_catalog_row() {
-        let PreparedStore { dirs, manifest, .. } = prepared_store();
-        let output = &manifest.source_segments[0].outputs[0];
-        let catalog_path = Path::new(&manifest.final_log_dir).join(&output.relative_path);
-        let connection = rusqlite::Connection::open(dirs.output.join(CATALOG_DB_FILENAME)).unwrap();
-        connection
-            .execute(
-                "DELETE FROM segments WHERE namespace = ?1 AND path = ?2",
-                rusqlite::params![output.namespace, catalog_path.to_string_lossy()],
-            )
-            .unwrap();
-
-        assert!(verify_store(&dirs.source, &dirs.output, 2).is_err());
-    }
-
-    #[test]
-    fn prepare_store_rejects_a_forwarding_sender() {
+    fn prepare_in_place_rejects_a_forwarding_sender() {
         let dirs = TestDirs::new("forwarding");
-        let catalog = Catalog::open(Some(&dirs.source)).unwrap();
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
         catalog
             .set_forward_cursor("hub", TELEMETRY_NAMESPACE, 12)
             .unwrap();
         drop(catalog);
 
-        assert!(prepare_store(&PrepareConfig {
-            source_dir: dirs.source.clone(),
-            output_dir: dirs.output.clone(),
-            final_log_dir: dirs.output.clone(),
+        assert!(prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
             batch_rows: 2,
         })
         .is_err());

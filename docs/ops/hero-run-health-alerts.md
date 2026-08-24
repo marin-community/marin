@@ -46,7 +46,7 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 Uniform routing over the hero rung's experts is 5.951 entropy, so falling entropy is expert collapse.
 The 7% drop limit sits above the intermittent 5% spikes a healthy MoE run shows.
 
-One bounded `telemetry_v1` scan per bridge cache interval feeds all three rules, reduced over a
+One bounded `telemetry_v1.levanter` scan per bridge cache interval feeds all three rules, reduced over a
 single execution: the newest attempt process zero reports. `loss_jump` reads its two loss windows
 against each other, so it filters them to that same execution. A retry keeps the run ID and takes a
 new `execution_uid`, so partitioning on the run alone would sum one attempt's skipped steps into the
@@ -109,7 +109,7 @@ SELECT
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
-FROM "telemetry_v1"
+FROM "telemetry_v1.levanter"
 WHERE service = 'levanter'
   AND run_id = '<hero-run-id>'
   AND name IN ('phase', 'grad_norm_total', 'optim_skipped_step', 'moe_drop_fraction',

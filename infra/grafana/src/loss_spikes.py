@@ -68,8 +68,7 @@ def loss_window_query(now: datetime, runs: Sequence[RunIdentity], executions: Se
     end = sql_epoch_ms(now)
     recent_ms = sql_epoch_ms(now - _RECENT_WINDOW)
     return (
-        'WITH telemetry AS (SELECT * FROM "telemetry_v1" '
-        'UNION ALL SELECT * FROM "telemetry_v1.levanter"), samples AS ('
+        'WITH telemetry AS (SELECT * FROM "telemetry_v1.levanter"), samples AS ('
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, value, timestamp_ms "
         "FROM telemetry "
         f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
