@@ -7,7 +7,12 @@ from typing import cast
 
 import pytest
 
-from scripts.ci.pulumi_rollouts import rollout_for_service, rollouts_for_paths, workflow_payload
+from scripts.ci.pulumi_rollouts import (
+    automatic_rollouts_for_paths,
+    rollout_for_service,
+    rollouts_for_paths,
+    workflow_payload,
+)
 
 
 @pytest.mark.parametrize(
@@ -38,3 +43,9 @@ def test_rollout_payload_passes_deploy_cli_config() -> None:
 
     assert item["name"] == "ducky"
     assert item["config"] == "ducky:deploy_generation=17"
+
+
+def test_cloud_run_rollouts_wait_for_iam_state_transfer() -> None:
+    selected = {rollout.name for rollout in automatic_rollouts_for_paths(["infra/pulumi/src/iac/gcp/cloud_run.py"])}
+
+    assert {"echo", "evaldash", "grafana"}.isdisjoint(selected)

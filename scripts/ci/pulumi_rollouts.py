@@ -28,6 +28,10 @@ CLOUD_RUN_SOURCE_ROOTS = (
     "lib/rigging/src/rigging/auth.py",
 )
 IRIS_SOURCE_ROOTS = ("infra/pulumi/src/iac/iris",)
+# Infra owns this gate. Remove it after the ``marin`` stack imports the live grants and the Echo,
+# EvalDash, and Grafana IAM resources are detached from their leaf states. Track the transfer at
+# https://github.com/marin-community/marin/issues/8455. Manual dispatch remains available.
+IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS = frozenset({"echo", "evaldash", "grafana"})
 
 
 ROLLOUTS = (
@@ -99,6 +103,12 @@ def rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
     )
 
 
+def automatic_rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
+    return tuple(
+        rollout for rollout in rollouts_for_paths(paths) if rollout.name not in IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS
+    )
+
+
 def rollout_for_service(name: str) -> Rollout:
     for rollout in ROLLOUTS:
         if rollout.name == name:
@@ -138,7 +148,7 @@ def main() -> None:
         else:
             if args.deploy_generation:
                 raise ValueError("--deploy-generation requires --service")
-            selected = rollouts_for_paths(line.strip() for line in sys.stdin if line.strip())
+            selected = automatic_rollouts_for_paths(line.strip() for line in sys.stdin if line.strip())
         print(json.dumps(workflow_payload(selected, args.deploy_generation), separators=(",", ":")))
     except ValueError as error:
         parser.error(str(error))

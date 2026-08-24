@@ -25,7 +25,7 @@ the matching `OPS.md` section:
 Read the guardrails beside the commands. Never modify the controller database,
 prefer `iris process profile` over SSH, and never run a full
 `iris cluster restart` without approval. After a TPU recovery or Zephyr fix,
-return to the active `babysit-job` or `babysit-zephyr` loop.
+return to the active Iris job-monitoring or `babysit-zephyr` loop.
 
 ## Code bugs
 
