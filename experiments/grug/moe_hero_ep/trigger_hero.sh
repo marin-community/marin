@@ -15,7 +15,7 @@ RUN_ID=hero-12d8b6f0-dee637
 short_uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
 short_uuid=${short_uuid:0:8}
 
-uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a \
   --priority production \
   --cpu 1 \
