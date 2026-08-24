@@ -8,3 +8,6 @@ ra2a-dkn-01c-leanpath	092af96532	2026.08.23.18	ragged_all_to_all	synthetic	disab
 ra2a-dkn-01d-leanpath	2041f6cb98	2026.08.23.19	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
 ra2a-dkn-02-splits32	885684f800	2026.08.23.20	ragged_all_to_all	synthetic	disabled	4470000	2100	none	--ragged-all-to-all-splits-per-peer 32
 ra2a-dkn-03-posture-lhs	3e531bab3f	2026.08.23.21	ragged_all_to_all	synthetic	disabled	4470000	2100	none	none
+ra2a-dkn-04-ab-dk-6k	d7db1b2698	2026.08.24.1	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-dkn-04b-ab-dk-6k	aa1cc02fde	2026.08.24.2	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-dkn-04c-ab-dk-6k	c11c3d98b0	2026.08.24.3	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
