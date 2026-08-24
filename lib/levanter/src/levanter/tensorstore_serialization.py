@@ -161,19 +161,16 @@ def _slice_shard_on_device(data, axis: int, start: int, limit: int):
 
 
 async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, int] | None = None) -> np.ndarray:
-    """Snapshot a shard into pageable host memory, restricted to ``local_slice``.
-
-    Unsliced GPU shards are training-owned. Staging them on a disposable pageable CPU array keeps
-    JAX's NumPy cache off the live shard without entering CUDA's pinned-host allocator. Sliced
-    shards are already disposable, and TPU keeps its direct path.
-    """
+    """Return a detached pageable-host snapshot, restricted to ``local_slice``."""
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
 
     if getattr(data.sharding, "memory_kind", None) == _HOST_MEMORY_KIND:
         # Already in host memory, and copying it to host again would alias rather than move.
         return np.array(data, copy=True)
 
-    if local_slice is None and data.device.platform == _GPU_PLATFORM:
+    # np.array(data) populates a GPU array's host cache, including for disposable slices. Going
+    # through a pageable CPU array lets the CUDA DMA pool reuse its internal pinned bounce buffer.
+    if data.device.platform == _GPU_PLATFORM:
         cpu_device = jax.local_devices(backend="cpu")[0]
         pageable_sharding = SingleDeviceSharding(cpu_device, memory_kind=_PAGEABLE_HOST_MEMORY_KIND)
         staged = jax.device_put(data, pageable_sharding)
