@@ -24,6 +24,7 @@ package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
 import logging
+import math
 import os
 import re
 import signal
@@ -40,7 +41,7 @@ import cloudpickle
 import psutil
 from rigging.filesystem.storage_path import StoragePath
 
-from zephyr import counters, memory_budget
+from zephyr import counters
 from zephyr.plan import Scatter, StageContext, run_stage
 from zephyr.stage_io import (
     ShardTask,
@@ -437,14 +438,13 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             child_env = os.environ.copy()
-            child_env["POLARS_MAX_THREADS"] = str(memory_budget.polars_thread_count(task.cost.cpu))
-            with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                returncode = self._child_returncode(
-                    [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],
-                    child_env,
-                    execution_id,
-                    task.stage_name,
-                )
+            child_env["OMP_NUM_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
+            returncode = self._child_returncode(
+                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
+                child_env,
+                execution_id,
+                task.stage_name,
+            )
 
             if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
