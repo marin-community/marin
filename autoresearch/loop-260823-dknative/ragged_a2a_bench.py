@@ -65,7 +65,10 @@ def main() -> None:
             mesh=mesh,
             in_specs=(P("x"), P("x"), P("x"), P("x"), P("x"), P("x")),
             out_specs=P("x"),
-        )
+        ),
+        # Donate the output buffer and feed it back each call, as a training step
+        # does; without donation every call pays a fresh 3.2 GB materialization.
+        donate_argnums=(1,),
     )
 
     def shard(build_row):
@@ -84,14 +87,15 @@ def main() -> None:
         shard(lambda r: recv_sizes),
     ]
 
+    x, out, *meta = args
     for _ in range(WARMUP):
-        result = fn(*args)
-    result.block_until_ready()
+        out = fn(x, out, *meta)
+    out.block_until_ready()
 
     start = time.perf_counter()
     for _ in range(ITERS):
-        result = fn(*args)
-    result.block_until_ready()
+        out = fn(x, out, *meta)
+    out.block_until_ready()
     elapsed = time.perf_counter() - start
 
     ms = elapsed / ITERS * 1e3
