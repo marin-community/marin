@@ -611,7 +611,7 @@ message Controller {
   message SetUserBudgetRequest {
     string user_id = 1;
     int64 budget_limit = 2;      // max budget value (0 = unlimited)
-    iris.job.PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+    iris.job.PriorityBand max_band = 3;   // highest-priority band this user can submit to
   }
   message SetUserBudgetResponse {}
 
