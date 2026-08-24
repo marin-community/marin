@@ -25,9 +25,11 @@ Storage, and Cloudflare R2 buckets.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+used by `infra/echo`, `infra/evaldash`, and `infra/grafana`), `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
-`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
+`infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
+used by [`infra/finelog`](../finelog/README.md)). Every `CloudRunService` grants
+`roles/iap.httpsResourceAccessor` to the
 OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
 desktop OAuth client as a programmatic audience. The `iap_members` and
 `iap_programmatic_clients` arguments are only for service-specific exceptions.
@@ -276,17 +278,23 @@ project's paths and calls `./.github/actions/pulumi-preview` with its own `stack
 
 ## Unsupported
 
-- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
-  minted with `iris cluster init-keys` — the key material must never pass through Pulumi state.
+- **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual.
+  Iris keys are minted with `iris cluster init-keys`; Finelog forwarding keys follow
+  [`lib/finelog/OPS.md`](../../lib/finelog/OPS.md). Their values never pass through Pulumi state.
 - **IAP Web OAuth client creation and secrets** stay in the Cloud Console. Pulumi preserves
   the existing client fields while managing IAP enablement, programmatic clients, and access.
 
 ## Future work
 
 - **CKS cluster object + VPC**: not yet managed by Pulumi; `CoreweaveCluster` only records the
-  resulting cluster identity as config (`CksClusterSpec`). The published CoreWeave Pulumi
-  package used for object storage also exposes the CKS and VPC resource types.
-- **finelog server Deployment**: a planned `FinelogServer` component, not yet built.
+  resulting cluster identity as config (`CksClusterSpec`). CoreWeave publishes an official
+  Terraform provider Pulumi could bridge
+  (`pulumi package add terraform-provider coreweave/coreweave`).
+- **Object storage** (`s3://marin-<region>` buckets + access keys): no schema or component
+  exists yet; buckets are created by hand plus `configure_buckets.py` for lifecycle rules.
+  `cw-rno2a` uses `marin-us-east-02a` through the LOTA endpoint, while `cw-us-east-02a` and
+  `cw-us-east-08a` share `marin-na` on R2. It remains undecided whether Pulumi should provision
+  a bucket per cluster or shared buckets are the standing choice.
 - **Federation peers**: `lib/iris/config/marin.yaml`/`marin-dev.yaml`'s `peers:` entries are
   hand-edited per cluster; generate or CI-validate the peer set from the cluster configs so a
   cluster can't be reachable-but-unregistered or registered-but-missing.

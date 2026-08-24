@@ -20,7 +20,7 @@ Example:
 import logging
 import re
 from collections.abc import Callable, Generator, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -51,8 +51,10 @@ from iris.cluster.client import (
 )
 from iris.cluster.constraints import (
     Constraint,
+    WellKnownAttribute,
     is_any_region_marker,
     merge_constraints,
+    region_constraint,
 )
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
@@ -602,46 +604,6 @@ class Job:
 # =============================================================================
 
 
-class EndpointRegistry(Protocol):
-    def register(
-        self,
-        name: str,
-        address: str,
-        metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
-    ) -> str:
-        """Register an endpoint for actor discovery.
-
-        Args:
-            name: Actor name for discovery
-            address: Address where actor is listening (host:port)
-            metadata: Optional metadata for the endpoint
-            access: Proxy access mode — PRIVATE (default), PUBLIC, or BEARER.
-
-        Returns:
-            Unique endpoint ID for later unregistration
-        """
-        ...
-
-    def unregister(self, endpoint_id: str) -> None:
-        """Unregister a previously registered endpoint.
-
-        Args:
-            endpoint_id: ID returned from register()
-        """
-        ...
-
-    def registered(
-        self,
-        name: str,
-        address: str,
-        metadata: dict[str, str] | None = None,
-        access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE,
-    ) -> AbstractContextManager[str]:
-        """Own one renewable endpoint registration for a context lifetime."""
-        ...
-
-
 class NamespacedEndpointRegistry:
     """Endpoint registry that auto-prefixes names with a namespace."""
 
@@ -1064,6 +1026,15 @@ class IrisClient:
                 constraints = []
             else:
                 constraints = merge_constraints(parent_constraints, constraints)
+
+            # Default children to the parent's resolved location. An explicit region,
+            # including the ANY marker, owns placement instead.
+            if (
+                job_info
+                and job_info.worker_region
+                and not any(constraint.key == WellKnownAttribute.REGION for constraint in constraints)
+            ):
+                constraints = [*constraints, region_constraint([job_info.worker_region])]
 
         # The ANY-region marker clears inherited region constraints during merging.
         # Drop it before the wire so it does not exclude workers without region metadata.

@@ -27,14 +27,24 @@ def test_stitch_dashboard_leaves_non_ref_panels_untouched():
     assert stitch_dashboard(source, {})["panels"] == [inline_panel]
 
 
-def test_stitch_dashboard_resolves_shared_links():
-    source = {"links": [{"linkRef": "cluster_capacity"}], "panels": []}
+@pytest.mark.parametrize(
+    ("link_ref", "expected_title", "expected_url", "expected_include_vars"),
+    [
+        ("cluster_capacity", "Cluster capacity", "/d/marin-cluster-capacity", True),
+        ("fleet_accelerators_without_vars", "Fleet accelerators", "/d/marin-accel", False),
+        ("fleet_health", "Fleet health", "/d/marin-clusters", True),
+    ],
+)
+def test_stitch_dashboard_resolves_shared_links(
+    link_ref: str, expected_title: str, expected_url: str, expected_include_vars: bool
+):
+    source = {"links": [{"linkRef": link_ref}], "panels": []}
 
     (link,) = stitch_dashboard(source, {})["links"]
 
-    assert link["title"] == "Cluster capacity"
-    assert link["url"] == "/d/marin-cluster-capacity"
-    assert link["includeVars"] is True
+    assert link["title"] == expected_title
+    assert link["url"] == expected_url
+    assert link["includeVars"] is expected_include_vars
 
 
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():

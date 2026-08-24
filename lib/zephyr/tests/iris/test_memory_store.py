@@ -12,8 +12,8 @@ import pytest
 from iris.cluster.types import JobName, TaskAttempt
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.memory_store import MemoryStorePartitionError
 from zephyr.testing.context import memory_store_context
 

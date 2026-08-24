@@ -1,27 +1,15 @@
 ---
 name: reserve-tpu
-description: Reserve an Iris-backed TPU worker for fast debugging with dev_tpu.py.
+description: Reserve or operate an Iris-backed TPU worker with scripts/iris/dev_tpu.py only when explicitly requested for a dev TPU session.
 ---
 
-# Skill: Dev TPU
-
-Use this skill for the standard fast TPU debugging loop without wiring a full training job each time.
+# Dev TPU
 
 `scripts/iris/dev_tpu.py` reserves a TPU-backed worker through Iris, waits for the worker VM to come up, and lets you SSH into it or run commands directly against it. It uses `gcloud` SSH and SCP against the worker Iris assigned to the holder job. There is no persistent `~/.ssh/config` alias.
 
 ## Critical concurrency rule
 
 Run at most one TPU job at a time on a given dev TPU VM. Do not launch concurrent TPU commands on the same worker from multiple shells, tmux panes, or background jobs.
-
-## Commands
-
-- `allocate`: submit a TPU holder job, resolve the assigned worker VM(s), optionally sync the repo, block until release
-- `status`: show the active local session metadata
-- `connect`: open an interactive SSH session to one reserved worker
-- `setup_env`: sync the repo by default, then install/refresh the remote `uv` environment on one or all reserved workers
-- `execute`: sync local files to `~/marin` on the reserved worker(s), then run one command
-- `watch`: sync all reserved workers and rerun a command on the selected worker when local files change
-- `release`: terminate the holder job and remove the local session file
 
 ## Prerequisites
 
@@ -34,13 +22,11 @@ gcloud auth application-default login
 make dev_setup
 ```
 
-2. Ensure the Iris controller is running for your cluster. On shared Marin clusters this is usually already true; only start it yourself for a fresh or local cluster.
-
-3. Use a cluster config that can actually provision the TPU type you want.
+2. Use a cluster config that provisions the requested TPU. Shared clusters
+   normally already have a controller; never start or restart one without
+   explicit approval.
 
 ## Command pattern
-
-All invocations share this shape; only the subcommand and its flags change:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
@@ -91,7 +77,7 @@ uv run iris --config=lib/iris/config/marin.yaml cluster vm logs <worker-id>
 - If the `allocate` terminal dies unexpectedly, use `release` to terminate the holder job and clear the stale state file.
 - `execute` and `watch` already wrap the remote command in `bash -lc`; do not pass your own `bash -c`.
 
-## Agent Usage
+## Unique session name
 
 Always pass `--tpu-name` to avoid collisions with other agents:
 

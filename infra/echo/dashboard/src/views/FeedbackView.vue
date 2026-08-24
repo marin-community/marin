@@ -66,7 +66,8 @@ onMounted(load)
                 <a class="font-semibold leading-5 hover:text-moss" :href="result.url" rel="noreferrer" target="_blank">
                   {{ result.title }}
                 </a>
-                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.key || result.source_id }}</span>
+                <span class="mt-1 block break-all font-mono text-[11px] text-ink/35">{{ result.source_id }}</span>
+                <span v-if="result.key" class="mt-1 block font-mono text-[11px] text-ink/30">Grade key {{ result.key }}</span>
               </div>
             </div>
           </div>
@@ -115,7 +116,8 @@ onMounted(load)
                 <a class="line-clamp-2 font-semibold leading-5 hover:text-moss" :href="result.url" rel="noreferrer" target="_blank">
                   {{ result.title }}
                 </a>
-                <span class="mt-1 block truncate font-mono text-[11px] text-ink/35">{{ result.key || result.source_id }}</span>
+                <span class="mt-1 block break-all font-mono text-[11px] text-ink/35">{{ result.source_id }}</span>
+                <span v-if="result.key" class="mt-1 block font-mono text-[11px] text-ink/30">Grade key {{ result.key }}</span>
               </td>
               <td v-if="index === 0" class="px-3 py-4" :rowspan="entry.grades.length">
                 <p class="font-medium leading-5 text-ink/80">{{ entry.query }}</p>

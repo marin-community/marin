@@ -5,6 +5,8 @@ import {
   frameWithField,
   nightlyCells,
   nodeMetrics,
+  smUtilizationPoints,
+  smUtilizationRasterData,
   taskUsage,
   workerRegions,
   workloadAllocations,
@@ -82,4 +84,21 @@ test('cluster capacity contracts read placement, inventory, and observed usage b
   }]))).toEqual([{
     cluster: 'cw-us-east-02a', node: 'gpu-1', name: 'gpu_utilization_percent', value: 82, sampledAt: 1000,
   }]);
+});
+
+test('SM raster orders devices and preserves missing time buckets', () => {
+  const points = smUtilizationPoints(frame([
+    { cluster: 'cw-b', node: 'node-10', gpu: '1', time: 60_000, sm_utilization: 90 },
+    { cluster: 'cw-a', node: 'node-2', gpu: '0', time: 60_000, sm_utilization: 30 },
+    { cluster: 'cw-a', node: 'node-2', gpu: '0', time: 0, sm_utilization: 20 },
+  ]));
+
+  const raster = smUtilizationRasterData(points);
+
+  expect(raster.devices).toEqual([
+    { cluster: 'cw-a', node: 'node-2', gpu: '0' },
+    { cluster: 'cw-b', node: 'node-10', gpu: '1' },
+  ]);
+  expect(raster.timestamps).toEqual([0, 60_000]);
+  expect(Array.from(raster.values)).toEqual([20, 30, Number.NaN, 90]);
 });

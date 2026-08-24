@@ -729,7 +729,7 @@
       "id": 7,
       "type": "table",
       "title": "Reset-aware latency evidence",
-      "description": "TTFT, TPOT/inter-token, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
+      "description": "TTFT, request TPOT, inter-token latency, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -908,14 +908,7 @@
       "url": "/d/marin-home"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Accelerators",
-      "type": "link",
-      "url": "/d/marin-accel"
+      "linkRef": "fleet_accelerators_without_vars"
     },
     {
       "asDropdown": false,
@@ -958,14 +951,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health_without_vars"
     },
     {
       "asDropdown": false,

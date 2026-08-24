@@ -487,6 +487,8 @@ class Checkpointer:
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
         self._temporary_checkpoints = []
+        self._checkpoint_request_lock = threading.Lock()
+        self._checkpoint_requested = False
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -565,7 +567,8 @@ class Checkpointer:
         # then we could end up with a situation where one process saves a checkpoint, and then another process
         # saves a checkpoint for the next step, etc. This leads to partial checkpoints, no good.
         # we fix by having process 0 make the decision
-        my_should_save = force
+        checkpoint_requested = self._consume_checkpoint_request()
+        my_should_save = force or checkpoint_requested
         my_save_permanent_ckpt = force
 
         if not force:
@@ -574,7 +577,7 @@ class Checkpointer:
             if current_every is not None and step % current_every == 0:
                 my_should_save = True
                 my_save_permanent_ckpt = True
-            elif self.save_interval and last_save_time >= self.save_interval:
+            elif not checkpoint_requested and self.save_interval and last_save_time >= self.save_interval:
                 my_should_save = True
                 my_save_permanent_ckpt = False
 
@@ -618,6 +621,17 @@ class Checkpointer:
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
             )
+
+    def request_checkpoint(self) -> None:
+        """Request a checkpoint on the next step, subject to the save policy."""
+        with self._checkpoint_request_lock:
+            self._checkpoint_requested = True
+
+    def _consume_checkpoint_request(self) -> bool:
+        with self._checkpoint_request_lock:
+            requested = self._checkpoint_requested
+            self._checkpoint_requested = False
+        return requested
 
     def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:
         search_paths = [self.base_path]

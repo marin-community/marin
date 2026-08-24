@@ -28,6 +28,7 @@ dependencies = [
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
+    "marin-deploy",
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
@@ -137,6 +138,7 @@ members = [
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
+    "infra/deploy",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
 # owns its own build backend and package metadata. The path sources below build
@@ -151,6 +153,7 @@ exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/exte
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
@@ -263,6 +266,7 @@ project-includes = [
     "lib/zephyr/src/**/*.py",
     "lib/finestore/src/**/*.py",
     "infra/evaldash/src/**/*.py",
+    "infra/deploy/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -280,6 +284,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "infra/deploy/src",
 ]
 disable-search-path-heuristics = true
 
@@ -436,7 +441,7 @@ markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
-    "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "cluster: mark smokes that submit a real job to a standing Marin cluster (run directly with explicit credentials)",
     "requires_cluster: mark Iris tests that start or connect to a cluster",
     "docker: mark tests that require a Docker daemon",
     "manual: mark tests that are run by hand on demand, never by any CI workflow",

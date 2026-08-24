@@ -1,21 +1,17 @@
 ---
 name: deploy-iris-controllers
-description: Deploy the Iris controller to one cluster or across the fleet, with automatic progress through passed gates. Use when restarting, rolling out, or rolling back a controller.
+description: Deploy, restart, or roll back the Iris controller for an explicitly named cluster set.
 ---
 
-# Skill: Deploy Iris controllers
+# Deploy Iris controllers
 
-Roll the controller in your working tree out to one cluster or to the whole
-fleet. Process one cluster at a time. Continue automatically after each passed
-gate. Stop when a gate is blocked. The reference for every command is
+Process one cluster at a time, continue after passed gates, and stop the fleet
+at the first blocked gate. The command reference is
 `lib/iris/OPS.md` ("Controller Restart", "Rolling back a controller deploy",
 "Controller Checkpoint Rollback").
 
-**A restart deploys your working tree, not `main`.** `iris cluster controller
-restart` builds images from HEAD plus staged and unstaged changes
-(`get_git_sha()` hashes tree content) and pins the deploy to that hash. Update
-the checkout first: a stale checkout ships stale code, which once cost ~5
-red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
+`iris cluster controller restart` deploys the working tree, including staged
+and unstaged changes; it does not deploy `main`. Update the checkout first.
 
 ## Rules
 
@@ -24,35 +20,24 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
    control-plane downtime, workers unaffected.
    It does not reconcile Pulumi-managed Kueue charts, ResourceFlavors,
    ClusterQueues, or CoreWeave NodePools.
-2. Treat an explicit rollout request as approval for its cluster set. Use its
-   order when given. Otherwise, use the order from `plan`. Ask only when the
-   scope is missing or ambiguous.
-3. Evaluate each gate from the command evidence. Report a passed gate and
-   continue without operator input.
-4. Stop the whole rollout at the first blocked gate. Report the cause. After a
+2. An explicit rollout request approves its named cluster set and order. Use
+   `plan` order when none is given; ask only when scope is ambiguous.
+3. Report each passed gate and continue without more operator input.
+4. Stop the fleet at the first blocked gate. After a
    restart, offer `--rollback` for that cluster. Do not continue to other
    clusters. Do not retry a restart to "see if it sticks".
 5. Never modify the controller database. Never take an action outside the
    approved rollout scope.
-6. Continuously monitor the stdout and stderr of each command until it exits. If
-   a tool yields, poll the same task and read each new output block. Do not pipe
-   a command to `tail -25` or an equivalent last-lines command. Such a pipeline
-   hides earlier output and gives no useful progress while the command runs.
+6. Monitor each command through exit. If it yields, resume the same task and
+   read new output. Do not pipe to `tail`; it hides earlier evidence.
+7. Run every controller lifecycle command through Iris's `controller` extra:
+   `uv run --package marin-iris --extra controller iris ...`. The base
+   environment omits the Kubernetes client and can misreport every CoreWeave
+   prerequisite as missing.
 
-## How to gate
-
-A passed gate does not require operator input. Show the evidence, then continue
-to the next step or cluster. Use `AskUserQuestion` only when a blocked gate
-requires operator input. Show the snapshot, verify samples, smoke result, and
-blocker. Silence is not approval for a blocked gate.
-
-Process each gate from its evidence:
-
-- **Passed:** Report the evidence and continue within the approved scope.
-- **Blocked before restart:** Report the cause. Ask for the necessary input or
-  stop.
-- **Blocked after restart:** Stop or ask for rollback approval. Never offer to
-  skip ahead.
+For a blocked gate, show the snapshot, verify samples, smoke result, and cause.
+Ask for missing input before restart or rollback approval after restart. Silence
+is not approval, and skipping ahead is never an option.
 
 ## Helper
 
@@ -72,41 +57,31 @@ Write the snapshot files to the session scratchpad, one per cluster.
 
 ## Step 0 — Scope gate
 
-1. Run `plan`. Without `--clusters` it prints the default order: `marin-dev`,
-   `marin`, then the CoreWeave clusters smallest capacity first. With
-   `--clusters` it uses the operator's list verbatim, in that order.
-2. Print `git log -1 --oneline` and the tree image tag that `plan` reports.
-   `preflight` reports the tree state in full at the next step.
-3. If the rollout request gives the cluster set, continue without another
-   confirmation. Use its order when given. Otherwise, use the `plan` order. If
-   the cluster set is missing or ambiguous, ask the operator.
+Run `plan`. Without `--clusters` it orders `marin-dev`, `marin`, then CoreWeave
+clusters by increasing capacity; with `--clusters` it preserves the operator's
+order. Show `git log -1 --oneline` and the reported tree image tag. Ask only if
+the cluster set is ambiguous.
 
 Do not resolve the cluster list from memory. Cluster names come from `plan` or
 from the operator.
 
 ## Step 1 — Tree and credential gate
 
-Run `preflight` for the selected clusters *before* any restart. It reports two
-things.
-
-**What this tree would ship.** The first block prints the tree hash, the branch,
+Run `preflight` before any restart. Its first block prints the tree hash, branch,
 the uncommitted file count, and how far HEAD is from `origin/main` (fetched
 first, so "behind" is current). Each of these raises a `[WARN]`:
 
 - a dirty tree — the deploy ships files that are in no commit
-- a tree behind `origin/main` — the deploy ships stale code, the failure mode
-  that once cost ~5 red-canary days
+- a tree behind `origin/main` — the deploy ships stale code
 - a tree ahead of `origin/main` — the deploy ships unmerged code
 
 An untracked file is dirty but does **not** change the tree hash, while the Docker
 build still copies it into the image — so two different images can carry one tag
 and verify cannot tell them apart. Commit or remove the file before deploying.
 
-On any warning `preflight` **exits non-zero and deploys nothing**. Show the
-warnings to the operator and ask whether to deploy this exact tree. A dirty tree
-is normal for a controller fix under test and reckless for a routine fleet
-rollout, so let the operator decide rather than guessing. Only after they confirm,
-re-run with `--accept-tree-state`. Never pass that flag on your own initiative.
+On any warning, `preflight` exits non-zero and deploys nothing. Show the warning
+and ask whether to deploy that exact tree. Only after confirmation, rerun with
+`--accept-tree-state`; never pass it on your own initiative.
 
 **What the deploy reads from this session.** Requirements are derived from each
 cluster config, so they cannot drift: `defaults.inject_env` names, the CoreWeave
@@ -144,7 +119,9 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
 2. **Snapshot gate.** Show the snapshot. State how many running jobs ride
    through the restart. State that the restart causes seconds of control-plane
    downtime. If the gate passes, restart without waiting for operator input.
-3. **Restart.** `iris --cluster=<name> cluster controller restart`. Add
+3. **Restart.**
+   `uv run --package marin-iris --extra controller iris --cluster=<name> cluster controller restart`.
+   Add
    `--skip-checkpoint` only if the checkpoint step times out. On a Kubernetes dev
    cluster with amd64 nodes only, add `--image-platform linux/amd64`. To reuse a
    build, pass `--prebuilt-tag <tag>`; the command requires amd64 and arm64
@@ -204,7 +181,8 @@ again so the final gate exercises the reconciled Kueue configuration.
 For a cluster that failed a gate while the controller is still reachable:
 
 ```bash
-iris --cluster=<name> cluster controller restart --rollback
+uv run --package marin-iris --extra controller iris \
+  --cluster=<name> cluster controller restart --rollback
 ```
 
 This restores the previous image **and** its pre-deploy checkpoint, because

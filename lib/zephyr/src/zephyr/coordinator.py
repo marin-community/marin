@@ -576,12 +576,14 @@ class ZephyrCoordinator:
 
     def _report_task_stats(self) -> None:
         """Publish pipeline progress telemetry and Iris task status."""
-        detail_md, summary_md = self._build_status_md()
         try:
             self._publish_telemetry()
         except Exception:
             logger.warning("Failed to publish coordinator telemetry", exc_info=True)
-        _push_iris_task_status(self._task_stats_limiter, lambda: (detail_md, summary_md))
+        # Pass the renderer, not its result: the limiter throttles pushes to
+        # half the coordinator loop's tick rate, so eager rendering would take
+        # the lock and walk every execution's stages for output nobody reads.
+        _push_iris_task_status(self._task_stats_limiter, self._build_status_md)
 
     def _log_status(self) -> None:
         with self._lock:

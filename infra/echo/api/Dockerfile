@@ -18,6 +18,8 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY schema.py .
 COPY hybrid_search.py .
+COPY repository_files.py .
+COPY repository_identity.py .
 COPY reranking.py .
 COPY search_config.py .
 COPY search_feedback.py .

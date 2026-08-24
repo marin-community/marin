@@ -28,8 +28,8 @@ values normalize to the empty string so the columns stay non-nullable strings.
 
 from fray.types import ResourceConfig
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (

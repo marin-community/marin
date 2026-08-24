@@ -1,25 +1,20 @@
 ---
 name: babysit-job
-description: Monitor an Iris job and recover it on failure. Use when asked to babysit or watch a job or run.
+description: Continuously monitor a specified non-Zephyr Iris job only when asked to babysit it; stop and resubmit only with authorization.
 ---
 
-# Skill: Babysit Job
+# Babysit an Iris job
 
-Monitor a job continuously and recover on failure. For **Zephyr pipelines**,
-delegate to **babysit-zephyr** instead. Otherwise, follow this skill — Iris is
-the execution backend.
+Use `babysit-zephyr` only when the requested target is a Zephyr pipeline.
 
 ## Required Info
 
-1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model-20260302-185630`)
-2. `config` — Iris config path (e.g., `lib/iris/config/marin.yaml`). When the user
-   refers to a cluster by shorthand name (e.g., "marin_dev", "marin-dev", "marin",
-   "coreweave"), resolve it to the matching config file under `lib/iris/config/`.
-   Common mappings:
+1. `job_id` in canonical `/<user>/<job>` format.
+2. Iris config path. Resolve shorthand against `lib/iris/config/`; common mappings:
    - `marin` / `marin_prod` -> `lib/iris/config/marin.yaml`
    - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
    - `coreweave` / `cw-us-east-02a` -> `lib/iris/config/cw-us-east-02a.yaml`; `cw-rno2a` -> `lib/iris/config/cw-rno2a.yaml`
-3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
+3. Exact resubmit command, including `--no-wait`.
 4. For Marin TPU training jobs, use `--extra marin-core:tpu` (not `--extra marin-core:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
@@ -27,7 +22,7 @@ the execution backend.
 Example resubmit command:
 `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin-core:tpu --tpu v5litepod-16 -- python -m experiments.tutorials.train_tiny_model --device v5litepod-16 --dataset tinystories`
 
-If any required field is missing, ask for it before proceeding.
+Ask for any missing field before monitoring.
 
 ## Scope
 
@@ -39,13 +34,8 @@ If any required field is missing, ask for it before proceeding.
 ## Monitoring Ownership and Duration
 
 - Assign a single monitoring owner when the loop starts.
-- Keep the loop running until: the job reaches a terminal state and the user has
-  acknowledged next action; a user-specified stopping point is reached; or an
-  unrecoverable error is found and reported.
-- Do not stop early after first loss lines, first eval, or first W&B link.
-- Ferry-scale runs commonly take 4-5 hours.
-- Do not end the turn for a status update while continuous monitoring is active;
-  continue until terminal state, a stopping point, or an unrecoverable error.
+- Continue until terminal state and acknowledged next action, a requested stop,
+  or a reported unrecoverable error. First loss, eval, or W&B link is not an exit.
 - For handoff, transfer ownership explicitly with: current `job_id`, latest
   error/signal, W&B link(s), and resubmission metadata.
 
@@ -53,13 +43,11 @@ If any required field is missing, ask for it before proceeding.
 
 - After submit/resubmit: sleep `120` once, check for immediate failure; if still
   alive, switch to the normal `570` cadence.
-- Tool-runtime workaround: keep one long-running monitor session; poll it in
-  ~30s chunks as tool limits require — repeated no-output polls are expected
-  while waiting for the next 570s check.
+- Keep one long-running monitor session. Resume that session across tool yields;
+  repeated no-output waits are expected.
 - Run only one active monitor loop per job (duplicate loops cause SSH tunnel and
   port-binding conflicts).
-- Sleep must be foreground (max ~10 min due to tool timeout). Loop control is at
-  agent level, not bash.
+- Sleep in the foreground; keep loop control at the agent level.
 - Screen/process alive is not enough. Check state-file freshness plus
   stdout/event-log mtime when a monitor writes them; if no monitor state or
   event update occurs for more than 2 cadences, report `monitor stale`
@@ -73,9 +61,8 @@ If any required field is missing, ask for it before proceeding.
 When using `marin-mcp-babysitter`, keep the MCP server resident and verify the
 job through MCP tools, not only Iris CLI commands.
 
-- Keep the controller tunnel and MCP server in named, restartable sessions
-  (`screen`, `tmux`, or one long-running exec session). Record session names,
-  ports, and log paths in the state file.
+- Keep the controller tunnel and MCP server in named, restartable sessions and
+  record their names, ports, and logs in the state file.
 - Start MCP with a stable local controller URL and streamable HTTP transport:
   `uv run --package marin-core marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
 - Verify with `iris_job_summary` and `iris_tail_logs`. For heartbeat monitoring,
@@ -85,10 +72,8 @@ job through MCP tools, not only Iris CLI commands.
   the Iris cluster.
 - If a sandbox blocks localhost TCP probes, run the probe inside an existing
   long-lived session and write a small JSON result under `scratch/`.
-- For bounded smoke tests, create a thread heartbeat only after the job is
-  submitted, MCP is reachable, and one expected log/progress line has appeared.
-  Delete the heartbeat and stop smoke-test sessions when the job reaches the
-  expected terminal state.
+- For a bounded smoke test, start a heartbeat only after submission, MCP
+  reachability, and one expected progress line. Delete it at terminal state.
 
 ## State File
 
@@ -156,9 +141,11 @@ part of the setup. The state file allows resume after context reset.
    - Resolve `<exact_max>` from the launched config/code, not from progress-bar display text.
 6. EVALUATE (terminal? error? stalled? -> recover or continue)
 
-7. RECOVER (STOP -> RESUBMIT)
+7. RECOVER (STOP -> RESUBMIT, ONLY WHEN AUTHORIZED IN THE CURRENT THREAD)
+   - If stop/resubmit is not authorized, report the failure and wait for the
+     user. Do not cancel or resubmit.
    - If current job is still non-terminal, stop it first:
-     uv run iris --config <CONFIG> job cancel <JOB_ID>
+     uv run iris --config <CONFIG> job cancel --exact <JOB_ID>
    - Then resubmit:
      <RESUBMIT_COMMAND>
    - Capture `job_id` from output (line like `Job submitted: /<user>/<job>`).
@@ -170,24 +157,18 @@ part of the setup. The state file allows resume after context reset.
    - Go to step 1.
 ```
 
-## Fixing Small Bugs
+## Error handling
 
-When EVALUATE detects an error, before recovery:
-
-1. Analyze logs for `Traceback`, `Error`, `Exception`. Identify file and line.
-2. Small fix (`NameError`, `ImportError`, `SyntaxError`, obvious `KeyError`):
-   fix it, then RECOVER.
-3. Complex (OOM, TPU/XLA HBM exhaustion, distributed-training failures, data
-   loading, unclear multi-file stack traces): report to user, exit loop.
-
-## Error Patterns
+Before recovery, identify the failing file and line. Fix and recover only a
+small obvious `NameError`, `ImportError`, `SyntaxError`, or `KeyError`. Report
+OOM/HBM, distributed, data-loading, or unclear multi-file failures and stop.
 
 - Treat TPU/XLA HBM reports as failure even without literal OOM:
   - `Program hbm requirement ...`
   - `Largest program allocations in hbm`
 - If progress stalls across multiple intervals with `OwnerDiedError`, dead node,
   or unsatisfied resources -> mark `degraded` and notify user.
-- If same error repeats after one fix attempt, do not retry blindly; report to user.
+- If an error repeats after one fix attempt, report it; do not retry blindly.
 - Noisy shutdown traces are not decisive by themselves. Terminal Iris/orchestrator
   status, driver/process exit code, final checkpoint state, and W&B state
   determine whether a run succeeded.
@@ -206,12 +187,9 @@ Before declaring the job complete:
 - Stop/delete monitor heartbeats and resident monitoring sessions that are no
   longer needed.
 
-## When to Escalate
-
-- Zephyr pipeline issues, TPU bad-node errors, or debugging running tasks with
-  `iris task exec` -> **debug**
-
 ## Notes
 
 - Iris `job list --prefix` requires canonical job names (`/<user>/<job>`), not short names.
 - Iris monitoring is job-level; cluster updates are not part of normal recovery.
+- Use `debug` only for a stated TPU bad-node fault or a request to inspect a
+  running task; use `babysit-zephyr` for Zephyr.

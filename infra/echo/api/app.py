@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 import dashboard as echo_dashboard
 import hybrid_search
+import repository_identity
 import reranking
 import schema
 import search_config
@@ -82,23 +83,17 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class EchoConfig:
     public_url: str
-    github_repository: str
-    github_branch: str
     service_revision: str | None = None
 
 
 DEFAULT_CONFIG = EchoConfig(
     public_url=search_config.PUBLIC_URL,
-    github_repository=search_config.INDEXED_REPOSITORY,
-    github_branch=search_config.INDEXED_BRANCH,
 )
 
 
 def environment_config() -> EchoConfig:
     return EchoConfig(
         public_url=os.environ.get("ECHO_PUBLIC_URL", DEFAULT_CONFIG.public_url).rstrip("/"),
-        github_repository=os.environ.get("GITHUB_REPOSITORY", DEFAULT_CONFIG.github_repository),
-        github_branch=os.environ.get("GITHUB_BRANCH", DEFAULT_CONFIG.github_branch),
         service_revision=os.environ.get("K_REVISION"),
     )
 
@@ -381,6 +376,7 @@ class WikiCreate(BaseModel):
 
 @dataclass(frozen=True)
 class RepositoryIndexState:
+    target: search_config.RepositoryTarget
     commit_sha: str
     completed_files: int | None
     total_files: int | None
@@ -590,16 +586,6 @@ def recorded_hit(result: Hit) -> search_history.SearchResultRecord:
     )
 
 
-def result_repository_commit(results: Iterable[SearchResult]) -> str | None:
-    for result in results:
-        if result.domain != "file":
-            continue
-        match = re.search(r"/blob/([^/]+)/", result.url)
-        if match is not None:
-            return match.group(1)
-    return None
-
-
 def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
     code = getattr(error.orig, "sqlstate", None) or getattr(error.orig, "pgcode", None)
     if isinstance(code, str):
@@ -650,10 +636,7 @@ def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
     )
 
 
-def repository_index_state(
-    conn: sqlalchemy.Connection,
-    config: EchoConfig,
-) -> RepositoryIndexState | None:
+def repository_index_states(conn: sqlalchemy.Connection) -> dict[search_config.RepositoryTarget, RepositoryIndexState]:
     join_condition = sqlalchemy.and_(
         schema.repository_index_state.c.repository == schema.repository_index_builds.c.repository,
         schema.repository_index_state.c.branch == schema.repository_index_builds.c.branch,
@@ -666,8 +649,10 @@ def repository_index_state(
         schema.repository_index_builds.c.branch,
         schema.repository_index_state.c.branch,
     )
-    row = conn.execute(
+    rows = conn.execute(
         sqlalchemy.select(
+            repository.label("repository"),
+            branch.label("branch"),
             sqlalchemy.func.coalesce(
                 schema.repository_index_builds.c.commit_sha,
                 schema.repository_index_state.c.commit_sha,
@@ -676,19 +661,22 @@ def repository_index_state(
             schema.repository_index_builds.c.total_files,
             schema.repository_index_builds.c.started_at,
             schema.repository_index_state.c.indexed_at,
-        )
-        .select_from(schema.repository_index_state.outerjoin(schema.repository_index_builds, join_condition, full=True))
-        .where(repository == config.github_repository, branch == config.github_branch)
-    ).first()
-    if row is None:
-        return None
-    return RepositoryIndexState(
-        row.commit_sha,
-        row.completed_files,
-        row.total_files,
-        row.started_at,
-        row.indexed_at,
+        ).select_from(schema.repository_index_state.outerjoin(schema.repository_index_builds, join_condition, full=True))
     )
+    targets = {(target.repository, target.branch): target for target in search_config.REPOSITORY_TARGETS}
+    states = {}
+    for row in rows:
+        target = targets.get((row.repository, row.branch))
+        if target is not None:
+            states[target] = RepositoryIndexState(
+                target,
+                row.commit_sha,
+                row.completed_files,
+                row.total_files,
+                row.started_at,
+                row.indexed_at,
+            )
+    return states
 
 
 def query_line_terms(query: str) -> frozenset[str]:
@@ -739,8 +727,8 @@ def repository_freshness(state: RepositoryIndexState) -> str:
     return f"indexed {state.indexed_at.isoformat()}"
 
 
-def repository_blob_url(config: EchoConfig, commit_sha: str, path: str) -> str:
-    return f"https://github.com/{config.github_repository}/blob/{commit_sha}/{quote(path, safe='/')}"
+def repository_blob_url(target: search_config.RepositoryTarget, commit_sha: str, path: str) -> str:
+    return f"https://github.com/{target.repository}/blob/{commit_sha}/{quote(path, safe='/')}"
 
 
 def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> FeedbackResultMetadata:
@@ -748,9 +736,10 @@ def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> Feed
     if domain == "wiki":
         return FeedbackResultMetadata(title=f"Wiki note #{value}", url=f"{config.public_url}/wiki/{value}")
     if domain == "file":
+        reference = repository_identity.stored_repository_file_reference(result_id)
         return FeedbackResultMetadata(
-            title=PurePosixPath(value).name,
-            url=f"https://github.com/{config.github_repository}/blob/{config.github_branch}/{quote(value, safe='/')}",
+            title=PurePosixPath(reference.path).name,
+            url=repository_blob_url(reference.target, reference.target.branch, reference.path),
         )
     labels = {"discord": "Discord message", "pr": "Pull request result", "issue": "Issue result"}
     return FeedbackResultMetadata(
@@ -874,9 +863,9 @@ def repository_file_search_result(
     row: sqlalchemy.Row,
     state: RepositoryIndexState,
     query: str,
-    config: EchoConfig,
 ) -> SearchResult:
-    source_url = repository_blob_url(config, state.commit_sha, row.path)
+    reference = repository_identity.repository_file_reference(state.target, row.path)
+    source_url = repository_blob_url(state.target, state.commit_sha, row.path)
     lines = representative_file_lines(row.text, query, row.start_line)
     references = [
         SearchReference(
@@ -887,16 +876,19 @@ def repository_file_search_result(
         for line, text in lines
     ]
     return SearchResult(
-        id=f"file:{row.path}",
+        id=reference.result_id,
         domain="file",
         title=row.title,
         subtitle=(
-            f"{row.path}:{references[0].line} · "
-            f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
+            f"{state.target.repository} · {row.path}:{references[0].line} · "
+            f"{state.target.branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
             f"{repository_freshness(state)}"
         ),
         url=references[0].url,
-        snippet=" · ".join(f"{row.path}:{reference.line} {reference.text}" for reference in references),
+        snippet=" · ".join(
+            f"{state.target.repository}:{row.path}:{line_reference.line} {line_reference.text}"
+            for line_reference in references
+        ),
         score=row.score,
         distance=row.distance,
         lexical_score=row.lexical_score,
@@ -908,7 +900,10 @@ def query_oriented_result(result: SearchResult, query: str) -> SearchResult:
     """Apply a small source-quality prior to prose queries over repository files."""
     if result.domain != "file" or search_config.is_identifier_query(query):
         return result
-    path = result.id.removeprefix("file:")
+    try:
+        path = repository_identity.parse_repository_file_id(result.id).path
+    except ValueError:
+        path = result.id.removeprefix("file:")
     filename = PurePosixPath(path).name
     score = result.score
     if path.lower().endswith(search_config.PROSE_FILE_SUFFIXES):
@@ -983,28 +978,37 @@ def repository_file_candidates(
     params: dict[str, object],
     retrieval_limit: int,
     query: str,
-    config: EchoConfig,
+    targets: tuple[search_config.RepositoryTarget, ...],
 ) -> list[SearchCandidate]:
-    state = repository_index_state(conn, config)
-    if state is None:
+    states = repository_index_states(conn)
+    if not states:
         return []
-    file_params = {
-        **params,
-        "candidate_limit": (
-            search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
-        ),
-        "repository": config.github_repository,
-        "branch": config.github_branch,
-        "exact": escape_like(query),
-        "substring": f"%{escape_like(query)}%",
-    }
-    return [
-        SearchCandidate(
-            repository_file_search_result(row, state, query, config),
-            f"{row.path}\n{row.title}\n\n{row.text}",
-        )
-        for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params)
-    ]
+    candidates = []
+    for target in targets:
+        state = states.get(target)
+        if state is None:
+            continue
+        # Rank inside each repository before merging. A large fork must not consume the
+        # bounded HNSW and lexical pools before smaller repositories get a candidate.
+        file_params = {
+            **params,
+            "candidate_limit": (
+                search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
+            ),
+            "exact": escape_like(query),
+            "substring": f"%{escape_like(query)}%",
+            "repository_0": target.repository,
+            "branch_0": target.branch,
+        }
+        for row in conn.execute(hybrid_search.repository_file_search_statement((target,)), file_params):
+            result = repository_file_search_result(row, state, query)
+            candidates.append(
+                SearchCandidate(
+                    result,
+                    f"{result.snippet}\n\n{row.path}\n{row.title}\n\n{row.text}",
+                )
+            )
+    return candidates
 
 
 def activity_candidates(
@@ -1060,32 +1064,27 @@ def search_configuration() -> SearchConfiguration:
     )
 
 
-@api.get("/repository-index", response_model=RepositoryIndexStatus)
-def repository_index_status(engine: Engine, config: Config) -> RepositoryIndexStatus:
-    """Return repository index freshness and current build progress."""
+@api.get("/repository-index", response_model=list[RepositoryIndexStatus])
+def repository_index_status(engine: Engine) -> list[RepositoryIndexStatus]:
+    """Return freshness or build progress for every configured repository."""
     with engine.connect() as conn:
-        state = repository_index_state(conn, config)
-    if state is None:
-        return RepositoryIndexStatus(
-            repository=config.github_repository,
-            branch=config.github_branch,
-            status="empty",
-            commit_sha=None,
-            completed_files=None,
-            total_files=None,
-            started_at=None,
-            indexed_at=None,
+        states = repository_index_states(conn)
+    statuses = []
+    for target in search_config.REPOSITORY_TARGETS:
+        state = states.get(target)
+        statuses.append(
+            RepositoryIndexStatus(
+                repository=target.repository,
+                branch=target.branch,
+                status="empty" if state is None else "building" if state.building else "ready",
+                commit_sha=state.commit_sha if state is not None else None,
+                completed_files=state.completed_files if state is not None else None,
+                total_files=state.total_files if state is not None else None,
+                started_at=state.started_at if state is not None else None,
+                indexed_at=state.indexed_at if state is not None else None,
+            )
         )
-    return RepositoryIndexStatus(
-        repository=config.github_repository,
-        branch=config.github_branch,
-        status="building" if state.building else "ready",
-        commit_sha=state.commit_sha,
-        completed_files=state.completed_files,
-        total_files=state.total_files,
-        started_at=state.started_at,
-        indexed_at=state.indexed_at,
-    )
+    return statuses
 
 
 @api.get("/search", response_model=list[Hit])
@@ -1146,6 +1145,7 @@ def federated_search(
     config: EchoConfig,
     query: str,
     domains: list[search_config.SearchDomain],
+    repository_targets: tuple[search_config.RepositoryTarget, ...],
     limit: int,
 ) -> list[SearchResult]:
     """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
@@ -1157,7 +1157,7 @@ def federated_search(
         if "wiki" in domains:
             candidates.extend(wiki_candidates(conn, params, config))
         if "file" in domains:
-            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, config))
+            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, repository_targets))
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             candidates.extend(activity_candidates(conn, params, activity_domains))
@@ -1175,6 +1175,10 @@ def federated_search_endpoint(
     domain: list[search_config.SearchDomain] | None = Query(
         None, description="Search this domain; repeat to select several."
     ),
+    repository: str | None = Query(
+        None,
+        description="Repository-file scope: one configured owner/repository or all. Omission selects Marin.",
+    ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> list[SearchResult]:
@@ -1182,8 +1186,16 @@ def federated_search_endpoint(
     if not query:
         raise HTTPException(422, "q must not be blank")
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
+    repository_scope = search_config.LEGACY_REPOSITORY_TARGET.repository if repository is None else repository
+    if repository_scope == search_config.ALL_REPOSITORIES:
+        repository_targets = search_config.REPOSITORY_TARGETS
+    else:
+        try:
+            repository_targets = (repository_identity.configured_repository_target(repository_scope),)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     started_at = time.perf_counter()
-    results = federated_search(engine, model, reranker, config, query, domains, limit)
+    results = federated_search(engine, model, reranker, config, query, domains, repository_targets, limit)
     execution = attach_search_execution(
         response,
         engine,
@@ -1192,11 +1204,13 @@ def federated_search_endpoint(
             query=query,
             mode="federated",
             domains=tuple(domains),
-            filters={},
+            filters={"repository": repository_scope} if "file" in domains else {},
             requested_limit=limit,
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
-            repository_commit=result_repository_commit(results),
+            # A federated file result set may span several commits. Per-result pinned URLs
+            # carry the exact provenance; the legacy scalar remains nullable.
+            repository_commit=None,
             service_revision=config.service_revision,
             results=tuple(recorded_search_result(result) for result in results),
         ),
@@ -1273,30 +1287,34 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
 
 
-@api.get("/repository-files/{path:path}", response_model=RepositoryFileDetail)
-def repository_file(path: str, engine: Engine, config: Config) -> RepositoryFileDetail:
-    """Return the complete indexed text and pinned URL for one repository path."""
+@api.get("/repository-files/{reference_value:path}", response_model=RepositoryFileDetail)
+def repository_file(reference_value: str, engine: Engine) -> RepositoryFileDetail:
+    """Return complete indexed text for one qualified repository-file identity."""
+    try:
+        reference = repository_identity.parse_repository_file_id(f"file:{reference_value}")
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     with engine.connect() as conn:
-        state = repository_index_state(conn, config)
+        state = repository_index_states(conn).get(reference.target)
         rows = conn.execute(
             sqlalchemy.select(schema.repository_file_chunks)
             .where(
-                schema.repository_file_chunks.c.repository == config.github_repository,
-                schema.repository_file_chunks.c.branch == config.github_branch,
-                schema.repository_file_chunks.c.path == path,
+                schema.repository_file_chunks.c.repository == reference.target.repository,
+                schema.repository_file_chunks.c.branch == reference.target.branch,
+                schema.repository_file_chunks.c.path == reference.path,
             )
             .order_by(schema.repository_file_chunks.c.chunk_index)
         ).all()
     if state is None or not rows:
-        raise HTTPException(404, f"no indexed repository file {path}")
+        raise HTTPException(404, f"no indexed repository file {reference.result_id}")
     return RepositoryFileDetail(
-        id=f"file:{path}",
+        id=reference.result_id,
         title=rows[0].title,
         subtitle=(
-            f"{path} · {config.github_branch}@"
+            f"{reference.target.repository} · {reference.path} · {reference.target.branch}@"
             f"{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {repository_freshness(state)}"
         ),
-        url=repository_blob_url(config, state.commit_sha, path),
+        url=repository_blob_url(reference.target, state.commit_sha, reference.path),
         text=indexed_file_text(rows),
     )
 

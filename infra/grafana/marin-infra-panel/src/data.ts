@@ -4,6 +4,8 @@ import {
   ClusterNode,
   NightlyCell,
   NodeMetric,
+  SmUtilizationPoint,
+  SmUtilizationRasterData,
   TaskUsage,
   WandbPoint,
   WorkloadAllocation,
@@ -177,6 +179,48 @@ export function nodeMetrics(frame: DataFrame): NodeMetric[] {
     value: requiredNumber(row, 'value'),
     sampledAt: requiredNumber(row, 'sampled_at'),
   }));
+}
+
+export function smUtilizationPoints(frame: DataFrame): SmUtilizationPoint[] {
+  return rows(frame).map((row) => ({
+    cluster: requiredString(row, 'cluster'),
+    node: requiredString(row, 'node'),
+    gpu: requiredString(row, 'gpu'),
+    sampledAt: requiredNumber(row, 'time'),
+    percent: requiredNumber(row, 'sm_utilization'),
+  }));
+}
+
+export function smUtilizationRasterData(points: SmUtilizationPoint[]): SmUtilizationRasterData {
+  const devicesByKey = new Map<string, SmUtilizationPoint>();
+  const timestampSet = new Set<number>();
+  for (const point of points) {
+    devicesByKey.set(`${point.cluster}\u0000${point.node}\u0000${point.gpu}`, point);
+    timestampSet.add(point.sampledAt);
+  }
+
+  const devices = [...devicesByKey.values()]
+    .map(({ cluster, node, gpu }) => ({ cluster, node, gpu }))
+    .sort((left, right) =>
+      left.cluster.localeCompare(right.cluster, undefined, { numeric: true })
+      || left.node.localeCompare(right.node, undefined, { numeric: true })
+      || left.gpu.localeCompare(right.gpu, undefined, { numeric: true })
+    );
+  const timestamps = [...timestampSet].sort((left, right) => left - right);
+  const deviceIndexes = new Map(
+    devices.map((device, index) => [`${device.cluster}\u0000${device.node}\u0000${device.gpu}`, index])
+  );
+  const timestampIndexes = new Map(timestamps.map((timestamp, index) => [timestamp, index]));
+  const values = new Float32Array(devices.length * timestamps.length);
+  values.fill(Number.NaN);
+  for (const point of points) {
+    const deviceIndex = deviceIndexes.get(`${point.cluster}\u0000${point.node}\u0000${point.gpu}`);
+    const timestampIndex = timestampIndexes.get(point.sampledAt);
+    if (deviceIndex !== undefined && timestampIndex !== undefined) {
+      values[deviceIndex * timestamps.length + timestampIndex] = point.percent;
+    }
+  }
+  return { devices, timestamps, values };
 }
 
 /**

@@ -38,6 +38,30 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+`query` prints JSONL by default. Pass a short query as one shell-quoted
+argument. Feed multiline SQL on stdin so SQL quotes do not need shell escaping:
+
+```bash
+uv run finelog query cw-us-east-08a <<'SQL'
+SELECT task_id, attempt_id, max(memory_peak_mb) AS peak_mib
+FROM "iris.task"
+WHERE task_id LIKE '/power/example/%'
+GROUP BY task_id, attempt_id
+ORDER BY peak_mib DESC
+SQL
+```
+
+List every namespace with its schema, index policy, retention overrides, and
+current storage statistics as JSONL. Fetch one schema as formatted JSON:
+
+```bash
+uv run finelog namespaces cw-us-east-08a
+uv run finelog schema cw-us-east-08a iris.task
+```
+
+Schema output includes `seq` under `implicit_columns`. Finelog assigns this
+column to every row; producers do not declare it, but SQL queries can select it.
+
 ## Diagnosing query latency
 
 Inspect the namespace before changing its policy or resetting it. Record its row
@@ -106,8 +130,11 @@ Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
 explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
-backfill is useful. `telemetry_v1` has one `training-status` projection for the
-three dashboard metric names.
+backfill is useful. `telemetry_v1` has a `training-status` projection for three
+dashboard metric names and a `training-process-zero` projection for rows whose
+`process_index` is `0`. The latter covers the structured columns used by the
+training loss window query. `process_index = '0'` and `name = 'train_loss'`
+also have exact postings when a segment has not completed projection backfill.
 
 Change a projection in place; do not version its name. Re-registering a name
 with a different predicate or column list supersedes the registered definition:
@@ -244,15 +271,29 @@ push. `forwarding.cluster` is the origin name the sender stamps on every forward
 row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
-then the sender. `deploy up` resolves `signing_key` from Secret Manager on the
-operator's machine and projects it into the pod's `<name>-env` Secret, so whoever
-runs it needs `roles/secretmanager.secretAccessor` on that secret.
+then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
+on the operator's machine and updates the pod's `<name>-env` Secret, so whoever
+runs it needs `roles/secretmanager.secretAccessor` on that secret. The Pulumi
+stack references that existing Kubernetes Secret without reading its values.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
+export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
-uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
+uv run finelog deploy sync-secret "$CLUSTER"
+uv run marin-deploy finelog rollout "$CLUSTER"
 ```
+
+`marin-deploy finelog rollout` captures the active Deployment revision, runs the matching
+Pulumi stack, and restores the captured ReplicaSet if the update or ingest
+verification fails. Its rollout identity and image build stamp come from the
+checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
+the pod using `kube_context`, `namespace`, and `name` from
+`lib/finelog/config/$CLUSTER.yaml`, wait for the Deployment, then run `uv run
+--frozen --package marin-finelog finelog deploy verify "$CLUSTER"`. See
+[`infra/finelog/README.md`](../../infra/finelog/README.md) for preview, manual
+rollback, and first-time stack adoption. Do not run the first update without the
+import flag: the live PVC must be adopted, not recreated.
 
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
@@ -327,8 +368,9 @@ local retention; filtered foreign-origin rows may make it an upper bound on lost
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
-hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
-drop the old public key and roll the hub again.
+hub, re-pin the sender's `signing_key` to the new version, run `deploy
+sync-secret`, update the sender's Pulumi stack, then drop the old public key and
+roll the hub again.
 
 ## Checking that a server is ingesting
 
@@ -350,9 +392,10 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
-System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
-`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
-back.
+System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
+restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
+failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
+ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
 ## Serving a copy of a store
 

@@ -3,6 +3,7 @@ import { PanelProps } from '@grafana/data';
 import { CommitStrip } from './CommitStrip';
 import { ClusterCapacity } from './ClusterCapacity';
 import { NightlyMatrix } from './NightlyMatrix';
+import { SmUtilizationRaster } from './SmUtilizationRaster';
 import { StatusPage } from './StatusPage';
 import { WandbChart } from './WandbChart';
 import { InfraPanelOptions } from '../types';
@@ -19,6 +20,9 @@ export function InfraPanel({ options, data, width, height }: PanelProps<InfraPan
   }
   if (options.view === 'wandb') {
     return <WandbChart frames={data.series} width={width} height={height} />;
+  }
+  if (options.view === 'sm') {
+    return <SmUtilizationRaster frames={data.series} width={width} height={height} />;
   }
   return <NightlyMatrix frames={data.series} width={width} height={height} />;
 }

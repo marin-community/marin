@@ -61,6 +61,8 @@ def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
 
 
 def _execution_uid(job_info: JobInfo) -> str:
+    if job_info.attempt_uid:
+        return f"iris:{job_info.attempt_uid}"
     return f"iris:{job_info.task_id}:attempt:{job_info.attempt_id}"
 
 

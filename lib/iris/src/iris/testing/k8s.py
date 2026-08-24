@@ -258,6 +258,7 @@ def common_env_from_req(
     return build_common_iris_env(
         task_id=req.task_id,
         attempt_id=req.attempt_id,
+        attempt_uid=req.attempt_uid,
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,

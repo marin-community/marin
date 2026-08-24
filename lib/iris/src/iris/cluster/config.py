@@ -49,8 +49,6 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
 DOCKER_WORKER_RUNTIME = "docker"
 KUBERNETES_WORKER_RUNTIME = "kubernetes"
@@ -1589,30 +1587,3 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
         scale_down_delay=Duration.from_seconds(1),
     )
     return config
-
-
-def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None = None) -> SshConfig:
-    """Resolve SSH config: cluster defaults merged with per-group manual overrides."""
-    ssh = config.defaults.ssh
-    user = ssh.user or "root"
-    key_file = ssh.key_file or ""
-    port = ssh.port if ssh.port and ssh.port > 0 else DEFAULT_SSH_PORT
-    impersonate = ssh.impersonate_service_account or ""
-    connect_timeout = ssh.connect_timeout if ssh.connect_timeout is not None else DEFAULT_SSH_CONNECT_TIMEOUT
-
-    if group_name and group_name in config.scale_groups:
-        group = config.scale_groups[group_name]
-        if group.slice_template is not None and group.slice_template.manual is not None:
-            manual = group.slice_template.manual
-            if manual.ssh_user:
-                user = manual.ssh_user
-            if manual.ssh_key_file:
-                key_file = manual.ssh_key_file
-
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=port,
-        impersonate_service_account=impersonate,
-        connect_timeout=connect_timeout,
-    )

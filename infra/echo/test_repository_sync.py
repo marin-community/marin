@@ -9,10 +9,87 @@ import sqlite3
 import tarfile
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 
+import pytest
 import repository_files
 from sync import github_repository as echo_sync
 from sync import main as activity_sync
+
+
+class _TurnResult:
+    def __init__(self, row=None):
+        self._row = row
+
+    def first(self):
+        return self._row
+
+    def scalar(self):
+        return self._row
+
+
+class _TurnEngine:
+    """Fake the database boundary needed by one otherwise-real sync execution."""
+
+    def __init__(self, turn_state, *, repository_locked=True, repository_state=None):
+        self.turn_state = turn_state
+        self.repository_locked = repository_locked
+        self.repository_state = repository_state
+        self.repository_lock_attempts = 0
+        self.repository_checked_at = None
+
+    def connect(self):
+        return self
+
+    def begin(self):
+        return self
+
+    def commit(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
+
+    def execute(self, statement):
+        rendered = str(statement)
+        table = getattr(getattr(statement, "table", None), "name", None)
+        if "pg_try_advisory_lock" in rendered:
+            self.repository_lock_attempts += 1
+            return _TurnResult(self.repository_locked)
+        if "pg_advisory_unlock" in rendered:
+            return _TurnResult(True)
+        if table == "repository_sync_turn" and statement.is_insert:
+            self.turn_state.setdefault("next_target", 0)
+            return _TurnResult()
+        if table == "repository_sync_turn" and statement.is_update:
+            self.turn_state["next_target"] = statement.compile().params["next_target"]
+            return _TurnResult()
+        if table == "repository_index_state" and statement.is_update:
+            self.repository_checked_at = statement.compile().params["checked_at"]
+            return _TurnResult()
+        if "FROM repository_sync_turn" in rendered:
+            return _TurnResult(SimpleNamespace(next_target=self.turn_state["next_target"]))
+        if "FROM sync_state" in rendered:
+            return _TurnResult(1)
+        if "FROM repository_index_state" in rendered:
+            if self.repository_state is None:
+                return _TurnResult()
+            return _TurnResult(
+                SimpleNamespace(
+                    commit_sha=self.repository_state.commit_sha,
+                    checked_at=self.repository_state.checked_at,
+                )
+            )
+        if "FROM repository_index_builds" in rendered:
+            return _TurnResult()
+        raise AssertionError(f"unexpected statement: {statement}")
+
+
+def _current_activity_manifest(_token):
+    return {"built_at_epoch": 1}
 
 
 def test_activity_corpus_reader_accepts_marinmirror_schema(tmp_path):
@@ -167,18 +244,22 @@ def test_archive_repository_files_uses_repository_relative_safety_filters():
     assert [file.path for file in files] == ["src/kept.py"]
 
 
-def test_repository_check_is_due_once_per_hour():
+def test_selected_repository_checks_head_even_if_recently_checked(monkeypatch):
     now = datetime(2026, 7, 29, 20, tzinfo=UTC)
+    target = echo_sync.RepositoryTarget("marin-community/marin", "main")
+    engine = _TurnEngine(
+        {},
+        repository_state=echo_sync.RepositoryState("abc", now - timedelta(minutes=1)),
+    )
+    requested = []
+    monkeypatch.setattr(
+        echo_sync, "github_head", lambda requested_target, _token: requested.append(requested_target) or "abc"
+    )
 
-    assert echo_sync.repository_check_due(None, now)
-    assert not echo_sync.repository_check_due(
-        echo_sync.RepositoryState("abc", now - timedelta(minutes=59)),
-        now,
-    )
-    assert echo_sync.repository_check_due(
-        echo_sync.RepositoryState("abc", now - timedelta(hours=1)),
-        now,
-    )
+    echo_sync.sync_repository_locked(engine, target, "token", now)
+
+    assert requested == [target]
+    assert engine.repository_checked_at == now
 
 
 def test_repository_resume_keeps_only_files_missing_from_durable_checkpoint():
@@ -191,3 +272,62 @@ def test_repository_resume_keeps_only_files_missing_from_durable_checkpoint():
     remaining = echo_sync.remaining_repository_files(tuple(files), frozenset({"docs/a.md", "docs/c.md"}))
 
     assert [file.path for file in remaining] == ["docs/b.md"]
+
+
+def test_repository_turn_is_durable_across_failure_and_process_restart(monkeypatch):
+    state = {}
+    attempts = []
+
+    monkeypatch.setattr(activity_sync, "fetch_manifest", _current_activity_manifest)
+
+    def fail_github_head(target, _token):
+        attempts.append(target.repository)
+        raise RuntimeError("injected GitHub failure")
+
+    monkeypatch.setattr(activity_sync.github_repository, "github_head", fail_github_head)
+
+    with pytest.raises(RuntimeError, match="injected GitHub failure"):
+        activity_sync.run(_TurnEngine(state), "token")
+
+    assert state == {"next_target": 1}
+
+    # A fresh engine stands in for a new Cloud Run process reading the same row.
+    with pytest.raises(RuntimeError, match="injected GitHub failure"):
+        activity_sync.run(_TurnEngine(state), "token")
+    assert attempts == ["marin-community/marin", "marin-community/vllm"]
+    assert state == {"next_target": 2}
+
+
+def test_repository_lock_loser_does_activity_but_does_not_consume_turn(monkeypatch):
+    state = {}
+    engine = _TurnEngine(state, repository_locked=False)
+    monkeypatch.setattr(activity_sync, "fetch_manifest", _current_activity_manifest)
+    monkeypatch.setattr(
+        activity_sync.github_repository,
+        "github_head",
+        lambda _target, _token: pytest.fail("lock loser reached GitHub"),
+    )
+
+    assert activity_sync.run(engine, "token") == 0
+    assert engine.repository_lock_attempts == 1
+    assert state == {}
+
+
+def test_activity_failure_prevents_repository_lock_and_turn(monkeypatch):
+    state = {}
+    engine = _TurnEngine(state)
+    monkeypatch.setattr(
+        activity_sync,
+        "fetch_manifest",
+        lambda _token: (_ for _ in ()).throw(RuntimeError("injected MarinMirror failure")),
+    )
+    monkeypatch.setattr(
+        activity_sync.github_repository,
+        "github_head",
+        lambda _target, _token: pytest.fail("activity failure reached GitHub"),
+    )
+
+    with pytest.raises(RuntimeError, match="injected MarinMirror failure"):
+        activity_sync.run(engine, "token")
+    assert engine.repository_lock_attempts == 0
+    assert state == {}

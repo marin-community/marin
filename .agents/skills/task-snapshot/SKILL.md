@@ -1,6 +1,6 @@
 ---
 name: task-snapshot
-description: "Create stable commit or tag snapshots for task milestones, experiment results, and reproducible artifact links."
+description: Create a commit or tag snapshot only when explicitly requested for a milestone, reproducibility checkpoint, handoff, or pinned artifact.
 ---
 
 # Skill: Task Snapshot

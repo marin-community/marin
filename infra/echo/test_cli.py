@@ -5,9 +5,11 @@
 
 import io
 import logging
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 import cli
+import pytest
 import requests
 
 
@@ -20,9 +22,13 @@ def json_response(value, headers=None):
 
 
 def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
+    reference_text = (
+        'raise SchedulerError("FAILED_PRECONDITION: pending queue cannot satisfy the requested TPU topology '
+        'and priority band")'
+    )
     remote_result = {
         "key": "file:731",
-        "id": "file:lib/iris/src/iris/scheduler.py",
+        "id": "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py",
         "domain": "file",
         "title": "scheduler.py",
         "subtitle": "lib/iris/src/iris/scheduler.py:42 · main@abc1234 · indexed 2026-07-29T20:00:00+00:00",
@@ -34,7 +40,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         "references": [
             {
                 "line": 42,
-                "text": "raise FAILED_PRECONDITION",
+                "text": reference_text,
                 "url": "https://github.com/marin-community/marin/blob/abc1234/" "lib/iris/src/iris/scheduler.py#L42",
             }
         ],
@@ -49,21 +55,40 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     monkeypatch.setattr(cli, "request_response", fake_request)
     clock = iter((10.0, 11.234))
     monkeypatch.setattr(cli.time, "perf_counter", lambda: next(clock))
-    args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
+    args = cli.build_parser().parse_args(
+        [
+            "search",
+            "FAILED_PRECONDITION",
+            "--domain",
+            "file",
+            "--domain",
+            "pr",
+            "--repository",
+            "marin-community/marin",
+        ]
+    )
     args.func(args)
 
     assert calls == [
         (
             "GET",
             "/federated-search",
-            {"params": {"q": "FAILED_PRECONDITION", "domain": ["file", "pr"], "limit": 10}},
+            {
+                "params": {
+                    "q": "FAILED_PRECONDITION",
+                    "domain": ["file", "pr"],
+                    "limit": 10,
+                    "repository": "marin-community/marin",
+                }
+            },
         )
     ]
     output = capsys.readouterr().out
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "file:731" in output
-    assert "L42 raise FAILED_PRECONDITION" in output
+    assert f"L42 {reference_text}" in output
+    assert output.count("File scope: marin-community/marin") == 1
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -74,16 +99,96 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
         return json_response([])
 
     monkeypatch.setattr(cli, "request_response", fake_request)
-    args = cli.build_parser().parse_args(["search", "scheduler"])
+    args = cli.build_parser().parse_args(["search", "scheduler", "--repository", "marin-community/marin"])
     args.func(args)
 
     assert calls == [
         (
             "GET",
             "/federated-search",
-            {"params": {"q": "scheduler", "domain": ["wiki", "file", "pr", "issue"], "limit": 10}},
+            {
+                "params": {
+                    "q": "scheduler",
+                    "domain": ["wiki", "file", "pr", "issue"],
+                    "limit": 10,
+                    "repository": "marin-community/marin",
+                }
+            },
         )
     ]
+
+
+def test_search_infers_configured_repository_from_contributor_fork(monkeypatch, tmp_path, capsys):
+    repository = tmp_path / "vllm"
+    subprocess.run(["git", "init", repository], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:contributor/vllm.git"],
+        cwd=repository,
+        check=True,
+    )
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file"])
+    args.func(args)
+
+    assert calls[0][2]["params"]["repository"] == "marin-community/vllm"
+    assert capsys.readouterr().out.count("File scope: marin-community/vllm") == 1
+
+
+@pytest.mark.parametrize("repository", ["marin-community/vllm", "all"])
+def test_search_explicit_repository_bypasses_checkout_inference(monkeypatch, tmp_path, repository):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file", "--repository", repository])
+    args.func(args)
+
+    assert calls[0][2]["params"]["repository"] == repository
+
+
+def test_unscoped_file_search_fails_before_request_outside_supported_checkout(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "file"])
+
+    with pytest.raises(SystemExit) as error:
+        args.func(args)
+
+    assert "--repository <owner/repo>" in str(error.value)
+    assert "--repository all" in str(error.value)
+    assert calls == []
+
+
+def test_search_without_file_domain_works_outside_git(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return json_response([])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "request_response", fake_request)
+    args = cli.build_parser().parse_args(["search", "scheduler", "--domain", "wiki"])
+    args.func(args)
+
+    assert calls == [("GET", "/federated-search", {"params": {"q": "scheduler", "domain": ["wiki"], "limit": 10}})]
 
 
 def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypatch, caplog):
@@ -107,22 +212,28 @@ def test_bearer_token_quiets_only_the_known_missing_email_scope_warning(monkeypa
 
 def test_get_fetches_full_detail_by_search_result_id(monkeypatch):
     calls = []
+    result_id = "file:marin-community/marin@main:lib/iris/OPS.md"
 
     def fake_request(method, path, **options):
         calls.append((method, path, options))
         return {
-            "id": "file:lib/iris/OPS.md",
+            "id": result_id,
             "title": "Iris Operations",
-            "subtitle": "lib/iris/OPS.md · main@abc123",
+            "subtitle": "marin-community/marin · lib/iris/OPS.md · main@abc123",
             "url": "https://github.com/marin-community/marin/blob/abc123/lib/iris/OPS.md",
             "text": "# Iris Operations\n\nDeploy with the restart command.",
         }
 
     monkeypatch.setattr(cli, "request", fake_request)
-    args = cli.build_parser().parse_args(["get", "file:lib/iris/OPS.md"])
+    args = cli.build_parser().parse_args(["get", result_id])
     args.func(args)
 
-    assert calls == [("GET", "/repository-files/lib/iris/OPS.md", {})]
+    assert calls == [("GET", "/repository-files/marin-community/marin@main:lib/iris/OPS.md", {})]
+
+
+def test_get_rejects_legacy_path_only_file_id():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["get", "file:lib/iris/OPS.md"])
 
 
 def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):

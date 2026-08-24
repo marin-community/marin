@@ -6,10 +6,14 @@ datasource UIDs and refIds, every rule's query URL answers on the bridge, and
 dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
+import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import duckdb
+import httpx
 import pyarrow as pa
 import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
@@ -17,6 +21,7 @@ from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
+from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
@@ -27,6 +32,8 @@ ALERTING = ROOT / "provisioning" / "alerting"
 DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
+# Grafana's built-in fan-out datasource: the panel's targets each name a real one.
+MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
 STORAGE_ALERT_FRACTION = 0.8
 
@@ -76,6 +83,18 @@ def _datasources() -> dict[str, str]:
 
 def _rules() -> list[dict]:
     return [rule for group in _load(ALERTING / "rules.yaml")["groups"] for rule in group["rules"]]
+
+
+def _route_for(rule: dict) -> dict:
+    """The first notification-policy route whose matchers all hold for this rule's labels."""
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    return next(
+        route
+        for route in policy["routes"]
+        if all(
+            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
+        )
+    )
 
 
 def test_alert_rules_have_resolvable_datasources_and_refids():
@@ -321,16 +340,52 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
-    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    route = next(
-        route
-        for route in policy["routes"]
-        if all(
-            operator == "=" and rule["labels"].get(label) == value for label, operator, value in route["object_matchers"]
-        )
-    )
+    route = _route_for(rule)
     assert route["receiver"] == "ops-critical"
-    assert route["group_by"] == ["alertname", "cluster", "job"]
+    assert route["group_by"] == ["alertname", "run"]
+    assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
+
+
+def test_run_health_alerts_split_paging_from_announcing():
+    # The hero on-call policy pages for a lost run or an unstable optimizer, and
+    # announces the routing, throughput, and Iris signals an operator reads.
+    rules = {rule["uid"]: rule for rule in _rules()}
+    paging = ("training-telemetry-gone", "training-optimizer-unstable")
+    for uid in paging:
+        assert rules[uid]["labels"] == {"severity": "critical", "notification": "hero-run"}
+        assert rules[uid]["for"] == "5m"
+    assert rules["training-run-health-degraded"]["labels"] == {"severity": "warning", "notification": "slack"}
+
+    urls = {uid: rules[uid]["data"][0]["model"]["url"] for uid in (*paging, "training-run-health-degraded")}
+    assert urls == {
+        "training-telemetry-gone": "/alerts/training_telemetry",
+        "training-optimizer-unstable": "/alerts/training_optimizer",
+        "training-run-health-degraded": "/alerts/training_health",
+    }
+
+
+def test_announcing_run_health_reaches_slack_without_a_triage_session():
+    # severity=warning alone is muted by dashboard-only, so the announcing rule
+    # needs the notification=slack route, which is matched first and unmuted.
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-run-health-degraded"]
+    route = _route_for(rule)
+
+    assert route["object_matchers"] == [["notification", "=", "slack"]]
+    assert route["receiver"] == "ops-slack"
+    assert "mute_time_intervals" not in route
+
+
+def test_run_health_dashboard_bands_match_the_alert_thresholds():
+    # The alert links the operator to these panels, so a limit tuned in one place
+    # and not the other would draw a band the rule does not fire on.
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    bands = " ".join(_panel_sql({**dashboard, "panels": [panels["Token drops"], panels["Router health"]]}))
+
+    assert f"CAST({DROP_FRACTION_MAX} AS DOUBLE) AS alert_threshold" in bands
+    assert f"CAST({ROUTER_ENTROPY_MIN} AS DOUBLE) AS entropy_minimum" in bands
+    assert f"CAST({ROUTER_BIAS_MAX} AS DOUBLE) AS bias_upper_limit" in bands
+    assert f"CAST({-ROUTER_BIAS_MAX} AS DOUBLE) AS bias_lower_limit" in bands
 
 
 def test_clusters_dashboard_shows_finelog_fleet_health():
@@ -393,7 +448,7 @@ def test_node_details_dashboard_combines_live_state_and_hardware_history():
     assert "gpu_pcie_transmit_bytes_per_second" in sql
     assert "node_cpu_utilization_percent" in sql
     assert "node_network_receive_bytes" in sql
-    assert "json_get(attributes_json, 'node_name') IN (${node:sqlstring})" in sql
+    assert "node_name IN (${node:sqlstring})" in sql
 
 
 def test_node_pools_dashboard_reads_live_node_pool_state():
@@ -421,16 +476,28 @@ def test_node_pools_dashboard_reads_live_node_pool_state():
     } <= selectors
 
 
-def test_accelerators_dashboard_shows_sm_and_temperature_distributions():
+def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribution():
     dashboard = _stitched_dashboards()["accelerators.json"]
-    heatmaps = {panel["title"]: panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"}
+    heatmaps = [panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"]
+    (sm_panel,) = [panel for panel in _all_panels(dashboard) if panel.get("options", {}).get("view") == "sm"]
 
-    assert set(heatmaps) == {"SM utilization distribution", "GPU temperature distribution"}
-    assert all(panel["options"]["calculate"] for panel in heatmaps.values())
-    sm_sql = _panel_sql({**dashboard, "panels": [heatmaps["SM utilization distribution"]]})
-    temperature_sql = _panel_sql({**dashboard, "panels": [heatmaps["GPU temperature distribution"]]})
+    assert len(heatmaps) == 1
+    (temperature_panel,) = heatmaps
+    assert not temperature_panel["options"]["calculate"]
+    assert sm_panel["type"] == "marin-infra-panel"
+    assert sm_panel["maxDataPoints"] == 100
+    assert {column["selector"] for column in sm_panel["targets"][0]["columns"]} == {
+        "t",
+        "cluster",
+        "node",
+        "gpu",
+        "sm_utilization",
+    }
+    sm_sql = _panel_sql({**dashboard, "panels": [sm_panel]})
+    temperature_sql = _panel_sql({**dashboard, "panels": [temperature_panel]})
     assert len(sm_sql) == len(temperature_sql) == 1
     assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
+    assert "GROUP BY 1, 2, 3, 4" in sm_sql[0]
     assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
 
 
@@ -506,10 +573,18 @@ def test_dashboard_filter_expressions_reference_selected_columns():
 
 
 def test_dashboard_datasource_uids_are_provisioned():
+    # A mixed panel names no datasource of its own; each of its targets carries one, and
+    # those are the ones that have to exist.
     uids = set(_datasources())
     for name, dashboard in _stitched_dashboards().items():
         for panel in _all_panels(dashboard):
             uid = (panel.get("datasource") or {}).get("uid")
+            if uid == MIXED_DATASOURCE:
+                targets = panel.get("targets", [])
+                named = [(target.get("datasource") or {}).get("uid") for target in targets]
+                assert all(named), f"{name} panel {panel.get('id')}: mixed target without a datasource"
+                assert set(named) <= uids, f"{name} panel {panel.get('id')}: unknown datasource in {named}"
+                continue
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
@@ -525,9 +600,9 @@ def test_status_page_has_each_required_source():
         "N": "/github/nightlies",
         "G": "/github/builds",
         "W": "/iris/marin/workers",
-        "T": "/wandb/train-loss",
-        "L": "/wandb/paloma-macro-loss",
-        "M": "/wandb/mfu",
+        "T": "/wandb/report/train-loss",
+        "L": "/wandb/report/paloma-macro-loss",
+        "M": "/wandb/report/mfu",
     }
 
 
@@ -542,16 +617,21 @@ def test_stat_panels_use_grafana_reduce_options_schema():
 
 
 def test_telemetry_queries_bound_their_window_with_foldable_macros():
-    # telemetry_v1 is sorted on timestamp_ms alone, so the boundary has to fold to a
-    # constant for segment pruning to happen at all. `timestamp_ms >= {{from}}` compares
-    # a bigint against a timestamp and turns every panel into a full namespace scan.
+    # Time-scoped queries need foldable bounds for segment pruning. A direct bigint-to-
+    # timestamp comparison such as `timestamp_ms >= {{from}}` cannot prune segments. No
+    # panel is exempt: whole-run history comes from W&B, not from an unbounded scan.
+    unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
             if '"telemetry_v1"' not in sql:
                 continue
-            assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" in sql, name
+            if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
+                unbounded.append((name, sql))
+                continue
             assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM" in sql, name
             assert "timestamp_ms >= {{from}}" not in sql, name
+
+    assert unbounded == []
 
 
 def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
@@ -613,3 +693,362 @@ def test_cluster_series_keep_one_colour_across_dashboards():
                 (colour,) = [p["value"]["fixedColor"] for p in override["properties"] if p["id"] == "color"]
                 assert colours.setdefault(series, colour) == colour, f"{name}: {series} changes colour"
     assert len(colours) >= len(CLUSTERS)
+
+
+def test_training_loss_by_attempt_separates_process_incarnations():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by attempt")
+    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
+    sql = sql.replace("${__interval_ms}", "60000")
+    sql = sql.replace("${run:sqlstring}", "'hero-run'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
+
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            execution_uid VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
+        [
+            ("iris:controller-attempt-first", 2.0, at),
+            ("iris:controller-attempt-first", 1.8, at + 10_000),
+            ("iris:controller-attempt-second", 2.4, at + 20_000),
+        ],
+    )
+
+    assert database.execute(sql).fetchall() == [
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-first", 1.9),
+        (datetime(2026, 8, 20, 12), "iris:controller-attempt-second", 2.4),
+    ]
+
+
+def test_training_loss_by_step_reads_the_whole_run_from_wandb():
+    # finelog evicts telemetry segments once telemetry_v1 passes its storage policy, so
+    # no finelog query reaches step 0. Join the panel's datasource base path with its
+    # URL and GET it for real, against a stubbed W&B.
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by step")
+    (target,) = panel["targets"]
+    params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+    params["run"] = "hero-run"  # Grafana interpolates ${run} before the request leaves it
+
+    history = {"data": {"project": {"run": {"sampledHistory": [[{"_step": 0, "train/loss": 3.1}]]}}}}
+    wandb_source = WandbSource(timeout=5.0)
+    wandb_source._client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=history)),
+        headers={"content-type": "application/json"},
+    )
+    client = TestClient(
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), K8sFleet(()), wandb_source)
+    )
+
+    response = client.get(_datasources()[panel["datasource"]["uid"]] + target["url"], params=params)
+
+    assert response.status_code == 200
+    (row,) = response.json()
+    assert (row["run"], row["step"], row["value"]) == ("hero-run", 0, 3.1)
+    # Infinity renames each selector to its text, and the trend panel plots that name.
+    columns = {column["selector"]: column["text"] for column in target["columns"]}
+    assert set(columns) <= set(row)
+    assert panel["options"]["xField"] in columns.values()
+
+
+def test_training_execution_health_uses_the_current_attempt_and_iris_state():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Execution health")
+    initialization_age = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "initialization age"
+    )
+    thresholds = next(field for field in initialization_age["properties"] if field["id"] == "thresholds")
+    assert [step["value"] for step in thresholds["value"]["steps"]] == [None, 2700, 3600]
+    sql_by_ref = {
+        target["refId"]: next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+        for target in panel["targets"]
+    }
+    fixed_now = "TIMESTAMP '2026-08-21 12:00:00+00:00'"
+    sql_by_ref = {
+        ref: (
+            sql.replace("${run:sqlstring}", "'hero-run'")
+            .replace("{{from}}", "TIMESTAMP '2026-08-21 10:30:00+00:00'")
+            .replace("{{to}}", fixed_now)
+            .replace("now()", fixed_now)
+        )
+        for ref, sql in sql_by_ref.items()
+    }
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            cluster VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
+        [
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
+            (
+                "hero-run",
+                "/u/hero-run-coord/train",
+                "attempt-current",
+                "0",
+                0,
+                fixed_now_ms - 4 * 60 * 60_000,
+                1,
+            ),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-current", "0", 1, fixed_now_ms - 60_000, 3),
+            ("hero-run", "/u/hero-run-coord/train", "attempt-replica", "1", 1, fixed_now_ms - 30_000, 4),
+            ("other-run", "/u/other-run-coord/train", "other-attempt", "0", 1, fixed_now_ms - 20_000, 5),
+        ],
+    )
+    database.execute(
+        """
+        CREATE TABLE "iris.task_state"(
+            cluster VARCHAR,
+            root_job_id VARCHAR,
+            ts TIMESTAMPTZ,
+            pending BIGINT,
+            assigned BIGINT,
+            building BIGINT,
+            running BIGINT
+        )
+        """
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_state" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-a", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 50, tzinfo=UTC), 4, 3, 2, 160),
+            ("cw-a", "/u/hero-run-coord-1", datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC), 1, 2, 3, 170),
+            ("cw-b", "/u/hero-run-coord", datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC), 0, 0, 0, 176),
+            ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
+        ],
+    )
+    database.execute(
+        """
+        CREATE TABLE "iris.task_event"(
+            cluster VARCHAR,
+            task_id VARCHAR,
+            attempt_id BIGINT,
+            reason VARCHAR,
+            ts TIMESTAMPTZ
+        )
+        """
+    )
+    database.executemany(
+        'INSERT INTO "iris.task_event" VALUES (?, ?, ?, ?, ?)',
+        [
+            (
+                "cw-a",
+                "/u/hero-run-coord/train/0",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 50, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/hero-run-coord-1/train/1",
+                1,
+                "CoscheduledSiblingRequeued",
+                datetime(2026, 8, 21, 11, 59, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/hero-run-coord/train/2",
+                0,
+                "TaskRunning",
+                datetime(2026, 8, 21, 11, 59, 30, tzinfo=UTC),
+            ),
+            (
+                "cw-b",
+                "/u/hero-run-coord/train/3",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 59, 40, tzinfo=UTC),
+            ),
+            (
+                "cw-a",
+                "/u/other-run-coord/train/0",
+                0,
+                "TaskRetryScheduled",
+                datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, None)]
+    assert database.execute(sql_by_ref["B"]).fetchall() == [(169, 160, 4, 3, 2, 600.0)]
+    assert database.execute(sql_by_ref["C"]).fetchall() == [(1, 600.0)]
+
+    database.execute("UPDATE telemetry_v1 SET value = 0 WHERE execution_uid = 'attempt-current' AND seq = 3")
+    assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, 14_400.0)]
+
+
+def test_training_status_reads_whole_run_active_time_from_wandb():
+    # Eviction bounds any finelog answer to the retained window, so the run totals come
+    # from W&B, whose `_runtime` carries across restarts. Join the target's datasource
+    # base path with its URL and GET it for real, against a stubbed W&B.
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Run status")
+    assert panel["datasource"]["uid"] == MIXED_DATASOURCE
+    target = next(target for target in panel["targets"] if target["refId"] == "B")
+    params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+    params["run"] = "hero-run"  # Grafana interpolates ${run} before the request leaves it
+
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-24T02:00:00Z",
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "_timestamp": 1_787_561_529}),
+    }
+    wandb_source = WandbSource(timeout=5.0)
+    wandb_source._client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": {"project": {"run": run}}})),
+        headers={"content-type": "application/json"},
+    )
+    client = TestClient(
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), K8sFleet(()), wandb_source)
+    )
+
+    response = client.get(_datasources()[target["datasource"]["uid"]] + target["url"], params=params)
+
+    assert response.status_code == 200
+    (row,) = response.json()
+    # Four days of wall clock, ninety hours of them running.
+    assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
+    assert {column["selector"] for column in target["columns"]} <= set(row)
+
+
+def test_training_attempts_table_links_the_newest_attempt_to_iris():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Attempts")
+    (target,) = panel["targets"]
+    overrides = {
+        override["matcher"]["options"]: {field["id"]: field["value"] for field in override["properties"]}
+        for override in panel["fieldConfig"]["overrides"]
+    }
+
+    # Grafana percent-encodes an interpolated value, so the job root goes in raw and
+    # comes out as the single path segment the Iris route expects. The cluster rides in
+    # a column the table keeps but does not draw; a transformation that dropped it would
+    # take half the link with it.
+    (link,) = overrides["job"]["links"]
+    assert link["url"] == "https://iris.oa.dev/#/job/${__data.fields.job}?cluster=${__data.fields.iris_cluster}"
+    assert overrides["iris_cluster"]["custom.hideFrom"]["viz"] is True
+    assert "iris_cluster" in {column["text"] for column in target["columns"]}
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            cluster VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    hour = 3_600_000
+    at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        [
+            # An attempt that ran two hours on a CoreWeave cluster and then failed.
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour),
+            # Its successor, a fresh job on the hub, whose rows carry no origin cluster.
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour),
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour),
+            # A replica of that attempt, and another run: neither is a row of this table.
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour),
+            ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour),
+        ],
+    )
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    sql = sql.replace("${run:sqlstring}", "'hero-run'").replace("now()", "TIMESTAMP '2026-08-21 12:00:00+00:00'")
+
+    # Newest first, so the top row is the last attempt whether or not it still runs. The
+    # Iris dashboard filters backends by peer id and reserves `local` for its own, which
+    # is the hub finelog leaves unlabeled.
+    assert database.execute(sql).fetchall() == [
+        (at - 2 * hour, "marin", "/u/hero-run-coord-2/train", 3_600.0, "local"),
+        (at - 6 * hour, "cw-a", "/u/hero-run-coord/train", 7_200.0, "cw-a"),
+    ]
+
+
+def test_training_moe_health_queries_show_routing_signals():
+    dashboard = _stitched_dashboards()["training.json"]
+    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",
+        [
+            ("moe_drop_fraction", 0.04, at),
+            ("moe_sender_drop_fraction", 0.03, at),
+            ("moe_receiver_drop_fraction", 0.02, at),
+            ("train_router_routing_entropy_mean", 5.93, at),
+            ("train_router_bias_max", 390.0, at),
+            ("train_router_bias_min", -380.0, at),
+            ("train_router_margin_max", 25.0, at),
+            ("train_router_margin_min", -31.0, at),
+            ("params_norm_total", 4800.0, at),
+            ("params_norm_stacked_blocks_stacked_mlp_router_bias", 200.0, at),
+        ],
+    )
+
+    def query(title: str) -> list[tuple]:
+        sql = _panel_sql({**dashboard, "panels": [panels[title]]})[0]
+        sql = sql.replace("${__interval_ms}", "60000")
+        sql = sql.replace("${run:sqlstring}", "'hero-run'")
+        sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-21 11:00:00+00:00'")
+        sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 13:00:00+00:00'")
+        return database.execute(sql).fetchall()
+
+    assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.07)]
+    assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
+    assert query("Parameter norms") == [(datetime(2026, 8, 21, 12), 4800.0, 200.0)]

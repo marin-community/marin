@@ -530,9 +530,9 @@ groups:
                 - evaluator: { type: gt, params: [0] }
 
   # Hero-run stalled-training detection. A fresh running task-state row whose
-  # root is named hero-*-coord enrolls the job. Structured run_id telemetry
-  # supplies current-execution progress; task-to-node GPU attribution is not
-  # required.
+  # root is named hero-*-coord or hero-*-coord-<retry> enrolls the job.
+  # Structured run_id telemetry supplies current-execution progress;
+  # task-to-node GPU attribution is not required.
   - orgId: 1
     name: training-progress
     folder: Alerts
@@ -566,6 +566,7 @@ groups:
               columns:
                 - { selector: cluster, text: cluster, type: string }
                 - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
                 - { selector: phase, text: phase, type: string }
                 - { selector: reason, text: reason, type: string }
                 - { selector: value, text: value, type: number }
@@ -609,6 +610,148 @@ groups:
               parser: backend
               format: table
               url: /alerts/loss_spikes
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # Hero run health beyond progress and loss: the telemetry path, the optimizer,
+  # MoE routing, throughput, evaluation, and Iris retries. These watch every run
+  # the Iris rollup or Levanter telemetry reports, so an outage on one path
+  # leaves the other watching. See docs/ops/hero-run-health-alerts.md.
+  - orgId: 1
+    name: training-health
+    folder: Alerts
+    interval: 1m
+    rules:
+      # Silent for ten minutes while Iris still reports the tasks running.
+      # Levanter publishes phase every minute, so this is the telemetry path or
+      # the process. TrainingProgressStalled defers rather than page again.
+      - uid: training-telemetry-gone
+        title: TrainingTelemetryGone
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} publishes no telemetry while Iris runs its tasks"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_telemetry
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # The optimizer signals that precede a divergence TrainingLossSpike catches
+      # later: a loss floor a whole unit above its trailing floor, a gradient
+      # norm above the band this run has no clipping for, and skipped steps.
+      - uid: training-optimizer-unstable
+        title: TrainingOptimizerUnstable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} optimizer reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_optimizer
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # Token drops, router collapse, a throughput or MFU floor, a worse
+      # evaluation, a stale Iris state row, and controller retries. These take
+      # the explicit notification=slack exception: an operator reads them beside
+      # the run dashboard, so they announce without opening a triage session.
+      - uid: training-run-health-degraded
+        title: TrainingRunHealthDegraded
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_health
               url_options: { method: GET }
               columns:
                 - { selector: cluster, text: cluster, type: string }

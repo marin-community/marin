@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replay an Echo query manifest through normal federated search.
+"""Replay an Echo query manifest through all-repository federated search.
 
 Each successful request is durably recorded by Echo. The output JSONL maps the
 manifest case to the resulting search execution ID and is safe to resume.
@@ -80,6 +80,9 @@ def reconcile_history(cases: Sequence[ReplayCase], history: Path, output: Path) 
             continue
         if tuple(execution["domains"]) != case.domains:
             continue
+        expected_filters = {"repository": search_config.ALL_REPOSITORIES} if "file" in case.domains else {}
+        if execution.get("filters", {}) != expected_filters:
+            continue
         recovered[case.id] = ReplayResult(case.id, execution["id"], execution["returned_count"])
     with output.open("a") as stream:
         for case in cases:
@@ -96,7 +99,12 @@ def replay_one(case: ReplayCase, limit: int) -> ReplayResult:
             response = echo_cli.request_response(
                 "GET",
                 "/federated-search",
-                params={"q": case.query, "domain": list(case.domains), "limit": limit},
+                params={
+                    "q": case.query,
+                    "domain": list(case.domains),
+                    "repository": search_config.ALL_REPOSITORIES,
+                    "limit": limit,
+                },
                 timeout=REPLAY_REQUEST_TIMEOUT,
             )
             break

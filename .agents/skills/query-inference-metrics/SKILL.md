@@ -1,6 +1,6 @@
 ---
 name: query-inference-metrics
-description: Investigate a vLLM serve's performance (throughput, TTFT/TPOT latency, queue depth, KV-cache usage) from durable Finelog telemetry with SQL. Use when asked how an inference or eval serve performed, or why it was slow. For kernel-level JAX profiling, use profile-training instead.
+description: Query Finelog telemetry to measure or diagnose a specified vLLM serve's throughput, latency, queue, or KV-cache behavior.
 ---
 
 # Query inference telemetry
@@ -10,7 +10,9 @@ Native vLLM `/metrics` snapshots are exported directly to Finelog every 15 secon
 Run SQL from a Marin checkout:
 
 ```sh
-uv run finelog query marin "<SQL>" --format table
+uv run finelog query marin --format table <<'SQL'
+<SQL>
+SQL
 ```
 
 Use the federated `marin` hub unless a task specifically requires a cluster-local view.

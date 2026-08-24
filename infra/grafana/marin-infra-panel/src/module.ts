@@ -14,6 +14,7 @@ export const plugin = new PanelPlugin<InfraPanelOptions>(InfraPanel).setPanelOpt
         { value: 'nightlies', label: 'Nightly matrix' },
         { value: 'commits', label: 'Commit strip' },
         { value: 'wandb', label: 'W&B chart' },
+        { value: 'sm', label: 'SM utilization raster' },
       ],
     },
   });

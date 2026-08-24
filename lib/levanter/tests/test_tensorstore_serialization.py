@@ -4,6 +4,7 @@
 import asyncio
 import json
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
 
 import equinox as eqx
@@ -22,15 +23,24 @@ from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostStagingGate,
+    _HostByteBudget,
+    _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
+    build_kvstore_spec,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
-import eight_device_checkpoints
-from eight_device_checkpoints import run_on_eight_devices
+from levanter.testing import eight_device_checkpoints
+from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+
+
+def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
+    spec = build_kvstore_spec(f"file://{tmp_path}/cache")
+
+    assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
@@ -41,6 +51,19 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source_host = np.asarray(source)
     np.testing.assert_array_equal(staged, source_host)
     assert not np.shares_memory(staged, source_host)
+
+
+def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):
+    callbacks = []
+    future = SimpleNamespace(add_done_callback=callbacks.append)
+
+    monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
+    _trim_host_memory_after_commits([future])
+    assert callbacks == []
+
+    monkeypatch.delenv("LD_PRELOAD")
+    _trim_host_memory_after_commits([future])
+    assert len(callbacks) == 1
 
 
 def test_tensorstore_checkpoint_simple():
@@ -279,7 +302,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostStagingGate(100)
+        gate = _HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))
@@ -311,6 +334,33 @@ def test_a_save_larger_than_the_staging_budget_rolls_through_it():
 
 
 @pytest.mark.parametrize(
+    "arrays, budget",
+    [
+        # One shard larger than the whole budget: it must be admitted anyway, or the read deadlocks.
+        (1, 1),
+        # Eight 16 KiB arrays through a budget admitting about two: the read rolls through it.
+        (8, 32 * 1024),
+    ],
+)
+def test_a_restore_completes_whatever_the_read_budget_admits(arrays, budget):
+    """Concurrent reads stay bounded by the budget and still return every array intact."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(arrays)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, state)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {name: hax.zeros(A) for name in state},
+                read_config=TensorStoreReadConfig(max_in_flight_bytes=budget),
+            )
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
     "local_shape, itemsize, max_bytes, expected",
     [
         ((8, 16), 4, 4096, (8, 16)),  # already under the cap
@@ -333,6 +383,14 @@ def test_every_replica_writes_a_disjoint_slice_covering_the_array():
 
 def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
     run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+def test_replica_aware_restore_reads_each_shard_once():
+    run_on_eight_devices(eight_device_checkpoints.replica_aware_restore_reads_each_shard_once)
+
+
+def test_replica_aware_restore_broadcasts_across_processes():
+    eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():
