@@ -43,6 +43,13 @@ ONE_PHASE_DATASET = {"300m": "300m_one_phase_fit", "delphi_3e18": "delphi_3e18_o
 DSP_REFERENCE = "effective_exposure_dsp"
 """The long-standing incumbent. Every margin in this benchmark is quoted against it."""
 
+RECOMMENDED = "general/semantic"
+"""The configuration to deploy, quoted alongside the per-cell leader.
+
+The per-cell leader is a different model in four of six cells, so it is a winner's-curse artefact rather
+than a recommendation. This one is consistently near the top, so its margin over DSP is the honest
+headline."""
+
 
 def later_mechanisms() -> list[swarm39.Model]:
     """Builders added after the model benchmark froze, none of them ever scored on single-phase rows.
@@ -204,23 +211,35 @@ def main() -> None:
             continue
         reference = dsp.sort_values("spearman", ascending=False).iloc[0]
         leader = group.sort_values(["regret@1", "spearman"], ascending=[True, False]).iloc[0]
+        picked = group[group["model"] == RECOMMENDED].sort_values("spearman", ascending=False)
+        chosen = picked.iloc[0] if not picked.empty else leader
         margins.append(
             {
                 "cell": cell,
                 "leader": f"{leader['model']}/{leader['fitted_on']}",
-                "leader_regret": leader["regret@1"],
-                "dsp_regret": reference["regret@1"],
-                "regret_ratio": reference["regret@1"] / leader["regret@1"] if leader["regret@1"] > 0 else float("inf"),
                 "leader_rho": leader["spearman"],
+                "recommended_fit": chosen["fitted_on"],
+                "recommended_rho": chosen["spearman"],
                 "dsp_rho": reference["spearman"],
-                "d_rho": leader["spearman"] - reference["spearman"],
+                "d_rho": chosen["spearman"] - reference["spearman"],
+                "recommended_regret": chosen["regret@1"],
+                "dsp_regret": reference["regret@1"],
             }
         )
-    print(pd.DataFrame(margins).to_string(index=False, float_format=lambda v: f"{v:+.5f}"))
+    margin_table = pd.DataFrame(margins)
+    print(margin_table.to_string(index=False, float_format=lambda v: f"{v:+.5f}"))
+    print(
+        f"  {RECOMMENDED} beats {DSP_REFERENCE} on rank correlation by {margin_table['d_rho'].mean():+.4f} on "
+        f"average (median {margin_table['d_rho'].median():+.4f}), winning "
+        f"{int((margin_table['d_rho'] > 0).sum())} of {len(margin_table)} cells"
+    )
 
     # Paired within model and cell, so this isolates the panel and not the model mix.
     wide = everything.pivot_table(index=["model", "cell"], columns="fitted_on", values="spearman")
     delta = (wide["one-phase"] - wide["two-phase"]).dropna()
+    regressions = delta[delta <= 0]
+    if len(regressions):
+        print(f"\n  panel switch HURTS these model-cell pairs: {', '.join(f'{m}@{c}' for m, c in regressions.index)}")
     print(
         f"\nfitting on the single-phase panel instead of the two-phase panel changes rank correlation by "
         f"{delta.mean():+.4f} on average (median {delta.median():+.4f}); "
