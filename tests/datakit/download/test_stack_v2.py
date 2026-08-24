@@ -7,7 +7,6 @@ import polars as pl
 import pytest
 from fray.local_backend import LocalClient
 from marin.datakit.download.stack_v2 import (
-    BLOB_PREFIX_PARTITION_COUNT,
     StackV2ParquetTask,
     build_stack_v2_pipeline,
     partition_stack_v2_parquet,
@@ -27,7 +26,7 @@ def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: 
     source.write_parquet(source_path)
 
     output_path = tmp_path / "partitioned"
-    result = partition_stack_v2_parquet(
+    partition_stack_v2_parquet(
         StackV2ParquetTask(
             source_url=str(source_path),
             relative_source_path="data/Python/train-00000.parquet",
@@ -35,7 +34,6 @@ def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: 
         )
     )
 
-    assert result["partition_count"] == 256
     parquet_paths = sorted(output_path.glob("blob_prefix=*/*.parquet"))
     assert {path.parent.name for path in parquet_paths} == {
         "blob_prefix=00",
@@ -51,7 +49,7 @@ def test_partition_stack_v2_parquet_rejects_non_hex_blob_prefix(tmp_path: Path):
     source_path = tmp_path / "source.parquet"
     pl.DataFrame({"blob_id": ["zz-not-a-hash"], "path": ["bad.py"]}).write_parquet(source_path)
 
-    with pytest.raises(ValueError, match="blob_id must start with two hexadecimal characters"):
+    with pytest.raises(ValueError, match="blob_id must start with 2 hexadecimal characters"):
         partition_stack_v2_parquet(
             StackV2ParquetTask(
                 source_url=str(source_path),
@@ -73,7 +71,6 @@ def test_stack_v2_pipeline_assigns_one_zephyr_shard_per_parquet_file(tmp_path: P
 
     plan = compute_plan(build_stack_v2_pipeline(tasks, str(tmp_path / "output")))
 
-    assert BLOB_PREFIX_PARTITION_COUNT == 256
     assert plan.num_shards == len(tasks)
     assert [item.data for item in plan.source_items] == tasks
 

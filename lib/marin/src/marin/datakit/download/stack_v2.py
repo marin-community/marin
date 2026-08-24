@@ -5,22 +5,21 @@
 
 The pipeline has one Zephyr source shard per Hugging Face parquet file. Each worker
 uses Polars' native ``hf://`` object-store reader and streaming parquet sink, so the
-source parquet is never materialized on worker disk. ``hf_xet``'s high-performance
-file downloader is enabled for Hugging Face operations, but is not used to stage the
-parquet files: that API reconstructs a complete local file before a transform can run.
+source parquet is never materialized on worker disk. This deliberately uses Polars'
+native range reader instead of ``hf_xet``'s file downloader, which reconstructs a
+complete local file before a transform can run.
 """
 
 import hashlib
 import logging
-import os
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 import draccus
 import polars as pl
 from fray.types import ResourceConfig
-from huggingface_hub import HfFileSystem
+from huggingface_hub import HfFileSystem, get_token
+from polars.io.partition import FileProviderArgs
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
@@ -41,7 +40,7 @@ DEFAULT_MAX_WORKERS = 128
 DEFAULT_MAX_SHARD_FAILURES = 5
 OBJECT_STORE_MAX_RETRIES = 10
 
-_HEX_PREFIX = re.compile(r"^[0-9a-f]{2}$")
+_HEX_PREFIX = re.compile(rf"^[0-9a-f]{{{BLOB_PREFIX_HEX_WIDTH}}}$")
 
 
 @dataclass(frozen=True)
@@ -52,7 +51,8 @@ class StackV2DownloadConfig:
     revision: str = HF_REVISION
     max_workers: int = DEFAULT_MAX_WORKERS
     max_files: int | None = None
-    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=4, ram="16g", disk="10g"))
+    worker_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=16, ram="80g", disk="16g"))
+    task_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=4, ram="16g", disk="4g"))
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=1, ram="8g", preemptible=False)
     )
@@ -73,20 +73,29 @@ class StackV2ParquetTask:
 
 
 @dataclass(frozen=True)
+class StackV2DownloadResult:
+    """Metrics emitted after one source parquet is fully partitioned."""
+
+    source_url: str
+    relative_source_path: str
+    expected_size: int | None
+
+
+@dataclass(frozen=True)
 class _BlobPartitionPathProvider:
     """Create collision-free output names for one source parquet file."""
 
     source_id: str
 
-    def __call__(self, args: Any) -> str:
+    def __call__(self, args: FileProviderArgs) -> str:
         prefix = args.partition_keys.item(0, 0)
         if not isinstance(prefix, str) or _HEX_PREFIX.fullmatch(prefix) is None:
-            raise ValueError(f"blob_id must start with two hexadecimal characters, got {prefix!r}")
+            raise ValueError(f"blob_id must start with {BLOB_PREFIX_HEX_WIDTH} hexadecimal characters, got {prefix!r}")
         return f"blob_prefix={prefix}/source-{self.source_id}-{args.index_in_partition:05d}.parquet"
 
 
 def _hf_token() -> str:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = get_token()
     if not token:
         raise RuntimeError(
             "bigcode/the-stack-v2 is gated; set HF_TOKEN in the driver and Iris worker environment "
@@ -98,7 +107,6 @@ def _hf_token() -> str:
 def list_stack_v2_tasks(cfg: StackV2DownloadConfig) -> list[StackV2ParquetTask]:
     """List the pinned parquet files and make one Zephyr task per file."""
 
-    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
     source_root = f"datasets/{HF_DATASET_ID}"
     source_fs = HfFileSystem(token=_hf_token())
     listing = source_fs.glob(
@@ -133,10 +141,9 @@ def _input_storage_options(source_url: str) -> dict[str, object] | None:
     return {"token": _hf_token(), "max_retries": OBJECT_STORE_MAX_RETRIES}
 
 
-def partition_stack_v2_parquet(task: StackV2ParquetTask) -> dict[str, object]:
+def partition_stack_v2_parquet(task: StackV2ParquetTask) -> StackV2DownloadResult:
     """Stream one remote parquet file into partitions keyed by ``blob_id[:2]``."""
 
-    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
     source = pl.scan_parquet(
         task.source_url,
         storage_options=_input_storage_options(task.source_url),
@@ -159,13 +166,11 @@ def partition_stack_v2_parquet(task: StackV2ParquetTask) -> dict[str, object]:
         storage_options={"max_retries": OBJECT_STORE_MAX_RETRIES},
     )
     logger.info("Partitioned %s into %s", task.source_url, task.output_path)
-    return {
-        "source_url": task.source_url,
-        "relative_source_path": task.relative_source_path,
-        "expected_size": task.expected_size,
-        "partition_count": BLOB_PREFIX_PARTITION_COUNT,
-        "status": "success",
-    }
+    return StackV2DownloadResult(
+        source_url=task.source_url,
+        relative_source_path=task.relative_source_path,
+        expected_size=task.expected_size,
+    )
 
 
 def build_stack_v2_pipeline(tasks: list[StackV2ParquetTask], output_path: str) -> Dataset[str]:
@@ -200,7 +205,7 @@ def download_stack_v2(cfg: StackV2DownloadConfig) -> None:
         max_shard_failures=DEFAULT_MAX_SHARD_FAILURES,
         max_execution_retries=10,
     )
-    ctx.execute(pipeline)
+    ctx.execute(pipeline, map_task_resources=cfg.task_resources)
     write_provenance_json(
         cfg.output_path,
         metadata={
@@ -208,7 +213,7 @@ def download_stack_v2(cfg: StackV2DownloadConfig) -> None:
             "revision": cfg.revision,
             "source_glob": HF_PARQUET_GLOB,
             "source_file_count": len(tasks),
-            "partition_key": "lower(blob_id[:2])",
+            "partition_key": f"lower(blob_id[:{BLOB_PREFIX_HEX_WIDTH}])",
             "partition_count": BLOB_PREFIX_PARTITION_COUNT,
         },
     )
