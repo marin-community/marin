@@ -207,8 +207,8 @@ class TreeCache(AsyncDataset[T_co]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         return await self._reader.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
-        return self._reader.get_batch_sync(indices_or_slice, timeout=timeout)
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
+        return self._reader.get_batch_sync(indices_or_slice)
 
     def flat_field_length(self, field: str) -> int:
         return self._reader.flat_field_length(field)
@@ -369,10 +369,8 @@ class TreeCache(AsyncDataset[T_co]):
             open_field_store,
         )
 
-    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
-        if len(indices) == 0:
-            return []
-
+    def _group_indices_by_shard(self, indices: Sequence[int]) -> Tuple[List[str], Dict[int, List[Tuple[int, int]]]]:
+        """Map global row indices onto ``(output position, row within shard)`` pairs per shard."""
         shard_names, shard_offsets = self._ensure_shard_row_offsets()
         shard_batches: Dict[int, List[Tuple[int, int]]] = {}
         for output_index, index in enumerate(indices):
@@ -383,6 +381,14 @@ class TreeCache(AsyncDataset[T_co]):
             shard_index = int(np.searchsorted(shard_offsets, index, side="right"))
             shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
             shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
+
+        return shard_names, shard_batches
+
+    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
+        if len(indices) == 0:
+            return []
+
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
 
         output: List[Optional[T_co]] = [None] * len(indices)
 
@@ -404,16 +410,7 @@ class TreeCache(AsyncDataset[T_co]):
         if len(indices) == 0:
             return []
 
-        shard_names, shard_offsets = self._ensure_shard_row_offsets()
-        shard_batches: Dict[int, List[Tuple[int, int]]] = {}
-        for output_index, index in enumerate(indices):
-            index = int(index)
-            if index < 0 or index >= self.ledger.total_num_rows:
-                raise ValueError("Requested indices beyond the end of the dataset")
-
-            shard_index = int(np.searchsorted(shard_offsets, index, side="right"))
-            shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
-            shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
 
         output: List[Optional[T_co]] = [None] * len(indices)
         for shard_index, batch in shard_batches.items():
@@ -498,7 +495,7 @@ class _TreeCacheReader(Protocol[T_co]):
 
     async def get_batch(self, indices: Union[Sequence[int], slice]) -> Sequence[T_co]: ...
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]: ...
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]: ...
 
     def flat_field_length(self, field: str) -> int: ...
 
@@ -538,7 +535,7 @@ class _MaterializedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._store.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
@@ -596,7 +593,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._cache._get_sharded_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
