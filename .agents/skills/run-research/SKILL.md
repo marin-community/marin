@@ -93,8 +93,8 @@ Seal when requested or when the defined goal is reached.
 If the research produced useful production changes, extract them into a clean
 branch that links the research record without including it. Before finishing,
 update the TL;DR and conclusion, list next steps, and link the final snapshot
-and production PR. Add the same links to the coordinating issue when one
-exists.
+and production PR when one exists. Add the same links to the coordinating issue
+when one exists.
 
 ## Practical Rules
 
