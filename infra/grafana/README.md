@@ -298,16 +298,22 @@ the strip a mixed-datasource panel. Those two totals describe the whole run, and
 eviction that keeps the step-axis loss panel on W&B bounds any finelog answer to the
 retained window. On 2026-08-24 `hero-12d8b6f0-dee637` read 93.5 hours active against
 105.0 hours of wall clock, an 89 percent active share, while finelog retained its
-last three days.
+last three days. A mixed panel names each frame after its refId and Grafana prefixes
+every field label with it, so the strip renames `A `/`B ` away; it stands ten grid
+rows tall because the stat layout picks its tile grid from the aspect ratio, and
+twelve tiles in a shorter panel land in one unreadable row.
 
 The Attempts table carries the recent detail behind that total: one row per Iris
 execution over a fixed seven-day window, newest first, running or not, so the top row
 stays the last attempt after that attempt fails. Its job cell links to the attempt in
 the Iris dashboard. That link has to come from finelog, because W&B records neither
-the cluster nor the job root. The URL is built in SQL and carried in a column the
-table hides rather than draws. Hide it with `custom.hideFrom.viz`: Grafana 13's table
-ignores the legacy `custom.hidden`, and a transformation that dropped the column would
-take the data link with it.
+the cluster nor the job root. It interpolates the job cell itself plus a cluster
+column the table hides rather than draws. Leave the job root unencoded in SQL:
+Grafana percent-encodes an interpolated data-link value, which is what makes the root
+one path segment for the Iris route, and a pre-encoded path arrives there as a
+literal `%2F` that `ListTasks` rejects. Hide the cluster column with
+`custom.hideFrom.viz`: Grafana 13's table ignores the legacy `custom.hidden`, and a
+transformation that dropped the column would take half the link with it.
 
 The execution-health strip shows the current attempt age, Iris task counts,
 task-state age, and retained retry events. Initialization age appears only before
