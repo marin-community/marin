@@ -92,6 +92,12 @@ live-policy audit, then convert them to authoritative role bindings in a separat
 change. Record code-declared grants that are absent live for a separate policy review instead
 of creating them during import.
 
+Automatic Echo, EvalDash, and Grafana rollouts are blocked in
+`scripts/ci/pulumi_rollouts.py` while their leaf states retain IAM resources transferred by
+issue #8455. Manual workflow dispatch remains available for the coordinated migration. Remove
+the gate after the `marin` stack imports the live grants and previews of all three leaf stacks
+show no IAM deletions.
+
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
 while their values remain outside Pulumi.
