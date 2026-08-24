@@ -5,6 +5,7 @@
 # usage: XLA_REV=<sha> JAX_REV=... STASH=s3://... [GRID_MULT=16] build_pjrt_forkbranch.sh
 set -euo pipefail
 XLA_REV="${XLA_REV:?set XLA_REV (sha on mcwitt/xla)}"
+XLA_BRANCH="${XLA_BRANCH:?set XLA_BRANCH (branch on mcwitt/xla containing XLA_REV)}"
 JAX_REV="${JAX_REV:?set JAX_REV}"
 STASH="${STASH:?set STASH (s3://... prefix to upload the wheel)}"
 
@@ -16,7 +17,7 @@ cd /tmp/build/jax && git fetch origin "$JAX_REV" && git checkout "$JAX_REV"
 if [ ! -d /tmp/build/xla ]; then git clone --filter=blob:none https://github.com/openxla/xla.git /tmp/build/xla; fi
 cd /tmp/build/xla
 git remote add fork https://github.com/mcwitt/xla.git 2>/dev/null || true
-git fetch fork "$XLA_REV"
+git fetch fork "$XLA_BRANCH"
 git checkout "$XLA_REV" && git reset --hard "$XLA_REV"
 echo "xla: $(git rev-parse HEAD)"
 
