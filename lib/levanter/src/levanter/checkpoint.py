@@ -38,7 +38,6 @@ from rigging.filesystem.storage_path import StoragePath
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
     TensorStoreWriteConfig,
-    release_commit_futures,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
@@ -694,7 +693,6 @@ class Checkpointer:
 
     def wait_until_finished(self):
         self._manager.wait_until_finished()
-        release_commit_futures(self._manager)
         if jax.process_index() == 0:
             while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
                 time.sleep(0.2)

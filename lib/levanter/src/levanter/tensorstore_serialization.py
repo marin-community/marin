@@ -97,14 +97,6 @@ def _trim_host_memory_after_commits(commit_futures: Sequence[ts.Future]) -> None
         future.add_done_callback(commit_finished)
 
 
-def release_commit_futures(manager: array_ser.GlobalAsyncCheckpointManager) -> None:
-    """Drop a save's joined commit futures after they finish.
-
-    JAX overwrites ``_commit_futures`` on each save and never clears it.
-    """
-    manager._commit_futures = None
-
-
 def _format_gib(num_bytes: int) -> str:
     return f"{num_bytes / (1024**3):.2f}GiB"
 
@@ -716,7 +708,6 @@ def _serialize_arrays(
     barriers on the other processes.
     """
     manager.wait_until_finished()
-    release_commit_futures(manager)
 
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
