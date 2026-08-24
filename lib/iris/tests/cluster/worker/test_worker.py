@@ -17,7 +17,7 @@ import pytest
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from iris.cluster.config import TaskOutputDestination, TaskOutputPolicy
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
@@ -118,7 +118,7 @@ def test_task_outputs_are_archived_after_success(mock_worker, mock_runtime, monk
     monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
     mock_worker._config = replace(
         mock_worker._config,
-        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
     )
 
     def create_with_output(config):
@@ -141,7 +141,7 @@ def test_task_output_storage_failure_preserves_task_success(mock_worker, monkeyp
     monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
     mock_worker._config = replace(
         mock_worker._config,
-        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
     )
 
     def fail_destination(*args, **kwargs):
@@ -162,7 +162,7 @@ def test_stop_during_output_finalization_preserves_task_success(mock_worker, mon
     monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_outbound_ip", lambda: "127.0.0.1")
     mock_worker._config = replace(
         mock_worker._config,
-        task_outputs=TaskOutputPolicy(destination=TaskOutputDestination.LOCAL, ttl_days=0),
+        task_outputs=TaskOutputPolicy(destination="file://", ttl_days=0),
     )
     capture_started = threading.Event()
 

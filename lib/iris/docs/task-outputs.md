@@ -32,7 +32,7 @@ The execution cluster owns the policy:
 
 ```yaml
 task_outputs:
-  destination: temporary_object_storage
+  destination: gs://regional-bucket/tmp/ttl=7d/iris/task-outputs
   ttl_days: 7
   max_bytes: 2147483648
   max_entries: 10000
@@ -40,9 +40,9 @@ task_outputs:
     seconds: 300
 ```
 
-`destination: temporary_object_storage` resolves through `marin_temp_bucket` on the execution cluster. Objects use its lifecycle-managed `tmp/ttl=<N>d/` prefix. Federated tasks therefore write in the region where they run.
+`destination` accepts any fsspec URL. Object-storage destinations must include a lifecycle-managed `tmp/ttl=<N>d/` path, and Iris reports that effective TTL with the archive. When the field is omitted, Iris resolves the same prefix through `marin_temp_bucket` on the execution cluster, so federated tasks write in the region where they run.
 
-`LocalCluster` replaces the destination with `local`. The runtime maps `$IRIS_OUTPUT_DIR` to an attempt-local host directory and stores the archive below the cluster's temporary root. Both disappear when the local cluster closes; the CLI labels this as local-cluster retention.
+`LocalCluster` replaces the destination with a local `file://` URL. The runtime maps `$IRIS_OUTPUT_DIR` to an attempt-local host directory and stores the archive below the cluster's temporary root. Both disappear when the local cluster closes; the CLI labels this as local-cluster retention.
 
 The byte limit counts regular-file bytes before compression. The entry limit counts files, directories, symlinks, and skipped special files. Iris stores symlinks without following them. Devices, sockets, and FIFOs are skipped and reported. Finalization holds the task allocation until capture completes or reaches its deadline.
 

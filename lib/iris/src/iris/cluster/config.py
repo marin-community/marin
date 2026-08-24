@@ -22,7 +22,6 @@ import ipaddress
 import logging
 import os
 from collections.abc import Collection, Iterator, Mapping
-from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
@@ -371,15 +370,14 @@ class WorkerSettings(_Config):
     cache_dir: str = ""
 
 
-class TaskOutputDestination(StrEnum):
-    TEMPORARY_OBJECT_STORAGE = "temporary_object_storage"
-    LOCAL = "local"
-
-
 class TaskOutputPolicy(_Config):
-    """Cluster-owned policy for per-attempt temporary output archives."""
+    """Cluster-owned policy for per-attempt temporary output archives.
 
-    destination: TaskOutputDestination = TaskOutputDestination.TEMPORARY_OBJECT_STORAGE
+    ``destination`` is an fsspec URL prefix. When omitted, the execution
+    cluster resolves its region-local lifecycle-managed temporary prefix.
+    """
+
+    destination: str | None = None
     ttl_days: int = 7
     max_bytes: int = 2 * 1024**3
     max_entries: int = 10_000
@@ -387,8 +385,8 @@ class TaskOutputPolicy(_Config):
 
     @model_validator(mode="after")
     def _validate_limits(self) -> TaskOutputPolicy:
-        if self.destination == TaskOutputDestination.TEMPORARY_OBJECT_STORAGE and self.ttl_days <= 0:
-            raise ValueError("task_outputs.ttl_days must be positive for temporary object storage")
+        if self.destination != "file://" and self.ttl_days <= 0:
+            raise ValueError("task_outputs.ttl_days must be positive for object storage")
         if self.max_bytes <= 0:
             raise ValueError("task_outputs.max_bytes must be positive")
         if self.max_entries <= 0:
@@ -1611,9 +1609,7 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
     config.controller = ControllerVmConfig(image=config.controller.image, local=LocalControllerConfig(port=0))
     config.storage.remote_state_dir = ""  # LocalCluster sets a temp path
     if config.task_outputs is not None:
-        config.task_outputs = config.task_outputs.model_copy(
-            update={"destination": TaskOutputDestination.LOCAL, "ttl_days": 0}
-        )
+        config.task_outputs = config.task_outputs.model_copy(update={"destination": "file://", "ttl_days": 0})
         config.defaults.worker.task_outputs = config.task_outputs.model_copy(deep=True)
     # Fast timings for local dev (override any production timings).
     config.defaults.autoscaler = AutoscalerConfig(

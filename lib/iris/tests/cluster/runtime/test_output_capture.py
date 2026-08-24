@@ -115,6 +115,27 @@ def test_resolve_task_output_destination_reports_effective_lifecycle_ttl(monkeyp
     assert str(result.path).startswith("gs://marin-us-east1/tmp/ttl=14d/")
 
 
+def test_resolve_task_output_destination_accepts_configured_storage_url(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "iris.cluster.runtime.output_capture.marin_temp_bucket",
+        lambda *args, **kwargs: pytest.fail("configured destinations must not use marin_temp_bucket"),
+    )
+
+    result = resolve_task_output_destination(
+        TaskOutputPolicy(destination="s3://regional-bucket/tmp/ttl=7d/iris/task-outputs"),
+        JobName.from_wire("/user/job/0"),
+        AttemptUid("0123456789abcdef"),
+        local_root=tmp_path,
+        source_prefix=None,
+    )
+
+    assert result.ttl_days == 7
+    assert (
+        str(result.path)
+        == "s3://regional-bucket/tmp/ttl=7d/iris/task-outputs/user/job/0/0123456789abcdef/outputs.tar.zst"
+    )
+
+
 def test_resolve_task_output_destination_rejects_unmanaged_temp_prefix(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "iris.cluster.runtime.output_capture.marin_temp_bucket",

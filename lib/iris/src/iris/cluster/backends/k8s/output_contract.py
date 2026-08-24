@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 from rigging.timing import Duration
 
-from iris.cluster.config import TaskOutputDestination, TaskOutputPolicy
+from iris.cluster.config import TaskOutputPolicy
 
 OUTPUT_CONTAINER_NAME = "output-uploader"
 OUTPUT_CONTROL_VOLUME_NAME = "output-control"
@@ -34,7 +34,7 @@ def output_uploader_environment(
     env: list[dict[str, object]] = [
         {"name": TASK_ID_ENV, "value": task_id_wire},
         {"name": ATTEMPT_UID_ENV, "value": attempt_uid},
-        {"name": DESTINATION_ENV, "value": str(policy.destination)},
+        {"name": DESTINATION_ENV, "value": policy.destination or ""},
         {"name": TTL_DAYS_ENV, "value": str(policy.ttl_days)},
         {"name": MAX_BYTES_ENV, "value": str(policy.max_bytes)},
         {"name": MAX_ENTRIES_ENV, "value": str(policy.max_entries)},
@@ -48,7 +48,7 @@ def output_uploader_environment(
 def output_policy_from_environment(environment: Mapping[str, str]) -> TaskOutputPolicy:
     """Decode uploader policy from its container environment."""
     return TaskOutputPolicy(
-        destination=TaskOutputDestination(environment[DESTINATION_ENV]),
+        destination=environment[DESTINATION_ENV] or None,
         ttl_days=int(environment[TTL_DAYS_ENV]),
         max_bytes=int(environment[MAX_BYTES_ENV]),
         max_entries=int(environment[MAX_ENTRIES_ENV]),

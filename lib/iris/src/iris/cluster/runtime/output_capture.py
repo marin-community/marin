@@ -20,7 +20,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Deadline
 
-from iris.cluster.config import TaskOutputDestination, TaskOutputPolicy
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.types import AttemptUid, JobName
 from iris.rpc import job_pb2
 
@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 _ARCHIVE_NAME = "outputs.tar.zst"
 _SKIPPED_SAMPLE_LIMIT = 10
 _SKIPPED_PATH_MAX_CHARS = 200
-_COPY_CHUNK_BYTES = 1024 * 1024
 _ERROR_MAX_CHARS = 900
 _CAPTURE_CANCELLED = "cancelled"
 
@@ -57,17 +56,29 @@ def resolve_task_output_destination(
 ) -> ResolvedOutputDestination:
     """Resolve one attempt's archive path from execution-cluster policy."""
     relative = f"{task_id.to_wire().lstrip('/')}/{attempt_uid}/{_ARCHIVE_NAME}"
-    if policy.destination == TaskOutputDestination.LOCAL:
+    if policy.destination == "file://":
         return ResolvedOutputDestination(
             path=StoragePath(f"file://{local_root / relative}"),
             retention=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER,
         )
-    prefix = marin_temp_bucket(policy.ttl_days, prefix="iris/task-outputs", source_prefix=source_prefix)
-    ttl_match = re.search(r"/ttl=(\d+)d(?:/|$)", prefix)
+    prefix = policy.destination
+    if prefix is None:
+        prefix = marin_temp_bucket(
+            policy.ttl_days,
+            prefix="iris/task-outputs",
+            source_prefix=source_prefix,
+        )
+    destination = StoragePath(prefix)
+    if policy.destination is not None and destination.is_local:
+        return ResolvedOutputDestination(
+            path=destination / relative,
+            retention=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER,
+        )
+    ttl_match = re.search(r"/ttl=(\d+)d(?:/|$)", str(destination))
     if ttl_match is None:
-        raise ValueError(f"Temporary output destination has no lifecycle TTL prefix: {prefix}")
+        raise ValueError(f"Temporary output destination has no lifecycle TTL prefix: {destination}")
     return ResolvedOutputDestination(
-        path=StoragePath(prefix) / relative,
+        path=destination / relative,
         retention=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_TTL,
         ttl_days=int(ttl_match.group(1)),
     )
@@ -91,17 +102,24 @@ class _CaptureError(RuntimeError):
     pass
 
 
+class _ArchiveStopped(_CaptureError):
+    pass
+
+
 def _skipped_entry(entry: _Entry) -> job_pb2.TaskOutputSkippedEntry:
     return job_pb2.TaskOutputSkippedEntry(path=entry.relative[:_SKIPPED_PATH_MAX_CHARS], reason="special_file")
 
 
 class _HashingWriter:
-    def __init__(self, raw: BinaryIO):
+    def __init__(self, raw: BinaryIO, deadline: Deadline, stop: threading.Event):
         self.raw = raw
+        self.deadline = deadline
+        self.stop = stop
         self.digest = hashlib.sha256()
         self.size = 0
 
     def write(self, data: bytes) -> int:
+        _check_running(self.deadline, self.stop)
         written = self.raw.write(data)
         chunk = data[:written]
         self.digest.update(chunk)
@@ -112,22 +130,11 @@ class _HashingWriter:
         self.raw.flush()
 
 
-class _CheckedReader:
-    def __init__(self, raw: BinaryIO, deadline: Deadline, stop: threading.Event):
-        self.raw = raw
-        self.deadline = deadline
-        self.stop = stop
-
-    def read(self, size: int = -1) -> bytes:
-        _check_running(self.deadline, self.stop)
-        return self.raw.read(_COPY_CHUNK_BYTES if size < 0 else min(size, _COPY_CHUNK_BYTES))
-
-
 def _check_running(deadline: Deadline, stop: threading.Event) -> None:
     if stop.is_set():
-        raise _CaptureError(_CAPTURE_CANCELLED)
+        raise _ArchiveStopped(_CAPTURE_CANCELLED)
     if deadline.expired():
-        raise _CaptureError("deadline_exceeded")
+        raise _ArchiveStopped("deadline_exceeded")
 
 
 def _inventory(source: Path, limits: TaskOutputLimits, deadline: Deadline, stop: threading.Event) -> list[_Entry]:
@@ -183,7 +190,7 @@ def _write_archive(
     destination.parent.mkdirs(exist_ok=True)
     try:
         with temporary.open("wb") as raw:
-            hashing = _HashingWriter(raw)
+            hashing = _HashingWriter(raw, deadline, stop)
             compressor = zstandard.ZstdCompressor(level=3)
             with compressor.stream_writer(hashing, closefd=False) as compressed:
                 with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT) as archive:
@@ -195,7 +202,7 @@ def _write_archive(
                         info = _normalized_tarinfo(archive.gettarinfo(str(entry.path), arcname=entry.relative))
                         if stat.S_ISREG(entry.mode):
                             with entry.path.open("rb") as source:
-                                archive.addfile(info, _CheckedReader(source, deadline, stop))
+                                archive.addfile(info, source)
                         else:
                             archive.addfile(info)
             hashing.flush()

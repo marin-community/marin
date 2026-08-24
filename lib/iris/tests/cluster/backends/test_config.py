@@ -31,7 +31,6 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     ScaleGroupResources,
     SliceConfig,
-    TaskOutputDestination,
     WorkerConfig,
     WorkerProviderConfig,
     WorkerSettings,
@@ -581,7 +580,7 @@ scale_groups:
         assert local_config.defaults.autoscaler.scale_up_delay.to_ms() == 1000
         assert local_config.defaults.autoscaler.scale_down_delay.to_ms() == 1000
         assert local_config.task_outputs is not None
-        assert local_config.task_outputs.destination is TaskOutputDestination.LOCAL
+        assert local_config.task_outputs.destination == "file://"
         assert local_config.task_outputs.ttl_days == 0
         assert local_config.defaults.worker.task_outputs == local_config.task_outputs
 
