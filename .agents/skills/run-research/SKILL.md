@@ -1,13 +1,13 @@
 ---
 name: run-research
-description: Run a coordinated multi-session research program only when explicitly requested with a logbook, experiment issue, and durable snapshots.
+description: Run a coordinated multi-session research program only when the user explicitly requests one or supplies an existing research logbook or experiment issue; do not activate for ordinary benchmarking, iteration, or investigation.
 ---
 
 # Multi-session research
 
-Long-lived work should leave a durable record: a logbook, coordinating issue
-updates, and enough commands/config to reproduce results. Do not publish secrets
-or private work the user asks to hold back.
+Long-lived work should leave enough local state to resume and reproduce results.
+Use a GitHub issue only when public coordination is part of the request. Do not
+publish secrets or private work the user asks to hold back.
 
 Use `background-research`, `task-logbook`, `wandb-reporting`, `task-snapshot`,
 and `update-docs` for their named artifacts. Add a domain skill only when the
@@ -15,16 +15,25 @@ research directly requires its workflow.
 
 ## Core Artifacts
 
-1. A GitHub experiment issue. Agent-created experiment issues use the
-   `experiment` and `agent-generated` labels.
-2. A logbook at `.agents/logbooks/<topic>.md`.
-3. A living hypothesis queue in the logbook, derived from append-only entries
+1. A logbook at `.agents/logbooks/<topic>.md`.
+2. A living hypothesis queue in the logbook, derived from append-only entries
    and updated as hypotheses are proposed, blocked, falsified, or promoted.
-4. A long-lived branch, for example `research/<topic>` or
+3. A long-lived branch, for example `research/<topic>` or
    `research/<user>/<issue>-<topic>`, with the logbook, research code, configs,
    small artifacts, and test harnesses needed to reproduce results.
-5. One or more commit or tag snapshots for meaningful milestones.
-6. Often a "production" branch that gets PR'd and merged.
+4. One or more commit or tag snapshots for meaningful milestones.
+5. Often a "production" branch that gets PR'd and merged.
+
+A GitHub experiment issue is optional. Create one only when the user asks for
+it or when the request establishes GitHub as the coordination surface for
+multiple people or sessions. An existing issue, a request to keep collaborators
+updated on GitHub, or a production workflow that explicitly requires an issue
+meets this threshold. Calling the work a research program, running several
+benchmarks, planning a PR, or selecting this skill does not.
+
+If an issue might help but the threshold is not met, continue without one. The
+work should not pause for an issue decision. Mention the option at handoff only
+when it would materially improve future coordination.
 
 ## Standard Workflow
 
@@ -32,9 +41,8 @@ research directly requires its workflow.
 
 1. Keep an existing user-specified branch; otherwise create or use a long-lived
    `research/<topic>` or `research/<user>/<issue>-<topic>` branch.
-2. Create or use the experiment issue and link it bidirectionally with the
-   logbook. Confirm scope or visibility before creating it when either is
-   unclear.
+2. If a coordinating issue meets the threshold above, create or use it and link
+   it bidirectionally with the logbook. Follow `file-issue` for a new issue.
 3. Choose one short experiment ID prefix and use IDs such as `MOE-HC-001` in
    entries, runs, and comments; use two to four shared tags.
 4. Record the goal, success and stop criteria, baseline, initial hypothesis
@@ -47,8 +55,8 @@ research directly requires its workflow.
 3. **Run:** implement the smallest useful experiment and collect evidence.
 4. **Interpret:** compare against baseline, decide confidence, and update the
    logbook.
-5. **Promote:** move only interesting, decision-relevant claims up the issue
-   funnel.
+5. **Promote:** move decision-relevant claims into the current summary and any
+   established public coordination surface.
 6. **Seal:** snapshot durable results or extract production work.
 
 ### 2.1 Forage: Background Research
@@ -59,8 +67,8 @@ the decision is expensive.
 
 Use the background-research output to update the logbook's hypothesis queue:
 add new candidates, revise weak ones, mark known dead ends, and promote
-well-supported ideas into the next experiment matrix. Let `background-research`
-and `task-logbook` decide what belongs in the issue versus the logbook.
+well-supported ideas into the next experiment matrix. If a coordinating issue
+exists, let `background-research` and `task-logbook` decide what belongs there.
 
 ### 2.2 Propose / Run / Interpret: Dev Work and Experiments
 
@@ -74,7 +82,7 @@ For each non-trivial experiment:
 1. Do the dev work needed for the experiment.
 2. Run the benchmark or experiment. Use `babysit-job` for long-lived runs.
 3. Append exact commands, config, key outputs, interpretation, and next decision
-   to the logbook. Follow `task-logbook` for issue updates.
+   to the logbook. Follow `task-logbook` for issue updates when an issue exists.
 4. Push dense scalar series, plots, or raw artifacts to W&B or another store
    when they are too large for issue comments.
 
@@ -82,18 +90,22 @@ For each non-trivial experiment:
 
 Seal when requested or when the defined goal is reached.
 
-1. Update the issue body with the final TL;DR, conclusion, decision log, and negative-results index. Again, follow the `task-logbook` skill.
-2. Add a final issue comment covering what worked, what did not, confidence
-   level, limitations, and ordered next steps.
+1. Update the logbook's final TL;DR, conclusion, decision log, and
+   negative-results index.
+2. If a coordinating issue exists, update its body and add a final comment
+   covering what worked, what did not, confidence, limitations, and ordered
+   next steps. Follow `task-logbook`.
 3. Use `update-docs` when behavior, operational practice, reusable guidance, or
    durable research findings changed.
 4. Ensure the final logbook entry and snapshot links are present.
-5. Close the issue when the research thread is complete.
+5. Close the coordinating issue when one exists and the research thread is
+   complete.
 
 If the research produced useful production changes, extract them into a clean
-branch that links the research record without including it. Before closing,
+branch that links the research record without including it. Before finishing,
 update the TL;DR and conclusion, list next steps, and link the final snapshot
-and production PR when one exists.
+and production PR. Add the same links to the coordinating issue when one
+exists.
 
 ## Practical Rules
 

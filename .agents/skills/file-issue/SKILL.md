@@ -1,9 +1,16 @@
 ---
 name: file-issue
-description: File a GitHub issue only when explicitly requested or delegated by another selected workflow; do not create issues merely because a problem was found.
+description: File a GitHub issue only when the user explicitly requests one or invokes a workflow whose stated purpose intrinsically requires a new issue; delegation from another skill alone is insufficient.
 ---
 
 # File a GitHub issue
+
+Creating an issue is an external publishing action. Do not activate this skill
+merely because an issue could help, a problem was found, or another skill lists
+an issue among its usual artifacts. A workflow may require issue creation only
+when its user-requested purpose depends on that issue, such as CI triage whose
+deliverable is a tracked bug. Research, benchmarking, implementation, and PR
+work do not imply issue creation.
 
 Before drafting, read `AGENTS.md` and:
 
@@ -114,9 +121,13 @@ completion criterion.
 
 ### 5. Apply the approval boundary
 
-If the user explicitly asked to file an issue, skip the preview — file it and
-share the link. If the agent surfaced the issue (not explicitly requested),
-show the drafted title and body and wait for approval or edits.
+If the user explicitly asked to file an issue, skip the preview, file it, and
+share the link. Do the same when the user invoked a workflow whose stated
+deliverable intrinsically requires a new issue.
+
+Otherwise, do not draft or file an issue. Continue the underlying work. If an
+issue would materially improve later coordination, mention that option at
+handoff without blocking the task.
 
 ### 6. File the issue
 
