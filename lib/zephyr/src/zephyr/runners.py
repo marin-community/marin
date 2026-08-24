@@ -131,7 +131,9 @@ class _InProcessWorkerContext:
                 entry.stage = stage
                 entry.count = 1
             return
-        entry.merge(CounterEntry(value, entry.aggregation, stage, count=1))
+        # fold() rather than merge(): this runs twice per pipeline item, so avoid
+        # allocating the throwaway CounterEntry that merge() would take.
+        entry.fold(value)
 
     def set_aggregation(self, name: str, agg: Aggregation) -> None:
         if name in self._counters:

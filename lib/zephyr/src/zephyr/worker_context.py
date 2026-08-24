@@ -31,25 +31,29 @@ class CounterEntry:
     stage: str | None = None
     count: int = 1  # number of observations; used for rolling average via update_counter
 
-    def merge(self, other: "CounterEntry") -> None:
-        """Fold *other* into this entry in-place using this entry's aggregation.
+    def fold(self, value: int | float, count: int = 1) -> None:
+        """Fold ``count`` observations worth of *value* into this entry in-place.
 
-        ``other.count`` is respected for AVERAGE so that merging two accumulated
-        entries (e.g. across concurrent runners) produces the correct weighted mean.
-        All other modes ignore ``other.count``.
+        ``count`` is respected for AVERAGE so that folding an already-accumulated
+        value (e.g. another runner's entry) produces the correct weighted mean.
+        All other modes ignore it.
         """
         match self.aggregation:
             case Aggregation.SUM:
-                self.value += other.value
+                self.value += value
             case Aggregation.MAX:
-                self.value = max(self.value, other.value)
+                self.value = max(self.value, value)
             case Aggregation.MIN:
-                self.value = min(self.value, other.value)
+                self.value = min(self.value, value)
             case Aggregation.AVERAGE:
-                total = self.count + other.count
+                total = self.count + count
                 if total > 0:
-                    self.value = (self.value * self.count + other.value * other.count) / total
+                    self.value = (self.value * self.count + value * count) / total
                 self.count = total
+
+    def merge(self, other: "CounterEntry") -> None:
+        """Fold *other* into this entry in-place using this entry's aggregation."""
+        self.fold(other.value, other.count)
 
 
 def merge_counter_entries(entries: Iterable[tuple[str, CounterEntry]]) -> tuple[dict[str, CounterEntry], set[str]]:
