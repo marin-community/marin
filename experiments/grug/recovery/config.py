@@ -61,6 +61,7 @@ class RecoveryRunConfig:
     # over the data axis (all local GPUs) with optional tensor-parallel width.
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+    # Sequence-dim shard count. Leave at 1: nothing in the recovery model shards the seq dim.
     context_axis_size: int = 1
 
     detection: DetectionConfig = field(default_factory=DetectionConfig)

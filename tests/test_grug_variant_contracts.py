@@ -147,6 +147,47 @@ def test_batch_axes_picks_up_a_context_axis_when_the_mesh_has_one():
     )
 
 
+def _run_on_eight_cpu_devices(script: str) -> None:
+    """Run ``script`` in a fresh interpreter with eight CPU devices, failing on its stderr.
+
+    The XLA device count is fixed for the life of a process, so mesh layouts wider than the
+    test runner's topology need their own interpreter.
+    """
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_compact_grug_mesh_pairs_each_axis_name_with_its_own_size():
+    """Sibling branches merge specs naming "context" onto this mesh, so the name-to-position
+    pairing is the contract, not just the multiset of sizes. Distinct context and expert
+    widths are what catch a transposed `_GRUG_MESH_AXIS_NAMES`; equal or length-1 axes let a
+    swapped pair pass unnoticed.
+    """
+    _run_on_eight_cpu_devices(
+        """
+        from levanter.grug.sharding import compact_grug_mesh
+
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
+        assert tuple(mesh.shape.items()) == (
+            ("replica_dcn", 1),
+            ("data", 1),
+            ("context", 2),
+            ("expert", 4),
+            ("model", 1),
+        ), mesh.shape
+        """
+    )
+
+
 def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
     """The hero 6k restore reads checkpoints written before `context` joined the mesh.
 
@@ -158,10 +199,8 @@ def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
     round trip, because that placement equality is what "no behavior change at
     context_axis_size == 1" means for a restored run.
     """
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-    script = """
+    _run_on_eight_cpu_devices(
+        """
         import tempfile
 
         import jax
@@ -199,17 +238,8 @@ def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
 
         assert restored.sharding == sharding, restored.sharding
         np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
-    """
-
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        """
     )
-
-    assert result.returncode == 0, result.stderr
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:

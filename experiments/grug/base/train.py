@@ -73,9 +73,11 @@ class GrugTrainerConfig:
         default_factory=lambda: BackwardFlowConfig(interval=_BACKWARD_FLOW_DEFAULT_INTERVAL)
     )
     loss_implementation: str | tuple[str, ...] | None = None
-    # Sequence-dim (context-parallel) shard count on the compact mesh's `context` axis; `data`
-    # absorbs the remainder. At size 1 the axis is inert. Sharding activations over it is the
-    # model's job, so raising this on its own only narrows `data`.
+    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. Leave it at 1:
+    # no model here shards the sequence dim yet, so a value above 1 not only narrows `data` but
+    # corrupts metrics -- the MoE token-space psums reduce over `context`, and with every
+    # context shard holding the same tokens they scale dropped-token counts by the context
+    # width. Raise it once model-side context sharding lands.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 

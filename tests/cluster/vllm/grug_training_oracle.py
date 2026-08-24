@@ -19,7 +19,7 @@ from haliax import Axis
 from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
-from levanter.grug.sharding import unshard
+from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES, unshard
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel, snowball_to_state_dict
 from safetensors.numpy import save_file
 
@@ -50,7 +50,6 @@ GRADIENT_NAMES = (
     "model.layers.2.mlp.router.weight",
     "lm_head.weight",
 )
-_GRUG_MESH_AXIS_NAMES = ("replica_dcn", "data", "context", "expert", "model")
 
 
 def _oracle_mesh() -> Mesh:

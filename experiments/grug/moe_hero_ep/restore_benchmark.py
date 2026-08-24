@@ -88,6 +88,9 @@ class RestoreBenchmarkConfig:
     repeats: int = 2
     expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE
     replica_axis_size: int = 1
+    # Restores read no activations, so a context-parallel run's width is safe to set here: it
+    # only places the restored parameters the way that run's mesh would.
+    context_axis_size: int = 1
 
 
 def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
@@ -141,6 +144,7 @@ def _run_restore_benchmark_local(config: RestoreBenchmarkConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
+        context_axis_size=config.context_axis_size,
     )
     state = _benchmark_state(config, mesh)
     with set_mesh(mesh):

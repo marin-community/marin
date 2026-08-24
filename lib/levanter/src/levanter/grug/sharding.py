@@ -80,9 +80,9 @@ def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_repl
 def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: PartitionSpec) -> PartitionSpec:
     """Replace mesh-absent axes in ``spec`` with ``None`` (replicated).
 
-    Compact meshes drop size-1 axes (e.g. "expert" when expert_axis_size == 1), so a
-    spec that names such an axis would raise. An absent axis has size 1, so replicating
-    along it is equivalent to sharding over it.
+    ``compact_grug_mesh`` keeps every axis, but meshes built by tests and other tools name
+    only the axes they use, and a spec naming an absent one would raise. An absent axis has
+    size 1, so replicating along it is equivalent to sharding over it.
     """
 
     def keep(entry):
@@ -163,9 +163,11 @@ def compact_grug_mesh(
     axes are kept so downstream PartitionSpecs can name any axis unconditionally.
     ``data`` absorbs whatever the other axes leave free, so a 32-process job with
     4 local devices can build an effective ``(4, 2, 1, 16, 1)`` Grug mesh.
-    ``context_axis_size`` shards the sequence dimension (context parallelism);
-    K/V are still all-gathered inside the attention kernel, only Q participates
-    in the shard.
+
+    ``context_axis_size`` only sizes the ``context`` axis. Placing the sequence
+    dimension on it belongs to the model and attention layers; until they do,
+    raising it above 1 just narrows ``data`` and leaves token-space reductions
+    counting shards no activation is actually split across.
     """
     if replica_axis_size is None:
         replica_axis_size = jax.process_count()
