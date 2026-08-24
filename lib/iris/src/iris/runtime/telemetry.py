@@ -69,7 +69,7 @@ def _execution_uid(job_info: JobInfo) -> str:
 def configure(
     service: str,
     *,
-    group: str,
+    scope: str,
     run_id: str | None = None,
     execution_uid: str | None = None,
     process_index: int | None = None,
@@ -96,7 +96,7 @@ def configure(
         telemetry.configure(
             endpoint=endpoint,
             service=service,
-            group=group,
+            scope=scope,
             attributes=resource,
         )
     except Exception:

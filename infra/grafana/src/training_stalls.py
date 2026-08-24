@@ -36,11 +36,12 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     end = sql_timestamp(now)
     metric_names = f"'{_PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        "WITH filtered AS ("
+        'WITH telemetry AS (SELECT * FROM "telemetry_v1" '
+        'UNION ALL SELECT * FROM "telemetry_v1.levanter.priority"), filtered AS ('
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id AS telemetry_job, execution_uid, name, value, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
-        'FROM "telemetry_v1" '
+        "FROM telemetry "
         f"WHERE service = 'levanter' AND name IN ({metric_names}) "
         f"AND {run_predicate} "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "

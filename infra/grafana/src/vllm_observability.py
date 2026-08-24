@@ -156,7 +156,11 @@ def vllm_overview_query(
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
 
     sql = f"""
-WITH base AS (
+WITH telemetry AS (
+    SELECT * FROM "telemetry_v1"
+    UNION ALL
+    SELECT * FROM "telemetry_v1.vllm.standard"
+), base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
            service,
            name,
@@ -166,7 +170,7 @@ WITH base AS (
            attributes_json,
            timestamp_ms,
            seq
-    FROM "telemetry_v1"
+    FROM telemetry
     WHERE service = 'vllm'
       AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})

@@ -57,9 +57,10 @@ def loss_window_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     end = sql_timestamp(now)
     recent_ms = f"CAST(EXTRACT(EPOCH FROM TIMESTAMP '{recent}') * 1000 AS BIGINT)"
     return (
-        "WITH samples AS ("
+        'WITH telemetry AS (SELECT * FROM "telemetry_v1" '
+        'UNION ALL SELECT * FROM "telemetry_v1.levanter.priority"), samples AS ('
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, value, timestamp_ms "
-        'FROM "telemetry_v1" '
+        "FROM telemetry "
         f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
         f"AND {run_predicate} "
         f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "

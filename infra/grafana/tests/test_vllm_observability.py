@@ -73,7 +73,7 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
+        CREATE TABLE "telemetry_v1.vllm.standard"(
             cluster VARCHAR,
             service VARCHAR,
             job_id VARCHAR,
@@ -89,12 +89,13 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
         )
         """
     )
+    database.execute('CREATE VIEW telemetry_v1 AS SELECT * FROM "telemetry_v1.vllm.standard" WHERE FALSE')
     database.execute(
         "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
     )
     if rows:
         database.executemany(
-            "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            'INSERT INTO "telemetry_v1.vllm.standard" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [(*row, seq) for seq, row in enumerate(rows)],
         )
     return database

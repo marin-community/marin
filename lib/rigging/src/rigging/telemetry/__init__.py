@@ -39,16 +39,24 @@ _MAX_SHUTDOWN_TIMEOUT = 5.0
 _REJECTION_WARNING_INTERVAL = 60.0
 _EVENT_KIND = "event"
 _TELEMETRY_NAMESPACE = "telemetry_v1"
-_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+_SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 
 
-def _namespace_for_group(group: str) -> str:
-    if not _GROUP_PATTERN.fullmatch(group):
-        raise ValueError("group must be one or more dotted lowercase namespace components")
-    namespace = f"{_TELEMETRY_NAMESPACE}.{group}"
+def _namespace_for(scope: str, policy: "TelemetryPolicy") -> str:
+    if not _SCOPE_PATTERN.fullmatch(scope):
+        raise ValueError("scope must be one or more dotted lowercase components")
+    namespace = f"{_TELEMETRY_NAMESPACE}.{scope}.{policy.value}"
     if len(namespace) > 64:
-        raise ValueError("group produces a Finelog namespace longer than 64 characters")
+        raise ValueError("scope and policy produce a Finelog namespace longer than 64 characters")
     return namespace
+
+
+class TelemetryPolicy(StrEnum):
+    """Storage and query-priority classes understood by Finelog."""
+
+    PRIORITY = "priority"
+    STANDARD = "standard"
+    BULK = "bulk"
 
 
 class TelemetryRole(StrEnum):
@@ -87,7 +95,7 @@ class TelemetryStatus:
 class _Config:
     endpoint: str
     service: str
-    group: str
+    scope: str
     attributes: dict[str, str]
     max_queue_records: int
     max_queue_bytes: int
@@ -102,7 +110,7 @@ class _Config:
         if not self.endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must use http:// or https://")
         serialization.validate_string(self.service, "service")
-        _namespace_for_group(self.group)
+        _namespace_for(self.scope, TelemetryPolicy.STANDARD)
         serialization.validate_attributes(self.attributes)
         limits = (
             self.max_queue_records,
@@ -130,28 +138,88 @@ class _Handle:
     name: str
     kind: str
     unit: str
-    group: str | None
+    scope: str | None
+    policy: TelemetryPolicy
 
 
 class Counter(_Handle):
     """A counter whose calls emit deltas."""
 
     def add(self, value: float = 1.0, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
+        _emit(
+            self.kind,
+            self.name,
+            value=value,
+            unit=self.unit,
+            attributes=attributes,
+            scope=self.scope,
+            policy=self.policy,
+        )
 
 
 class Gauge(_Handle):
     """A gauge whose calls emit current values."""
 
     def set(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
+        _emit(
+            self.kind,
+            self.name,
+            value=value,
+            unit=self.unit,
+            attributes=attributes,
+            scope=self.scope,
+            policy=self.policy,
+        )
+
+    def update(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
+        """Record the current scalar value."""
+        self.set(value, attributes=attributes)
 
 
 class Histogram(_Handle):
     """A histogram whose calls emit individual observations."""
 
     def record(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes, group=self.group)
+        _emit(
+            self.kind,
+            self.name,
+            value=value,
+            unit=self.unit,
+            attributes=attributes,
+            scope=self.scope,
+            policy=self.policy,
+        )
+
+
+@dataclass(frozen=True)
+class Writer:
+    """Declare instruments under one semantic telemetry scope."""
+
+    scope: str
+
+    def counter(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Counter:
+        return Counter(name, "counter", unit, self.scope, policy)
+
+    def gauge(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
+        return Gauge(name, "gauge", unit, self.scope, policy)
+
+    def scalar(self, name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
+        return self.gauge(name, unit=unit, policy=policy)
+
+    def histogram(
+        self,
+        name: str,
+        *,
+        unit: str = "",
+        policy: TelemetryPolicy = TelemetryPolicy.BULK,
+    ) -> Histogram:
+        return Histogram(name, "histogram", unit, self.scope, policy)
+
+
+def writer(scope: str) -> Writer:
+    """Return an immutable instrument factory for ``scope``."""
+    _namespace_for(scope, TelemetryPolicy.STANDARD)
+    return Writer(scope)
 
 
 def snapshot_attributes(source_kind: str, temporality: str) -> dict[str, str]:
@@ -253,7 +321,7 @@ class _PendingBatch:
 
 @dataclass(frozen=True)
 class _QueuedRecord:
-    group: str
+    namespace: str
     body: bytes
     enqueued_at: float
 
@@ -284,11 +352,10 @@ class _Runtime:
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
 
-    def emit(self, record: bytes, group: str | None) -> bool:
+    def emit(self, record: bytes, namespace: str) -> bool:
         """Return whether ``record`` was queued; a false result is counted as lost."""
-        resolved_group = group or self.config.group
         with self._condition:
-            if self._stop or len(record) + self._empty_envelope_size(resolved_group) > self.config.max_batch_bytes:
+            if self._stop or len(record) + self._empty_envelope_size(namespace) > self.config.max_batch_bytes:
                 self._lost_records += 1
                 return False
             if (
@@ -297,7 +364,7 @@ class _Runtime:
             ):
                 self._lost_records += 1
                 return False
-            queued = _QueuedRecord(resolved_group, record, time.monotonic())
+            queued = _QueuedRecord(namespace, record, time.monotonic())
             self._records.append(queued)
             if self._oldest_queued_at is None:
                 self._oldest_queued_at = queued.enqueued_at
@@ -368,9 +435,13 @@ class _Runtime:
                 return None
             batch_id = str(uuid.uuid4())
             selected: list[_QueuedRecord] = []
-            group = self._records[0].group
-            body_size = self._empty_envelope_size(group)
-            while self._records and self._records[0].group == group and len(selected) < self.config.max_batch_records:
+            namespace = self._records[0].namespace
+            body_size = self._empty_envelope_size(namespace)
+            while (
+                self._records
+                and self._records[0].namespace == namespace
+                and len(selected) < self.config.max_batch_records
+            ):
                 record = self._records[0]
                 extra = len(record.body) + (1 if selected else 0)
                 if selected and body_size + extra > self.config.max_batch_bytes:
@@ -386,18 +457,18 @@ class _Runtime:
             if not selected:
                 return None
         bodies = [record.body for record in selected]
-        body = self._batch_body(batch_id, bodies, group)
+        body = self._batch_body(batch_id, bodies, namespace)
         return _PendingBatch(batch_id, body, len(selected), sum(map(len, bodies)))
 
-    def _batch_body(self, batch_id: str, records: list[bytes], group: str) -> bytes:
+    def _batch_body(self, batch_id: str, records: list[bytes], namespace: str) -> bytes:
         resource = serialization.json_bytes({"attributes": self.config.attributes, "service": self.config.service})
-        namespace = _namespace_for_group(group).encode()
+        encoded_namespace = namespace.encode()
         return b"".join(
             (
                 b'{"batch_id":"',
                 batch_id.encode(),
                 b'","namespace":"',
-                namespace,
+                encoded_namespace,
                 b'","records":[',
                 b",".join(records),
                 b'],"resource":',
@@ -406,8 +477,9 @@ class _Runtime:
             )
         )
 
-    def _empty_envelope_size(self, group: str | None = None) -> int:
-        return len(self._batch_body(str(uuid.UUID(int=0)), [], group or self.config.group))
+    def _empty_envelope_size(self, namespace: str | None = None) -> int:
+        resolved = namespace or _namespace_for(self.config.scope, TelemetryPolicy.STANDARD)
+        return len(self._batch_body(str(uuid.UUID(int=0)), [], resolved))
 
     def max_record_bytes(self) -> int:
         return min(self.config.max_queue_bytes, self.config.max_batch_bytes - self._empty_envelope_size())
@@ -494,19 +566,19 @@ _configuration_lock = threading.Lock()
 _runtime: _Runtime | None = None
 
 
-def counter(name: str, *, unit: str = "", group: str | None = None) -> Counter:
+def counter(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Counter:
     """Declare a counter that emits deltas when configured."""
-    return Counter(name, "counter", unit, group)
+    return Counter(name, "counter", unit, None, policy)
 
 
-def gauge(name: str, *, unit: str = "", group: str | None = None) -> Gauge:
+def gauge(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Gauge:
     """Declare a gauge that emits current values when configured."""
-    return Gauge(name, "gauge", unit, group)
+    return Gauge(name, "gauge", unit, None, policy)
 
 
-def histogram(name: str, *, unit: str = "", group: str | None = None) -> Histogram:
+def histogram(name: str, *, unit: str = "", policy: TelemetryPolicy = TelemetryPolicy.STANDARD) -> Histogram:
     """Declare a histogram that emits individual observations when configured."""
-    return Histogram(name, "histogram", unit, group)
+    return Histogram(name, "histogram", unit, None, policy)
 
 
 def event(
@@ -514,17 +586,17 @@ def event(
     body: serialization.EventBody,
     *,
     attributes: Mapping[str, str] | None = None,
-    group: str | None = None,
+    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> None:
     """Emit one structured event when configured."""
-    _emit(_EVENT_KIND, name, body=body, attributes=attributes, group=group)
+    _emit(_EVENT_KIND, name, body=body, attributes=attributes, policy=policy)
 
 
 def configure(
     *,
     endpoint: str,
     service: str,
-    group: str,
+    scope: str,
     attributes: Mapping[str, str] | None = None,
     max_queue_records: int = DEFAULT_MAX_QUEUE_RECORDS,
     max_queue_bytes: int = DEFAULT_MAX_QUEUE_BYTES,
@@ -535,18 +607,13 @@ def configure(
     retry_initial: float = 0.1,
     retry_maximum: float = 5.0,
 ) -> None:
-    """Configure the process-wide exporter; the first valid configuration wins.
-
-    ``group`` selects the default physical namespace suffix. Individual metric
-    handles and events may override it; the client sends each batch to
-    ``telemetry_v1.<group>``.
-    """
+    """Configure the process-wide exporter; the first valid configuration wins."""
     global _runtime
     try:
         config = _Config(
             endpoint=endpoint,
             service=service,
-            group=group,
+            scope=scope,
             attributes=dict(attributes or {}),
             max_queue_records=max_queue_records,
             max_queue_bytes=max_queue_bytes,
@@ -646,12 +713,23 @@ def _emit(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-    group: str | None = None,
+    scope: str | None = None,
+    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> None:
     runtime = _runtime
     if runtime is None:
         return
-    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes, group=group)
+    _emit_to_runtime(
+        runtime,
+        kind,
+        name,
+        value=value,
+        body=body,
+        unit=unit,
+        attributes=attributes,
+        scope=scope,
+        policy=policy,
+    )
 
 
 def _emit_to_runtime(
@@ -663,7 +741,8 @@ def _emit_to_runtime(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-    group: str | None = None,
+    scope: str | None = None,
+    policy: TelemetryPolicy = TelemetryPolicy.STANDARD,
 ) -> bool:
     """Return whether one validated record was queued in the selected runtime."""
     try:
@@ -690,9 +769,8 @@ def _emit_to_runtime(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        resolved_group = group or runtime.config.group
-        _namespace_for_group(resolved_group)
-        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()), resolved_group)
+        namespace = _namespace_for(scope or runtime.config.scope, policy)
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()), namespace)
     except Exception:
         runtime.count_lost()
         return False

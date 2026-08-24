@@ -29,7 +29,6 @@ use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
 use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
-use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
@@ -38,8 +37,23 @@ pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
 
 pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
-const TELEMETRY_NAMESPACE_PREFIX: &str = "telemetry_v1.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
+const TELEMETRY_NAMESPACES: [(&str, i64); 7] = [
+    (TELEMETRY_NAMESPACE, 50 * GIBIBYTE),
+    ("telemetry_v1.levanter.priority", 22 * GIBIBYTE),
+    ("telemetry_v1.levanter.bulk", 8 * GIBIBYTE),
+    ("telemetry_v1.levanter.standard", 2 * GIBIBYTE),
+    ("telemetry_v1.node_agent.standard", 15 * GIBIBYTE),
+    ("telemetry_v1.iris.rpc.standard", GIBIBYTE),
+    ("telemetry_v1.vllm.standard", 2 * GIBIBYTE),
+];
+const LEGACY_TELEMETRY_NAMESPACES: [&str; 5] = [
+    "telemetry_v1.node_agent",
+    "telemetry_v1.levanter.core",
+    "telemetry_v1.levanter.extra",
+    "telemetry_v1.iris.rpc",
+    "telemetry_v1.vllm",
+];
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_NORMALIZED_BYTES: usize = 16 << 20;
 const MAX_RECORDS: usize = 10_000;
@@ -58,8 +72,14 @@ const NODE_NAME_COLUMN: &str = "node_name";
 const PROCESS_INDEX_COLUMN: &str = "process_index";
 const PRIMARY_PROCESS_INDEX: &str = "0";
 
-pub(crate) fn is_telemetry_namespace(namespace: &str) -> bool {
-    namespace == TELEMETRY_NAMESPACE || namespace.starts_with(TELEMETRY_NAMESPACE_PREFIX)
+pub(crate) fn is_forwarded_telemetry_namespace(namespace: &str) -> bool {
+    telemetry_max_bytes(namespace).is_some() || LEGACY_TELEMETRY_NAMESPACES.contains(&namespace)
+}
+
+fn telemetry_max_bytes(namespace: &str) -> Option<i64> {
+    TELEMETRY_NAMESPACES
+        .iter()
+        .find_map(|(candidate, max_bytes)| (*candidate == namespace).then_some(*max_bytes))
 }
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
@@ -381,13 +401,12 @@ impl TelemetryState {
                 let namespace = namespace.to_string();
                 let registered_namespace = namespace.clone();
                 match tokio::task::spawn_blocking(move || {
-                    let policy = if namespace == TELEMETRY_NAMESPACE {
-                        StoragePolicy {
-                            max_bytes: Some(50 * GIBIBYTE),
-                            ..StoragePolicy::default()
-                        }
-                    } else {
-                        StoragePolicy::default()
+                    let policy = StoragePolicy {
+                        max_bytes: Some(
+                            telemetry_max_bytes(&namespace)
+                                .expect("only telemetry policy namespaces are registered"),
+                        ),
+                        ..StoragePolicy::default()
                     };
                     store.register_table(&namespace, telemetry_schema(), policy)
                 })
@@ -438,7 +457,9 @@ pub fn router(
     dedupe_capacity: usize,
     health: Arc<IngestHealth>,
 ) -> Router {
-    health.declare_owned(TELEMETRY_NAMESPACE);
+    for (namespace, _) in TELEMETRY_NAMESPACES {
+        health.declare_owned(namespace);
+    }
     let state = Arc::new(TelemetryState {
         store,
         admission: Arc::new(Semaphore::new(max_concurrent)),
@@ -450,15 +471,17 @@ pub fn router(
     // startup even when telemetry reaches this store through StatsService or a
     // forwarder instead of the HTTP endpoint below. Requests share the OnceCell
     // and wait for this same registration if they arrive while it is running.
-    let startup_registration = Arc::clone(&state);
-    tokio::spawn(async move {
-        if let Err(error) = startup_registration
-            .ensure_namespace_registered(TELEMETRY_NAMESPACE)
-            .await
-        {
-            tracing::warn!(error = %error.message, "telemetry namespace startup registration failed");
-        }
-    });
+    for (namespace, _) in TELEMETRY_NAMESPACES {
+        let startup_registration = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(error) = startup_registration
+                .ensure_namespace_registered(namespace)
+                .await
+            {
+                tracing::warn!(namespace, error = %error.message, "telemetry namespace startup registration failed");
+            }
+        });
+    }
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
         .with_state(state)
@@ -647,20 +670,10 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
 }
 
 fn validate_telemetry_namespace(namespace: &str) -> Result<(), ApiError> {
-    validate_namespace_name(namespace, None)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    if !is_telemetry_namespace(namespace) {
+    if telemetry_max_bytes(namespace).is_none() {
         return Err(ApiError::bad_request(format!(
-            "namespace must be {TELEMETRY_NAMESPACE:?} or one of its descendants"
+            "namespace is not present in the telemetry storage policy"
         )));
-    }
-    let Some(suffix) = namespace.strip_prefix(TELEMETRY_NAMESPACE_PREFIX) else {
-        return Ok(());
-    };
-    if suffix.split('.').any(str::is_empty) {
-        return Err(ApiError::bad_request(
-            "telemetry namespace components must not be empty",
-        ));
     }
     Ok(())
 }

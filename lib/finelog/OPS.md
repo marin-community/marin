@@ -154,18 +154,15 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-At query time, a namespace `x` is a composite view when the catalog contains
-physical namespaces below `x.*`. The view unions every descendant with the
-physical `x` table when it exists. For example, `telemetry_v1` combines the
-complete telemetry tree. Clients choose full namespace names;
-Rigging constructs one from the sample's group and includes it in the JSON
-envelope. The server does not interpret the group or maintain a child allowlist.
-An omitted namespace continues to write the physical `telemetry_v1` table.
-
-Composite views align columns by name and fill missing nullable fields with
-nulls. A type conflict or missing required field leaves that composite name
-unavailable for the query. Direct leaf namespaces and unrelated composites
-remain queryable, so Finelog does not return a partial union.
+Rigging writers combine a semantic scope with a storage policy. For example,
+`telemetry.writer("levanter").scalar("train_loss", policy=PRIORITY)` writes to
+`telemetry_v1.levanter.priority` while the metric name remains `train_loss`.
+Finelog registers the policy namespaces at startup and rejects names outside
+the policy. Queries read a leaf directly or spell out the small `UNION ALL`
+they need; parent namespaces are ordinary physical tables. During migration,
+Grafana queries explicitly union the legacy `telemetry_v1` table with the
+relevant leaves so both long-running old jobs and updated clients remain
+visible. Remove the legacy branch after those jobs drain.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -176,7 +173,11 @@ An explicit field wins over an attribute and replaces the same key in
 both conflicting values. Selectors and groupings should use the structured
 columns.
 
-The server-owned physical `telemetry_v1` table retains up to 50 GiB locally.
+The legacy `telemetry_v1` table retains up to 50 GiB while old clients migrate.
+Policy leaves have independent limits: Levanter priority has 22 GiB, Levanter
+bulk has 8 GiB, and Levanter exporter health has 2 GiB. Node-agent telemetry
+has 15 GiB, Iris RPC has 1 GiB, and vLLM has 2 GiB. The policy leaves total 50
+GiB.
 
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
@@ -394,11 +395,10 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-The physical `telemetry_v1` table is registered on boot. A client-selected
-`telemetry_v1.*` namespace is registered against the same telemetry schema on
-its first request. When the binary's schema and the catalog disagree in a way
-no merge can reconcile (a column type change), writes to that namespace return
-400 until one of them changes, across restarts.
+The legacy table and each policy namespace are registered on boot. When the
+binary's schema and a catalog entry disagree in a way no merge can reconcile
+(a column type change), writes to that namespace return 400 until one of them
+changes, across restarts.
 
 ```bash
 curl -sf http://<host>:<port>/health          # ok | degraded: ...

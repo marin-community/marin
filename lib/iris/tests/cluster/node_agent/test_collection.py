@@ -55,7 +55,7 @@ def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     telemetry.configure(
         endpoint="http://finelog/v1/telemetry",
         service="iris-node-agent",
-        group=TELEMETRY_GROUP,
+        scope=TELEMETRY_GROUP,
         attributes={"node_name": "g83d142", "node_uid": "node-uid-1", "role": "worker"},
     )
     return transport

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
 _EXTRA_LOG_INTERVAL = 10
+_TELEMETER = telemetry.writer("levanter")
 
 
 class TrainingPhase(IntEnum):
@@ -45,8 +46,10 @@ def _metric_name(name: str) -> str:
 
 def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
     metric_name = _metric_name(name)
-    group = "levanter.core" if metric_name in _EVERY_STEP_METRICS else None
-    telemetry.gauge(metric_name, group=group).set(value, attributes=attributes)
+    policy = (
+        telemetry.TelemetryPolicy.PRIORITY if metric_name in _EVERY_STEP_METRICS else telemetry.TelemetryPolicy.BULK
+    )
+    _TELEMETER.scalar(metric_name, policy=policy).update(value, attributes=attributes)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -254,7 +257,7 @@ class TelemetryConfig(TrackerConfig):
         process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
-            group="levanter.extra",
+            scope="levanter",
             run_id=run_id,
             process_index=process_index,
         )

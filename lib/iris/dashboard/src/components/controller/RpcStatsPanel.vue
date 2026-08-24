@@ -54,7 +54,11 @@ const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
 function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
-WITH filtered AS (
+WITH telemetry AS (
+  SELECT * FROM "telemetry_v1"
+  UNION ALL
+  SELECT * FROM "telemetry_v1.iris.rpc.standard"
+), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          name, value, timestamp_ms, seq,
          json_get(attributes_json, 'service') AS rpc_service,
@@ -62,7 +66,7 @@ WITH filtered AS (
          json_get(attributes_json, 'upstream') AS upstream,
          json_get(attributes_json, 'status') AS status,
          json_get(attributes_json, 'le') AS le
-  FROM telemetry_v1
+  FROM telemetry
   WHERE service = 'iris-controller' AND name IN (${names})
     AND ${RECENT_STATS_FILTER()}
     AND ${LOCAL_CLUSTER_FILTER}
@@ -79,7 +83,11 @@ QUALIFY row_number() OVER (
 function proxySql(): string {
   const names = Object.values(PROXY_METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
-WITH filtered AS (
+WITH telemetry AS (
+  SELECT * FROM "telemetry_v1"
+  UNION ALL
+  SELECT * FROM "telemetry_v1.iris.rpc.standard"
+), filtered AS (
   SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
          name, value, timestamp_ms, seq,
          json_get(attributes_json, 'scope') AS scope,
@@ -88,7 +96,7 @@ WITH filtered AS (
          json_get(attributes_json, 'route_kind') AS route_kind,
          json_get(attributes_json, 'status') AS status,
          json_get(attributes_json, 'le') AS le
-  FROM telemetry_v1
+  FROM telemetry
   WHERE service = 'iris-controller' AND name IN (${names})
     AND ${RECENT_STATS_FILTER()}
     AND ${LOCAL_CLUSTER_FILTER}

@@ -65,7 +65,7 @@ def _configure(endpoint: str, *, node_name: str, node_uid: str, worker: str | No
     telemetry.configure(
         endpoint=endpoint,
         service=SERVICE_NAME,
-        group=TELEMETRY_GROUP,
+        scope=TELEMETRY_GROUP,
         attributes=attributes,
     )
 

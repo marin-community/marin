@@ -30,7 +30,7 @@ def exported(monkeypatch):
     telemetry.configure(
         endpoint="http://finelog/v1/telemetry",
         service="levanter",
-        group="levanter.extra",
+        scope="levanter",
         attributes={"run": "run-42"},
     )
     yield transport

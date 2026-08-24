@@ -259,6 +259,31 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         store.get_policy("telemetry_v1").unwrap().max_bytes,
         Some(50 * 1024 * 1024 * 1024)
     );
+    for (namespace, max_gibibytes) in [
+        ("telemetry_v1.levanter.priority", 22),
+        ("telemetry_v1.levanter.bulk", 8),
+        ("telemetry_v1.levanter.standard", 2),
+        ("telemetry_v1.node_agent.standard", 15),
+        ("telemetry_v1.iris.rpc.standard", 1),
+        ("telemetry_v1.vllm.standard", 2),
+    ] {
+        assert_eq!(
+            store.get_policy(namespace).unwrap().max_bytes,
+            Some(max_gibibytes * 1024 * 1024 * 1024)
+        );
+    }
+    let policy_leaf_bytes = [
+        "telemetry_v1.levanter.priority",
+        "telemetry_v1.levanter.bulk",
+        "telemetry_v1.levanter.standard",
+        "telemetry_v1.node_agent.standard",
+        "telemetry_v1.iris.rpc.standard",
+        "telemetry_v1.vllm.standard",
+    ]
+    .into_iter()
+    .map(|namespace| store.get_policy(namespace).unwrap().max_bytes.unwrap())
+    .sum::<i64>();
+    assert_eq!(policy_leaf_bytes, 50 * 1024 * 1024 * 1024);
 
     for name in ["service", "kind", "name"] {
         let column = schema
@@ -630,7 +655,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
 }
 
 #[tokio::test]
-async fn client_selected_namespace_is_registered_and_included_in_parent_queries() {
+async fn policy_namespace_is_registered_and_queried_directly() {
     let store = disk_store("telemetry-client-namespace");
     let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
     let client = http_client();
@@ -639,7 +664,7 @@ async fn client_selected_namespace_is_registered_and_included_in_parent_queries(
     let response = post(
         &client,
         addr,
-        batch_in_namespace(batch_id, "telemetry_v1.iris.rpc"),
+        batch_in_namespace(batch_id, "telemetry_v1.levanter.priority"),
         Some(batch_id),
         Some("application/json"),
         None,
@@ -648,25 +673,34 @@ async fn client_selected_namespace_is_registered_and_included_in_parent_queries(
 
     assert_eq!(response.status, StatusCode::OK);
     store
-        .await_persisted("telemetry_v1.iris.rpc", 1, Duration::from_secs(5))
+        .await_persisted("telemetry_v1.levanter.priority", 1, Duration::from_secs(5))
         .await
         .unwrap();
     assert_eq!(
-        store.get_policy("telemetry_v1.iris.rpc").unwrap().max_bytes,
-        None
+        store
+            .get_policy("telemetry_v1.levanter.priority")
+            .unwrap()
+            .max_bytes,
+        Some(22 * 1024 * 1024 * 1024)
     );
-    for namespace in ["\"telemetry_v1.iris.rpc\"", "telemetry_v1"] {
-        let rows = query(
-            &store,
-            &format!("SELECT name FROM {namespace} ORDER BY record_index"),
-        )
-        .await;
-        assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
-    }
+    let rows = query(
+        &store,
+        "SELECT name FROM \"telemetry_v1.levanter.priority\" ORDER BY record_index",
+    )
+    .await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
+    let legacy = query(&store, "SELECT count(*) FROM telemetry_v1").await;
+    assert_eq!(
+        legacy[0]
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .value(0),
+        0
+    );
 }
 
 #[tokio::test]
-async fn client_namespace_must_be_a_compatible_telemetry_descendant() {
+async fn client_namespace_must_be_in_the_storage_policy() {
     let store = disk_store("telemetry-client-namespace-rejection");
     store
         .register_table(

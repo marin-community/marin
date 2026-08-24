@@ -781,7 +781,7 @@ def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_nam
         telemetry.configure(
             endpoint=endpoint,
             service=SERVICE_NAME,
-            group=TELEMETRY_GROUP,
+            scope=TELEMETRY_GROUP,
             attributes={
                 "node_name": target.name,
                 "node_uid": target.node_uid,

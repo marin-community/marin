@@ -66,7 +66,7 @@ def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     telemetry.configure(
         endpoint="http://finelog/v1/telemetry",
         service="vllm",
-        group="vllm",
+        scope="vllm",
         attributes={"job_id": "/serve"},
     )
     return transport
