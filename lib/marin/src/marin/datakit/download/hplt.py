@@ -24,7 +24,6 @@ from marin.execution.step_spec import StepSpec
 logger = logging.getLogger(__name__)
 
 HPLT_BASE_URL = "https://data.hplt-project.org/three/sorted/eng_Latn"
-HPLT_MAP_URL = f"{HPLT_BASE_URL}/eng_Latn.map"
 
 # Shard counts per WDS quality tier
 HPLT_SHARD_COUNTS = {5: 74, 6: 119, 7: 275, 8: 479, 9: 344, 10: 3}
