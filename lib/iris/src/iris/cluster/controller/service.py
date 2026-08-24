@@ -112,8 +112,11 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
+    ADMIN_PRIORITY_BAND_VALUES,
+    PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
+    priority_band_rank,
     resolve_container_profile,
     task_state_friendly,
 )
@@ -183,16 +186,9 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
     "IAP or present a user token so the submission carries your identity."
 )
 
-# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# What LaunchJob accepts in priority_band: the real bands, plus INHERIT for a
 # client that wants the parent's band (or the INTERACTIVE default at a root).
-_SUBMITTABLE_PRIORITY_BANDS = frozenset(
-    {
-        job_pb2.PRIORITY_BAND_INHERIT,
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    }
-)
+_SUBMITTABLE_PRIORITY_BANDS = frozenset((job_pb2.PRIORITY_BAND_INHERIT, *PRIORITY_BAND_VALUES))
 
 
 def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
@@ -1494,14 +1490,14 @@ class ControllerServiceImpl:
 
         # Priority band validation.
         #
-        # - PRODUCTION additionally requires MANAGE_BUDGETS when auth is on;
-        #   admins pass here and skip the max_band cap below.
+        # - SYSTEM and PRODUCTION additionally require MANAGE_BUDGETS when auth
+        #   is on; admins pass here and skip the max_band cap below.
         # - The max_band cap fires regardless of auth mode, keyed on the
         #   claimed job_id.user. In anonymous mode this doesn't guarantee the
         #   user is who they claim to be, but it ensures the cluster's
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
-        #   PRODUCTION just by skipping auth.
+        #   SYSTEM or PRODUCTION just by skipping auth.
         # A received handoff's band was authorized by the parent against the original
         # submitter and their budget tier; the receiving cluster does not manage that
         # user, so it trusts the parent rather than re-gating on its own tiers (the
@@ -1509,8 +1505,8 @@ class ControllerServiceImpl:
         #
         # This is the one place INHERIT becomes a real band: resolve it here, gate that
         # result, and store it. Everything behind this point — the scheduler, spend, the
-        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
-        # BATCH, so none of them re-derive a band of their own.
+        # k8s mapping, a federated handoff — only ever sees SYSTEM, PRODUCTION,
+        # INTERACTIVE, or BATCH, so none of them re-derive a band of their own.
         #
         # Gating the resolved band rather than the request matters because the client
         # chooses whether to send the field; gating the request would let it pick whether
@@ -1534,13 +1530,13 @@ class ControllerServiceImpl:
         # reads the same real band without re-deriving one.
         request.priority_band = band
         if not is_received_handoff:
-            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            if band in ADMIN_PRIORITY_BAND_VALUES and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:
                     user_budget = reads.get_user_budget(_snap, job_id.user)
                 max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-                if band < max_band:
+                if priority_band_rank(band) < priority_band_rank(max_band):
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
                         f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
@@ -3120,11 +3116,7 @@ class ControllerServiceImpl:
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
         max_band = request.max_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if max_band not in (
-            job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_INTERACTIVE,
-            job_pb2.PRIORITY_BAND_BATCH,
-        ):
+        if max_band not in PRIORITY_BAND_VALUES:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
         with self._db.transaction() as _tx:
@@ -3422,7 +3414,7 @@ class ControllerServiceImpl:
                     summary.availability.total_amounts[token] = device_capacity.total
                     for band, amount in device_capacity.held_by_band.items():
                         held_by_band.setdefault(band, {})[token] = amount
-                for band, amounts in sorted(held_by_band.items()):
+                for band, amounts in sorted(held_by_band.items(), key=lambda item: priority_band_rank(item[0])):
                     summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":

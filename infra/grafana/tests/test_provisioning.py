@@ -6,6 +6,7 @@ datasource UIDs and refIds, every rule's query URL answers on the bridge, and
 dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
+import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,8 @@ ALERTING = ROOT / "provisioning" / "alerting"
 DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
+# Grafana's built-in fan-out datasource: the panel's targets each name a real one.
+MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
 STORAGE_ALERT_FRACTION = 0.8
 
@@ -570,10 +573,18 @@ def test_dashboard_filter_expressions_reference_selected_columns():
 
 
 def test_dashboard_datasource_uids_are_provisioned():
+    # A mixed panel names no datasource of its own; each of its targets carries one, and
+    # those are the ones that have to exist.
     uids = set(_datasources())
     for name, dashboard in _stitched_dashboards().items():
         for panel in _all_panels(dashboard):
             uid = (panel.get("datasource") or {}).get("uid")
+            if uid == MIXED_DATASOURCE:
+                targets = panel.get("targets", [])
+                named = [(target.get("datasource") or {}).get("uid") for target in targets]
+                assert all(named), f"{name} panel {panel.get('id')}: mixed target without a datasource"
+                assert set(named) <= uids, f"{name} panel {panel.get('id')}: unknown datasource in {named}"
+                continue
             if uid is None or uid.startswith("${"):  # row panels / template variables
                 continue
             assert uid in uids, f"{name} panel {panel.get('id')}: unknown datasource {uid!r}"
@@ -899,6 +910,103 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
 
     database.execute("UPDATE telemetry_v1 SET value = 0 WHERE execution_uid = 'attempt-current' AND seq = 3")
     assert database.execute(sql_by_ref["A"]).fetchall() == [(14_400.0, 14_400.0)]
+
+
+def test_training_status_reads_whole_run_active_time_from_wandb():
+    # Eviction bounds any finelog answer to the retained window, so the run totals come
+    # from W&B, whose `_runtime` carries across restarts. Join the target's datasource
+    # base path with its URL and GET it for real, against a stubbed W&B.
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Run status")
+    assert panel["datasource"]["uid"] == MIXED_DATASOURCE
+    target = next(target for target in panel["targets"] if target["refId"] == "B")
+    params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+    params["run"] = "hero-run"  # Grafana interpolates ${run} before the request leaves it
+
+    run = {
+        "state": "running",
+        "createdAt": "2026-08-20T02:00:00Z",
+        "heartbeatAt": "2026-08-24T02:00:00Z",
+        "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "_timestamp": 1_787_561_529}),
+    }
+    wandb_source = WandbSource(timeout=5.0)
+    wandb_source._client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": {"project": {"run": run}}})),
+        headers={"content-type": "application/json"},
+    )
+    client = TestClient(
+        create_app(bridge_config(), {}, {}, GithubSource(auth=None, timeout=5.0), K8sFleet(()), wandb_source)
+    )
+
+    response = client.get(_datasources()[target["datasource"]["uid"]] + target["url"], params=params)
+
+    assert response.status_code == 200
+    (row,) = response.json()
+    # Four days of wall clock, ninety hours of them running.
+    assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
+    assert {column["selector"] for column in target["columns"]} <= set(row)
+
+
+def test_training_attempts_table_links_the_newest_attempt_to_iris():
+    dashboard = _stitched_dashboards()["training.json"]
+    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Attempts")
+    (target,) = panel["targets"]
+    overrides = {
+        override["matcher"]["options"]: {field["id"]: field["value"] for field in override["properties"]}
+        for override in panel["fieldConfig"]["overrides"]
+    }
+
+    # Grafana percent-encodes an interpolated value, so the job root goes in raw and
+    # comes out as the single path segment the Iris route expects. The cluster rides in
+    # a column the table keeps but does not draw; a transformation that dropped it would
+    # take half the link with it.
+    (link,) = overrides["job"]["links"]
+    assert link["url"] == "https://iris.oa.dev/#/job/${__data.fields.job}?cluster=${__data.fields.iris_cluster}"
+    assert overrides["iris_cluster"]["custom.hideFrom"]["viz"] is True
+    assert "iris_cluster" in {column["text"] for column in target["columns"]}
+
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            service VARCHAR,
+            run_id VARCHAR,
+            cluster VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index VARCHAR,
+            name VARCHAR,
+            value DOUBLE,
+            timestamp_ms BIGINT
+        )
+        """
+    )
+    hour = 3_600_000
+    at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        [
+            # An attempt that ran two hours on a CoreWeave cluster and then failed.
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour),
+            # Its successor, a fresh job on the hub, whose rows carry no origin cluster.
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour),
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour),
+            # A replica of that attempt, and another run: neither is a row of this table.
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour),
+            ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour),
+        ],
+    )
+    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    sql = sql.replace("${run:sqlstring}", "'hero-run'").replace("now()", "TIMESTAMP '2026-08-21 12:00:00+00:00'")
+
+    # Newest first, so the top row is the last attempt whether or not it still runs. The
+    # Iris dashboard filters backends by peer id and reserves `local` for its own, which
+    # is the hub finelog leaves unlabeled.
+    assert database.execute(sql).fetchall() == [
+        (at - 2 * hour, "marin", "/u/hero-run-coord-2/train", 3_600.0, "local"),
+        (at - 6 * hour, "cw-a", "/u/hero-run-coord/train", 7_200.0, "cw-a"),
+    ]
 
 
 def test_training_moe_health_queries_show_routing_signals():

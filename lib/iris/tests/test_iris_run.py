@@ -157,10 +157,38 @@ def test_run_iris_job_adds_region_and_zone_constraints(recorded_job_submissions)
     assert zone_constraints[0].values[0].value == "us-central2-b"
 
 
-def test_run_iris_job_passes_priority_band(recorded_job_submissions):
-    result = _invoke_run(["--priority", "batch"])
+@pytest.mark.parametrize(
+    "name, band",
+    [
+        ("production", job_pb2.PRIORITY_BAND_PRODUCTION),
+        ("batch", job_pb2.PRIORITY_BAND_BATCH),
+    ],
+)
+def test_run_iris_job_passes_priority_band(recorded_job_submissions, name, band):
+    result = _invoke_run(["--priority", name])
     assert result.exit_code == 0, result.output
-    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+    assert recorded_job_submissions[0]["priority_band"] == band
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--priority", "system"],
+        ["--priority", "system", "--system-reason=urgent heroic recovery"],
+        ["--priority", "production", "--system-reason=iris recovery"],
+    ],
+)
+def test_run_iris_job_rejects_invalid_system_reason_usage(recorded_job_submissions, args):
+    result = _invoke_run(args)
+    assert result.exit_code != 0
+    assert recorded_job_submissions == []
+
+
+@pytest.mark.parametrize("reason", ["hero recovery", "Finelog outage", "Iris controller restart"])
+def test_run_iris_job_accepts_system_reasons(recorded_job_submissions, reason):
+    result = _invoke_run(["--priority", "system", f"--system-reason={reason}"])
+    assert result.exit_code == 0, result.output
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_SYSTEM
 
 
 def test_run_iris_job_default_priority_inherit(recorded_job_submissions):

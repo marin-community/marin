@@ -79,6 +79,7 @@ class PriorityBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     PRIORITY_BAND_INHERIT: _ClassVar[PriorityBand]
     PRIORITY_BAND_PRODUCTION: _ClassVar[PriorityBand]
+    PRIORITY_BAND_SYSTEM: _ClassVar[PriorityBand]
     PRIORITY_BAND_INTERACTIVE: _ClassVar[PriorityBand]
     PRIORITY_BAND_BATCH: _ClassVar[PriorityBand]
 
@@ -137,6 +138,7 @@ EXISTING_JOB_POLICY_KEEP: ExistingJobPolicy
 EXISTING_JOB_POLICY_RECREATE: ExistingJobPolicy
 PRIORITY_BAND_INHERIT: PriorityBand
 PRIORITY_BAND_PRODUCTION: PriorityBand
+PRIORITY_BAND_SYSTEM: PriorityBand
 PRIORITY_BAND_INTERACTIVE: PriorityBand
 PRIORITY_BAND_BATCH: PriorityBand
 CONTAINER_PROFILE_UNSPECIFIED: ContainerProfile

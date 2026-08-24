@@ -203,7 +203,7 @@ than a numbered Attempt.
 many in seconds, so a grep for anything earlier in the run comes back empty:
 
 ```bash
-iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkpoint"
+iris job logs /user/job/child --max-lines 400000 --no-tail --substring "Saving checkpoint"
 ```
 
 ### Submitting a GPU gang from a workstation
@@ -282,8 +282,11 @@ iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 garbage-collected. It queries `iris.task_event` across every retained attempt in
 the task's current job incarnation in one call and shows both backend
 observations (`k8s/kueue`, `k8s/container`) and controller decisions
-(`iris/controller`) in chronological order. Events are retained for up to seven
-days.
+(`iris/controller`) in chronological order. Events are retained for up to 30
+days. Kubernetes `DisruptionTarget` conditions are recorded as
+`k8s/disruption` events with the pod and node identity plus a snapshot of the
+node's taints, conditions, hardware/topology labels, and CoreWeave health
+annotations.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -403,7 +406,7 @@ iris rpc controller get-provider-status         # scheduling events, cluster cap
 iris cluster vm status                          # scale groups with slice counts
 ```
 
-Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
+Priority bands: `PRIORITY_BAND_SYSTEM` (admin-only Iris, Finelog, and hero work), `PRIORITY_BAND_PRODUCTION` (admin-only critical work), `PRIORITY_BAND_INTERACTIVE` (default), and `PRIORITY_BAND_BATCH` (opportunistic). CLI SYSTEM submissions require `--system-reason` containing `hero`, `finelog`, or `iris`. See [`docs/priority-bands.md`](docs/priority-bands.md).
 
 `get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
 `state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
@@ -554,7 +557,7 @@ Namespaces:
   restart resets that peak. Kubelet resource metrics do not expose container
   filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
   service account requires `get` on `nodes/proxy`.
-- `iris.task_event` — up to seven days of deduplicated backend verdicts and
+- `iris.task_event` — up to 30 days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:
 
@@ -564,6 +567,24 @@ Namespaces:
   WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
   ORDER BY ts ASC;
   ```
+
+  Kubernetes disruptions use `source='k8s/disruption'`. `node_provider_id` and
+  `node_system_uuid` identify a physical machine; `node_boot_id` distinguishes
+  reboots. To inspect taint-manager evictions across the fleet:
+
+  ```sql
+  SELECT cluster, ts, task_id, attempt_id, pod_name, node_name,
+         node_uid, node_provider_id, node_boot_id, node_system_uuid,
+         reason, message, pod_conditions_json, node_taints_json,
+         node_conditions_json
+  FROM "iris.task_event"
+  WHERE source='k8s/disruption' AND reason='DeletionByTaintManager'
+  ORDER BY ts DESC;
+  ```
+
+  One node drain can disrupt many pods. Treat rows with the same cluster,
+  `node_system_uuid`, `node_boot_id`, and nearby timestamps as one machine
+  incident before counting repeat offenders.
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
@@ -937,13 +958,13 @@ treat it as an explicit outage decision. Change one owner at a time and confirm
 that `CWActive` drops the blocker before continuing. Do not delete provider
 DaemonSets or use `kubectl drain --force`.
 
-Iris coordinator task PDBs follow the job's priority band. PRODUCTION uses
-`minAvailable: 1` and intentionally blocks voluntary eviction. INTERACTIVE and
-BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods during a drain,
-and Iris records the disruption as `PREEMPTED` and retries it within the job's
-preemption budget. For a PRODUCTION blocker, follow the running-task procedure
-in the table above. Do not weaken its live PDB to recover a node without the
-job owner's approval.
+Iris coordinator task PDBs follow the job's priority band. SYSTEM and
+PRODUCTION use `minAvailable: 1` and intentionally block voluntary eviction.
+INTERACTIVE and BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods
+during a drain, and Iris records the disruption as `PREEMPTED` and retries it
+within the job's preemption budget. For a SYSTEM or PRODUCTION blocker, follow
+the running-task procedure in the table above. Do not weaken its live PDB to
+recover a node without the job owner's approval.
 
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.

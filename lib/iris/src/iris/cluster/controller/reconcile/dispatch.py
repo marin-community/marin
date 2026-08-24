@@ -38,6 +38,7 @@ from iris.cluster.controller.schema import job_config_table, jobs_table, local_t
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_rank
 
 
 @dataclass(frozen=True)
@@ -209,7 +210,7 @@ def _rank_promotion_units(
 ) -> list[list[_RankRow]]:
     """Order promotion units by effective band, then per-user fairness.
 
-    Buckets by the job's effective band (ascending: PRODUCTION first); within a
+    Buckets by the job's effective band (highest priority first); within a
     band, sorts by the hierarchy/submission key and round-robins across users by
     ascending spend. A gang is one atomic unit, so it takes a single round-robin
     turn rather than one per task.
@@ -218,7 +219,7 @@ def _rank_promotion_units(
     for unit in units:
         by_band[effective_bands[unit[0].job_id]].append(unit)
     ranked: list[list[_RankRow]] = []
-    for band in sorted(by_band):
+    for band in sorted(by_band, key=priority_band_rank):
         band_units = sorted(by_band[band], key=lambda unit: min(row.sort_key for row in unit))
         user_units = [UserTask(user_id=unit[0].task_id.user, task=unit) for unit in band_units]
         ranked.extend(interleave_by_user(user_units, user_spend))
@@ -247,7 +248,7 @@ def _select_within_cap(
         if promoted >= max_promotions:
             break
         band = effective_bands[unit[0].job_id]
-        if barrier_band is not None and band > barrier_band:
+        if barrier_band is not None and priority_band_rank(band) > priority_band_rank(barrier_band):
             break
         if len(unit) <= max_promotions - promoted or len(unit) > max_promotions:
             selected.append(unit)
@@ -367,6 +368,7 @@ def drain_for_dispatch(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
             attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
+            state=int(row.state),
         )
         for row in running_rows
     ]

@@ -4,7 +4,6 @@
 """Shared cluster test harnesses and factories."""
 
 from dataclasses import dataclass
-from unittest.mock import Mock
 
 from finelog.client import LogClient
 
@@ -16,13 +15,11 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transition_reader import DbTransitionReader
-from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
-from iris.cluster.federation.manager import FederationManager
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
-from iris.managed_thread import get_thread_container
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.testing.controller import make_test_entrypoint
+from iris.testing.controller import MockController, make_test_entrypoint
 from iris.testing.controller_state import ControllerTestState
 
 # ---------------------------------------------------------------------------
@@ -60,38 +57,6 @@ def make_gpu_resource_spec() -> job_pb2.ResourceSpecProto:
 # ---------------------------------------------------------------------------
 # ServiceTestHarness — parameterized GCP / K8s controller service harness
 # ---------------------------------------------------------------------------
-
-
-class _HarnessController:
-    """Minimal controller mock satisfying the ControllerProtocol surface."""
-
-    def __init__(self) -> None:
-        self.wake = Mock()
-        self.get_job_scheduling_diagnostics = Mock(return_value=None)
-        self.last_scheduling_context = None
-        self.provider: object = Mock()
-        self.provider.autoscaler = None
-        # The backend owns its liveness tracker; the harness points this at the
-        # same tracker its ControllerTestState exposes (see the harness factories).
-        self.provider.health = WorkerHealthTracker()
-        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-        self.scale_group_to_backend: dict[str, str] = {}
-        self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
-        # Zero-peer federation: route_submit returns local, ListPeers is empty.
-        self.federation = FederationManager([], threads=get_thread_container())
-
-    def backend_id_for_scale_group(self, scale_group: str) -> str:
-        return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
-
-    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
-        merged: dict[WorkerId, WorkerLiveness] = {}
-        for backend in self.backends.values():
-            if backend.health is not None:
-                merged.update(backend.health.all())
-        return merged
-
-    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
-        return self.all_liveness().get(worker_id, WorkerLiveness())
 
 
 @dataclass
@@ -161,7 +126,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         transition_reader=DbTransitionReader(db),
     )
 
-    ctrl = _HarnessController()
+    ctrl = MockController()
     ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     ctrl.provider = k8s_provider
 
@@ -181,7 +146,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     health = WorkerHealthTracker()
     state = ControllerTestState(db, health=health)
 
-    ctrl = _HarnessController()
+    ctrl = MockController()
     ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     # Share the harness tracker so the service registers into and reads liveness
     # through the same object this harness's ControllerTestState exposes.

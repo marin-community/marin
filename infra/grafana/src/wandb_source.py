@@ -3,14 +3,18 @@
 
 """W&B series as flat chart rows for Grafana.
 
-Two readers over the same public GraphQL API. `points` follows the runset pinned
+Three readers over the same public GraphQL API. `points` follows the runset pinned
 by Marin's public hero-run report. `run_history` reads one named run's whole
 logged history for one metric, which is what lets a step-axis panel start at step
 0: finelog evicts telemetry segments once the namespace passes its storage policy,
-while W&B keeps the run.
+while W&B keeps the run. `run_activity` reads the same run's clocks, for the same
+reason: a run's total active time spans every attempt it ever had, and finelog
+retains only a window of them.
 """
 
 import json
+from collections.abc import Callable
+from datetime import datetime
 
 import httpx
 from errors import UpstreamError
@@ -55,9 +59,24 @@ query RunSampledHistory($entity: String!, $project: String!, $run: String!, $spe
 }
 """
 
+# `summaryMetrics` carries the last value logged for every key, `_runtime` among them.
+# Reading the clocks therefore costs one small request, not a history download.
+_ACTIVITY_QUERY = """
+query RunActivity($entity: String!, $project: String!, $run: String!) {
+  project(entityName: $entity, name: $project) {
+    run(name: $run) { state createdAt heartbeatAt summaryMetrics }
+  }
+}
+"""
+
+
+def _epoch_seconds(stamp: str) -> float:
+    """Epoch seconds for a W&B RFC-3339 stamp, whose zone is always `Z`."""
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
 
 class WandbSource:
-    """Reads the public hero-run report's runset, and any single run's history."""
+    """Reads the public hero-run report's runset, and any single run's history and clocks."""
 
     def __init__(self, *, timeout: float) -> None:
         self._client = httpx.Client(timeout=timeout, headers={"content-type": "application/json"})
@@ -110,6 +129,18 @@ class WandbSource:
                 pairs.append((x_value, y_value))
         return pairs
 
+    def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
+        """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
+
+        A run in none of them fails loud rather than rendering as an empty panel.
+        """
+        projects = (project,) if project else RUN_HISTORY_PROJECTS
+        for candidate in projects:
+            rows = read(candidate)
+            if rows is not None:
+                return rows
+        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
+
     def points(self, chart_key: str) -> list[dict]:
         """Return one row per sampled point for a configured report chart."""
         if chart_key not in WANDB_CHARTS:
@@ -140,19 +171,60 @@ class WandbSource:
         `run` is the Levanter run id: marin names the W&B run after it, and
         `resume="allow"` keeps one W&B run across restarts, so this covers the run
         from step 0 however many times it was resumed. W&B samples server-side, so
-        the response stays small on a long run. A run absent from every searched
-        project fails loud rather than rendering as an empty panel.
+        the response stays small on a long run.
         """
-        projects = (project,) if project else RUN_HISTORY_PROJECTS
-        for candidate in projects:
+
+        def read(candidate: str) -> list[dict] | None:
             pairs = self._sampled_history(
                 project=candidate, run=run, x_key=_STEP_KEY, y_key=metric, samples=_RUN_HISTORY_SAMPLES
             )
             if pairs is None:
-                continue
+                return None
             run_url = _RUN_URL.format(entity=_ENTITY, project=candidate, run=run)
             return [
                 {"run": run, "project": candidate, "run_url": run_url, "step": step, "value": value}
                 for step, value in pairs
             ]
-        raise UpstreamError("wandb", f"run {run!r} not found in {', '.join(projects)}", status_code=404)
+
+        return self._search_projects(run, project, read)
+
+    def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
+        """Return one row of active and wall-clock time for the whole of `run`.
+
+        W&B's `_runtime` counts the seconds a process was alive: `resume="allow"`
+        restores it at each restart, so the wait between two attempts never enters
+        it. That makes it the run's active execution time across every attempt, and
+        unlike a `telemetry_v1` scan it does not stop where segment eviction does.
+        Wall time runs from the run's creation to its last heartbeat, thus the
+        remainder is downtime and the ratio is the share of the run that ran. A run
+        that has logged nothing yet reports a null active time rather than a zero.
+        """
+
+        def read(candidate: str) -> list[dict] | None:
+            run_data = (
+                self._graphql(
+                    _ACTIVITY_QUERY,
+                    {"entity": _ENTITY, "project": candidate, "run": run},
+                ).get("project")
+                or {}
+            ).get("run")
+            if not run_data:
+                return None
+            summary = json.loads(run_data.get("summaryMetrics") or "{}")
+            active = summary.get("_runtime")
+            active = float(active) if isinstance(active, int | float) else None
+            wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
+            return [
+                {
+                    "run": run,
+                    "project": candidate,
+                    "run_url": _RUN_URL.format(entity=_ENTITY, project=candidate, run=run),
+                    "state": run_data.get("state"),
+                    "active_seconds": active,
+                    "wall_seconds": wall,
+                    "downtime_seconds": None if active is None else wall - active,
+                    "active_share": active / wall if active is not None and wall > 0 else None,
+                }
+            ]
+
+        return self._search_projects(run, project, read)

@@ -206,6 +206,7 @@ def _latency_records() -> list[TelemetryRow]:
         ),
     ]
     for family, total_sum, count in (
+        ("request_time_per_output_token_seconds", 0.9, 3),
         ("inter_token_latency_seconds", 0.4, 4),
         ("request_queue_time_seconds", 0.6, 3),
         ("e2e_request_latency_seconds", 4.5, 3),
@@ -293,7 +294,8 @@ def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows)
     assert _one(overview_rows, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
     assert _one(overview_rows, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
     assert _one(overview_rows, "latency", "ttft", "p90")["value"] is None
-    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.1)
+    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.3)
+    assert _one(overview_rows, "latency", "inter_token_latency", "mean")["value"] == pytest.approx(0.1)
     assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
     assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
 

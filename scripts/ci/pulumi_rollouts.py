@@ -13,30 +13,30 @@ from dataclasses import asdict, dataclass
 @dataclass(frozen=True)
 class Rollout:
     name: str
-    stack: str
     work_dir: str
     service_account: str
     source_roots: tuple[str, ...] = ()
     timeout_minutes: int = 60
-    cloudflare_secret_name: str = ""
     deploy_generation_key: str = ""
     test_path: str = ""
 
 
 CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT = "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com"
 IRIS_DEPLOY_SERVICE_ACCOUNT = "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com"
-CLOUDFLARE_DNS_SECRET = "cloudflare-oa-dns-token"
 CLOUD_RUN_SOURCE_ROOTS = (
     "infra/pulumi/src/iac/gcp/cloud_run.py",
     "lib/rigging/src/rigging/auth.py",
 )
 IRIS_SOURCE_ROOTS = ("infra/pulumi/src/iac/iris",)
+# Infra owns this gate. Remove it after the ``marin`` stack imports the live grants and the Echo,
+# EvalDash, and Grafana IAM resources are detached from their leaf states. Track the transfer at
+# https://github.com/marin-community/marin/issues/8455. Manual dispatch remains available.
+IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS = frozenset({"echo", "evaldash", "grafana"})
 
 
 ROLLOUTS = (
     Rollout(
         name="ducky",
-        stack="ducky-marin",
         work_dir="infra/ducky",
         service_account=IRIS_DEPLOY_SERVICE_ACCOUNT,
         source_roots=("lib/ducky", *IRIS_SOURCE_ROOTS),
@@ -45,16 +45,13 @@ ROLLOUTS = (
     ),
     Rollout(
         name="echo",
-        stack="marin-echo",
         work_dir="infra/echo",
         service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
         source_roots=(*CLOUD_RUN_SOURCE_ROOTS, "infra/pulumi/src/iac/gcp/cloud_run_job.py"),
         timeout_minutes=90,
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
     ),
     Rollout(
         name="evaldash",
-        stack="marin-evaldash",
         work_dir="infra/evaldash",
         service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
         source_roots=(
@@ -73,20 +70,16 @@ ROLLOUTS = (
             "lib/marin/src/marin/evaluation/records.py",
             "lib/rigging",
         ),
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
     ),
     Rollout(
         name="grafana",
-        stack="marin-grafana",
         work_dir="infra/grafana",
         service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
         source_roots=CLOUD_RUN_SOURCE_ROOTS,
-        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
         test_path="infra/grafana",
     ),
     Rollout(
         name="xprof",
-        stack="xprof-marin",
         work_dir="infra/xprof",
         service_account=IRIS_DEPLOY_SERVICE_ACCOUNT,
         source_roots=(*IRIS_SOURCE_ROOTS, "lib/rigging/src/rigging/filesystem"),
@@ -110,6 +103,12 @@ def rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
     )
 
 
+def automatic_rollouts_for_paths(paths: Iterable[str]) -> tuple[Rollout, ...]:
+    return tuple(
+        rollout for rollout in rollouts_for_paths(paths) if rollout.name not in IAM_STATE_TRANSFER_BLOCKED_ROLLOUTS
+    )
+
+
 def rollout_for_service(name: str) -> Rollout:
     for rollout in ROLLOUTS:
         if rollout.name == name:
@@ -121,14 +120,11 @@ def rollout_for_service(name: str) -> Rollout:
 def rollout_item(rollout: Rollout, deploy_generation: str = "") -> dict[str, object]:
     item = asdict(rollout)
     item.pop("source_roots")
+    item.pop("work_dir")
     deploy_generation_key = item.pop("deploy_generation_key")
     if deploy_generation and not deploy_generation_key:
         raise ValueError(f"{rollout.name} does not support a deploy-generation override")
-    item["config_map"] = (
-        json.dumps({deploy_generation_key: {"value": deploy_generation}}, separators=(",", ":"))
-        if deploy_generation
-        else ""
-    )
+    item["config"] = f"{deploy_generation_key}={deploy_generation}" if deploy_generation else ""
     return item
 
 
@@ -152,7 +148,7 @@ def main() -> None:
         else:
             if args.deploy_generation:
                 raise ValueError("--deploy-generation requires --service")
-            selected = rollouts_for_paths(line.strip() for line in sys.stdin if line.strip())
+            selected = automatic_rollouts_for_paths(line.strip() for line in sys.stdin if line.strip())
         print(json.dumps(workflow_payload(selected, args.deploy_generation), separators=(",", ":")))
     except ValueError as error:
         parser.error(str(error))

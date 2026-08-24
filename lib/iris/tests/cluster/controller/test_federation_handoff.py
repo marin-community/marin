@@ -105,6 +105,36 @@ def _peer_status_of(service: ControllerServiceImpl, job_id: JobName) -> int:
     ).job.peer_status
 
 
+def _report_peer_backend_task(
+    peer_state: ControllerTestState,
+    job_id: JobName,
+    *,
+    new_state: int,
+    error: str | None = None,
+    exit_code: int | None = None,
+    pod_name: str | None = None,
+    pod_uid: str | None = None,
+    node_name: str | None = None,
+    terminal_reason: str | None = None,
+) -> None:
+    worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+    (task,) = query_tasks_for_job(peer_state, job_id)
+    assign_task(peer_state, task, worker)
+    update = TaskUpdate(
+        task_id=task.task_id,
+        attempt_id=query_task(peer_state, task.task_id).current_attempt_id,
+        new_state=new_state,
+        error=error,
+        exit_code=exit_code,
+        pod_name=pod_name,
+        pod_uid=pod_uid,
+        node_name=node_name,
+        terminal_reason=terminal_reason,
+    )
+    with peer_state._db.transaction() as cur:
+        commit_dispatch_updates(cur, [update], now=Timestamp.now())
+
+
 def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) -> None:
     """Register a worker on the peer and drive the handed-off job's task to SUCCEEDED."""
     worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
@@ -363,11 +393,7 @@ def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
-    """After sync-back the parent renders a federated task natively: the peer's
-    attempt history is mirrored and the peer-side worker identity is surfaced (as
-    display text — there is no local worker row), and the mirrored attempt stays
-    off the worker-routing fold (its namespaced uid never resolves)."""
+def test_sync_mirrors_attempt_history_and_backend_identity(tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
@@ -377,7 +403,15 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
         job_id = JobName.from_wire(response.job_id)
         promote_queued_federation(manager, parent_state)
 
-        _run_peer_task_to_success(peer_state, job_id)
+        _report_peer_backend_task(
+            peer_state,
+            job_id,
+            new_state=job_pb2.TASK_STATE_RUNNING,
+            pod_name="iris-fed-job-0-a1",
+            pod_uid="pod-uid-a",
+            node_name="node-a",
+        )
+        transition_task(peer_state, job_id.task(0), job_pb2.TASK_STATE_SUCCEEDED)
         manager.sync_once()
 
         (mirrored,) = query_tasks_for_job(parent_state, job_id)
@@ -385,18 +419,16 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
             controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
         ).task
 
-        # The peer's attempt renders natively, and the worker identity is surfaced
-        # from the peer (the task has no local worker row, so it is display-only).
         assert task.cluster == "cw"
         assert task.worker_id == "w1"
         assert len(task.attempts) == 1
         assert task.attempts[0].state == job_pb2.TASK_STATE_SUCCEEDED
         assert task.attempts[0].worker_id == ""  # no local worker FK for a mirrored attempt
+        assert task.attempts[0].pod_name == "iris-fed-job-0-a1"
+        assert task.attempts[0].pod_uid == "pod-uid-a"
+        assert task.attempts[0].node_name == "node-a"
 
-        # The mirrored uid is the peer's raw uid, written verbatim (no peer-prefix
-        # rebasing — job ids are cluster-invariant). Because uid resolution is scoped
-        # to local_tasks, it never resolves — so reconcile's worker-routing can never
-        # act on a federated attempt.
+        # A mirrored attempt has no local worker row and cannot enter local routing.
         with peer_state._db.read_snapshot() as tx:
             (peer_attempt,) = reads.all_attempts_for_tasks(tx, [job_id.task(0)])[job_id.task(0)]
         with parent_state._db.read_snapshot() as tx:
@@ -404,6 +436,34 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
             assert attempt_row.attempt_uid == peer_attempt.attempt_uid
             assert "~" not in attempt_row.attempt_uid
             assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
+
+
+def test_sync_mirrors_attempt_terminal_reason(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-terminal-reason"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+
+        terminal_reason = "init failed: disk corrupt"
+        _report_peer_backend_task(
+            peer_state,
+            job_id,
+            new_state=job_pb2.TASK_STATE_FAILED,
+            error=terminal_reason,
+            exit_code=1,
+            terminal_reason=terminal_reason,
+        )
+        manager.sync_once()
+
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
+        task = parent_service.get_task_status(
+            controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
+        ).task
+        assert task.attempts[0].terminal_reason == terminal_reason
 
 
 def _dispatch_building(peer_state, task_id: JobName, attempt_id: int, status_message: str | None) -> None:

@@ -1984,7 +1984,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
+    assert summaries["gcp"]["availability"]["version"] == 3  # wire contract; not the constant
     # Held capacity is reported per priority band so a parent can see what a
     # higher-priority job would reclaim there.
     assert summaries["gcp"]["availability"]["heldByBand"] == [
