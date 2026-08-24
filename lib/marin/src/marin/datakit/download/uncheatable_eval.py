@@ -9,7 +9,7 @@ from functools import partial
 from typing import Any
 
 from fray.types import ResourceConfig
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
@@ -47,7 +47,7 @@ def uncheatable_eval_document(row: dict[str, Any]) -> dict[str, str]:
 
 
 def _write_category(output_path: str, category: str, rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    path = f"{output_path}/{category}.jsonl.gz"
+    path = prefix_join(output_path, f"{category}.jsonl.gz")
     result = write_jsonl_file((uncheatable_eval_document(row) for row in rows), path)
     return {"category": category, **result}
 
@@ -56,7 +56,7 @@ def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str,
     """Split a pinned UncheatableEval Parquet release into compressed JSONL files."""
     selected_categories = frozenset(cfg.categories)
     pipeline = (
-        Dataset.from_files(f"{cfg.input_path}/**/*.parquet")
+        Dataset.from_files(prefix_join(cfg.input_path, "**/*.parquet"))
         .flat_map(load_parquet)
         .filter(lambda row: row.get("category") in selected_categories)
         .group_by(
@@ -70,7 +70,9 @@ def transform_uncheatable_eval(cfg: UncheatableEvalTransformConfig) -> dict[str,
     ctx.execute(pipeline)
 
     missing_categories = [
-        category for category in cfg.categories if not StoragePath(f"{cfg.output_path}/{category}.jsonl.gz").exists()
+        category
+        for category in cfg.categories
+        if not StoragePath(prefix_join(cfg.output_path, f"{category}.jsonl.gz")).exists()
     ]
     if missing_categories:
         raise ValueError(f"UncheatableEval release is missing categories: {', '.join(missing_categories)}")
