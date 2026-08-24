@@ -50,12 +50,12 @@ GRADIENT_NAMES = (
     "model.layers.2.mlp.router.weight",
     "lm_head.weight",
 )
-_GRUG_MESH_AXIS_NAMES = ("replica_dcn", "data", "expert", "model")
+_GRUG_MESH_AXIS_NAMES = ("replica_dcn", "data", "context", "expert", "model")
 
 
 def _oracle_mesh() -> Mesh:
     """Keep the one-example oracle on one device when a host exposes many."""
-    devices = np.asarray(jax.local_devices()[:1], dtype=object).reshape((1, 1, 1, 1))
+    devices = np.asarray(jax.local_devices()[:1], dtype=object).reshape((1,) * len(_GRUG_MESH_AXIS_NAMES))
     axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
     return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
 
