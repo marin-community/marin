@@ -14,3 +14,4 @@ ra2a-dkn-04c-ab-dk-6k	c11c3d98b0	2026.08.24.3	ragged_all_to_all	mixture	disabled
 ra2a-dkn-05-ab-oneshot-6k	91668c83bc	2026.08.24.4	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
 ra2a-dkn-06-ab-oneshot-legacy	877be36ad3	2026.08.24.5	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
 ra2a-dkn-07-ab-oneshot-sib11	2fa850229a	2026.08.24.6	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-dkn-10b-ab-dk-6k-s64	3059cff782	2026.08.24.11	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	--ragged-all-to-all-splits-per-peer 64
