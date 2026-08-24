@@ -24,19 +24,16 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
-use crate::ingestion::route_ingestion_batch;
 use crate::ingestion_policy::IngestionBatchSource;
+use crate::policies::{eager_storage_namespaces_for, route_ingestion_batch, storage_policy_for};
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
 use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
-use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
-use crate::telemetry_policy::{
-    matches_telemetry_namespace, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
-};
+use crate::telemetry_policy::{matches_telemetry_namespace, TELEMETRY_NAMESPACE};
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
@@ -59,11 +56,6 @@ const NODE_NAME_COLUMN: &str = "node_name";
 const PROCESS_INDEX_COLUMN: &str = "process_index";
 const PRIMARY_PROCESS_INDEX: &str = "0";
 
-fn telemetry_storage_namespaces() -> impl Iterator<Item = &'static str> {
-    TELEMETRY_STORAGE_SHARDS
-        .iter()
-        .map(|shard| shard.storage_namespace)
-}
 const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
 const TRAINING_LOSS_NAMES: [&str; 1] = ["train_loss"];
 const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
@@ -388,13 +380,7 @@ impl TelemetryState {
                 let namespace = namespace.to_string();
                 let registered_namespace = namespace.clone();
                 match tokio::task::spawn_blocking(move || {
-                    let policy = StoragePolicy {
-                        max_bytes: Some(
-                            storage_max_bytes(&namespace)
-                                .expect("only telemetry storage namespaces are registered"),
-                        ),
-                        ..StoragePolicy::default()
-                    };
+                    let policy = storage_policy_for(&namespace)?;
                     store.register_table(&namespace, telemetry_schema(), policy)
                 })
                 .await
@@ -444,7 +430,7 @@ pub fn router(
     dedupe_capacity: usize,
     health: Arc<IngestHealth>,
 ) -> Router {
-    let mut startup_namespaces = telemetry_storage_namespaces().collect::<Vec<_>>();
+    let mut startup_namespaces = eager_storage_namespaces_for(TELEMETRY_NAMESPACE);
     if store.get_table_schema(TELEMETRY_NAMESPACE).is_ok() {
         startup_namespaces.push(TELEMETRY_NAMESPACE);
     }
@@ -697,14 +683,6 @@ fn telemetry_policy_error(error: StatsError) -> ApiError {
             format!("telemetry policy failed: {error}"),
         ),
     }
-}
-
-#[cfg(test)]
-pub(super) fn normalize_test_batch(idempotency_key: &str, body: &[u8]) -> Vec<u8> {
-    let mut prepared = prepare_batch(idempotency_key, body)
-        .unwrap_or_else(|error| panic!("could not normalize test telemetry: {}", error.message));
-    assert_eq!(prepared.shards.len(), 1);
-    prepared.shards.remove(0).ipc
 }
 
 fn validate_batch(batch: &TelemetryBatch) -> Result<(), ApiError> {

@@ -5,12 +5,13 @@ pub mod proto {
 }
 
 pub mod errors;
-pub(crate) mod ingestion;
 pub(crate) mod ingestion_policy;
 pub(crate) mod json;
 pub mod migrations;
+pub(crate) mod policies;
 pub mod query;
 pub mod server;
+pub(crate) mod storage_policy;
 pub mod store;
 pub(crate) mod telemetry_policy;
 

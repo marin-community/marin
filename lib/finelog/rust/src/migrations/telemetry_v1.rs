@@ -1,4 +1,4 @@
-//! In-place migration from legacy telemetry namespaces into semantic storage shards.
+//! In-place migration from the production telemetry root into semantic storage shards.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -16,24 +16,22 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
-use crate::ingestion::route_ingestion_batch;
 use crate::ingestion_policy::IngestionBatchSource;
+use crate::policies::{eager_storage_namespaces_for, route_ingestion_batch, storage_policy_for};
 use crate::server::telemetry::{telemetry_schema, TELEMETRY_MAX_ROW_GROUP_ROWS};
 use crate::store::catalog::{Catalog, CATALOG_DB_FILENAME};
-use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, stored_form, IMPLICIT_SEQ_COLUMN};
 use crate::store::segment::{
     discover_segments, read_segment_footer, segment_writer_properties_with_max_rows,
 };
 use crate::store::store::acquire_exclusive_store_lock;
 use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
-use crate::telemetry_policy::{
-    migration_source_namespaces, storage_max_bytes, TELEMETRY_NAMESPACE, TELEMETRY_STORAGE_SHARDS,
-};
+use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
 const MANIFEST_VERSION: u32 = 1;
-const POLICY_REVISION: &str = "semantic-storage-v3";
+const POLICY_REVISION: &str = "semantic-storage-v4";
+const MIGRATION_SOURCE_NAMESPACES: [&str; 1] = [TELEMETRY_NAMESPACE];
 const OUTPUT_LEVEL: i32 = 0;
 const MIGRATION_DIRECTORY: &str = ".finelog-telemetry-v1-migration";
 const SOURCE_SNAPSHOT_DIRECTORY: &str = "source";
@@ -42,6 +40,10 @@ const ROLLBACK_DIRECTORY: &str = "rollback";
 const CATALOG_BUILD_DIRECTORY: &str = "catalog-build";
 const MIGRATED_SEQ_START: i64 = -4_000_000_000_000_000_000;
 const SNAPSHOT_ATTEMPTS: usize = 8;
+
+fn migration_source_namespaces() -> impl Iterator<Item = &'static str> {
+    MIGRATION_SOURCE_NAMESPACES.iter().copied()
+}
 
 #[derive(Debug, Clone)]
 pub struct InPlaceConfig {
@@ -192,10 +194,10 @@ pub fn verify_store(
     Ok(manifest)
 }
 
-/// Stage the complete legacy hot set while Finelog remains available.
+/// Stage the complete root hot set while Finelog remains available.
 ///
-/// Deploy the row-aware ingestion policy first so no new rows enter the legacy
-/// namespaces after preparation begins. Repeated calls resume the same stage.
+/// Deploy the row-aware ingestion policy first so no new rows enter the root
+/// namespace after preparation begins. Repeated calls resume the same stage.
 pub fn prepare_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
     if config.batch_rows == 0 {
         return Err(validation_error("batch_rows must be positive"));
@@ -228,7 +230,7 @@ pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
         verify_published_catalog(&store_dir, &manifest)?;
     }
     if manifest.phase == MigrationPhase::Retired {
-        verify_legacy_namespaces_retired(&store_dir)?;
+        verify_root_namespace_retired(&store_dir)?;
     }
     Ok(manifest)
 }
@@ -273,7 +275,7 @@ pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Sta
     Ok(manifest)
 }
 
-/// Remove legacy namespaces after every query has switched to semantic names.
+/// Remove the root namespace after every query has switched to semantic names.
 ///
 /// Stop Finelog before this command and restart it after the command returns.
 pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
@@ -286,28 +288,28 @@ pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
     let mut manifest = read_manifest(&manifest_path)?;
     if manifest.phase != MigrationPhase::Published {
         return Err(validation_error(
-            "telemetry migration must be published before legacy retirement",
+            "telemetry migration must be published before root retirement",
         ));
     }
     verify_published_catalog(&store_dir, &manifest)?;
 
-    let rollback_sources = migration_dir.join(ROLLBACK_DIRECTORY).join("legacy-files");
+    let rollback_sources = migration_dir.join(ROLLBACK_DIRECTORY).join("root-files");
     for namespace in migration_source_namespaces() {
         let namespace_dir = store_dir.join(namespace);
         for source in discover_segments(&namespace_dir) {
             let filename = source.file_name().ok_or_else(|| {
                 validation_error(format!(
-                    "legacy segment has no filename: {}",
+                    "root telemetry segment has no filename: {}",
                     source.display()
                 ))
             })?;
             let destination = rollback_sources.join(namespace).join(filename);
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(io_error("create legacy rollback directory"))?;
+                    .map_err(io_error("create root rollback directory"))?;
             }
             std::fs::rename(&source, &destination)
-                .map_err(io_error("move legacy segment into rollback"))?;
+                .map_err(io_error("move root segment into rollback"))?;
         }
     }
     let retired_files = migration_source_namespaces()
@@ -324,14 +326,14 @@ pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
         .collect();
     let retire_backup = catalog_backup_path(&migration_dir, "pre-retire");
     if retire_backup.exists() {
-        verify_legacy_namespaces_retired(&store_dir)?;
+        verify_root_namespace_retired(&store_dir)?;
     } else {
         replace_catalog_for_retirement(&store_dir, &migration_dir)?;
     }
     manifest.retired_files = retired_files;
     manifest.phase = MigrationPhase::Retired;
     write_manifest(&manifest_path, &manifest)?;
-    verify_legacy_namespaces_retired(&store_dir)?;
+    verify_root_namespace_retired(&store_dir)?;
     Ok(manifest)
 }
 
@@ -459,15 +461,9 @@ fn replace_catalog_for_publish(
     )?;
     let catalog = Catalog::open(Some(&build_dir))?;
     let stored_schema = stored_form(telemetry_schema());
-    for shard in TELEMETRY_STORAGE_SHARDS {
-        catalog.upsert(shard.storage_namespace, &stored_schema)?;
-        catalog.upsert_policy(
-            shard.storage_namespace,
-            &StoragePolicy {
-                max_bytes: Some(shard.max_bytes),
-                ..StoragePolicy::default()
-            },
-        )?;
+    for namespace in eager_storage_namespaces_for(TELEMETRY_NAMESPACE) {
+        catalog.upsert(namespace, &stored_schema)?;
+        catalog.upsert_policy(namespace, &storage_policy_for(namespace)?)?;
     }
     let output_namespaces: BTreeSet<_> = manifest
         .source_segments
@@ -477,13 +473,7 @@ fn replace_catalog_for_publish(
         .collect();
     for namespace in output_namespaces {
         catalog.upsert(namespace, &stored_schema)?;
-        catalog.upsert_policy(
-            namespace,
-            &StoragePolicy {
-                max_bytes: storage_max_bytes(namespace),
-                ..StoragePolicy::default()
-            },
-        )?;
+        catalog.upsert_policy(namespace, &storage_policy_for(namespace)?)?;
     }
     let created_at_ms = now_ms()?;
     let rows = manifest
@@ -623,7 +613,7 @@ fn verify_published_catalog(
     Ok(())
 }
 
-fn verify_legacy_namespaces_retired(store_dir: &Path) -> Result<(), StatsError> {
+fn verify_root_namespace_retired(store_dir: &Path) -> Result<(), StatsError> {
     let connection = rusqlite::Connection::open_with_flags(
         store_dir.join(CATALOG_DB_FILENAME),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -639,7 +629,7 @@ fn verify_legacy_namespaces_retired(store_dir: &Path) -> Result<(), StatsError> 
             .map_err(sqlite_error("verify retired telemetry namespace"))?;
         if count != 0 || !discover_segments(&store_dir.join(namespace)).is_empty() {
             return Err(validation_error(format!(
-                "legacy telemetry namespace {namespace:?} is still visible"
+                "root telemetry namespace {namespace:?} is still visible"
             )));
         }
     }
@@ -1475,14 +1465,6 @@ mod tests {
         add_segment(
             &catalog,
             &dirs.store,
-            "telemetry_v1.levanter.extra",
-            1,
-            1,
-            &telemetry_batch(&["old-levanter-client"], &["step"], 1),
-        );
-        add_segment(
-            &catalog,
-            &dirs.store,
             "telemetry_storage_v1.levanter.detail",
             1,
             1,
@@ -1510,15 +1492,15 @@ mod tests {
     }
 
     #[test]
-    fn prepare_in_place_routes_every_legacy_row_and_preserves_the_live_store() {
+    fn prepare_in_place_routes_every_root_row_and_preserves_the_live_store() {
         let PreparedMigration {
             dirs,
             manifest,
             source_sha,
         } = prepared_migration();
 
-        assert_eq!(manifest.input_rows, 8);
-        assert_eq!(manifest.output_rows, 8);
+        assert_eq!(manifest.input_rows, 7);
+        assert_eq!(manifest.output_rows, 7);
         assert_eq!(manifest.residual_rows, 0);
         assert!(manifest.complete);
         assert_eq!(manifest.phase, MigrationPhase::Staged);

@@ -8,9 +8,11 @@ use arrow::record_batch::RecordBatch;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::{
-    IngestionBatchSource, IngestionDestination, IngestionLayoutPolicy, RoutedIngestionBatch,
+    IngestionBatchSource, IngestionDestination, IngestionPolicy, RoutedIngestionBatch,
 };
+use crate::storage_policy::NamespaceStoragePolicy;
 use crate::store::namespace_name::MAX_NAMESPACE_NAME_BYTES;
+use crate::store::policy::StoragePolicy;
 
 pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
@@ -28,16 +30,16 @@ pub(crate) const IRIS_RPC_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.iris_r
 pub(crate) const VLLM_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.vllm";
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TelemetryLayoutPolicy {
+pub(crate) struct TelemetryPolicy {
     logical_inference_rules: &'static [LogicalInferenceRule],
     storage_shards: &'static [TelemetryStorageShard],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TelemetryStorageShard {
-    pub logical_namespace: &'static str,
-    pub storage_namespace: &'static str,
-    pub max_bytes: i64,
+struct TelemetryStorageShard {
+    logical_namespace: &'static str,
+    storage_namespace: &'static str,
+    max_bytes: i64,
     predicate: StoragePredicate,
 }
 
@@ -48,7 +50,7 @@ enum StoragePredicate {
     LevanterDetail,
 }
 
-pub(crate) const TELEMETRY_STORAGE_SHARDS: [TelemetryStorageShard; 5] = [
+const TELEMETRY_STORAGE_SHARDS: [TelemetryStorageShard; 5] = [
     TelemetryStorageShard {
         logical_namespace: LEVANTER_NAMESPACE,
         storage_namespace: LEVANTER_STATUS_STORAGE_NAMESPACE,
@@ -129,43 +131,12 @@ const LOGICAL_INFERENCE_RULES: [LogicalInferenceRule; 6] = [
     },
 ];
 
-pub(crate) const TELEMETRY_LAYOUT_POLICY: TelemetryLayoutPolicy = TelemetryLayoutPolicy {
+pub(crate) const TELEMETRY_POLICY: TelemetryPolicy = TelemetryPolicy {
     logical_inference_rules: &LOGICAL_INFERENCE_RULES,
     storage_shards: &TELEMETRY_STORAGE_SHARDS,
 };
 
-// Remove superseded entries after every forwarder advances past its last legacy
-// segment and the corresponding hub shards are empty.
-const LEGACY_STORAGE_NAMESPACES: [(&str, &str); 12] = [
-    (LEVANTER_NAMESPACE, LEVANTER_NAMESPACE),
-    ("telemetry_v1.levanter.priority", LEVANTER_NAMESPACE),
-    ("telemetry_v1.levanter.bulk", LEVANTER_NAMESPACE),
-    ("telemetry_v1.levanter.standard", LEVANTER_NAMESPACE),
-    ("telemetry_v1.levanter.core", LEVANTER_NAMESPACE),
-    ("telemetry_v1.levanter.extra", LEVANTER_NAMESPACE),
-    (NODE_AGENT_NAMESPACE, NODE_AGENT_NAMESPACE),
-    ("telemetry_v1.node_agent.standard", NODE_AGENT_NAMESPACE),
-    (IRIS_RPC_NAMESPACE, IRIS_RPC_NAMESPACE),
-    ("telemetry_v1.iris.rpc.standard", IRIS_RPC_NAMESPACE),
-    (VLLM_NAMESPACE, VLLM_NAMESPACE),
-    ("telemetry_v1.vllm.standard", VLLM_NAMESPACE),
-];
-
-pub(crate) fn migration_source_namespaces() -> impl Iterator<Item = &'static str> {
-    std::iter::once(TELEMETRY_NAMESPACE).chain(
-        LEGACY_STORAGE_NAMESPACES
-            .iter()
-            .map(|(storage, _logical)| *storage),
-    )
-}
-
-pub(crate) fn migration_source_logical_namespace(namespace: &str) -> Option<&'static str> {
-    LEGACY_STORAGE_NAMESPACES
-        .iter()
-        .find_map(|(storage, logical)| (*storage == namespace).then_some(*logical))
-}
-
-impl IngestionLayoutPolicy for TelemetryLayoutPolicy {
+impl IngestionPolicy for TelemetryPolicy {
     /// Partition a complete normalized batch into logical streams and physical
     /// storage shards. Policy decisions receive a view of every column in each
     /// row; callers do not pre-extract a routing key.
@@ -205,7 +176,7 @@ impl IngestionLayoutPolicy for TelemetryLayoutPolicy {
     }
 }
 
-impl TelemetryLayoutPolicy {
+impl TelemetryPolicy {
     fn destination(
         &self,
         source: IngestionBatchSource<'_>,
@@ -225,10 +196,6 @@ impl TelemetryLayoutPolicy {
 
         let logical_namespace = if requested_namespace == TELEMETRY_NAMESPACE {
             self.infer_logical_namespace(record)?
-        } else if matches!(source, IngestionBatchSource::Stored(_)) {
-            migration_source_logical_namespace(requested_namespace)
-                .unwrap_or(requested_namespace)
-                .to_string()
         } else if is_semantic_namespace(requested_namespace) {
             requested_namespace.to_string()
         } else {
@@ -287,6 +254,35 @@ impl TelemetryLayoutPolicy {
         is_semantic_namespace(logical_namespace)
             .then(|| logical_namespace.to_string())
             .ok_or_else(|| invalid_namespace(logical_namespace))
+    }
+}
+
+impl NamespaceStoragePolicy for TelemetryPolicy {
+    fn storage_policy(&self, namespace: &str) -> Result<StoragePolicy, StatsError> {
+        let max_bytes = if namespace == TELEMETRY_NAMESPACE {
+            50 * GIBIBYTE
+        } else if let Some(max_bytes) = self
+            .storage_shards
+            .iter()
+            .find_map(|shard| (shard.storage_namespace == namespace).then_some(shard.max_bytes))
+        {
+            max_bytes
+        } else if is_semantic_namespace(namespace) {
+            DEFAULT_STREAM_MAX_BYTES
+        } else {
+            return Err(invalid_namespace(namespace));
+        };
+        Ok(StoragePolicy {
+            max_bytes: Some(max_bytes),
+            ..StoragePolicy::default()
+        })
+    }
+
+    fn eager_namespaces(&self) -> Vec<&str> {
+        self.storage_shards
+            .iter()
+            .map(|shard| shard.storage_namespace)
+            .collect()
     }
 }
 
@@ -368,16 +364,6 @@ fn normalized_scope_component(service: &str) -> String {
     normalized
 }
 
-pub(crate) fn storage_max_bytes(storage_namespace: &str) -> Option<i64> {
-    if storage_namespace == TELEMETRY_NAMESPACE {
-        return Some(50 * GIBIBYTE);
-    }
-    TELEMETRY_STORAGE_SHARDS
-        .iter()
-        .find_map(|shard| (shard.storage_namespace == storage_namespace).then_some(shard.max_bytes))
-        .or_else(|| is_semantic_namespace(storage_namespace).then_some(DEFAULT_STREAM_MAX_BYTES))
-}
-
 pub(crate) fn logical_namespace_for_storage(storage_namespace: &str) -> Option<&'static str> {
     TELEMETRY_STORAGE_SHARDS.iter().find_map(|shard| {
         (shard.storage_namespace == storage_namespace).then_some(shard.logical_namespace)
@@ -386,8 +372,7 @@ pub(crate) fn logical_namespace_for_storage(storage_namespace: &str) -> Option<&
 
 pub(crate) fn is_forwarded_telemetry_namespace(namespace: &str) -> bool {
     namespace == TELEMETRY_NAMESPACE
-        || storage_max_bytes(namespace).is_some()
-        || migration_source_logical_namespace(namespace).is_some()
+        || is_semantic_namespace(namespace)
         || logical_namespace_for_storage(namespace).is_some()
 }
 
@@ -401,11 +386,7 @@ fn is_semantic_namespace(namespace: &str) -> bool {
     let Some(scope) = namespace.strip_prefix("telemetry_v1.") else {
         return false;
     };
-    if namespace.len() > MAX_NAMESPACE_NAME_BYTES
-        || LEGACY_STORAGE_NAMESPACES
-            .iter()
-            .any(|(legacy, logical)| legacy != logical && *legacy == namespace)
-    {
+    if namespace.len() > MAX_NAMESPACE_NAME_BYTES {
         return false;
     }
     scope.split('.').all(|component| {
@@ -447,7 +428,7 @@ mod tests {
         source: IngestionBatchSource<'_>,
         batch: &RecordBatch,
     ) -> Vec<(IngestionDestination, usize)> {
-        TELEMETRY_LAYOUT_POLICY
+        TELEMETRY_POLICY
             .route_batch(source, batch)
             .unwrap()
             .into_iter()
@@ -540,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_batches_preserve_physical_layout_and_accept_superseded_names() {
+    fn stored_batches_preserve_physical_layout() {
         let batch = telemetry_batch(&["levanter"], &["gauge"], &["train_loss"]);
         assert_eq!(
             destinations(
@@ -553,24 +534,6 @@ mod tests {
                 physical_namespace: LEVANTER_DETAIL_STORAGE_NAMESPACE.to_string(),
             }
         );
-        assert_eq!(
-            destinations(
-                IngestionBatchSource::Stored("telemetry_v1.levanter.extra"),
-                &batch,
-            )[0]
-            .0
-            .physical_namespace,
-            LEVANTER_STATUS_STORAGE_NAMESPACE
-        );
-        assert!(is_forwarded_telemetry_namespace(
-            "telemetry_v1.levanter.extra"
-        ));
-        assert!(TELEMETRY_LAYOUT_POLICY
-            .route_batch(
-                IngestionBatchSource::Declared("telemetry_v1.levanter.extra"),
-                &batch,
-            )
-            .is_err());
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub(crate) struct RoutedIngestionBatch {
     pub batch: RecordBatch,
 }
 
-pub(crate) trait IngestionLayoutPolicy: Sync {
+pub(crate) trait IngestionPolicy: Sync {
     /// Partition a complete batch into logical and physical destinations.
     fn route_batch(
         &self,
@@ -42,11 +42,11 @@ pub(crate) trait IngestionLayoutPolicy: Sync {
 }
 
 #[derive(Debug)]
-pub(crate) struct IdentityLayoutPolicy;
+pub(crate) struct IdentityIngestionPolicy;
 
-pub(crate) const IDENTITY_LAYOUT_POLICY: IdentityLayoutPolicy = IdentityLayoutPolicy;
+pub(crate) const IDENTITY_INGESTION_POLICY: IdentityIngestionPolicy = IdentityIngestionPolicy;
 
-impl IngestionLayoutPolicy for IdentityLayoutPolicy {
+impl IngestionPolicy for IdentityIngestionPolicy {
     fn route_batch(
         &self,
         source: IngestionBatchSource<'_>,
@@ -60,54 +60,5 @@ impl IngestionLayoutPolicy for IdentityLayoutPolicy {
             },
             batch: batch.clone(),
         }])
-    }
-}
-
-pub(crate) struct IngestionPolicyRegistration {
-    namespace_matches: fn(&str) -> bool,
-    policy: &'static dyn IngestionLayoutPolicy,
-}
-
-impl IngestionPolicyRegistration {
-    pub(crate) const fn new(
-        namespace_matches: fn(&str) -> bool,
-        policy: &'static dyn IngestionLayoutPolicy,
-    ) -> Self {
-        Self {
-            namespace_matches,
-            policy,
-        }
-    }
-}
-
-pub(crate) struct IngestionPolicyRegistry {
-    registrations: &'static [IngestionPolicyRegistration],
-    default_policy: &'static dyn IngestionLayoutPolicy,
-}
-
-impl IngestionPolicyRegistry {
-    pub(crate) const fn new(
-        registrations: &'static [IngestionPolicyRegistration],
-        default_policy: &'static dyn IngestionLayoutPolicy,
-    ) -> Self {
-        Self {
-            registrations,
-            default_policy,
-        }
-    }
-
-    pub(crate) fn route_batch(
-        &self,
-        source: IngestionBatchSource<'_>,
-        batch: &RecordBatch,
-    ) -> Result<Vec<RoutedIngestionBatch>, StatsError> {
-        let policy = self
-            .registrations
-            .iter()
-            .find_map(|registration| {
-                (registration.namespace_matches)(source.namespace()).then_some(registration.policy)
-            })
-            .unwrap_or(self.default_policy);
-        policy.route_batch(source, batch)
     }
 }

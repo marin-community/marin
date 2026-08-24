@@ -17,7 +17,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Snapshot legacy telemetry and stage physical shards inside the same store.
+    /// Snapshot root telemetry and stage physical shards inside the same store.
     PrepareTelemetryV1 {
         /// Finelog store containing the catalog and namespace directories.
         #[arg(long)]
@@ -33,7 +33,7 @@ enum Command {
         #[arg(long, default_value_t = DEFAULT_BATCH_ROWS)]
         batch_rows: usize,
     },
-    /// Remove legacy namespaces after queries use semantic names. Finelog must be stopped.
+    /// Remove the root namespace after queries use semantic names. Finelog must be stopped.
     RetireTelemetryV1 {
         #[arg(long)]
         store_dir: PathBuf,

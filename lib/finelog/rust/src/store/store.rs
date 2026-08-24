@@ -22,10 +22,8 @@ use arrow::record_batch::RecordBatch;
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
-use crate::ingestion::route_ingestion_batch;
-use crate::ingestion_policy::{
-    IngestionBatchSource, IngestionLayoutPolicy, IDENTITY_LAYOUT_POLICY,
-};
+use crate::ingestion_policy::{IngestionBatchSource, IngestionPolicy, IDENTITY_INGESTION_POLICY};
+use crate::policies::route_ingestion_batch;
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -594,7 +592,7 @@ impl Store {
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
         let mut routed =
-            IDENTITY_LAYOUT_POLICY.route_batch(IngestionBatchSource::Declared(name), &batch)?;
+            IDENTITY_INGESTION_POLICY.route_batch(IngestionBatchSource::Declared(name), &batch)?;
         let partition = routed
             .pop()
             .expect("identity ingestion policy returns one partition");
@@ -690,7 +688,7 @@ impl Store {
                     tracing::warn!(
                         storage_namespace = ns.name,
                         logical_namespace,
-                        "excluding incompatible legacy telemetry shard from semantic query alias"
+                        "excluding incompatible physical telemetry shard from semantic query alias"
                     );
                     continue;
                 }

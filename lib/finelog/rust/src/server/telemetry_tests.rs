@@ -19,7 +19,6 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
 use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
-use crate::server::telemetry::normalize_test_batch;
 use crate::server::test_support::{disk_store, serve, PUB_A};
 use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
@@ -752,32 +751,6 @@ async fn semantic_namespace_routes_to_server_owned_storage() {
     .await;
     assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
 
-    let legacy_batch_id = "16327be0-1282-4443-86bd-b3af0f6d4d9e";
-    let legacy_ipc = normalize_test_batch(
-        legacy_batch_id,
-        &batch_in_namespace(legacy_batch_id, "telemetry_v1.levanter"),
-    );
-    store
-        .write_forwarded_telemetry_rows("telemetry_v1.levanter.priority", &legacy_ipc, "marin")
-        .unwrap();
-    store
-        .await_persisted(
-            "telemetry_storage_v1.levanter.detail",
-            3,
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
-    let combined = query(
-        &store,
-        "SELECT name FROM \"telemetry_v1.levanter\" ORDER BY batch_id, record_index",
-    )
-    .await;
-    assert_eq!(
-        combined.iter().map(|batch| batch.num_rows()).sum::<usize>(),
-        4
-    );
-
     assert!(store.get_table_schema("telemetry_v1").is_err());
 }
 
@@ -819,7 +792,7 @@ async fn client_defined_semantic_namespace_uses_default_storage() {
 }
 
 #[tokio::test]
-async fn invalid_incompatible_and_deprecated_client_namespaces_are_rejected() {
+async fn invalid_and_incompatible_client_namespaces_are_rejected() {
     let store = disk_store("telemetry-client-namespace-rejection");
     store
         .register_table(
@@ -846,10 +819,6 @@ async fn invalid_incompatible_and_deprecated_client_namespaces_are_rejected() {
         (
             "13ab225e-2bb9-4e96-a312-21cdaff3f139",
             "telemetry_v1.bad_schema",
-        ),
-        (
-            "f7b18004-c423-45db-9b14-9d881117e9de",
-            "telemetry_v1.levanter.priority",
         ),
     ] {
         let response = post(

@@ -154,12 +154,11 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-Finelog routes complete ingestion batches through an `IngestionLayoutPolicy`
-registry. The default identity policy applies to every schema: its logical and
-physical namespaces are the requested table and its batch is unchanged.
-Telemetry is the first registered non-identity policy. This keeps physical
-partitioning opt-in while giving future schemas the same logical/physical
-layout seam without changing their ingestion API.
+`policies.rs` holds ordered matcher lists for programmable ingestion and
+storage policies. The first matching rule wins. The ingestion fallback is
+identity: the logical and physical namespaces remain the requested table and
+the batch is unchanged. The storage fallback inherits the cluster defaults.
+Telemetry is the first policy registered in both lists.
 
 Rigging writers send a semantic stream name. For example,
 `telemetry.writer("levanter").scalar("train_loss")` writes the
@@ -181,8 +180,9 @@ than entering a catch-all namespace. The policy accepts the complete Arrow
 record batch and returns partitions containing the logical namespace, physical
 storage namespace, and rows. HTTP ingestion, forwarding, and migration do not
 pre-extract their own routing keys. A forwarded physical namespace is
-preserved, while a forwarded root or superseded semantic namespace is
-classified row by row.
+preserved, while the production root `telemetry_v1` is classified row by row.
+Valid dotted semantic namespaces are ordinary client-selected scopes; Finelog
+does not reserve names from earlier design iterations.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -200,9 +200,9 @@ GiB, Levanter detail has 10 GiB, node-agent telemetry has 15 GiB, Iris RPC has
 1 GiB, and vLLM has 2 GiB. These server-owned shards total 50 GiB. Changing an
 allocation or routing rule does not change a writer or query namespace.
 
-### Migrate the legacy telemetry hot set
+### Migrate the root telemetry hot set
 
-`finelog-migrate` rewrites the legacy hot set inside the existing hub store. It
+`finelog-migrate` rewrites the `telemetry_v1` hot set inside the existing hub store. It
 uses the same full-batch layout policy as HTTP ingestion and forwarding. Deploy that
 policy to the whole Finelog fleet first: recognized old clients and forwarding
 backlogs then stop adding root rows even before those clients send semantic
@@ -211,7 +211,7 @@ names themselves.
 The migrator rejects stores with forwarding cursors, so run it on the `marin`
 or `marin-dev` hub, not a `cw-*` sender. Preparation may run while Finelog is
 serving. It takes a consistent SQLite snapshot and hard-links exactly the local
-legacy Parquets named by that catalog under
+root Parquets named by that catalog under
 `.finelog-telemetry-v1-migration/source`. If compaction removes one during the
 snapshot, preparation retries from a newer catalog. Rewritten Parquets land
 under `.finelog-telemetry-v1-migration/staged` with a negative `seq` range
@@ -237,8 +237,8 @@ finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
 Publish hard-links the staged Parquets into their physical namespace directories
-and replaces a catalog derived from the latest live catalog. It leaves every
-legacy namespace queryable. Old root-only queries and new semantic-only queries
+and replaces a catalog derived from the latest live catalog. It leaves the
+root namespace queryable. Old root-only queries and new semantic-only queries
 therefore each see one copy of the rows; a root-plus-semantic union would count
 them twice. Deploy the semantic-only Grafana and Iris queries after publish.
 
@@ -248,8 +248,8 @@ Once those queries are live, stop Finelog for the second short cutover:
 finelog-migrate retire-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
-Retirement moves legacy local files into the migration rollback directory and
-replaces the catalog again, removing the old namespaces and their remote-only
+Retirement moves root local files into the migration rollback directory and
+replaces the catalog again, removing the old namespace and its remote-only
 catalog rows. A restart does not recreate the root. The pre-cutover catalogs
 stay under the `rollback` subdirectory; the hard-linked source snapshot stays
 under `source`. Keep the migration directory until the new layout has passed
@@ -483,7 +483,7 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-The legacy table and each internal storage shard are registered on boot. When the
+The existing root table and each internal storage shard are registered on boot. When the
 binary's schema and a catalog entry disagree in a way no merge can reconcile
 (a column type change), writes to that namespace return 400 until one of them
 changes, across restarts.
