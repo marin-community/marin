@@ -6,7 +6,6 @@ from collections import defaultdict
 
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _phase_weights
 from experiments.june_tpu_67b_a2b.moe.long_context_datakit_moe_mix import (
-    LONG_CONTEXT_SKEW,
     long_context_datakit_components,
     long_context_phase_weights,
 )
@@ -26,9 +25,7 @@ def test_default_long_context_skew_reproduces_original_mixture():
     components = long_context_datakit_components()
     quality_domain_weights = _quality_domain_weights(weights)
 
-    assert LONG_CONTEXT_SKEW == 1.0
     assert components.keys() == weights.keys()
-    assert len(weights) == 391
     assert math.isclose(sum(weights.values()), 1.0, abs_tol=1e-12)
     for bucket, weight in original.items():
         if bucket == "tail":

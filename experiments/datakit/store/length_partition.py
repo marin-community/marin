@@ -28,31 +28,17 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, format_shard_path
 
 from experiments.datakit.store.bucket_writer import write_bucket_cache
+from experiments.datakit.store.datakit_store import BucketCacheStats, ClusteredStoreData
 
 DOCUMENT_LENGTH_THRESHOLD = 65_536
 READ_CHUNK_ELEMENTS = 16 * 1024 * 1024
 SOURCE_STORE_PATH = "gs://marin-us-central2/datakit/store_8ac06c74"
-EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
+INPUT_IDS = "input_ids"
 
 
 class DocumentLengthBucket(StrEnum):
     LTE_64K = "lte_64k"
     GT_64K = "gt_64k"
-
-
-class SourceBucketCacheStats(BaseModel):
-    cluster_id: int
-    quality_bucket: int
-    path: str
-
-
-class SourceClusteredStoreData(BaseModel):
-    cache_path: str
-    cluster_view: int
-    split: str
-    buckets: list[SourceBucketCacheStats]
-    source_names: list[str]
-    tokenizer: str
 
 
 class LengthBucketCacheStats(BaseModel):
@@ -108,8 +94,8 @@ class _WrittenShard:
     tokens: int
 
 
-def _source_leaf_groups(source: SourceClusteredStoreData) -> list[list[_SourceLeaf]]:
-    def bucket_leaves(bucket: SourceBucketCacheStats) -> list[tuple[str, _SourceLeaf]]:
+def _source_leaf_groups(source: ClusteredStoreData) -> list[list[_SourceLeaf]]:
+    def bucket_leaves(bucket: BucketCacheStats) -> list[tuple[str, _SourceLeaf]]:
         ledger = CacheLedger.load(bucket.path)
         if ledger.layout != "sharded":
             return [(bucket.path, _SourceLeaf(bucket.cluster_id, bucket.quality_bucket, bucket.path))]
@@ -152,8 +138,8 @@ def _partition_leaf(
     total_tasks: int,
     attempt: str,
 ) -> list[_WrittenShard]:
-    cache = TreeCache.load(leaf.path, EXEMPLAR)
-    input_ids = cache.jagged_array_tree()["input_ids"]
+    cache = TreeCache.load(leaf.path, {INPUT_IDS: np.array([0], dtype=np.int32)})
+    input_ids = cache.jagged_array_tree()[INPUT_IDS]
     ends = np.asarray(input_ids.offsets[1 : len(cache) + 1].read().result(), dtype=np.int64)
     starts = np.empty_like(ends)
     starts[0] = 0
@@ -187,7 +173,7 @@ def _partition_leaf(
                 length_bucket=length_bucket,
                 path=cache_path,
                 rows=ledger.total_num_rows,
-                tokens=ledger.field_counts["input_ids"],
+                tokens=ledger.field_counts[INPUT_IDS],
             )
         )
     return written
@@ -267,7 +253,7 @@ def _merge_buckets(shards: list[_WrittenShard], output_path: str) -> list[Length
             )
             for shard in bucket_shards
         ]
-        field_counts = [{"input_ids": shard.tokens} for shard in bucket_shards]
+        field_counts = [{INPUT_IDS: shard.tokens} for shard in bucket_shards]
         ledger = _merge_sharded_ledgers(bucket_root, paths, ledgers, field_counts, metadata)
         buckets.append(
             LengthBucketCacheStats(
@@ -276,7 +262,7 @@ def _merge_buckets(shards: list[_WrittenShard], output_path: str) -> list[Length
                 length_bucket=length_bucket,
                 path=bucket_root,
                 total_elements=ledger.total_num_rows,
-                total_tokens=ledger.field_counts["input_ids"],
+                total_tokens=ledger.field_counts[INPUT_IDS],
                 n_shards=len(bucket_shards),
             )
         )
@@ -284,7 +270,7 @@ def _merge_buckets(shards: list[_WrittenShard], output_path: str) -> list[Length
 
 
 def partition_store_by_length(config: LengthPartitionConfig) -> LengthPartitionedStoreData:
-    source = read_artifact(config.source_path, SourceClusteredStoreData)
+    source = read_artifact(config.source_path, ClusteredStoreData)
     leaf_groups = _source_leaf_groups(source)
     tasks = [
         _PartitionTask(leaves=leaves, task=task, total_tasks=len(leaf_groups)) for task, leaves in enumerate(leaf_groups)

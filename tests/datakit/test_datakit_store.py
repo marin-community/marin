@@ -36,6 +36,7 @@ from experiments.datakit.cluster.quality.fast_transformer.artifact import Qualit
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
+    BucketCacheStats,
     ClusteredStoreData,
     _iter_tokenized_documents,
     build_clustered_store,
@@ -44,8 +45,6 @@ from experiments.datakit.store.length_partition import (
     DOCUMENT_LENGTH_THRESHOLD,
     DocumentLengthBucket,
     LengthPartitionConfig,
-    SourceBucketCacheStats,
-    SourceClusteredStoreData,
     partition_store_by_length,
 )
 
@@ -531,13 +530,24 @@ def test_length_partition_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
         CacheMetadata.empty(),
     )
     write_artifact(
-        SourceClusteredStoreData(
+        ClusteredStoreData(
             cache_path=source_path,
             cluster_view=40,
+            bucket_edges=[],
             split="train",
-            buckets=[SourceBucketCacheStats(cluster_id=3, quality_bucket=2, path=bucket_path)],
+            buckets=[
+                BucketCacheStats(
+                    cluster_id=3,
+                    quality_bucket=2,
+                    path=bucket_path,
+                    total_elements=len(documents),
+                    total_tokens=sum(map(len, documents)),
+                    n_shards=1,
+                )
+            ],
             source_names=["source"],
             tokenizer="tokenizer",
+            counters={},
         ),
         source_path,
     )

@@ -1,20 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Long-context-skewed second-phase mixture for the June TPU 67B store."""
+"""Configurable long-context weighting for the June TPU 67B second phase."""
 
 import math
 
 from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.formats import TextLmDatasetFormat
+from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.store.length_partition import DocumentLengthBucket
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 
 LONG_CONTEXT_STORE_PREFIX = "datakit/store/june-67b-a2b-length64k/2026.08.24"
 LONG_CONTEXT_SKEW = 1.0
 
-_LTE_64K = "lte_64k"
-_GT_64K = "gt_64k"
 _BUCKET_LENGTH_TOKENS: tuple[tuple[str, int, int], ...] = (
     ("c00q0", 46_647_598, 42_509_355),
     ("c00q1", 6_618_196, 14_777_397),
@@ -237,7 +237,10 @@ def _component_name(bucket: str, length_bucket: str) -> str:
 def _bucket_component(bucket: str, length_bucket: str) -> DatasetComponent:
     cluster = int(bucket[1:3])
     quality = int(bucket[-1])
-    cache_dir = f"{LONG_CONTEXT_STORE_PREFIX}/cluster={cluster}/quality={quality}/length={length_bucket}"
+    cache_dir = prefix_join(
+        LONG_CONTEXT_STORE_PREFIX,
+        f"cluster={cluster}/quality={quality}/length={length_bucket}",
+    )
     return DatasetComponent(
         source=None,
         cache_dir=cache_dir,
@@ -257,9 +260,11 @@ def long_context_phase_weights(skew: float = LONG_CONTEXT_SKEW) -> dict[str, flo
     for bucket, short_tokens, long_tokens in _BUCKET_LENGTH_TOKENS:
         bucket_weight = quality_domain_weights[bucket]
         skewed_tokens = short_tokens + skew * long_tokens
-        weights[_component_name(bucket, _LTE_64K)] = bucket_weight * short_tokens / skewed_tokens
+        weights[_component_name(bucket, DocumentLengthBucket.LTE_64K)] = bucket_weight * short_tokens / skewed_tokens
         if long_tokens:
-            weights[_component_name(bucket, _GT_64K)] = bucket_weight * skew * long_tokens / skewed_tokens
+            weights[_component_name(bucket, DocumentLengthBucket.GT_64K)] = (
+                bucket_weight * skew * long_tokens / skewed_tokens
+            )
     return weights
 
 
@@ -267,9 +272,13 @@ def long_context_datakit_components() -> dict[str, DatasetComponent]:
     """Return one component for every populated quality, domain, and length cell."""
     components = {}
     for bucket, _, long_tokens in _BUCKET_LENGTH_TOKENS:
-        components[_component_name(bucket, _LTE_64K)] = _bucket_component(bucket, _LTE_64K)
+        components[_component_name(bucket, DocumentLengthBucket.LTE_64K)] = _bucket_component(
+            bucket, DocumentLengthBucket.LTE_64K
+        )
         if long_tokens:
-            components[_component_name(bucket, _GT_64K)] = _bucket_component(bucket, _GT_64K)
+            components[_component_name(bucket, DocumentLengthBucket.GT_64K)] = _bucket_component(
+                bucket, DocumentLengthBucket.GT_64K
+            )
     return components
 
 
