@@ -11,11 +11,11 @@ author: rjpower
 - Goal: Determine whether generic Iris and Finelog skills improve operational answers, which task-specific skills remain necessary, and promote the smallest supported change.
 - Primary metrics: rubric score across correctness, command/provenance quality, safety, and task completion; skill-trigger and source-selection behavior; answer concision.
 - Constraints: use identical normalized prompts, fresh Luna/medium sessions, no live cluster mutations, no production data changes, and no expected answers or prior conclusions in evaluator prompts.
-- Coordinating issue/PR: https://github.com/marin-community/marin/issues/8634
+- Coordinating issue/PR: https://github.com/marin-community/marin/issues/8634 and https://github.com/marin-community/marin/pull/8636
 
 ## Current TL;DR
 
-The first blinded Luna/medium pass scored the current layout 75/80, the layered generic layout 79/80, and the generic replacement layout 79/80. Both generic layouts produced the exact regional/hub log comparison and avoided asserting remembered schema columns; the current layout missed those two requirements. The refined candidate keeps cross-domain and mutation-specific workflows, replaces only `query-inference-metrics`, and adds explicit federation/schema guardrails for a baseline-versus-candidate follow-up.
+The refined generic layout is promoted in PR #8636. The first blinded Luna/medium pass scored current 75/80 and both generic layouts 79/80. A fresh replication scored refined 99/100 and current 94/100, with refined at 20/20 on two held-out cases. The change adds `use-iris` and `query-finelog`, folds vLLM semantics into a focused reference, removes `query-inference-metrics`, and retains cross-domain and stateful workflow skills.
 
 ## Baseline
 
@@ -28,9 +28,6 @@ The first blinded Luna/medium pass scored the current layout 75/80, the layered 
 
 ### Active
 
-- `ISG-001`: A concise `use-iris` navigator improves cross-cutting job and federation answers because it routes agents to authoritative operational references. Evidence: first-pass layered and replacement scores of 79/80 versus 75/80 current. Next test: baseline-versus-refined replication with a federation-route held-out case.
-- `ISG-002`: A generic `query-finelog` skill improves non-vLLM telemetry questions without reducing vLLM counter correctness. Evidence: both generic layouts scored 10/10 on schema discovery and cumulative-counter cases; current scored 8/10 on schema discovery. Next test: held-out native-delta versus imported-cumulative semantics.
-- `ISG-003`: Mutation-specific skills remain necessary for monitoring, controller rollout, and destructive recovery because their authorization and persistence contracts are task-specific. Evidence: repository validation and direct links require the monitoring, rollout, profiling, and recovery skills; all layouts scored 10/10 on their safety cases. Next test: retain them in the refined candidate.
 
 ### Blocked
 
@@ -40,6 +37,21 @@ The first blinded Luna/medium pass scored the current layout 75/80, the layered 
 
 ### Promoted
 
+- `ISG-001`: Add a concise `use-iris` navigator. Decision: PR #8636; first pass 79/80 versus 75/80 and replication 99/100 versus 94/100.
+- `ISG-002`: Replace `query-inference-metrics` with generic `query-finelog` plus a vLLM reference. Decision: PR #8636; refined scored 10/10 on both repeated counter cases and the held-out native-versus-imported temporality case.
+- `ISG-003`: Retain stateful and cross-domain workflow skills. Decision: PR #8636 keeps monitoring, rollout, profiling, reservation, recovery, and `debug` separate.
+
+## Decision Log
+
+- 2026-08-24: Promote the refined layered layout in PR #8636.
+- 2026-08-24: Remove only `query-inference-metrics`; its vLLM knowledge moves under `query-finelog/references/vllm.md`.
+- 2026-08-24: Retain `debug` because it owns code, JAX, Zephyr, TPU, and incident-record behavior outside generic Iris operation.
+- 2026-08-24: Retain mutation and persistence workflows because they encode authorization, duration, state, and rollback contracts.
+
+## Negative Results Index
+
+- Wholesale removal of task-specific Iris workflows failed repository skill-metadata validation because manuals and other workflows link to them. It also offered no answer-quality gain over the layered layout in the first pass.
+- The current layout found the broad operational manuals but substituted task telemetry for exact log-key forwarding diagnosis and asserted remembered schema columns in the first pass.
 
 ## Background Research Brief
 
@@ -143,3 +155,13 @@ Answer sessions: `rqqbybme` (current), `ejqnahan` (layered), `2jy1pwd4` (replace
 - Result: Current 75/80; layered 79/80; replacement 79/80. All safety, federation placement, vLLM counter, telemetry-reset, and babysitting cases scored 10/10. Current lost two points for substituting `iris.task` telemetry for the exact attempt-suffixed regional/hub `log` comparison and two for asserting schema columns before discovery. Both generic layouts lost one command/provenance point on the pending-federation triad.
 - Interpretation: Generic navigation improved source selection. The equal layered/replacement result does not support deleting the cross-domain `debug` skill: babysitting and Zephyr workflows refer to it, and it owns incident/Echo behavior outside Iris. Retain mutation/persistence and cross-domain workflows; replace only the duplicated vLLM query skill.
 - Next action: Refine `use-iris` to require the complete parent-side triad, strengthen the no-guessed-schema rule, and forward-test commit `ad8fd7d572` against current on the original cases plus two held-out cases.
+
+### 2026-08-24 20:36 UTC - ISG-002 held-out replication and promotion
+
+- Hypothesis: The refined layered layout improves federation and Finelog source selection on repeated and unseen cases while preserving narrow workflow safety.
+- Commit Hash: current `1936313ac7`; refined evaluation `ad8fd7d572`; production `9002b574d5`; benchmark `eb93433dcf`.
+- Command: `loom launch --model gpt-5.6-luna --effort medium --mode plan <ten-case prompt>` in fresh current and refined worktrees; blind grading with a third Luna/medium session.
+- Config: Eight repeated cases plus held-out native-delta/imported-cumulative telemetry and direct-versus-federation-route cases; randomized grader labels P=current, Q=refined; no live operations.
+- Result: Refined 99/100 versus current 94/100. Refined repeated cases scored 79/80 and held-out cases 20/20. Its only deduction was conservative wording in the babysitting answer: it omitted the narrow small-code-error repair allowance and did not explicitly recognize the current thread's recovery authorization. Current lost points on the pending-job command set, hub/origin identity, recovery boundaries, and HTTP-layer interpretation.
+- Interpretation: The improvement replicated and generalized to both held-out cases. The remaining refined miss belongs to `babysit-job`, which this change intentionally retains; broadening `use-iris` with that exception would duplicate a stateful workflow.
+- Next action: Promote production commit `9002b574d5` in PR #8636, update issue #8634, and monitor the PR.
