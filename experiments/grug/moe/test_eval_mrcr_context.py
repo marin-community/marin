@@ -94,6 +94,20 @@ def test_smoke_builder_exposes_four_independent_cells_with_validation_dependenci
     assert all(len(step.config.evaluation.dataset_manifest_paths) == 3 for step in steps)
 
 
+def test_v4_32_smoke_builder_uses_full_data_sharding_and_distinct_outputs():
+    steps = build_default_steps("smoke", tpu_variant="v4-32")
+
+    assert len(steps) == 4
+    assert all(step.config.resources.value.device.variant == "v4-32" for step in steps)
+    assert all(step.config.evaluation.runtime.value.eval_batch_size == 16 for step in steps)
+    assert all(step.config.evaluation.runtime.value.data_axis_size == 16 for step in steps)
+    assert all(step.config.evaluation.runtime.value.context_axis_size == 1 for step in steps)
+    assert all(step.name.endswith("-v432") for step in steps)
+
+    with pytest.raises(ValueError, match="bounded smoke"):
+        build_default_steps("primary", tpu_variant="v4-32")
+
+
 def test_summary_computes_adaptation_arm_qk_and_difference_in_differences(tmp_path: Path):
     artifacts = (
         _artifact(tmp_path, "step-156000-source-qk157", MrcrPromptVariant.TWO_SHOT, (0.0, 0.0)),

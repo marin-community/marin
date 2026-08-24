@@ -126,7 +126,7 @@ SENSITIVITY_EVALUATION_KEYS = tuple(
     for variant in MrcrPromptVariant
 )
 SMOKE_CONTEXT_CAPS = SENSITIVITY_CONTEXT_CAPS
-EVALUATION_RESOURCES = ResourceConfig.with_tpu("v4-2048", preemptible=False)
+DEFAULT_TPU_VARIANT = "v4-2048"
 CANONICAL_CONTEXT_MODEL = QK175_TRAINING_STEP.config.model.value
 SOURCE_CHECKPOINT = InputName.hardcoded(
     "grug/moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step141k-a30ef8/checkpoints/step-156000"
@@ -198,6 +198,26 @@ class _MrcrDispatchStepConfig:
     resources: ResourceConfig
 
 
+@dataclass(frozen=True)
+class _MrcrEvaluationShape:
+    tpu_variant: str
+    eval_batch_size: int
+    data_axis_size: int
+    context_axis_size: int
+
+    @property
+    def resources(self) -> ResourceConfig:
+        return ResourceConfig.with_tpu(self.tpu_variant, preemptible=False)
+
+
+def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
+    if tpu_variant == DEFAULT_TPU_VARIANT:
+        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=256, data_axis_size=256, context_axis_size=4)
+    if tpu_variant == "v4-32":
+        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=16, data_axis_size=16, context_axis_size=1)
+    raise ValueError(f"Unsupported MRCR evaluation TPU shape: {tpu_variant}")
+
+
 def _dispatch_evaluation(config: _MrcrDispatchStepConfig) -> None:
     dispatch_grug_checkpoint_eval(config.evaluation, resources=config.resources)
 
@@ -236,11 +256,13 @@ def build_evaluation_steps(
     *,
     bundle: MrcrDatasetBundle,
     checkpoint_paths: dict[str, InputName],
+    tpu_variant: str = DEFAULT_TPU_VARIANT,
     bootstrap_samples: int = MRCR_BOOTSTRAP_SAMPLES,
     bootstrap_seed: int = 0,
 ) -> tuple[ExecutorStep[_MrcrDispatchStepConfig], ...]:
     """Materialize one current-executor step for every requested matrix cell."""
 
+    shape = _evaluation_shape(tpu_variant)
     steps: list[ExecutorStep[_MrcrDispatchStepConfig]] = []
     for cell in cells:
         checkpoint_path = checkpoint_paths.get(cell.package.name)
@@ -255,8 +277,10 @@ def build_evaluation_steps(
             max_seq_len=cell.context_cap,
             qk_mult=cell.package.qk_mult,
         )
+        resource_suffix = "" if tpu_variant == DEFAULT_TPU_VARIANT else f"-{tpu_variant.replace('-', '')}"
+        run_id = f"{cell.run_id}{resource_suffix}"
         evaluation = GrugCheckpointEvalConfig(
-            run_id=cell.run_id,
+            run_id=run_id,
             checkpoint_path=checkpoint_path,  # type: ignore[arg-type]
             context_cap=cell.context_cap,
             prompt_variant=cell.prompt_variant,
@@ -270,10 +294,13 @@ def build_evaluation_steps(
                     mp="params=float32,compute=bfloat16,output=bfloat16",
                     tracker=WandbConfig(
                         project="marin_moe",
-                        tags=["mrcr", "base_eval", "paired_likelihood"],
+                        tags=["mrcr", "base_eval", "paired_likelihood", tpu_variant.replace("-", "_")],
                         group="mrcr-67b-base-context-eval",
-                        name=cell.run_id,
+                        name=run_id,
                     ),
+                    eval_batch_size=shape.eval_batch_size,
+                    data_axis_size=shape.data_axis_size,
+                    context_axis_size=shape.context_axis_size,
                 )
             ),  # type: ignore[arg-type]
             output_path=this_output_path(),  # type: ignore[arg-type]
@@ -282,21 +309,30 @@ def build_evaluation_steps(
         )
         steps.append(
             ExecutorStep(
-                name=f"eval/mrcr/{cell.package.name}/{cell.prompt_variant}/cap-{cell.context_cap}",
+                name=(f"eval/mrcr/{cell.package.name}/{cell.prompt_variant}/cap-{cell.context_cap}{resource_suffix}"),
                 fn=_dispatch_evaluation,
-                config=_MrcrDispatchStepConfig(evaluation=evaluation, resources=versioned(EVALUATION_RESOURCES)),
+                config=_MrcrDispatchStepConfig(evaluation=evaluation, resources=versioned(shape.resources)),
             )
         )
     return tuple(steps)
 
 
-def build_default_steps(selection: str) -> tuple[ExecutorStep[_MrcrDispatchStepConfig], ...]:
+def build_default_steps(
+    selection: str, *, tpu_variant: str = DEFAULT_TPU_VARIANT
+) -> tuple[ExecutorStep[_MrcrDispatchStepConfig], ...]:
     """Build the selected checked-in matrix without submitting any other cells."""
 
     cells = evaluation_cells(selection)
+    if tpu_variant != DEFAULT_TPU_VARIANT and selection != "smoke":
+        raise ValueError("Noncanonical TPU shapes are limited to the bounded smoke selection")
     variants = tuple(dict.fromkeys(cell.prompt_variant for cell in cells))
     bundle = mrcr_datasets(prompt_variants=variants)
-    return build_evaluation_steps(cells, bundle=bundle, checkpoint_paths=default_checkpoint_paths())
+    return build_evaluation_steps(
+        cells,
+        bundle=bundle,
+        checkpoint_paths=default_checkpoint_paths(),
+        tpu_variant=tpu_variant,
+    )
 
 
 def expected_evaluations_for_stage(summary_stage: str) -> tuple[MrcrEvaluationKey, ...]:
@@ -696,8 +732,12 @@ if __name__ == "__main__":
             "Set MRCR_MATRIX_SELECTION explicitly to smoke, primary, sensitivity, or complete; "
             "the launcher does not default to an expensive matrix"
         )
-    selected_steps = build_default_steps(selection)
+    tpu_variant = os.environ.get("MRCR_EVAL_TPU", DEFAULT_TPU_VARIANT)
+    selected_steps = build_default_steps(selection, tpu_variant=tpu_variant)
     executor_main(
         steps=list(selected_steps),
-        description=f"Paired MRCR base-checkpoint likelihood evaluation ({selection}, {len(selected_steps)} cells).",
+        description=(
+            f"Paired MRCR base-checkpoint likelihood evaluation "
+            f"({selection}, {len(selected_steps)} cells, {tpu_variant})."
+        ),
     )
