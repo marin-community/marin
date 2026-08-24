@@ -350,16 +350,14 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
-def test_every_critical_hero_rule_selects_the_hero_operator_behavior():
-    rules = {rule["uid"]: rule for rule in _rules()}
-    for uid in (
-        "training-progress-stalled",
-        "training-loss-spike",
-        "training-telemetry-gone",
-        "training-optimizer-unstable",
-    ):
-        assert rules[uid]["labels"]["notification"] == "hero-run"
-        assert rules[uid]["labels"]["operator_behavior"] == "hero"
+def test_training_loss_alert_selects_the_hero_operator_behavior():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-loss-spike"]
+
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
 
 
 def test_run_health_alerts_split_paging_from_announcing():

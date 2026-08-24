@@ -76,7 +76,7 @@ class OperatorBehavior:
     session_title: str
     operator_name: str
     instructions: str = ""
-    context: OperatorContextFactory | None = None
+    context_factory: OperatorContextFactory | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -420,11 +420,11 @@ class LoomAlertClient:
         self, behavior: OperatorBehavior, firing: list[Mapping[str, object]]
     ) -> Mapping[str, object] | None:
         """Collect advisory evidence without making alert delivery depend on it."""
-        if behavior.context is None:
+        if behavior.context_factory is None:
             return None
         try:
             async with asyncio.timeout(OPERATOR_CONTEXT_TIMEOUT):
-                return await behavior.context(firing)
+                return await behavior.context_factory(firing)
         except Exception as err:
             logger.exception("%s operator context collection failed", behavior.name)
             return {

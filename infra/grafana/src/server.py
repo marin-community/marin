@@ -886,7 +886,7 @@ def main() -> None:
                     session_title="Hero run operator",
                     operator_name="Marin hero-run operator",
                     instructions=HERO_OPERATOR_INSTRUCTIONS,
-                    context=hero_context.assemble,
+                    context_factory=hero_context.assemble,
                 ),
             ),
         )

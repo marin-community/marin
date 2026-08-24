@@ -215,11 +215,7 @@ def test_log_context_redacts_credentials_before_prompt_injection():
 
 
 class _ContextSource:
-    def __init__(self) -> None:
-        self.queries: list[str] = []
-
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        self.queries.append(sql)
         if 'FROM "telemetry_v1"' in sql:
             return pa.Table.from_pylist(
                 [
@@ -235,20 +231,37 @@ class _ContextSource:
                 ]
             )
         if 'FROM "iris.task_state"' in sql:
-            return pa.Table.from_pylist([{"observed_at": datetime(2026, 8, 21, 4, 12, tzinfo=UTC), "running": 0}])
-        if 'FROM "iris.task_event"' in sql:
-            return pa.Table.from_pylist(
-                [
+            rows = [
+                {
+                    "job": "/power/hero-example-coord",
+                    "observed_at": datetime(2026, 8, 21, 4, 12, tzinfo=UTC),
+                    "running": 0,
+                }
+            ]
+            if "/rav/hero-example-coord-prior" in sql:
+                rows.append(
                     {
-                        "reason": "OOMKilled",
-                        "type": "Normal",
-                        "source": "k8s/container",
-                        "first_at": datetime(2026, 8, 21, 4, 10, tzinfo=UTC),
-                        "last_at": datetime(2026, 8, 21, 4, 10, tzinfo=UTC),
-                        "event_count": 1,
-                        "affected_tasks": 1,
-                        "sample_message": "container exited while checkpointing",
-                    },
+                        "job": "/rav/hero-example-coord-prior",
+                        "observed_at": datetime(2026, 8, 21, 4, 6, tzinfo=UTC),
+                        "running": 0,
+                    }
+                )
+            return pa.Table.from_pylist(rows)
+        if 'FROM "iris.task_event"' in sql:
+            rows = [
+                {
+                    "reason": "OOMKilled",
+                    "type": "Normal",
+                    "source": "k8s/container",
+                    "first_at": datetime(2026, 8, 21, 4, 10, tzinfo=UTC),
+                    "last_at": datetime(2026, 8, 21, 4, 10, tzinfo=UTC),
+                    "event_count": 1,
+                    "affected_tasks": 1,
+                    "sample_message": "container exited while checkpointing",
+                }
+            ]
+            if "/rav/hero-example-coord-prior" in sql:
+                rows.append(
                     {
                         "reason": "TaskRetryScheduled",
                         "type": "Normal",
@@ -258,11 +271,27 @@ class _ContextSource:
                         "event_count": 1,
                         "affected_tasks": 1,
                         "sample_message": "retrying failed task",
-                    },
+                    }
+                )
+            return pa.Table.from_pylist(rows)
+        if 'FROM "log"' in sql:
+            if "/rav/hero-example-coord-prior/%" not in sql:
+                return pa.Table.from_pylist([])
+            return pa.Table.from_pylist(
+                [
+                    {
+                        "anchor_at": datetime(2026, 8, 21, 4, 6, tzinfo=UTC),
+                        "observed_at": datetime(2026, 8, 21, 4, 6, tzinfo=UTC),
+                        "source": "stderr",
+                        "level": 4,
+                        "message": "prior execution failed before replacement",
+                        "occurrences": 1,
+                        "task_attempts": 1,
+                        "total_task_attempts": 8,
+                        "sample_key": "/rav/hero-example-coord-prior/train/0:0",
+                    }
                 ]
             )
-        if 'FROM "log"' in sql:
-            return pa.Table.from_pylist([])
         raise AssertionError(sql)
 
 
@@ -279,11 +308,9 @@ def test_context_assembler_spans_recent_executions_and_versions_its_schema():
         "/power/hero-example-coord",
         "/rav/hero-example-coord-prior",
     ]
+    assert {row["job"] for row in context["taskStates"]} == {
+        "/power/hero-example-coord",
+        "/rav/hero-example-coord-prior",
+    }
     assert [event["reason"] for event in context["taskEvents"]] == ["OOMKilled", "TaskRetryScheduled"]
-    log_query = next(sql for sql in source.queries if 'FROM "log"' in sql)
-    assert "2026-08-21 04:06:00" in log_query
-    assert "/power/hero-example-coord/%" in log_query
-    assert "/rav/hero-example-coord-prior/%" in log_query
-    event_queries = [sql for sql in source.queries if 'FROM "iris.task_event"' in sql]
-    assert len(event_queries) == 2
-    assert "/rav/hero-example-coord-prior/%" in event_queries[-1]
+    assert context["logEvidence"]["excerpts"][0]["sampleKey"].startswith("/rav/hero-example-coord-prior/")

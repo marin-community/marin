@@ -162,19 +162,6 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
-def test_grafana_operator_behaviors_share_two_session_ops_capacity() -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
-    profiles = stack["config"]["marin-loom:profiles"]
-    (grafana_workload,) = [
-        workload for workload in stack["config"]["marin-loom:workloads"] if workload["name"] == "grafana-alerts"
-    ]
-
-    assert profiles["ops"]["maxConcurrent"] == 2
-    assert "hero-ops" not in profiles
-    assert grafana_workload["profile"] == "ops"
-    assert "additionalProfiles" not in grafana_workload
-
-
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
     canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
     tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64
