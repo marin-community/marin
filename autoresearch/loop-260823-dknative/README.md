@@ -74,3 +74,18 @@ The cross-branch "drift" investigation (dkn-05..09 + replay) concluded: no code 
 all — lib-swap hybrid null, siblings null, wheel vintage null, epoch null; every delta was
 the splits default. dkn-10 first attempt crashed on a mis-submitted bisect tree (pyc-blocked
 checkout); resubmitted clean as dkn-10b.
+
+## Standalone microbench validation (2026-08-24, `ragged_a2a_bench.py`)
+
+64 ranks (16 nodes x GB200x4, one NVL72 domain), 3.2 GB per rank per call, 30 updates/peer,
+6144-wide bf16 rows, output buffer donated (ping-pong):
+- one-shot (kmax128 wheel):        7.56 ms  (424 GB/s)   1.00x
+- device kernel, stock grid:      22.61 ms  (142 GB/s)   2.99x
+- device kernel, g8x128 grid:     12.18 ms  (263 GB/s)   1.61x
+Training-trace kernel-only ratios were 3.44x and 1.84x — same ordering and magnitude (wall
+time shared across cells compresses the ratios slightly). VALIDATED as a faithful repro.
+4-GPU sanity runs show the ranking INVERTS at small world size (one-shot 13.9 ms vs dk
+6.3-6.9 ms) — the one-shot advantage is a large-NVLink-domain effect.
+Jobs: ra2a-mw-bench64b-{oneshot,dkstock,dkg8x}-20260824; 4-GPU: ra2a-mw-bench4-*.
+Gotcha: two gang configs cannot share one iris job (the second re-init grabs the dead
+first coordinator endpoint); one config per job.
