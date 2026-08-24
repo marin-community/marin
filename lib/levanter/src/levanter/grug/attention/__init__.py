@@ -15,3 +15,9 @@ from levanter.grug.attention._core import (
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds as fa4_cute_segment_bounds
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
 from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention as gpu_fa4_thd_attention
+
+# ``_te_cp`` stays out of this list: ``attention()`` imports it lazily, and only its config is eager.
+from levanter.grug.attention._te_cp_config import (
+    ContextParallelStrategy as ContextParallelStrategy,
+    TeContextParallelConfig as TeContextParallelConfig,
+)

@@ -16,6 +16,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_ke
 from jax.sharding import NamedSharding
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug.attention._te_cp_config import TeContextParallelConfig
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SplashAttentionMaskSpec,
@@ -32,6 +33,7 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_thd",
+    "gpu_te_cp",
 ]
 
 
@@ -447,7 +449,13 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    te_cp: TeContextParallelConfig | None = None,
 ) -> Float[Array, "B Q Hq D"]:
+    """Run Grug attention through ``implementation``, or the backend default when unset.
+
+    ``te_cp`` configures the ``gpu_te_cp`` context-parallel backend and is required by it;
+    that backend is never selected automatically.
+    """
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     if implementation == "gpu_fa4_cute":
@@ -458,6 +466,12 @@ def attention(
         from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
 
         return gpu_fa4_thd_attention(q, k, v, mask)
+    if implementation == "gpu_te_cp":
+        if te_cp is None:
+            raise ValueError("gpu_te_cp attention requires a TeContextParallelConfig; pass te_cp=...")
+        from levanter.grug.attention._te_cp import gpu_te_cp_attention  # noqa: PLC0415
+
+        return gpu_te_cp_attention(q, k, v, mask, config=te_cp)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")
@@ -476,6 +490,7 @@ __all__ = [
     "AttentionMask",
     "GrugAttentionImplementation",
     "RotaryConfig",
+    "TeContextParallelConfig",
     "align_kv_heads",
     "apply_rotary_embedding",
     "attention",

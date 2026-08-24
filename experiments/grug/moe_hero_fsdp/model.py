@@ -192,6 +192,17 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if self.attention_implementation == "gpu_te_cp":
+            # The layer scan compiles one Block body for every layer and varies the sliding window
+            # through ``fa4_bounds``, because a static AttentionMask field cannot differ per layer.
+            # Transformer Engine's window_size is a static kernel argument, so this variant cannot
+            # hand it the per-layer window at all -- it would silently run every local layer full
+            # causal. Context parallelism here needs a per-window scan split first.
+            raise ValueError(
+                'attention_implementation="gpu_te_cp" is not supported by moe_hero_fsdp: its layer '
+                "scan carries the per-layer sliding window in fa4_bounds, which Transformer Engine "
+                "cannot read as a static window_size."
+            )
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
         if (self.local_kv_heads is None) != (self.global_kv_heads is None):
