@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import threading
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
@@ -14,11 +15,14 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+import tensorstore as ts
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter import tensorstore_serialization
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
@@ -314,6 +318,54 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
         assert gate.peak_bytes == 60
 
     asyncio.run(scenario())
+
+
+def test_serialization_returns_after_staging_before_tensorstore_open_completes(monkeypatch, tmp_path):
+    source = jnp.arange(8, dtype=jnp.float32)
+    open_promise, open_future = ts.Promise.new()
+    commit_promise, commit_future = ts.Promise.new()
+    copy_promise, copy_future = ts.Promise.new()
+    copy_promise.set_result(None)
+    writes = []
+    write_started = threading.Event()
+
+    class FakeStore:
+        def __getitem__(self, index):
+            return self
+
+        def write(self, data, *, can_reference_source_data_indefinitely):
+            writes.append(np.array(data, copy=True))
+            write_started.set()
+            return SimpleNamespace(copy=copy_future, commit=commit_future)
+
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *args, **kwargs: open_future)
+
+    manager = array_ser.GlobalAsyncCheckpointManager()
+    returned = threading.Event()
+    errors = []
+
+    def serialize():
+        try:
+            tree_serialize_leaves_tensorstore(str(tmp_path), {"w": source}, manager=manager)
+        except BaseException as error:
+            errors.append(error)
+        else:
+            returned.set()
+
+    serializer = threading.Thread(target=serialize)
+    serializer.start()
+    try:
+        assert returned.wait(timeout=5), "serialization waited for TensorStore to open after staging"
+    finally:
+        open_promise.set_result(FakeStore())
+        assert write_started.wait(timeout=5)
+        commit_promise.set_result(None)
+        serializer.join(timeout=5)
+        manager.wait_until_finished()
+
+    assert not serializer.is_alive()
+    assert errors == []
+    np.testing.assert_array_equal(writes, [np.asarray(source)])
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
