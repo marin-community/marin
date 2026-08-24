@@ -24,13 +24,18 @@ import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.telemetry.metrics import MetricSnapshotPublisher
+from rigging.telemetry.metrics import RejectOversizedMetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
-from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
+from marin.inference.config import (
+    WORKER_PYTHON_VERSION,
+    InferenceModelConfig,
+    VllmCompilationCacheMode,
+    standard_vllm_metric_families,
+)
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
     current_vllm_gpu_wheel,
@@ -97,7 +102,9 @@ _HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
 _VLLM_METRIC_PREFIX = "vllm:"
-_MAX_VLLM_METRIC_SNAPSHOTS = 1024
+# The complete standard contract is 1,128 samples at the observed ordinary eight-engine
+# cardinality. Keep optional additions bounded by the same post-selection envelope.
+_VLLM_METRIC_SAMPLE_LIMIT_8_ENGINE_ENVELOPE = 2048
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -708,6 +715,7 @@ class VllmEnvironment:
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
         compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
+        metric_families: tuple[str, ...] | None = None,
         wait_for_ready: bool = True,
     ) -> None:
         validate_vllm_mode_env()
@@ -720,6 +728,7 @@ class VllmEnvironment:
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
+        self.metric_families = metric_families or standard_vllm_metric_families()
         self._ready_on_enter = wait_for_ready
 
         self.vllm_server: VllmServerHandle | None = None
@@ -781,6 +790,7 @@ class VllmEnvironment:
                 handle,
                 host=self.host,
                 launcher=self.launcher,
+                metric_families=self.metric_families,
             )
             self.model_id = _get_first_model_id(self.vllm_server.server_url)
         except Exception:
@@ -1087,6 +1097,7 @@ def _configure_vllm_telemetry(
     *,
     host: str,
     launcher: VllmLauncher,
+    metric_families: tuple[str, ...],
 ) -> VllmServerHandle:
     """Attach telemetry collectors after a native vLLM server is ready."""
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
@@ -1101,9 +1112,13 @@ def _configure_vllm_telemetry(
     metrics_collector = PrometheusCollector(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),
-        processor=functools.partial(prefixed_metric_snapshots, metric_prefix=_VLLM_METRIC_PREFIX),
-        publisher=MetricSnapshotPublisher(
-            max_records=_MAX_VLLM_METRIC_SNAPSHOTS,
+        processor=functools.partial(
+            prefixed_metric_snapshots,
+            metric_prefix=_VLLM_METRIC_PREFIX,
+            family_names=frozenset(metric_families),
+        ),
+        publisher=RejectOversizedMetricSnapshotPublisher(
+            max_records=_VLLM_METRIC_SAMPLE_LIMIT_8_ENGINE_ENVELOPE,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),
     )

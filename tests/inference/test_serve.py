@@ -37,6 +37,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
+    standard_vllm_metric_families,
 )
 from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
@@ -375,6 +376,23 @@ def test_local_cli_rejects_backend_specific_flags() -> None:
     assert "--max-seqs" in vllm.output
 
 
+def test_standard_vllm_metric_families_match_the_dashboard_contract() -> None:
+    assert frozenset(standard_vllm_metric_families()) == {
+        "vllm:prompt_tokens",
+        "vllm:generation_tokens",
+        "vllm:num_preemptions",
+        "vllm:request_success",
+        "vllm:num_requests_running",
+        "vllm:num_requests_waiting",
+        "vllm:kv_cache_usage_perc",
+        "vllm:time_to_first_token_seconds",
+        "vllm:request_time_per_output_token_seconds",
+        "vllm:inter_token_latency_seconds",
+        "vllm:request_queue_time_seconds",
+        "vllm:e2e_request_latency_seconds",
+    }
+
+
 def _plan(**overrides):
     args = {
         "backend": "vllm",
@@ -581,6 +599,41 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert result.exit_code == 0, result.output
     mint.assert_not_called()
     assert "Submitted" in result.output
+
+
+def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
+    config = tmp_path / "metrics.toml"
+    config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--vllm-metrics-config",
+        str(config),
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    client.submit.assert_called_once()
+    assert services[0].engine.metric_families == tuple(
+        sorted((*standard_vllm_metric_families(), "vllm:custom_scheduler_pressure"))
+    )
+
+
+def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch, tmp_path):
+    config = tmp_path / "metrics.toml"
+    config.write_text('families = "vllm:not-an-array"\n')
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--vllm-metrics-config",
+        str(config),
+        "--no-wait",
+    )
+
+    assert result.exit_code != 0
+    assert "vLLM metrics config" in result.output
+    client.submit.assert_not_called()
+    assert services == []
 
 
 @pytest.mark.parametrize(

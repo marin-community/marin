@@ -6,7 +6,7 @@
 import logging
 import math
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Set
 from enum import StrEnum
 
 import requests
@@ -90,14 +90,31 @@ def prefixed_metric_snapshots(
     families: tuple[PrometheusMetric, ...],
     *,
     metric_prefix: str,
+    family_names: Set[str] | None = None,
 ) -> tuple[metrics.MetricSnapshot, ...]:
-    """Preserve Prometheus series whose family names match ``metric_prefix``."""
+    """Preserve whole matching Prometheus families before flattening their samples.
+
+    A parser may expose a counter or histogram's generated ``_created`` series as
+    a separate gauge family. Selecting the exact base family also selects that
+    auxiliary family, so the source family remains complete.
+    """
     if not metric_prefix:
         raise ValueError("metric_prefix must not be empty")
     snapshots: list[metrics.MetricSnapshot] = []
     for family in families:
         if not family.name.startswith(metric_prefix):
             continue
+        if family_names is not None:
+            selected = family.name in family_names
+            created_base = family.name.removesuffix("_created")
+            created_auxiliary = (
+                family.name.endswith("_created")
+                and created_base in family_names
+                and family.type == "gauge"
+                and all(sample.name == family.name for sample in family.samples)
+            )
+            if not selected and not created_auxiliary:
+                continue
         for sample in family.samples:
             cumulative = family.type in {"counter", "histogram"} or (
                 family.type == "summary" and sample.name.endswith(("_count", "_sum"))

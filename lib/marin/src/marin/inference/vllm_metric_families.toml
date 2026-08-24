@@ -1,0 +1,14 @@
+families = [
+  "vllm:e2e_request_latency_seconds",
+  "vllm:generation_tokens",
+  "vllm:inter_token_latency_seconds",
+  "vllm:kv_cache_usage_perc",
+  "vllm:num_preemptions",
+  "vllm:num_requests_running",
+  "vllm:num_requests_waiting",
+  "vllm:prompt_tokens",
+  "vllm:request_queue_time_seconds",
+  "vllm:request_success",
+  "vllm:request_time_per_output_token_seconds",
+  "vllm:time_to_first_token_seconds",
+]

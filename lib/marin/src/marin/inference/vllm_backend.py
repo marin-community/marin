@@ -123,6 +123,7 @@ class VllmBackend:
                 extra_args=self._serve_args(spec, chat_template_args, extra_args),
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
+                metric_families=self.config.metric_families,
                 wait_for_ready=False,
             ) as environment:
                 yield environment

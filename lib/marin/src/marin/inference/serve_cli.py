@@ -18,6 +18,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
+    load_vllm_metric_families,
 )
 from marin.inference.iris_cli import main as iris
 from marin.inference.iris_cli import reject_backend_options
@@ -29,6 +30,7 @@ _LOCAL_VLLM_OPTIONS = {
     "vllm_version": "--vllm-version",
     "max_num_batched_tokens": "--max-num-batched-tokens",
     "vllm_args": "--vllm-arg",
+    "vllm_metrics_config": "--vllm-metrics-config",
     "startup_timeout": "--startup-timeout",
 }
 _LOCAL_LEVANTER_OPTIONS = {
@@ -62,6 +64,12 @@ def main() -> None:
 @click.option("--max-num-batched-tokens", type=int, default=None)
 @click.option("--chat-template", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--vllm-arg", "vllm_args", multiple=True)
+@click.option(
+    "--vllm-metrics-config",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="TOML file of additional vLLM metric families to forward.",
+)
 @click.option("--startup-timeout", type=int, default=1800)
 @click.option("--max-seqs", type=int, default=16)
 @click.option("--page-size", type=int, default=128)
@@ -81,6 +89,7 @@ def local(
     max_num_batched_tokens: int | None,
     chat_template: str | None,
     vllm_args: tuple[str, ...],
+    vllm_metrics_config: Path | None,
     startup_timeout: int,
     max_seqs: int,
     page_size: int,
@@ -114,6 +123,10 @@ def local(
         chat_template_content=Path(chat_template).read_text() if chat_template else None,
     )
     if backend == "vllm":
+        try:
+            metric_families = load_vllm_metric_families(vllm_metrics_config)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
         engine = VllmEngineConfig(
             launcher=launcher_type,
             source=source,
@@ -121,6 +134,7 @@ def local(
             startup_timeout_seconds=startup_timeout,
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=vllm_args,
+            metric_families=metric_families,
         )
     else:
         engine = LevanterEngineConfig(

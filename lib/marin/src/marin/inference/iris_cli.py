@@ -71,6 +71,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
+    load_vllm_metric_families,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -91,6 +92,7 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
     "vllm_args": "--vllm-arg",
+    "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
 _LEVANTER_ONLY_OPTIONS = {
@@ -366,6 +368,12 @@ def _mint_and_print_capability_url(
 )
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
 @click.option(
+    "--vllm-metrics-config",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="TOML file of additional vLLM metric families to forward.",
+)
+@click.option(
     "--vllm-version",
     default=DEFAULT_CUDA_VLLM_VERSION,
     help="CUDA vLLM version to provision in the isolated uv-tool env on the GPU path "
@@ -430,6 +438,7 @@ def main(
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
+    vllm_metrics_config: Path | None,
     vllm_version: str,
     vllm_source: str,
     extras: tuple[str, ...],
@@ -462,6 +471,11 @@ def main(
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
 
+    try:
+        metric_families = load_vllm_metric_families(vllm_metrics_config)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
         backend=backend,
@@ -477,6 +491,7 @@ def main(
             # --wait-timeout for a slow-booting model actually takes effect.
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
+            metric_families=metric_families,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,
