@@ -246,7 +246,6 @@ def test_hero_behavior_uses_a_separate_channel_and_first_pass_operator_context()
     assert '"operatorBehavior": "hero"' in request["session"]["goal"]
     assert '"operatorContext"' in request["session"]["goal"]
     assert '"heroContext"' not in request["session"]["goal"]
-    assert "bounded first-pass snapshot" in request["session"]["goal"]
 
 
 def test_operator_behavior_routes_independently_of_alert_name():

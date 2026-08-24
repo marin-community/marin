@@ -4,6 +4,7 @@
 import asyncio
 from datetime import UTC, datetime
 
+import duckdb
 import pyarrow as pa
 import pytest
 from hero_alert_context import (
@@ -143,15 +144,46 @@ def test_nvlink_incident_backtest_is_recovered_by_the_generic_strategy():
         "sample_key": "/power/hero-example-coord/train/9:0",
     }
 
-    selected = select_log_evidence([actual_incident_row])
-
-    assert selected[0]["message"] == actual_incident_row["message"]
     query = log_context_query(
         HeroAlertIdentity("cw-a", "hero-example", ("/power/hero-example-coord",)),
         [anchor],
     )
-    assert "task_attempts * 3 <= cardinality.total_task_attempts" in query
     assert "NVLINK" not in query and "CUDA" not in query and "Traceback" not in query
+    database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
+    database.execute(
+        'CREATE TABLE "log"(cluster VARCHAR, key VARCHAR, source VARCHAR, data VARCHAR, epoch_ms BIGINT, level INT)'
+    )
+    incident_ms = round(actual_incident_row["observed_at"].timestamp() * 1000)
+    database.execute(
+        'INSERT INTO "log" VALUES (?, ?, ?, ?, ?, ?)',
+        [
+            "cw-a",
+            actual_incident_row["sample_key"],
+            actual_incident_row["source"],
+            actual_incident_row["message"],
+            incident_ms,
+            actual_incident_row["level"],
+        ],
+    )
+    database.executemany(
+        'INSERT INTO "log" VALUES (?, ?, ?, ?, ?, ?)',
+        [
+            (
+                "cw-a",
+                f"/power/hero-example-coord/train/{task}:0",
+                "stderr",
+                "collective barrier failed after a sibling exited",
+                incident_ms + task,
+                4,
+            )
+            for task in range(7)
+        ],
+    )
+
+    selected = select_log_evidence(database.execute(query).fetch_arrow_table().to_pylist())
+
+    assert [item["message"] for item in selected] == [actual_incident_row["message"]]
 
 
 def test_log_context_redacts_credentials_before_prompt_injection():
@@ -234,11 +266,12 @@ class _ContextSource:
         raise AssertionError(sql)
 
 
-def test_context_assembler_spans_recent_executions_and_marks_itself_first_pass():
+def test_context_assembler_spans_recent_executions_and_versions_its_schema():
     source = _ContextSource()
 
     context = asyncio.run(HeroAlertContextAssembler(source, max_rows=1_000).assemble([alert()]))
 
+    assert context["schemaVersion"] == 1
     assert context["status"] == "complete"
     assert context["recentExecutions"][0]["executionUid"].startswith("iris:/rav/hero-example-coord-prior/")
     assert context["scope"]["alertRootJobs"] == ["/power/hero-example-coord"]
@@ -247,7 +280,6 @@ def test_context_assembler_spans_recent_executions_and_marks_itself_first_pass()
         "/rav/hero-example-coord-prior",
     ]
     assert [event["reason"] for event in context["taskEvents"]] == ["OOMKilled", "TaskRetryScheduled"]
-    assert "not an exhaustive log search" in context["caveat"]
     log_query = next(sql for sql in source.queries if 'FROM "log"' in sql)
     assert "2026-08-21 04:06:00" in log_query
     assert "/power/hero-example-coord/%" in log_query

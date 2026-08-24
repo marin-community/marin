@@ -21,7 +21,8 @@ from typing import Protocol
 
 import pyarrow as pa
 from config import HERO_NOTIFICATION, HERO_OPERATOR_BEHAVIOR, OPERATOR_BEHAVIOR_LABEL
-from hero_runs import hero_run_id, root_job_for, sql_epoch_ms, sql_timestamp
+from hero_runs import as_utc, hero_run_id, root_job_for, sql_epoch_ms, sql_timestamp
+from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string
 from vllm_observability import sql_string
 
 CONTEXT_LOOKBACK = timedelta(minutes=70)
@@ -62,10 +63,8 @@ _LOCAL_RANK = re.compile(r"\blocal rank \d+\b", re.IGNORECASE)
 _HEX = re.compile(r"\b0x[0-9a-fA-F]+\b")
 _UUID = re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
 _LONG_NUMBER = re.compile(r"\b\d{4,}\b")
-_SECRET_ASSIGNMENT = re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s,;]+)")
-_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*")
-_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
-_AWS_ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_ASSIGNMENT = re.compile(r"(?P<prefix>\b(?P<key>[A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*)[^\s,;]+")
+_BEARER_CREDENTIAL = re.compile(r"(?i)(?P<prefix>\bBearer\s+)[A-Za-z0-9._~+/-]+=*")
 _URL_CREDENTIALS = re.compile(r"(?P<scheme>https?://)[^\s/@:]+:[^\s/@]+@")
 
 
@@ -243,23 +242,30 @@ def root_job_from_execution_uid(execution_uid: str) -> str | None:
     return root_job if root_job is not None and _SAFE_JOB.fullmatch(root_job) else None
 
 
-def _redact(message: str) -> str:
-    message = _BEARER.sub("Bearer <redacted>", message)
-    message = _JWT.sub("<redacted-jwt>", message)
-    message = _AWS_ACCESS_KEY.sub("<redacted-access-key>", message)
-    message = _URL_CREDENTIALS.sub(r"\g<scheme><redacted>@", message)
-    return _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=<redacted>", message)
-
-
 def _text(value: object, limit: int) -> str:
-    result = _redact(str(value or "")).replace("\x00", "")
+    result = str(value or "").replace("\x00", "")
+    return result if len(result) <= limit else f"{result[: limit - 1]}…"
+
+
+def _log_text(value: object, limit: int) -> str:
+    """Redact free-form output using shared secret classification plus log syntax."""
+    result = str(value or "").replace("\x00", "")
+    result = _ASSIGNMENT.sub(
+        lambda match: (
+            f"{match.group('prefix')}{REDACTED_VALUE}" if is_sensitive_key_name(match.group("key")) else match.group(0)
+        ),
+        result,
+    )
+    result = _BEARER_CREDENTIAL.sub(rf"\g<prefix>{REDACTED_VALUE}", result)
+    result = _URL_CREDENTIALS.sub(rf"\g<scheme>{REDACTED_VALUE}@", result)
+    result = redact_string(result)
     return result if len(result) <= limit else f"{result[: limit - 1]}…"
 
 
 def _iso(value: object) -> str:
     if not isinstance(value, datetime):
         return _text(value, 80)
-    return (value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)).isoformat()
+    return as_utc(value).isoformat()
 
 
 def select_log_evidence(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -276,7 +282,7 @@ def select_log_evidence(rows: Sequence[Mapping[str, object]]) -> list[dict[str, 
         ):
             continue
         anchor = _iso(row.get("anchor_at"))
-        message = _text(row.get("message"), 700)
+        message = _log_text(row.get("message"), 700)
         template = normalize_log_message(message)
         identity = (anchor, template)
         if not template or identity in seen or per_anchor.get(anchor, 0) >= MAX_LOG_EXCERPTS_PER_ANCHOR:
@@ -350,7 +356,7 @@ def _execution_context(rows: Sequence[Mapping[str, object]], run_id: str) -> _Ex
             }
         last_at = row.get("execution_last_at")
         if isinstance(last_at, datetime):
-            anchors.append(last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at.astimezone(UTC))
+            anchors.append(as_utc(last_at))
     ordered = sorted(executions.values(), key=lambda item: int(item["rank"]))
     return _ExecutionContext(executions=ordered, anchors=anchors, root_jobs=root_jobs)
 
@@ -370,12 +376,12 @@ def _event_context(rows: Sequence[Mapping[str, object]]) -> _EventContext:
                 "eventCount": int(row.get("event_count") or 0),
                 "affectedTasks": int(row.get("affected_tasks") or 0),
                 "sampleTask": _text(row.get("sample_task"), 300),
-                "sampleMessage": _text(row.get("sample_message"), 500),
+                "sampleMessage": _log_text(row.get("sample_message"), 500),
             }
         )
         last_at = row.get("last_at")
         if isinstance(last_at, datetime):
-            anchors.append(last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at.astimezone(UTC))
+            anchors.append(as_utc(last_at))
     return _EventContext(events=events, anchors=anchors)
 
 
