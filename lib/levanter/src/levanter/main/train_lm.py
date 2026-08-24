@@ -54,6 +54,8 @@ class TrainLmConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     optimizer_schedule_num_train_steps: int | None = None
     """Optional optimizer schedule horizon when execution intentionally stops earlier."""
+    minimum_initial_step: int | None = None
+    """Fail before training if checkpoint restoration starts before this completed-update count."""
 
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
@@ -264,6 +266,11 @@ def main(config: TrainLmConfig):
             state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
+
+        if config.minimum_initial_step is not None and int(state.step) < config.minimum_initial_step:
+            raise ValueError(
+                f"Initial trainer step {int(state.step)} is below required minimum {config.minimum_initial_step}"
+            )
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?

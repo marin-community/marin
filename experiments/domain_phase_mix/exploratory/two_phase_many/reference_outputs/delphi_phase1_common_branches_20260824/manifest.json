@@ -1,5 +1,5 @@
 {
-  "candidate_pool_size": 100193,
+  "candidate_pool_size": 33599,
   "candidate_prefix_ids": [
     "shared_bounded_ensemble_kl0p05",
     "shared_bounded_ensemble_kl0p2",
@@ -8,7 +8,8 @@
     "proportional_control"
   ],
   "candidate_prefix_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
-  "continuation_weights_sha256": "3b3fba7f7905ba9788cd9a94936eb4f86561b80cb64cd8234a08d2acd70f126e",
+  "continuation_summary_sha256": "4d004d2f0eb04ea087a9370a1234275bba75d454f2ac1dbef0cf9731327d6321",
+  "continuation_weights_sha256": "9547515728e3c85ed564066cf8cfa36eefa80a7241cde3b32e351004f9afc883",
   "control_continuations": 3,
   "design_seed": 20260824,
   "dirichlet_concentrations": [
@@ -24,48 +25,49 @@
     0.0,
     5.0,
     15.0,
-    30.0,
-    45.0,
-    62.28165425173926
+    25.0,
+    35.0,
+    62.28165425173962
   ],
   "fit_continuations": 50,
   "fit_exposure_bin_counts": {
     "[0,5)": 10,
-    "[15,30)": 10,
-    "[30,45)": 10,
-    "[45,62.2817)": 10,
+    "[15,25)": 10,
+    "[25,35)": 10,
+    "[35,62.2817)": 10,
     "[5,15)": 10
   },
   "fit_max_phase_1_epoch_range": [
-    1.52582716026895,
-    59.30072699352576
+    0.6472734812137412,
+    53.69349492823572
   ],
   "fit_max_total_epoch_range": [
-    9.405571234274749,
-    68.7062982278005
+    9.405571234274813,
+    63.09906616251054
   ],
   "fit_per_exposure_bin": 10,
   "fit_tv_bin_counts": {
-    "[0,0.25)": 6,
-    "[0.25,0.5)": 14,
-    "[0.5,0.75)": 15,
-    "[0.75,1)": 15
+    "[0,0.25)": 11,
+    "[0.25,0.5)": 21,
+    "[0.5,0.75)": 18,
+    "[0.75,1)": 0
   },
   "fit_tv_to_proportional_quantiles": {
-    "0.0": 0.22900390625,
-    "0.25": 0.481201171875,
-    "0.5": 0.724853515625,
-    "0.75": 0.936279296875,
-    "1.0": 0.98828125
+    "0.0": 0.17822265625,
+    "0.25": 0.3699951171875,
+    "0.5": 0.462890625,
+    "0.75": 0.5357666015625,
+    "1.0": 0.6796875
   },
-  "historical_phase_1_epoch_cap": 62.28165425173926,
-  "historical_total_epoch_cap": 255.82463494607435,
+  "historical_phase_1_epoch_cap": 62.28165425173962,
+  "historical_total_epoch_cap": 255.8246349460757,
   "incumbent_row_id": "run_00125",
-  "minimum_fit_direction_distance": 0.2557511554737945,
+  "minimum_fit_direction_distance": 0.32193119039826706,
   "mixture_block_size": 2048,
+  "per_bucket_phase_1_and_total_support_enforced": true,
   "rejection_counts": {
-    "duplicate_or_control": 15,
-    "phase_1_cap": 72,
+    "duplicate_or_control": 2,
+    "phase_1_cap": 66679,
     "total_cap": 0
   },
   "selection_geometry": "exposure-by-TV stratification, then round-robin maximin over unit sqrt(c1 * w1) directions",
@@ -78,34 +80,34 @@
   ],
   "tv_quotas_by_exposure_bin": [
     [
-      2,
-      2,
+      6,
       3,
-      3
+      1,
+      0
     ],
     [
+      4,
+      4,
       2,
-      2,
-      3,
-      3
+      0
     ],
     [
-      2,
-      2,
+      1,
+      6,
       3,
-      3
+      0
     ],
     [
       0,
-      4,
-      3,
-      3
+      5,
+      5,
+      0
     ],
     [
       0,
-      4,
       3,
-      3
+      7,
+      0
     ]
   ]
 }
