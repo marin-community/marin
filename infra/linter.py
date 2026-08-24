@@ -43,6 +43,7 @@ LINT_REVIEW_AGENT_DEFAULT = "claude -p"
 LINT_REVIEW_TIMEOUT = 600
 
 CODEX_SANDBOX_BYPASS_FLAGS = frozenset(("--dangerously-bypass-approvals-and-sandbox", "--yolo"))
+CODEX_READ_ONLY_SANDBOX = "read-only"
 
 # The lint review runs fully-headless agents over the working tree. They are REVIEWERS:
 # the only job is to READ the change and emit advisory findings on stdout — never to modify
@@ -406,12 +407,7 @@ def _readonly_agent_flags() -> list[str]:
 
 
 def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
-    """Lock a supported headless agent to read-only review.
-
-    Claude receives a tool allowlist and explicit mutation denials. Codex runs in
-    an ephemeral read-only sandbox so the review cannot modify the worktree or
-    persist its child sessions. Other agent CLIs manage their own permissions.
-    """
+    """Return an agent command that enforces the review's read-only contract."""
     agent_name = os.path.basename(agent_cmd[0])
     if agent_name == "codex" and len(agent_cmd) > 1 and agent_cmd[1] in {"exec", "e"}:
         command = [arg for arg in agent_cmd if arg not in CODEX_SANDBOX_BYPASS_FLAGS]
@@ -422,18 +418,18 @@ def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
         )
         if sandbox_assignment is not None:
             flag = command[sandbox_assignment].split("=", maxsplit=1)[0]
-            command[sandbox_assignment] = f"{flag}=read-only"
+            command[sandbox_assignment] = f"{flag}={CODEX_READ_ONLY_SANDBOX}"
         else:
             for flag in ("--sandbox", "-s"):
                 if flag in command:
                     sandbox_index = command.index(flag) + 1
                     if sandbox_index == len(command):
-                        command.append("read-only")
+                        command.append(CODEX_READ_ONLY_SANDBOX)
                     else:
-                        command[sandbox_index] = "read-only"
+                        command[sandbox_index] = CODEX_READ_ONLY_SANDBOX
                     break
             else:
-                command.extend(("--sandbox", "read-only"))
+                command.extend(("--sandbox", CODEX_READ_ONLY_SANDBOX))
         return command
     if agent_name != "claude" or "--allowedTools" in agent_cmd:
         return agent_cmd

@@ -5,18 +5,20 @@ import pytest
 
 from infra import linter
 
+READ_ONLY_SANDBOX = "read-only"
+
 
 @pytest.mark.parametrize(
     ("agent_command", "expected"),
     [
-        (["codex", "exec"], ["codex", "exec", "--ephemeral", "--sandbox", "read-only"]),
+        (["codex", "exec"], ["codex", "exec", "--ephemeral", "--sandbox", READ_ONLY_SANDBOX]),
         (
             ["codex", "exec", "--ephemeral", "--sandbox", "workspace-write"],
-            ["codex", "exec", "--ephemeral", "--sandbox", "read-only"],
+            ["codex", "exec", "--ephemeral", "--sandbox", READ_ONLY_SANDBOX],
         ),
         (
             ["codex", "e", "--yolo", "--sandbox=danger-full-access"],
-            ["codex", "e", "--sandbox=read-only", "--ephemeral"],
+            ["codex", "e", f"--sandbox={READ_ONLY_SANDBOX}", "--ephemeral"],
         ),
     ],
 )
