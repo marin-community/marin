@@ -490,10 +490,11 @@ def test_wandb_run_history_fails_loud_when_no_project_has_the_run():
 
 
 class _FakeIris:
-    def __init__(self, target, *, raises=None, rows=None):
+    def __init__(self, target, *, raises=None, rows=None, active_jobs=None):
         self._target = target
         self._raises = raises
         self._rows = rows or []
+        self._active_jobs = active_jobs or {}
 
     @property
     def target(self):
@@ -507,7 +508,7 @@ class _FakeIris:
     def active_job_ids(self, cluster):
         if self._raises:
             raise self._raises
-        return self._rows
+        return [{"job": job} for job in self._active_jobs.get(cluster, [])]
 
     def peers(self):
         if self._raises:
@@ -528,9 +529,17 @@ def test_iris_endpoint_returns_rows():
 
 
 def test_iris_active_job_ids_endpoint_scopes_rows_to_the_requested_federation_cluster():
-    client = _app(_FakeIris(TARGET, rows=[{"job": "/alice/train"}]))
+    client = _app(
+        _FakeIris(
+            TARGET,
+            active_jobs={"cw-us-east-02a": ["/alice/train"], "cw-us-east-08a": ["/bob/eval"]},
+        )
+    )
     assert client.get("/iris/marin/active_job_ids", params={"cluster": "cw-us-east-02a"}).json() == [
         {"job": "/alice/train"}
+    ]
+    assert client.get("/iris/marin/active_job_ids", params={"cluster": "cw-us-east-08a"}).json() == [
+        {"job": "/bob/eval"}
     ]
 
 
