@@ -33,7 +33,9 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         config = base.build_config(ctx)
         original_train_components = _phase_weights(1)
         validation_components = {
-            name: component for name, component in config.data.components.items() if name not in original_train_components
+            name: component
+            for name, component in config.data.components.items()
+            if name not in original_train_components
         }
         validation_weights = {name: 0.0 for name in validation_components}
         data = dataclasses.replace(

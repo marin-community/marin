@@ -9,7 +9,7 @@ from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.formats import TextLmDatasetFormat
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datakit.store.length_partition import DocumentLengthBucket
+from experiments.datakit.store.length_partitioned_store import DocumentLengthBucket
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 
 LONG_CONTEXT_STORE_PREFIX = "datakit/store/june-67b-a2b-length64k/2026.08.24"

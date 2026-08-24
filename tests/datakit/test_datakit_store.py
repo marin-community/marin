@@ -19,10 +19,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.types import ResourceConfig
-from levanter.store.cache import CacheMetadata, TreeCache, _merge_sharded_ledgers
+from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import datakit_source_key
-from marin.execution.artifact import read_artifact, write_artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
@@ -36,16 +36,14 @@ from experiments.datakit.cluster.quality.fast_transformer.artifact import Qualit
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
-    BucketCacheStats,
     ClusteredStoreData,
     _iter_tokenized_documents,
     build_clustered_store,
 )
-from experiments.datakit.store.length_partition import (
+from experiments.datakit.store.length_partitioned_store import (
     DOCUMENT_LENGTH_THRESHOLD,
     DocumentLengthBucket,
-    LengthPartitionConfig,
-    partition_store_by_length,
+    build_length_partitioned_store,
 )
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
@@ -176,7 +174,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
         )
 
 
-def _build_inputs(tmp_path):
+def _build_inputs(tmp_path, shard0: list[_Doc] = SHARD0, shard1: list[_Doc] = SHARD1):
     """Materialize the synthetic inputs and return the typed artifacts."""
     main_dir = str(tmp_path / "src")
     source_key = datakit_source_key(main_dir)
@@ -186,8 +184,8 @@ def _build_inputs(tmp_path):
         os.makedirs(d, exist_ok=True)
 
     shard_dirs = {**dirs, "tokenize": tok_train}
-    _write_shard(shard_dirs, "part-00000-of-00002.parquet", SHARD0)
-    _write_shard(shard_dirs, "part-00001-of-00002.parquet", SHARD1)
+    _write_shard(shard_dirs, "part-00000-of-00002.parquet", shard0)
+    _write_shard(shard_dirs, "part-00001-of-00002.parquet", shard1)
 
     tokenize = {
         "src": TokenizedAttrData(
@@ -511,54 +509,29 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
         list(_iter_tokenized_documents(path))
 
 
-def test_length_partition_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
+def test_length_partitioned_store_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    source_path = str(tmp_path / "source")
-    bucket_path = f"{source_path}/cluster=3/quality=2"
-    leaf_path = f"{bucket_path}/part-00000-of-00001"
-    documents = [
-        np.full(DOCUMENT_LENGTH_THRESHOLD - 1, 1, dtype=np.int32),
-        np.full(DOCUMENT_LENGTH_THRESHOLD, 2, dtype=np.int32),
-        np.full(DOCUMENT_LENGTH_THRESHOLD + 1, 3, dtype=np.int32),
+    shard0: list[_Doc] = [
+        ("short", 0, 2, False, None, 1, DOCUMENT_LENGTH_THRESHOLD - 1),
+        ("boundary", 0, 2, False, None, 2, DOCUMENT_LENGTH_THRESHOLD),
     ]
-    leaf_ledger = write_bucket_cache(leaf_path, documents, [len(document) for document in documents])
-    _merge_sharded_ledgers(
-        bucket_path,
-        [leaf_path],
-        [leaf_ledger],
-        [leaf_ledger.field_counts],
-        CacheMetadata.empty(),
-    )
-    write_artifact(
-        ClusteredStoreData(
-            cache_path=source_path,
-            cluster_view=40,
-            bucket_edges=[],
-            split="train",
-            buckets=[
-                BucketCacheStats(
-                    cluster_id=3,
-                    quality_bucket=2,
-                    path=bucket_path,
-                    total_elements=len(documents),
-                    total_tokens=sum(map(len, documents)),
-                    n_shards=1,
-                )
-            ],
-            source_names=["source"],
-            tokenizer="tokenizer",
-            counters={},
-        ),
-        source_path,
-    )
+    shard1: list[_Doc] = [
+        ("long", 0, 2, False, None, 3, DOCUMENT_LENGTH_THRESHOLD + 1),
+    ]
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path, shard0, shard1)
 
-    artifact = partition_store_by_length(
-        LengthPartitionConfig(
-            source_path=source_path,
-            output_path=str(tmp_path / "partitioned"),
-            worker_resources=ResourceConfig(cpu=1, ram="2g", disk="1g"),
-            max_workers=1,
-        )
+    artifact = build_length_partitioned_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=str(tmp_path / "partitioned"),
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+        worker_resources=ResourceConfig(cpu=1, ram="2g", disk="1g"),
+        max_workers=1,
     )
 
     recovered = {
@@ -572,7 +545,11 @@ def test_length_partition_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
     assert [len(document) for document in recovered[DocumentLengthBucket.GT_64K]] == [DOCUMENT_LENGTH_THRESHOLD + 1]
     assert [int(document[0]) for document in recovered[DocumentLengthBucket.LTE_64K]] == [1, 2]
     assert [int(document[0]) for document in recovered[DocumentLengthBucket.GT_64K]] == [3]
-    assert sum(artifact.counters[name] for name in ("docs_lte_64k", "docs_gt_64k")) == len(documents)
-    assert sum(artifact.counters[name] for name in ("tokens_lte_64k", "tokens_gt_64k")) == sum(
-        len(document) for document in documents
+    assert (
+        sum(artifact.counters[f"datakit_length_store/docs_{length_bucket}"] for length_bucket in DocumentLengthBucket)
+        == 3
+    )
+    assert (
+        sum(artifact.counters[f"datakit_length_store/tokens_{length_bucket}"] for length_bucket in DocumentLengthBucket)
+        == 3 * DOCUMENT_LENGTH_THRESHOLD
     )
