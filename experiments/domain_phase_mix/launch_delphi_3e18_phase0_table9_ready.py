@@ -210,6 +210,7 @@ def main() -> None:
     eval_resources = replay.base.TABLE9_EVAL_RESOURCES
     if (
         eval_resources.device.variant != "v6e-8"
+        or eval_resources.device_alternatives is not None
         or eval_resources.regions != ["us-east5"]
         or eval_resources.zone != "us-east5-b"
     ):
