@@ -82,7 +82,7 @@ WHERE name = 'requests_completed'
 
 ### Imported cumulative counter
 
-Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 15-second scrape before the visible window, preserve the complete series identity, and discard reset intervals.
+Imported vLLM counters carry `source_temporality = 'cumulative_snapshot'`. Scan one 60-second scrape before the visible window, preserve the complete series identity, and discard reset intervals.
 
 ```sql
 WITH base AS (
@@ -93,7 +93,7 @@ WITH base AS (
   WHERE service = 'vllm'
     AND name = 'generation_tokens_total'
     AND json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
-    AND timestamp_ms >= <start_ms - 15000>
+    AND timestamp_ms >= <start_ms - 60000>
     AND timestamp_ms < <end_ms>
 ), samples AS (
   SELECT *, lag(value) OVER (

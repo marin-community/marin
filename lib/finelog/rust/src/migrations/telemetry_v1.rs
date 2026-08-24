@@ -366,7 +366,6 @@ fn snapshot_migration_sources(store_dir: &Path, source_dir: &Path) -> Result<(),
     unreachable!()
 }
 
-/// Hard-link local segments referenced by the snapshot catalog.
 fn link_catalog_snapshot_segments(
     store_dir: &Path,
     snapshot_dir: &Path,

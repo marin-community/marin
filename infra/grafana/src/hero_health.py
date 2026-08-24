@@ -18,6 +18,7 @@ from math import isfinite
 import pyarrow as pa
 from hero_runs import (
     HERO_ROOT_PATTERNS,
+    LEVANTER_TELEMETRY_TABLE,
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
@@ -70,7 +71,6 @@ _SIGNAL_METRICS = (
 )
 # The floor each throughput check compares its window against.
 _FLOORS = {_TOKENS_PER_SECOND: TOKENS_PER_SECOND_MIN, _MFU: MFU_MIN}
-_LEVANTER_TELEMETRY_TABLE = '"telemetry_v1.levanter"'
 
 _SIGNAL_LOOKBACK = timedelta(minutes=65)
 # The phase heartbeat and the evaluations need their own window: an outage is
@@ -143,7 +143,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
         "ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn "
-        f"FROM {_LEVANTER_TELEMETRY_TABLE} "
+        f"FROM {LEVANTER_TELEMETRY_TABLE} "
         f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
         f"AND {run_predicate} AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
@@ -152,7 +152,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "), samples AS ("
         "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
         "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
-        f"FROM {_LEVANTER_TELEMETRY_TABLE} AS telemetry JOIN execution "
+        f"FROM {LEVANTER_TELEMETRY_TABLE} AS telemetry JOIN execution "
         "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
         "AND telemetry.run_id = execution.run_id "
         "AND telemetry.execution_uid = execution.execution_uid "

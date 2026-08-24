@@ -10,7 +10,7 @@
 //! - re-register with an EMPTY policy KEEPS the existing policy.
 //! - `log` is privileged and undroppable.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use arrow::record_batch::RecordBatch;
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
-use crate::ingestion_policy::{IngestionBatchSource, IngestionPolicy, IDENTITY_INGESTION_POLICY};
+use crate::ingestion_policy::IngestionBatchSource;
 use crate::policies::route_ingestion_batch;
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
@@ -35,7 +35,7 @@ use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     merge_schemas, resolve_key_column, stamp_cluster_column, stored_form, validate_and_align_batch,
-    validate_and_align_forwarded_batch, validate_index_policies, Column, Schema,
+    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
@@ -67,6 +67,27 @@ pub struct ForwardedWrite {
     pub rows_written: i64,
     pub persisted_targets: Vec<(String, i64)>,
     pub ignored_columns: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum BatchAlignment {
+    Strict,
+    ForwardCompatible,
+}
+
+impl BatchAlignment {
+    fn align(
+        self,
+        batch: &RecordBatch,
+        schema: &Schema,
+    ) -> Result<(AlignedBatch, Vec<String>), StatsError> {
+        match self {
+            Self::Strict => {
+                validate_and_align_batch(batch, schema).map(|aligned| (aligned, Vec::new()))
+            }
+            Self::ForwardCompatible => validate_and_align_forwarded_batch(batch, schema),
+        }
+    }
 }
 
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
@@ -505,7 +526,7 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        let outcome = self.write_rows_with_policy(name, arrow_ipc, origin_cluster)?;
+        let outcome = self.write_physical_rows(name, arrow_ipc, origin_cluster)?;
         debug_assert!(outcome.ignored_columns.is_empty());
         let last_seq = outcome
             .persisted_targets
@@ -523,29 +544,12 @@ impl Store {
         origin_cluster: Option<&str>,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let routed = route_ingestion_batch(IngestionBatchSource::Declared(name), &batch)?;
-        let mut prepared_partitions = Vec::with_capacity(routed.len());
-        for partition in routed {
-            let destination = partition.destination.physical_namespace;
-            let engine = self.require_engine(&destination)?;
-            let mut aligned = validate_and_align_batch(&partition.batch, engine.schema())?;
-            if let Some(origin) = origin_cluster {
-                stamp_cluster_column(&mut aligned, origin);
-            }
-            prepared_partitions.push((destination, engine, aligned));
-        }
-        let persisted_targets = prepared_partitions
-            .into_iter()
-            .map(|(destination, engine, aligned)| {
-                let last_seq = engine.append_aligned_batch(&aligned);
-                (destination, last_seq)
-            })
-            .collect();
-        Ok(ForwardedWrite {
-            rows_written: batch.num_rows() as i64,
-            persisted_targets,
-            ignored_columns: Vec::new(),
-        })
+        self.write_routed_batch(
+            IngestionBatchSource::Declared(name),
+            batch,
+            origin_cluster,
+            BatchAlignment::Strict,
+        )
     }
 
     /// Append telemetry forwarded by another Finelog while preserving the hub's
@@ -558,19 +562,35 @@ impl Store {
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let routed = route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
-        let mut prepared_shards = Vec::with_capacity(routed.len());
-        let mut ignored_columns = std::collections::BTreeSet::new();
+        self.write_routed_batch(
+            IngestionBatchSource::Stored(name),
+            batch,
+            Some(origin_cluster),
+            BatchAlignment::ForwardCompatible,
+        )
+    }
+
+    fn write_routed_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: RecordBatch,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let routed = route_ingestion_batch(source, &batch)?;
+        let mut prepared_partitions = Vec::with_capacity(routed.len());
+        let mut ignored_columns = BTreeSet::new();
         for partition in routed {
             let destination = partition.destination.physical_namespace;
             let engine = self.require_engine(&destination)?;
-            let (mut aligned, ignored) =
-                validate_and_align_forwarded_batch(&partition.batch, engine.schema())?;
-            stamp_cluster_column(&mut aligned, origin_cluster);
+            let (mut aligned, ignored) = alignment.align(&partition.batch, engine.schema())?;
+            if let Some(origin) = origin_cluster {
+                stamp_cluster_column(&mut aligned, origin);
+            }
             ignored_columns.extend(ignored);
-            prepared_shards.push((destination, engine, aligned));
+            prepared_partitions.push((destination, engine, aligned));
         }
-        let persisted_targets = prepared_shards
+        let persisted_targets = prepared_partitions
             .into_iter()
             .map(|(destination, engine, aligned)| {
                 let last_seq = engine.append_aligned_batch(&aligned);
@@ -584,21 +604,15 @@ impl Store {
         })
     }
 
-    fn write_rows_with_policy(
+    fn write_physical_rows(
         &self,
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let mut routed =
-            IDENTITY_INGESTION_POLICY.route_batch(IngestionBatchSource::Declared(name), &batch)?;
-        let partition = routed
-            .pop()
-            .expect("identity ingestion policy returns one partition");
-        let destination = partition.destination.physical_namespace;
-        let engine = self.require_engine(&destination)?;
-        let mut aligned = validate_and_align_batch(&partition.batch, engine.schema())?;
+        let engine = self.require_engine(name)?;
+        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
@@ -606,7 +620,7 @@ impl Store {
         let last_seq = engine.append_aligned_batch(&aligned);
         Ok(ForwardedWrite {
             rows_written: n,
-            persisted_targets: vec![(destination, last_seq)],
+            persisted_targets: vec![(name.to_string(), last_seq)],
             ignored_columns: Vec::new(),
         })
     }

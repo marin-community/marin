@@ -10,6 +10,7 @@ import pyarrow as pa
 from hero_runs import (
     FINISHED_PHASE,
     INITIALIZING_PHASE,
+    LEVANTER_TELEMETRY_TABLE,
     PHASE_METRIC,
     TASK_STATE_LOOKBACK,
     TELEMETRY_GONE_AGE,
@@ -48,7 +49,7 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     end = sql_epoch_ms(now)
     metric_names = f"'{PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        'WITH telemetry AS (SELECT * FROM "telemetry_v1.levanter"), filtered AS ('
+        f"WITH telemetry AS (SELECT * FROM {LEVANTER_TELEMETRY_TABLE}), filtered AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id AS telemetry_job, execution_uid, name, value, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "

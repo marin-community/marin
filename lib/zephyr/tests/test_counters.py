@@ -471,7 +471,7 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
             emitted.append((value, attributes))
 
     class Writer:
-        def gauge(self, name, **kwargs):
+        def gauge(self, _name, **_kwargs):
             return Gauge()
 
     monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())

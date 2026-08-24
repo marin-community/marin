@@ -715,7 +715,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
                 emitted.append((value, attributes))
 
     class Writer:
-        def gauge(self, name, **kwargs):
+        def gauge(self, name, **_kwargs):
             return Gauge(name)
 
     monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())
@@ -764,7 +764,7 @@ def test_progress_metric_isolated_between_executions(coordinator, monkeypatch):
             emitted.append((self.name, value, attributes))
 
     class Writer:
-        def gauge(self, name, **kwargs):
+        def gauge(self, name, **_kwargs):
             return Gauge(name)
 
     monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())

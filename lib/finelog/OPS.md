@@ -173,8 +173,8 @@ class. Moving a metric between physical shards therefore changes one Finelog
 policy and leaves writers and dashboards alone. Requests outside the configured
 `telemetry_v1.<scope>` form are rejected. Client-defined semantic scopes use a
 2 GiB physical table unless Finelog has a more specific routing policy. The
-temporary old-client root form is classified from the complete normalized row
-by the same policy. Known services use the policy's semantic inference rules;
+unscoped root form is classified from the complete normalized row by the same
+policy. Known services use the policy's semantic inference rules;
 an unmapped service gets a normalized `telemetry_v1.<service>` stream rather
 than entering a catch-all namespace. The policy accepts the complete Arrow
 record batch and returns partitions containing the logical namespace, physical

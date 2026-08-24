@@ -423,7 +423,7 @@ def test_query_uses_more_than_one_scrape_interval_for_predecessors():
     rows = _query_rows(
         _database(
             [
-                _record("a", "generation_tokens_total", 10, 88_000, cumulative),
+                _record("a", "generation_tokens_total", 10, 0, cumulative),
                 _record("a", "generation_tokens_total", 15, 120_000, cumulative),
             ]
         )

@@ -132,11 +132,7 @@ class _Handle:
     unit: str
     scope: str | None
 
-
-class Counter(_Handle):
-    """A counter whose calls emit deltas."""
-
-    def add(self, value: float = 1.0, *, attributes: Mapping[str, str] | None = None) -> None:
+    def _emit_value(self, value: float, attributes: Mapping[str, str] | None) -> None:
         _emit(
             self.kind,
             self.name,
@@ -145,48 +141,34 @@ class Counter(_Handle):
             attributes=attributes,
             scope=self.scope,
         )
+
+
+class Counter(_Handle):
+    """A counter whose calls emit deltas."""
+
+    def add(self, value: float = 1.0, *, attributes: Mapping[str, str] | None = None) -> None:
+        self._emit_value(value, attributes)
 
 
 class Gauge(_Handle):
     """A gauge whose calls emit current values."""
 
     def set(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(
-            self.kind,
-            self.name,
-            value=value,
-            unit=self.unit,
-            attributes=attributes,
-            scope=self.scope,
-        )
+        self._emit_value(value, attributes)
 
 
 class Scalar(_Handle):
     """A scalar whose updates emit current values."""
 
     def update(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(
-            self.kind,
-            self.name,
-            value=value,
-            unit=self.unit,
-            attributes=attributes,
-            scope=self.scope,
-        )
+        self._emit_value(value, attributes)
 
 
 class Histogram(_Handle):
     """A histogram whose calls emit individual observations."""
 
     def record(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        _emit(
-            self.kind,
-            self.name,
-            value=value,
-            unit=self.unit,
-            attributes=attributes,
-            scope=self.scope,
-        )
+        self._emit_value(value, attributes)
 
 
 @dataclass(frozen=True)

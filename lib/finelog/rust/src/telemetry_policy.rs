@@ -15,6 +15,8 @@ use crate::store::namespace_name::MAX_NAMESPACE_NAME_BYTES;
 use crate::store::policy::StoragePolicy;
 
 pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
+const SEMANTIC_NAMESPACE_PREFIX: &str = "telemetry_v1.";
+const STORAGE_NAMESPACE_PREFIX: &str = "telemetry_storage_v1.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const DEFAULT_STREAM_MAX_BYTES: i64 = 2 * GIBIBYTE;
 pub(crate) const LEVANTER_NAMESPACE: &str = "telemetry_v1.levanter";
@@ -184,10 +186,10 @@ impl TelemetryPolicy {
     ) -> Result<IngestionDestination, StatsError> {
         let requested_namespace = source.namespace();
         if matches!(source, IngestionBatchSource::Stored(_))
-            && requested_namespace.starts_with("telemetry_storage_v1.")
+            && requested_namespace.starts_with(STORAGE_NAMESPACE_PREFIX)
         {
             let logical_namespace = logical_namespace_for_storage(requested_namespace)
-                .ok_or_else(|| invalid_namespace(requested_namespace))?;
+                .ok_or_else(|| namespace_error(requested_namespace))?;
             return Ok(IngestionDestination {
                 logical_namespace: logical_namespace.to_string(),
                 physical_namespace: requested_namespace.to_string(),
@@ -199,10 +201,10 @@ impl TelemetryPolicy {
         } else if is_semantic_namespace(requested_namespace) {
             requested_namespace.to_string()
         } else {
-            return Err(invalid_namespace(requested_namespace));
+            return Err(namespace_error(requested_namespace));
         };
         if !is_semantic_namespace(&logical_namespace) {
-            return Err(invalid_namespace(requested_namespace));
+            return Err(namespace_error(requested_namespace));
         }
         let physical_namespace = self.storage_namespace(&logical_namespace, record)?;
         Ok(IngestionDestination {
@@ -211,7 +213,7 @@ impl TelemetryPolicy {
         })
     }
 
-    /// Classify a row written before semantic namespaces were available.
+    /// Classify a row written through the unscoped root namespace.
     ///
     /// The root carries no client-selected scope, so the owning service is the
     /// primary semantic boundary. Iris controller rows are narrower: only the
@@ -232,7 +234,7 @@ impl TelemetryPolicy {
             return Ok(namespace.to_string());
         }
         Ok(format!(
-            "telemetry_v1.{}",
+            "{SEMANTIC_NAMESPACE_PREFIX}{}",
             normalized_scope_component(service)
         ))
     }
@@ -253,7 +255,7 @@ impl TelemetryPolicy {
         }
         is_semantic_namespace(logical_namespace)
             .then(|| logical_namespace.to_string())
-            .ok_or_else(|| invalid_namespace(logical_namespace))
+            .ok_or_else(|| namespace_error(logical_namespace))
     }
 }
 
@@ -270,7 +272,7 @@ impl NamespaceStoragePolicy for TelemetryPolicy {
         } else if is_semantic_namespace(namespace) {
             DEFAULT_STREAM_MAX_BYTES
         } else {
-            return Err(invalid_namespace(namespace));
+            return Err(namespace_error(namespace));
         };
         Ok(StoragePolicy {
             max_bytes: Some(max_bytes),
@@ -325,14 +327,14 @@ impl TelemetryRecord<'_> {
     }
 }
 
-fn invalid_namespace(namespace: &str) -> StatsError {
+fn namespace_error(namespace: &str) -> StatsError {
     StatsError::SchemaValidation(format!(
         "namespace {namespace:?} is not present in the telemetry stream policy"
     ))
 }
 
 fn normalized_scope_component(service: &str) -> String {
-    const MAX_SCOPE_BYTES: usize = MAX_NAMESPACE_NAME_BYTES - "telemetry_v1.".len();
+    const MAX_SCOPE_BYTES: usize = MAX_NAMESPACE_NAME_BYTES - SEMANTIC_NAMESPACE_PREFIX.len();
 
     let mut normalized = String::with_capacity(service.len().min(MAX_SCOPE_BYTES));
     let mut previous_was_separator = false;
@@ -378,12 +380,12 @@ pub(crate) fn is_forwarded_telemetry_namespace(namespace: &str) -> bool {
 
 pub(crate) fn matches_telemetry_namespace(namespace: &str) -> bool {
     namespace == TELEMETRY_NAMESPACE
-        || namespace.starts_with("telemetry_v1.")
-        || namespace.starts_with("telemetry_storage_v1.")
+        || namespace.starts_with(SEMANTIC_NAMESPACE_PREFIX)
+        || namespace.starts_with(STORAGE_NAMESPACE_PREFIX)
 }
 
 fn is_semantic_namespace(namespace: &str) -> bool {
-    let Some(scope) = namespace.strip_prefix("telemetry_v1.") else {
+    let Some(scope) = namespace.strip_prefix(SEMANTIC_NAMESPACE_PREFIX) else {
         return false;
     };
     if namespace.len() > MAX_NAMESPACE_NAME_BYTES {
