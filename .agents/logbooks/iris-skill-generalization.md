@@ -184,3 +184,10 @@ Answer sessions: `rqqbybme` (current), `ejqnahan` (layered), `2jy1pwd4` (replace
 - Result: The answer printed `preflight --clusters marin-dev,marin --accept-tree-state`, processed clusters sequentially, stopped after `marin-dev` failed verification, and required fresh rollback approval.
 - Interpretation: The correction is discoverable without restoring the long top-level deployment skill.
 - Next action: Update the public artifacts and monitor PR #8636.
+
+### 2026-08-24 20:58 UTC - ISG-005 final review
+
+- Commit Hash: production `d7ac518758`.
+- Command: `./infra/pre-commit.py --review --agent-command='codex exec'`.
+- Result: The advisory review found one duplicated CoreWeave hardware-to-cluster mapping. The final reference now resolves the cluster from checked-in config and `list-backends`; validation passed after the targeted edit.
+- Next action: Monitor PR #8636 through an exit condition.
