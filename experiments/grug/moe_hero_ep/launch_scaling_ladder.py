@@ -98,7 +98,10 @@ WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
-TENSORSTORE_CACHE_BYTES = 125_000_000_000
+# The decoded-chunk cache is process-local. A two-tray loader benchmark at the hero's global batch
+# and sequence length found 1 GB retained 18.6x throughput headroom while bounding the cache near
+# 0.923 GiB per process; 125 GB allowed native RSS to grow until the cache filled.
+TENSORSTORE_CACHE_BYTES = 1_000_000_000
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
