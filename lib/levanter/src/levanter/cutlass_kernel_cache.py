@@ -106,10 +106,9 @@ def cutlass_kernel_cache() -> PersistentKvCache:
     """The standard cache for compiled CuTeDSL kernel object code, addressed by key.
 
     Memory over region-local temp object storage, assembled by
-    :meth:`PersistentKvCache.for_prefix`. Every process reads the shared cache, while
-    only global process 0 publishes misses. An unreachable store degrades to a compile.
+    :meth:`PersistentKvCache.for_prefix`. An unreachable store degrades to a compile.
     """
-    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX, is_writer=lambda: jax.process_index() == 0)
+    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX)
 
 
 def install(cache: PersistentKvCache) -> None:

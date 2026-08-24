@@ -367,7 +367,6 @@ def drain_for_dispatch(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
             attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
-            state=int(row.state),
         )
         for row in running_rows
     ]

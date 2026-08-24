@@ -100,23 +100,6 @@ def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
         getattr(svc, client_attr)
 
 
-def test_node_resource_metrics_decodes_raw_response():
-    metrics = b"# HELP container_cpu_usage_seconds_total CPU usage.\ncontainer_cpu_usage_seconds_total 1.5\n"
-    request: dict = {}
-
-    def get_metrics(**kwargs):
-        request.update(kwargs)
-        return SimpleNamespace(data=metrics)
-
-    svc = CloudK8sService(namespace="iris")
-    svc.__dict__["_core_v1"] = SimpleNamespace(connect_get_node_proxy_with_path=get_metrics)
-
-    assert svc.node_resource_metrics("worker-0") == metrics.decode()
-    assert request["name"] == "worker-0"
-    assert request["path"] == "metrics/resource"
-    assert request["_preload_content"] is False
-
-
 class _FakeApiServer:
     """Paginating stand-in for one DynamicClient resource handle.
 

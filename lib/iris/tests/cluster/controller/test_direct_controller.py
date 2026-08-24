@@ -421,7 +421,6 @@ def test_drain_redrives_assigned_null_worker(state):
     assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch1.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
-    assert batch1.running_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
 
     # Second drain (simulates a crash between assign-commit and provider.sync,
     # or a transient apply failure): task is still ASSIGNED+null-worker, so it
@@ -433,7 +432,6 @@ def test_drain_redrives_assigned_null_worker(state):
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
-    assert batch2.running_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
 
 
 def test_drain_scopes_running_tasks_to_backend(state):
@@ -482,7 +480,6 @@ def test_drain_executing_goes_to_running_tasks(state):
     assert len(batch2.running_tasks) == 1
     assert batch2.running_tasks[0].task_id == task_id
     assert batch2.running_tasks[0].attempt_id == attempt_id
-    assert batch2.running_tasks[0].state == job_pb2.TASK_STATE_RUNNING
 
 
 # =============================================================================

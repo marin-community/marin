@@ -16,11 +16,10 @@ from types import TracebackType
 from typing import Protocol
 
 import pyarrow as pa
-from rigging.filesystem.s3_errors import is_transient_s3_error
-from rigging.timing import ExponentialBackoff
 
 from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
-from finestore.compaction import CompactionResult, compact_table
+from finestore.compaction import CompactionResult
+from finestore.compaction import compact as compact_table
 from finestore.layout import (
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
@@ -43,10 +42,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FLUSH_INTERVAL = 5.0
 DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
-DEFAULT_COMPACTION_LEVELS = (16, 4, 4)
+DEFAULT_COMPACTION_SHARDS = 8
 OBJECT_PART_BYTES = 8 * 1024 * 1024
-_MAINTENANCE_BACKOFF_INITIAL = 1.0
-_MAINTENANCE_BACKOFF_MAXIMUM = 10 * 60.0
 
 _BLOB_SCHEMA = pa.schema(
     [
@@ -157,7 +154,7 @@ class DataStore:
         writer_id: str | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
-        compaction_levels: Sequence[int] = DEFAULT_COMPACTION_LEVELS,
+        compaction_shards: int = DEFAULT_COMPACTION_SHARDS,
     ) -> None:
         self.root = root
         self._layout = FineStoreLayout(self.root)
@@ -166,9 +163,7 @@ class DataStore:
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
         self._max_buffer_bytes = max_buffer_bytes
-        self._compaction_levels = tuple(compaction_levels)
-        if not self._compaction_levels or any(limit < 1 for limit in self._compaction_levels):
-            raise ValueError("compaction_levels must contain positive shard limits")
+        self._compaction_shards = compaction_shards
         self._tables: dict[str, DataTable] = {}
         self._register_lock = threading.Lock()
         self._commit_lock = threading.Lock()
@@ -347,21 +342,18 @@ class DataStore:
                 return snapshot.token
             return self._commits.commit(_addition_delta(additions))
 
-    def compact(self, table: str, *, generation: int | None = None) -> CompactionResult:
+    def compact(self, table: str) -> CompactionResult:
         """Logically compact one table against the current manifest."""
         with self._commit_lock:
-            return compact_table(self.root, table, generation=generation, coordinator=self._commits)
+            return compact_table(self.root, table, coordinator=self._commits)
 
     def maintain(self) -> CommitToken | None:
-        """Flush pending rows and compact each overfull level once."""
+        """Flush pending rows and compact tables that crossed the shard threshold."""
         token = self.flush()
         view = self.read_view()
         for name in view.table_names():
-            for generation, shard_limit in enumerate(self._compaction_levels):
-                level_shards = [shard for shard in view.list_shards(name) if shard.generation == generation]
-                if len(level_shards) <= shard_limit:
-                    continue
-                self.compact(name, generation=generation)
+            if len(view.list_shards(name)) >= self._compaction_shards:
+                self.compact(name)
                 view = self.read_view()
                 token = view.token
         return token
@@ -397,34 +389,12 @@ class DataStore:
             self._wake.clear()
             if self._stop.is_set():
                 return
-            backoff = ExponentialBackoff(
-                initial=_MAINTENANCE_BACKOFF_INITIAL,
-                maximum=_MAINTENANCE_BACKOFF_MAXIMUM,
-                factor=2.0,
-                jitter=0.25,
-            )
-            failures = 0
-            while not self._stop.is_set():
-                try:
-                    self.maintain()
-                    break
-                except Exception as exc:
-                    if not is_transient_s3_error(exc):
-                        self._error = exc
-                        logger.exception("FineStore background maintenance failed")
-                        return
-                    failures += 1
-                    delay = backoff.next_interval()
-                    logger.warning(
-                        "FineStore background maintenance failed for %s (consecutive_failures=%d); "
-                        "retrying in %.2fs: %s",
-                        self.root,
-                        failures,
-                        delay,
-                        exc,
-                    )
-                    if self._stop.wait(delay):
-                        return
+            try:
+                self.maintain()
+            except BaseException as exc:
+                self._error = exc
+                logger.exception("FineStore background maintenance failed")
+                return
 
     def request_flush(self) -> None:
         self._wake.set()

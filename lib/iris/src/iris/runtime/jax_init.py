@@ -53,9 +53,6 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
-# Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
-# Leave the same margin again while bounding a rank stuck below Python.
-_JAX_DIST_SHUTDOWN_TIMEOUT = 120
 
 
 class _AutotuneCacheRole(enum.StrEnum):
@@ -334,7 +331,6 @@ def _initialize_supervised_jax(
             num_processes=1,
             process_id=0,
             local_device_ids=device_ids,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
         return
 
@@ -361,7 +357,6 @@ def _initialize_supervised_jax(
         local_device_ids=device_ids,
         initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
         heartbeat_timeout_seconds=heartbeat_timeout,
-        shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -447,7 +442,6 @@ def initialize_jax(
             coordinator,
             num_processes=1,
             process_id=0,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
         return
 
@@ -466,7 +460,6 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
     else:
         ctx = iris_ctx()
@@ -477,5 +470,4 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
-            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )

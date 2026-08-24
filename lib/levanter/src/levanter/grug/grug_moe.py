@@ -40,7 +40,9 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
-    _expert_granular_a2a_params as _expert_granular_a2a_params,
+    _compact_by_keep_mask as _compact_by_keep_mask,
+    _expand_from_keep_mask as _expand_from_keep_mask,
+    _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local

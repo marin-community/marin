@@ -100,18 +100,6 @@ def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"
 
 
-def test_non_writer_cache_keeps_value_in_memory_without_persisting(tmp_path, monkeypatch):
-    root = tmp_path / "cutlass-kernels"
-    monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda _ttl, _prefix: str(root))
-    cache = PersistentKvCache.for_prefix("cutlass-kernels", is_writer=lambda: False)
-
-    cache.store("kernel", b"value")
-    assert cache.load("kernel") == b"value"
-    cache.close()
-
-    assert PersistentKvCache.at(str(root)).load("kernel") is None
-
-
 def test_remote_cache_can_commit_object_larger_than_store_buffer(tmp_path, monkeypatch):
     root = str(tmp_path / "cache")
     open_store = DataStore.open

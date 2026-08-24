@@ -358,17 +358,6 @@ iris --config cluster.yaml job cancel --prefix /my-job-prefix
 iris --config cluster.yaml job complete /my-job
 ```
 
-The standard task image includes jemalloc as an opt-in allocator. Set
-`LD_PRELOAD=libjemalloc.so.2` for the default jemalloc policy, and optionally
-set `MALLOC_CONF` to tune it for the workload:
-
-```bash
-iris --config cluster.yaml job run \
-  -e LD_PRELOAD libjemalloc.so.2 \
-  -e MALLOC_CONF background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2 \
-  -- python train.py
-```
-
 `iris process logs` is the low-level diagnostic view for a controller, worker,
 or task-runtime process. Workload output is always under `job logs`, `task logs`,
 or `attempt logs`.

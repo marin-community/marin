@@ -96,33 +96,3 @@ def test_s3_conditional_object_maps_precondition_failure(monkeypatch):
     monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
     with pytest.raises(ConditionalWriteError):
         S3ConditionalObject("s3://bucket/HEAD").write(b"two", expected_version='"v1"')
-
-
-def test_s3_conditional_object_retries_slow_down(monkeypatch):
-    client = MagicMock()
-    client.get_object.return_value = {"Body": BytesIO(b"one"), "ETag": '"v1"'}
-    client.put_object.side_effect = [
-        ClientError({"Error": {"Code": "SlowDown", "Message": "reduce request rate"}}, "PutObject"),
-        {"ETag": '"v2"'},
-    ]
-    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
-    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
-
-    version = S3ConditionalObject("s3://bucket/HEAD").write(b"two", expected_version='"v1"')
-
-    assert version == '"v2"'
-    assert client.put_object.call_count == 2
-
-
-def test_s3_conditional_object_reconciles_accepted_put_after_transport_failure(monkeypatch):
-    client = MagicMock()
-    client.put_object.side_effect = TimeoutError("response lost")
-    client.get_object.return_value = {"Body": BytesIO(b"two"), "ETag": '"v2"'}
-    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
-    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
-
-    version = S3ConditionalObject("s3://bucket/HEAD").write(b"two", expected_version='"v1"')
-
-    assert version == '"v2"'
-    client.put_object.assert_called_once()
-    client.get_object.assert_called_once_with(Bucket="bucket", Key="HEAD")

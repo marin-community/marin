@@ -359,12 +359,6 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
-    def request_checkpoint(self) -> None:
-        """Request a checkpoint after the current step, subject to the save policy."""
-        if self._checkpointer is None:
-            raise RuntimeError("Checkpointing is not configured")
-        self._checkpointer.request_checkpoint()
-
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping
@@ -706,7 +700,7 @@ class Trainer:
             max_buffered_batches=128,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            fetch_batch_size=32,
+            prefetch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -910,17 +904,12 @@ class TrainerConfig:
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
-    load_checkpoint_path: Optional[str | list[str]] = None
-    """One checkpoint root/path, or ordered roots searched for the newest checkpoint.
-
-    If None, search the checkpointer's permanent and temporary roots.
-    """
+    load_checkpoint_path: Optional[str] = None
+    """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
 
     def checkpoint_search_paths(self, run_id: str) -> list[str]:
-        if isinstance(self.load_checkpoint_path, str):
-            return [self.load_checkpoint_path]
         if self.load_checkpoint_path is not None:
-            return list(self.load_checkpoint_path)
+            return [self.load_checkpoint_path]
 
         paths = [self.checkpointer.expanded_path(run_id)]
         temp_path = self.checkpointer.expanded_temporary_path(run_id)

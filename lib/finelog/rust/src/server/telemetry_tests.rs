@@ -179,43 +179,6 @@ fn batch(batch_id: &str) -> Vec<u8> {
     .unwrap()
 }
 
-fn training_metrics_batch(
-    batch_id: &str,
-    process_index: &str,
-    execution_uid: &str,
-    step: f64,
-    loss: f64,
-) -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "version": 1,
-        "batch_id": batch_id,
-        "resource": {
-            "service": "levanter",
-            "run_id": "run-projection",
-            "execution_uid": execution_uid,
-            "process_index": process_index,
-            "attributes": {}
-        },
-        "records": [
-            {
-                "timestamp_ms": 1_700_000_000_000_i64,
-                "kind": "gauge",
-                "name": "step",
-                "value": step,
-                "attributes": {}
-            },
-            {
-                "timestamp_ms": 1_700_000_000_001_i64,
-                "kind": "gauge",
-                "name": "train_loss",
-                "value": loss,
-                "attributes": {}
-            }
-        ]
-    }))
-    .unwrap()
-}
-
 async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
     let _guard = store.query_visibility().read().await;
     let providers = store.query_providers().unwrap();
@@ -310,7 +273,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "phase",
             "progress_time_seconds",
             "step",
-            "train_loss",
         ]
     );
     let projections: BTreeMap<_, _> = schema
@@ -332,7 +294,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "accelerator-utilization",
             "node-host-network",
             "node-host-utilization",
-            "training-process-zero",
             "training-run-attribution",
             "training-status",
         ]
@@ -369,10 +330,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
-    assert_eq!(
-        training_status.predicate_values,
-        ["phase", "progress_time_seconds", "step"]
-    );
     for column in ["run_id", "job_id"] {
         assert!(training_status.columns.iter().any(|item| item == column));
     }
@@ -382,110 +339,6 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     assert_eq!(grouped.json_column, "resource_attributes_json");
     assert_eq!(grouped.json_key, "job_id");
     assert_eq!(grouped.extrema_column, "timestamp_ms");
-}
-
-#[tokio::test]
-async fn process_zero_training_query_uses_projection_without_changing_results() {
-    let store = Arc::new(
-        Store::new(
-            Some(unique_dir("telemetry-process-zero-projection")),
-            String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
-            crate::store::ServeMode::Shadow,
-        )
-        .unwrap(),
-    );
-    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
-    let client = http_client();
-
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while get_text(&client, addr, "/health").await != HEALTH_OK {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("telemetry registration did not complete");
-
-    for (batch_id, process_index, execution_uid, step, loss) in [
-        (
-            "3ec4ce6c-3ab9-43b1-a5e9-43f43d9f187c",
-            "0",
-            "execution-0",
-            10.0,
-            2.0,
-        ),
-        (
-            "789c78ef-44c3-42a3-a130-67dbc255e1c0",
-            "1",
-            "execution-1",
-            99.0,
-            9.9,
-        ),
-    ] {
-        let response = post(
-            &client,
-            addr,
-            training_metrics_batch(batch_id, process_index, execution_uid, step, loss),
-            Some(batch_id),
-            Some("application/json"),
-            None,
-        )
-        .await;
-        assert_eq!(response.status, StatusCode::OK);
-    }
-    store
-        .maintain_namespace("telemetry_v1", true)
-        .await
-        .unwrap();
-
-    const FILTER_AND_ORDER: &str = "FROM telemetry_v1 \
-        WHERE service = 'levanter' \
-          AND name IN ('step', 'train_loss') \
-          AND run_id = 'run-projection' \
-          AND execution_uid IS NOT NULL \
-          AND process_index = '0' \
-        ORDER BY seq";
-    let projection_sql =
-        format!("SELECT seq, timestamp_ms, execution_uid, name, value {FILTER_AND_ORDER}");
-    // `kind` is absent from the projection, forcing this query to use source Parquet.
-    let source_sql =
-        format!("SELECT seq, timestamp_ms, execution_uid, name, value, kind {FILTER_AND_ORDER}");
-
-    let result_rows = |batches: &[arrow::array::RecordBatch]| {
-        let mut rows = Vec::new();
-        for batch in batches {
-            let names = batch.column(3).as_string::<i32>();
-            let values = batch
-                .column(4)
-                .as_primitive::<arrow::datatypes::Float64Type>();
-            rows.extend(
-                (0..batch.num_rows()).map(|row| (names.value(row).to_string(), values.value(row))),
-            );
-        }
-        rows
-    };
-
-    let source_rows = result_rows(&query(&store, &source_sql).await);
-    assert_eq!(
-        source_rows,
-        [("step".to_string(), 10.0), ("train_loss".to_string(), 2.0)]
-    );
-
-    let projection_rows = result_rows(&query(&store, &projection_sql).await);
-    assert_eq!(projection_rows, source_rows);
-
-    let explain_batches = query(&store, &format!("EXPLAIN {projection_sql}")).await;
-    let mut explain = String::new();
-    for batch in &explain_batches {
-        let plans = batch.column(1).as_string::<i32>();
-        for row in 0..batch.num_rows() {
-            explain.push_str(plans.value(row));
-        }
-    }
-    assert!(
-        explain.contains(".fidx.training-process-zero.parquet"),
-        "{explain}"
-    );
 }
 
 #[tokio::test]

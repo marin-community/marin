@@ -438,16 +438,6 @@ def test_trainer_config_checkpoint_search_paths():
     )
     assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
 
-    multi_config = dataclasses.replace(
-        config,
-        load_checkpoint_path=["/tmp/test-perm/run1", "/tmp/test-temp/run1", "/tmp/test-old-temp"],
-    )
-    assert multi_config.checkpoint_search_paths("run1") == [
-        "/tmp/test-perm/run1",
-        "/tmp/test-temp/run1",
-        "/tmp/test-old-temp",
-    ]
-
     pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
     assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 
@@ -728,44 +718,6 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
 
         assert _get_checkpoint_steps(permanent_dir) == [1]
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
-
-
-def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
-    permanent_path = tmp_path / "checkpoints"
-    temporary_path = tmp_path / "temporary"
-    checkpointer = Checkpointer(
-        permanent_path,
-        None,
-        [],
-        temporary_base_path=temporary_path,
-    )
-
-    checkpointer.request_checkpoint()
-    checkpointer.request_checkpoint()
-    _on_step(checkpointer, 1)
-    _on_step(checkpointer, 2)
-    checkpointer.wait_until_finished()
-
-    assert _get_checkpoint_steps(temporary_path) == [1]
-    assert not permanent_path.exists()
-
-
-def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(tmp_path):
-    permanent_path = tmp_path / "checkpoints"
-    temporary_path = tmp_path / "temporary"
-    checkpointer = Checkpointer(
-        permanent_path,
-        None,
-        [CheckpointInterval(every=1)],
-        temporary_base_path=temporary_path,
-    )
-
-    checkpointer.request_checkpoint()
-    _on_step(checkpointer, 1)
-    checkpointer.wait_until_finished()
-
-    assert _get_checkpoint_steps(permanent_path) == [1]
-    assert not temporary_path.exists()
 
 
 def test_load_from_checkpoint_or_initialize():

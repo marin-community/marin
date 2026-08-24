@@ -130,11 +130,8 @@ Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
 explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
-backfill is useful. `telemetry_v1` has a `training-status` projection for three
-dashboard metric names and a `training-process-zero` projection for rows whose
-`process_index` is `0`. The latter covers the structured columns used by the
-training loss window query. `process_index = '0'` and `name = 'train_loss'`
-also have exact postings when a segment has not completed projection backfill.
+backfill is useful. `telemetry_v1` has one `training-status` projection for the
+three dashboard metric names.
 
 Change a projection in place; do not version its name. Re-registering a name
 with a different predicate or column list supersedes the registered definition:

@@ -107,15 +107,13 @@ The core `DataStore` and `ReadView` APIs propagate storage and commit errors.
 
 ## Compaction
 
-The store's maintenance thread flushes on its configured interval and uses bounded
-leveled compaction. Level-zero shards are compacted after 16 active files, followed by
-limits of 4 shards at levels one and two. Level three is terminal, so one maintenance
-pass performs at most three compactions per table. `store.maintain()` exposes the same
-operation for deterministic callers. `compact_table(root, table)` compacts all active shards
-for explicit materialization and sealing.
+The store's maintenance thread flushes on its configured interval and compacts a
+table after it crosses `compaction_shards` active files. `store.maintain()` exposes
+the same operation for deterministic callers. `compact(root, table)` performs one
+explicit compaction.
 
 Compaction pins a manifest, streams an ordered merge of its exact input shards, writes
-one shard at the next level, and replaces those paths through the same `HEAD` compare
+one next-generation shard, and replaces those paths through the same `HEAD` compare
 and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,
 the replacement can rebase while preserving the new shard.

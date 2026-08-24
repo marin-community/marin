@@ -226,9 +226,7 @@ def _autotune_enabled() -> bool:
     return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-_AUTOTUNE_CACHE = AutotuneBlockSizeCache(
-    PersistentKvCache.for_prefix(_AUTOTUNE_BLOCK_SIZE_PREFIX, is_writer=lambda: jax.process_index() == 0)
-)
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache(PersistentKvCache.for_prefix(_AUTOTUNE_BLOCK_SIZE_PREFIX))
 
 
 def _autotune_jaxpr_hash(

@@ -7,15 +7,14 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
-from iris.client.client import iris_ctx
+from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 from levanter.megascale import configure_megascale_from_iris
@@ -33,21 +32,15 @@ _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
 
 
-def _finalize_iris_jax_after_clean_exit(complete_job: Callable[[], None] | None = None) -> None:
+def _complete_iris_job_after_clean_exit(client: IrisClient, job_id: JobName) -> None:
+    # Preserve retries for genuine failures; the successful rank-0 exit owns completed-job teardown.
     if getattr(sys, "last_exc", None) is not None:
         return
-    if jax.distributed.is_initialized():
-        try:
-            jax.distributed.shutdown()
-        except BaseException:  # noqa: BLE001 - atexit exceptions do not reliably affect the process exit code
-            logger.exception("JAX distributed shutdown failed")
-            os._exit(1)
-    if complete_job is not None:
-        complete_job()
+    client.complete_job(job_id)
 
 
-def _unregister_iris_exit_handler() -> None:
-    atexit.unregister(_finalize_iris_jax_after_clean_exit)
+def _unregister_iris_job_completion() -> None:
+    atexit.unregister(_complete_iris_job_after_clean_exit)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -252,10 +245,8 @@ class DistributedConfig:
                 ctx = iris_ctx()
                 if ctx.client is None:
                     raise RuntimeError("Iris context has no client for completing the current job")
-                complete_job = partial(ctx.client.complete_job, job_info.job_id)
-                atexit.register(_finalize_iris_jax_after_clean_exit, complete_job)
-            else:
-                atexit.register(_finalize_iris_jax_after_clean_exit)
+                # Tracker exit hooks register later and therefore run before job completion.
+                atexit.register(_complete_iris_job_after_clean_exit, ctx.client, job_info.job_id)
         elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

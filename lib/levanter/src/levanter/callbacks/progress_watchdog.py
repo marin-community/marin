@@ -38,16 +38,13 @@ class ProgressWatchdog(Callback[Any]):
         *,
         step_timeout: timedelta | None,
         process_timeout: timedelta | None,
-        startup_timeout: timedelta | None = None,
         startup_grace_period: timedelta = _DEFAULT_STARTUP_GRACE_PERIOD,
         diagnostic: Callable[[ProgressTimeout], None] | None = None,
         diagnostic_timeout: timedelta | None = None,
         poll_interval: float = _WATCHDOG_POLL_INTERVAL,
     ) -> None:
-        if step_timeout is None and process_timeout is None and startup_timeout is None:
+        if step_timeout is None and process_timeout is None:
             raise ValueError("at least one watchdog timeout must be set")
-        if startup_timeout is not None and startup_timeout.total_seconds() <= 0:
-            raise ValueError("startup_timeout must be positive")
         if step_timeout is not None and step_timeout.total_seconds() <= 0:
             raise ValueError("step_timeout must be positive")
         if process_timeout is not None and process_timeout.total_seconds() <= 0:
@@ -61,7 +58,6 @@ class ProgressWatchdog(Callback[Any]):
         if poll_interval <= 0:
             raise ValueError("poll_interval must be positive")
 
-        self._startup_timeout = startup_timeout.total_seconds() if startup_timeout is not None else None
         self._step_timeout = step_timeout.total_seconds() if step_timeout is not None else None
         self._process_timeout = process_timeout.total_seconds() if process_timeout is not None else None
         self._startup_grace_period = startup_grace_period.total_seconds()
@@ -69,7 +65,6 @@ class ProgressWatchdog(Callback[Any]):
         self._diagnostic_timeout = diagnostic_timeout.total_seconds() if diagnostic_timeout is not None else None
         self._poll_interval = poll_interval
         self._lock = threading.Lock()
-        self._created_at = monotonic()
         self._completed_training_step = False
         self._training_started_at: float | None = None
         self._active_step_started_at: float | None = None
@@ -113,20 +108,9 @@ class ProgressWatchdog(Callback[Any]):
         while not self._stop.wait(self._poll_interval):
             now = monotonic()
             with self._lock:
-                completed_training_step = self._completed_training_step
                 training_started_at = self._training_started_at
                 active_step_started_at = self._active_step_started_at
                 last_progress = self._last_progress
-
-            if not completed_training_step:
-                # No step has completed, so the process is still restoring, building caches, or
-                # compiling its first step. Elapsed time is all that bounds this: the step deadline
-                # stays unarmed until a step completes, and the process deadline has no progress
-                # event to measure from.
-                if self._startup_timeout is not None and now - self._created_at >= self._startup_timeout:
-                    self._terminate(ProgressEvent.PROCESS_STARTED, now - self._created_at, self._startup_timeout)
-                    return
-                continue
 
             if training_started_at is None or now - training_started_at < self._startup_grace_period:
                 continue
@@ -184,15 +168,12 @@ class ProgressWatchdogConfig:
 
     step_timeout: timedelta | None = None
     process_timeout: timedelta | None = None
-    startup_timeout: timedelta | None = None
     startup_grace_period: timedelta = _DEFAULT_STARTUP_GRACE_PERIOD
     diagnostic_timeout: timedelta | None = None
 
     def __post_init__(self) -> None:
         if self.step_timeout is not None and self.step_timeout.total_seconds() <= 0:
             raise ValueError("step_timeout must be positive")
-        if self.startup_timeout is not None and self.startup_timeout.total_seconds() <= 0:
-            raise ValueError("startup_timeout must be positive")
         if self.process_timeout is not None and self.process_timeout.total_seconds() <= 0:
             raise ValueError("process_timeout must be positive")
         if self.startup_grace_period.total_seconds() < 0:
@@ -206,7 +187,7 @@ class ProgressWatchdogConfig:
         process_index: int = 0,
         diagnostic: Callable[[ProgressTimeout], None] | None = None,
     ) -> ProgressWatchdog | None:
-        if self.step_timeout is None and self.process_timeout is None and self.startup_timeout is None:
+        if self.step_timeout is None and self.process_timeout is None:
             return None
         if self.diagnostic_timeout is not None and process_index != 0:
             return None
@@ -215,7 +196,6 @@ class ProgressWatchdogConfig:
         return ProgressWatchdog(
             step_timeout=self.step_timeout,
             process_timeout=self.process_timeout,
-            startup_timeout=self.startup_timeout,
             startup_grace_period=self.startup_grace_period,
             diagnostic=diagnostic if self.diagnostic_timeout is not None else None,
             diagnostic_timeout=self.diagnostic_timeout,

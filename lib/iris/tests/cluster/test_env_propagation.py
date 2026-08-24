@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, any_region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 
@@ -162,42 +162,6 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     assert not any(
         c.key == WellKnownAttribute.REGION and c.value.string_value == "us-west4" for c in stub.captured_constraints
     )
-
-
-@pytest.mark.parametrize(
-    ("child_constraints", "expected_regions"),
-    [
-        (None, ["us-central2"]),
-        (
-            [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")],
-            ["europe-west4"],
-        ),
-        ([any_region_constraint()], []),
-    ],
-    ids=("inherit-worker", "explicit-child", "any-region"),
-)
-def test_child_region_placement_uses_parent_worker_region(
-    capturing_client,
-    parent_context,
-    monkeypatch,
-    child_constraints,
-    expected_regions,
-):
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/parent-job/0:0")
-    monkeypatch.setenv("IRIS_WORKER_REGION", "us-central2")
-
-    set_job_info(None)
-    try:
-        with iris_ctx_scope(parent_context):
-            client.submit(entrypoint, "child-region", resources, constraints=child_constraints)
-    finally:
-        set_job_info(None)
-
-    region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
-    assert [constraint.value.string_value for constraint in region_constraints] == expected_regions
 
 
 def test_child_any_region_marker_clears_inherited_region_constraint(capturing_client, parent_context):

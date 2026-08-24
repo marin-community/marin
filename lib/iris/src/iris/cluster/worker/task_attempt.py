@@ -27,12 +27,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import (
-    IRIS_ATTEMPT_UID_ENV,
-    IRIS_WORKER_REGION_ENV,
-    STANDARD_MOUNTS,
-    build_common_iris_env,
-)
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -44,7 +39,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, is_task_finished
+from iris.cluster.types import AttemptUid, JobName, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
@@ -723,11 +718,6 @@ class TaskAttempt:
         env.pop(IRIS_ATTEMPT_UID_ENV, None)
         if attempt_uid := iris_env.get(IRIS_ATTEMPT_UID_ENV):
             env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
-
-        # The worker's physical location is authoritative over task-provided env.
-        region = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
-        if region and region.string_value:
-            env[IRIS_WORKER_REGION_ENV] = region.string_value
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint

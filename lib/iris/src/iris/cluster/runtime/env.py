@@ -27,7 +27,6 @@ IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
-IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).

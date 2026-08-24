@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from finestore.layout import (
     FORMAT_VERSION,
@@ -30,8 +29,6 @@ from finestore.layout import (
 )
 
 _MAX_COMMIT_ATTEMPTS = 32
-_COMMIT_BACKOFF_INITIAL = 1.0
-_COMMIT_BACKOFF_MAXIMUM = 10 * 60.0
 _ROOT_COMMIT_ID = "root"
 
 
@@ -233,13 +230,7 @@ class CommitCoordinator:
         """Publish ``delta`` and return the new durable commit token."""
         with self._lock:
             current = base or read_snapshot(self._layout)
-            refresh = False
-
-            def publish() -> CommitToken:
-                nonlocal current, refresh
-                if refresh:
-                    current = read_snapshot(self._layout)
-                    refresh = False
+            for _attempt in range(_MAX_COMMIT_ATTEMPTS):
                 manifest = _apply_delta(current.manifest, delta)
                 manifest_path = self._layout.manifest_path(manifest.commit_id)
                 StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
@@ -252,29 +243,12 @@ class CommitCoordinator:
                 try:
                     version = self._head.write(head.model_dump_json().encode(), expected_version=expected_version)
                 except ConditionalWriteError:
-                    refresh = True
-                    raise
+                    current = read_snapshot(self._layout)
+                    continue
                 return CommitToken(
                     commit_id=manifest.commit_id,
                     sequence=manifest.sequence,
                     version=version,
                     manifest_path=manifest_path,
                 )
-
-            try:
-                return retry_with_backoff(
-                    publish,
-                    retryable=lambda exc: isinstance(exc, ConditionalWriteError),
-                    max_attempts=_MAX_COMMIT_ATTEMPTS,
-                    backoff=ExponentialBackoff(
-                        initial=_COMMIT_BACKOFF_INITIAL,
-                        maximum=_COMMIT_BACKOFF_MAXIMUM,
-                        factor=2.0,
-                        jitter=0.25,
-                    ),
-                    operation=f"FineStore commit at {self._layout.root}",
-                )
-            except ConditionalWriteError as exc:
-                raise CommitConflict(
-                    f"HEAD at {self._layout.root} changed {_MAX_COMMIT_ATTEMPTS} consecutive times"
-                ) from exc
+        raise CommitConflict(f"HEAD at {self._layout.root} changed {_MAX_COMMIT_ATTEMPTS} consecutive times")

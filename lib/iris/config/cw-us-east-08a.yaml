@@ -167,11 +167,11 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # Durable outputs remain in 02A. All lifecycle-managed temporary writes use
-    # the region-local 08A bucket; rigging adds the tmp/ttl=Nd prefixes.
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    MARIN_TEMP_PREFIX: s3://hero-checkpoints
-    # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name

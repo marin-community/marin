@@ -268,7 +268,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ffmpeg \
     lldb \
-    libjemalloc2 \
     libibverbs1 \
     ibverbs-providers \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

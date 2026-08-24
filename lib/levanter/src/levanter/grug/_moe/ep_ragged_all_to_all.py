@@ -130,6 +130,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     assignments_per_shard = tokens_per_shard * topk
     local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
     local_capacity = max(local_experts, local_capacity)
+    recv_capacity = local_capacity
 
     # One a2a update per (peer, local expert, split): reuse the peer-granular splits knob as
     # a per-expert-group split count with a comparable total update budget.
@@ -149,7 +150,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         flat_selected = selected_experts_local.reshape(-1)
         sorted_indices = jnp.argsort(flat_selected)
         group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
-        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)
+        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk=topk)
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
 
     expert_mlp = _select_expert_mlp(activation_fn)
@@ -188,7 +189,9 @@ def _moe_mlp_ep_ragged_a2a_local(
                 *dispatch_params,
                 axis_name="expert",
             )
-            active_all = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0)
+            active_all = jnp.sum(
+                clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
+            )
             active_group_sizes = active_all[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts]
             total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
             physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)

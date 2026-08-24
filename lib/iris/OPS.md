@@ -64,17 +64,6 @@ one-job smoke test.
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
-Run controller lifecycle commands with the `controller` extra, which supplies
-the Kubernetes client used by CoreWeave prerequisite checks:
-
-```bash
-uv run --package marin-iris --extra controller iris \
-  --cluster=<name> cluster controller restart
-```
-
-The base `uv run iris` environment omits this dependency and can report every
-CoreWeave prerequisite as missing even when the objects exist.
-
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
 The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
@@ -88,8 +77,7 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 Restarts default to the fast Rust profile, which skips LTO and reduces native link time. Kubernetes clusters build the controller and task images for amd64+arm64 because task Pods run the controller image as the log-shipper sidecar; they skip the unused worker image. VM clusters build amd64 controller, worker, and task images. `--image-platform` overrides only the task image, for example when a Kubernetes dev cluster has amd64 nodes only:
 
 ```bash
-uv run --package marin-iris --extra controller iris \
-  --config path/to/dev.yaml cluster controller restart \
+iris --config path/to/dev.yaml cluster controller restart \
   --image-platform linux/amd64
 ```
 
@@ -106,8 +94,7 @@ Pass `--cargo-profile release` for an LTO build. Keep the default task image pla
 **Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
 
 ```bash
-uv run --package marin-iris --extra controller iris \
-  --cluster=marin cluster controller restart --rollback
+iris --cluster=marin cluster controller restart --rollback
 ```
 
 **Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
@@ -282,11 +269,8 @@ iris task exec /user/job/0 -- python -c "import jax; print(jax.devices())"
 garbage-collected. It queries `iris.task_event` across every retained attempt in
 the task's current job incarnation in one call and shows both backend
 observations (`k8s/kueue`, `k8s/container`) and controller decisions
-(`iris/controller`) in chronological order. Events are retained for up to 30
-days. Kubernetes `DisruptionTarget` conditions are recorded as
-`k8s/disruption` events with the pod and node identity plus a snapshot of the
-node's taints, conditions, hardware/topology labels, and CoreWeave health
-annotations.
+(`iris/controller`) in chronological order. Events are retained for up to seven
+days.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -557,7 +541,7 @@ Namespaces:
   restart resets that peak. Kubelet resource metrics do not expose container
   filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
   service account requires `get` on `nodes/proxy`.
-- `iris.task_event` — up to 30 days of deduplicated backend verdicts and
+- `iris.task_event` — up to seven days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:
 
@@ -567,24 +551,6 @@ Namespaces:
   WHERE task_id='/user/job/0' AND attempt_uid='<uid from iris task describe>'
   ORDER BY ts ASC;
   ```
-
-  Kubernetes disruptions use `source='k8s/disruption'`. `node_provider_id` and
-  `node_system_uuid` identify a physical machine; `node_boot_id` distinguishes
-  reboots. To inspect taint-manager evictions across the fleet:
-
-  ```sql
-  SELECT cluster, ts, task_id, attempt_id, pod_name, node_name,
-         node_uid, node_provider_id, node_boot_id, node_system_uuid,
-         reason, message, pod_conditions_json, node_taints_json,
-         node_conditions_json
-  FROM "iris.task_event"
-  WHERE source='k8s/disruption' AND reason='DeletionByTaintManager'
-  ORDER BY ts DESC;
-  ```
-
-  One node drain can disrupt many pods. Treat rows with the same cluster,
-  `node_system_uuid`, `node_boot_id`, and nearby timestamps as one machine
-  incident before counting repeat offenders.
 - `iris.task_state` — controller-emitted (every 30s) task counts by state per root job, plus `oldest_pending_age_ms` / `oldest_building_age_ms` wait ages, keyed by `root_job_id`. The `root_job_id=""` row is the per-cluster rollup, written even when idle — its absence means the controller is down. Feeds fleet-wide stuck-BUILDING alerting and queue-depth history.
 - `iris.admission_probe` — on Kubernetes clusters, the outcome (every 60s) of a `dryRun=All` canary pod apply that traverses the full admission chain, keyed by `outcome` (`ok`/`failed` with `error_class`, latency, truncated message). `failed` rows (or silence) detect fail-closed admission webhooks before any task pod exists.
 - `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.

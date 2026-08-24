@@ -23,7 +23,6 @@ CBInfo = TypeVar("CBInfo")
 class ProgressEvent(StrEnum):
     """Lifecycle events that represent forward progress through training."""
 
-    PROCESS_STARTED = "process_started"
     TRAIN_STEP_STARTED = "train_step_started"
     TRAIN_STEP_FINISHED = "train_step_finished"
     EVALUATION_STARTED = "evaluation_started"
