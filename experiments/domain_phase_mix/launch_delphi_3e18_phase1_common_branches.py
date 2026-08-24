@@ -63,11 +63,17 @@ PRIMARY_BRANCH_SEED = 0
 STABILITY_BRANCH_SEED = 1
 STABILITY_CONTINUATION_COUNT = 3
 STABILITY_CONTROL_IDS = {"control_proportional", "control_incumbent_planned"}
+BRANCH_NOISE_REPEAT_COUNT = 4
+BRANCH_NOISE_PREFIX_CANDIDATE = "observed_cap10_best"
+BRANCH_NOISE_CONTINUATION_ID = "control_proportional"
+BRANCH_NOISE_DATA_SEED_BASE = 960_000
 REQUIRED_SELECTED_CANDIDATES = {"observed_cap10_best"}
-HISTORICAL_PHASE_1_EPOCH_CAP = 62.28165425173926
-HISTORICAL_TOTAL_EPOCH_CAP = 255.82463494607435
+HISTORICAL_PHASE_1_EPOCH_CAP = 62.28165425173962
+HISTORICAL_TOTAL_EPOCH_CAP = 255.8246349460757
 BRANCH_RUN_ID_BASE = 950_000
-TOTAL_BRANCH_ROWS = SELECTED_PREFIX_COUNT * (COMMON_CONTINUATION_COUNT + 1 + STABILITY_CONTINUATION_COUNT)
+TOTAL_BRANCH_ROWS = (
+    SELECTED_PREFIX_COUNT * (COMMON_CONTINUATION_COUNT + 1 + STABILITY_CONTINUATION_COUNT) + BRANCH_NOISE_REPEAT_COUNT
+)
 DEFAULT_MAX_CONCURRENT = 56
 SUPPORT_TOLERANCE = 1e-9
 RUN_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_.-]+")
@@ -92,6 +98,7 @@ class BranchTrainingConfig:
     prefix_replay_code_commit: str
     candidate_weights_sha256: str
     continuation_weights_sha256: str
+    continuation_id: str
     code_commit: str
 
 
@@ -119,6 +126,48 @@ def read_uri_bytes(uri: str) -> bytes:
 
 def phase_weights_sha256(phase_weights: dict[str, dict[str, float]]) -> str:
     return hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest()
+
+
+def verify_prefix_checkpoint_on_worker(config: BranchTrainingConfig) -> None:
+    """Re-verify the exact prefix state inside the TPU task before training."""
+    prefix = config.prefix_checkpoint
+    fs, checkpoint_path = fsspec.core.url_to_fs(prefix.checkpoint_uri)
+    metadata_path = os.path.join(checkpoint_path, "metadata.json")
+    if not fs.exists(metadata_path):
+        raise FileNotFoundError(f"Prefix checkpoint metadata is missing on worker: {prefix.checkpoint_uri}")
+    with fs.open(metadata_path) as handle:
+        metadata = json.load(handle)
+    if metadata.get("step") != replay.EXPECTED_PREFIX_HF_STEP or metadata.get("is_temporary") is not False:
+        raise ValueError(f"Worker received a non-permanent prefix checkpoint: {metadata}")
+
+    output_root = prefix.checkpoint_uri.rsplit("/checkpoints/", maxsplit=1)[0]
+    provenance_uri = f"{output_root}/{candidates.CANDIDATE_PROVENANCE_FILENAME}"
+    provenance_bytes = read_uri_bytes(provenance_uri)
+    actual_sha256 = hashlib.sha256(provenance_bytes).hexdigest()
+    if actual_sha256 != prefix.provenance_sha256:
+        raise ValueError(f"Prefix provenance changed on worker: {actual_sha256} != {prefix.provenance_sha256}")
+
+    candidate_position = candidates.CANDIDATE_IDS.index(prefix.candidate_id)
+    seed_position = candidates.REPEAT_SEEDS.index(prefix.repeat_seed)
+    prefix_weights = config.run_spec.phase_weights["phase_0"]
+    expected = {
+        "experiment_name": candidates.EXPERIMENT_NAME,
+        "candidate_id": prefix.candidate_id,
+        "candidate_weights_sha256": config.candidate_weights_sha256,
+        "phase_weights_sha256": phase_weights_sha256({"phase_0": prefix_weights, "phase_1": prefix_weights}),
+        "replay_code_commit": config.prefix_replay_code_commit,
+        "run_name": f"prefix_{prefix.candidate_id}_seed{prefix.repeat_seed}",
+        "run_order": candidate_position * len(candidates.REPEAT_SEEDS) + seed_position,
+        "run_id": candidates.RUN_ID_BASE + candidate_position * len(candidates.REPEAT_SEEDS) + seed_position,
+        "data_seed": candidates.DATA_SEED_BASE + prefix.repeat_seed,
+        "trainer_seed": prefix.repeat_seed,
+        "checkpoint_uri": prefix.checkpoint_uri,
+        "checkpoint_step": replay.EXPECTED_PREFIX_HF_STEP,
+        "trainer_state_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
+    }
+    provenance = json.loads(provenance_bytes)
+    if provenance != expected:
+        raise ValueError(f"Worker prefix provenance does not match the branch state: {provenance}")
 
 
 def load_selected_prefixes(
@@ -426,6 +475,31 @@ def branch_rows(
                 }
             )
             run_order += 1
+
+    noise_prefix = next(prefix for prefix in primary_prefixes if prefix.candidate_id == BRANCH_NOISE_PREFIX_CANDIDATE)
+    noise_source = prefix_specs[(noise_prefix.candidate_id, noise_prefix.repeat_seed)]
+    noise_continuation = next(
+        continuation for continuation in continuations if continuation["continuation_id"] == BRANCH_NOISE_CONTINUATION_ID
+    )
+    for repeat_index in range(BRANCH_NOISE_REPEAT_COUNT):
+        rows.append(
+            {
+                "run_order": run_order,
+                "fit_budget": False,
+                "branch_role": "same_prefix_branch_noise",
+                "prefix": noise_prefix,
+                "continuation_id": f"{BRANCH_NOISE_CONTINUATION_ID}_noise{repeat_index + 1}",
+                "continuation_role": "same_prefix_branch_noise",
+                "noise_group_id": f"{BRANCH_NOISE_PREFIX_CANDIDATE}/{BRANCH_NOISE_CONTINUATION_ID}",
+                "branch_noise_repeat_index": repeat_index + 1,
+                "data_seed": BRANCH_NOISE_DATA_SEED_BASE + repeat_index,
+                "phase_weights": {
+                    "phase_0": noise_source.phase_weights["phase_0"],
+                    "phase_1": noise_continuation["weights"],
+                },
+            }
+        )
+        run_order += 1
     if sum(bool(row["fit_budget"]) for row in rows) != SELECTED_PREFIX_COUNT * COMMON_FIT_CONTINUATION_COUNT:
         raise ValueError("Round-1 fit budget changed")
     if len(rows) != TOTAL_BRANCH_ROWS:
@@ -452,7 +526,7 @@ def enrich_branch_rows(
                 **row,
                 "run_id": BRANCH_RUN_ID_BASE + run_order,
                 "run_name": run_name,
-                "data_seed": source.data_seed,
+                "data_seed": int(row.get("data_seed", source.data_seed)),
                 "trainer_seed": source.trainer_seed,
                 "max_simulated_epoch": max_epoch,
                 "q95_simulated_epoch": q95_epoch,
@@ -468,6 +542,7 @@ def enrich_branch_rows(
 def run_phase_1_branch(config: BranchTrainingConfig) -> None:
     """Restore one exact prefix trainer state and continue through update 3007."""
     run_spec = config.run_spec
+    verify_prefix_checkpoint_on_worker(config)
     expected_prefix_steps, expected_prefix_hf_step = replay.phase_0_boundary(run_spec.train_steps, run_spec.batch_size)
     if (expected_prefix_steps, expected_prefix_hf_step) != (
         replay.EXPECTED_PREFIX_TRAIN_STEPS,
@@ -505,6 +580,8 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
             f"prefix_repeat_seed={config.prefix_checkpoint.repeat_seed}",
             f"prefix_replay_code_commit={config.prefix_replay_code_commit}",
             f"branch_code_commit={config.code_commit}",
+            f"continuation_id={config.continuation_id}",
+            f"continuation_weights_sha256={config.continuation_weights_sha256}",
             f"data_seed={run_spec.data_seed}",
             f"trainer_seed={run_spec.trainer_seed}",
         ],
@@ -569,6 +646,7 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "candidate_weights_sha256": config.candidate_weights_sha256,
         "continuation_weights_sha256": config.continuation_weights_sha256,
+        "continuation_id": config.continuation_id,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "branch_code_commit": config.code_commit,
         "terminal_checkpoint_uri": terminal_uri,
@@ -604,12 +682,16 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
         "terminal_checkpoint_step": replay.EXPECTED_FULL_TRAIN_STEPS - 1,
         "optimizer_schedule_num_train_steps": replay.EXPECTED_FULL_TRAIN_STEPS,
-        "full_design_rows": TOTAL_BRANCH_ROWS,
+        "expected_full_design_rows": TOTAL_BRANCH_ROWS,
+        "selected_design_rows": len(branch_rows),
         "selected_run_orders": [row["run_order"] for row in branch_rows],
         "fit_budget_rows": fit_budget_rows,
         "control_rows": len(branch_rows) - fit_budget_rows,
-        "same_prefix_branch_noise_rows": 0,
-        "noise_estimation": "deferred to fresh full-trajectory confirmation; whole-run seed changes are confounded",
+        "same_prefix_branch_noise_rows": sum(row["branch_role"] == "same_prefix_branch_noise" for row in branch_rows),
+        "noise_estimation": (
+            "four phase-1 data-seed repeats hold the observed-incumbent seed-0 prefix checkpoint and "
+            "proportional continuation fixed; whole-run prefix-seed changes remain confounded"
+        ),
         "branch_rows": branch_rows,
     }
     with fs.open(os.path.join(config.output_path, "manifest.json"), "w") as handle:
@@ -758,6 +840,7 @@ def main() -> None:
                         prefix_replay_code_commit=args.prefix_replay_code_commit,
                         candidate_weights_sha256=args.expected_candidate_sha256,
                         continuation_weights_sha256=args.expected_continuation_sha256,
+                        continuation_id=str(row["continuation_id"]),
                         code_commit=code_commit,
                     ),
                 )

@@ -5,14 +5,15 @@
 # requires-python = ">=3.12"
 # dependencies = ["fsspec", "gcsfs", "numpy", "pandas"]
 # ///
-"""Freeze a label-blind, exposure-aware Delphi phase-1 continuation panel.
+"""Freeze an exposure-aware Delphi phase-1 continuation panel.
 
 Round 1 crosses the same 50 fit-budget continuations with every selected prefix.
 The panel spans the complete historical phase-1 exposure range while reserving
-explicit radial coverage near proportional. Selection uses no endpoint labels:
-exact mixtures are stratified jointly by maximum materialized phase-1 epochs
-and total variation from proportional, then greedily spread in phase-weighted
-square-root geometry within each cell.
+explicit radial coverage near proportional. Fit selection uses no endpoint
+metric values: exact mixtures are stratified jointly by maximum materialized
+phase-1 epochs and total variation from proportional, then greedily spread in
+phase-weighted square-root geometry within each cell. The label-selected
+historical incumbent is retained only as a fixed control.
 """
 
 from __future__ import annotations
@@ -39,13 +40,13 @@ MIXTURE_BLOCK_SIZE = 2_048
 DESIGN_SEED = 20_260_824
 FIT_PER_EXPOSURE_BIN = 10
 EXPOSURE_BIN_EDGES = (0.0, 5.0, 15.0, 25.0, 35.0)
-TV_BIN_EDGES = (0.0, 0.25, 0.5, 0.75, 1.000001)
+TV_BIN_EDGES = (0.0, 0.05, 0.15, 0.25, 0.5, 0.75, 1.000001)
 TV_QUOTAS_BY_EXPOSURE_BIN = (
-    (6, 3, 1, 0),
-    (4, 4, 2, 0),
-    (1, 6, 3, 0),
-    (0, 5, 5, 0),
-    (0, 3, 7, 0),
+    (1, 2, 3, 3, 1, 0),
+    (0, 1, 3, 4, 2, 0),
+    (0, 0, 1, 6, 3, 0),
+    (0, 0, 0, 5, 5, 0),
+    (0, 0, 0, 3, 7, 0),
 )
 DIRICHLET_CONCENTRATIONS = (500.0, 100.0, 20.0, 5.0, 1.0)
 DIRICHLET_DRAWS_PER_CONCENTRATION = 20_000
@@ -351,7 +352,9 @@ def build_design(prefix_weights_path: Path) -> tuple[pd.DataFrame, pd.DataFrame,
     maximum_exposure = np.max(pool * phase_1_scales[None, :], axis=1)
     tv_to_proportional = 0.5 * np.abs(pool - proportional).sum(axis=1)
     cells = exposure_radial_cells(maximum_exposure, tv_to_proportional, phase_1_cap)
-    fixed_directions = np.stack([exposure_direction(weights, phase_1_scales) for _, _, weights in controls])
+    # Proportional and UniMax-8 are label-blind anchors. The outcome-selected
+    # incumbent remains a control, but must not repel fit points.
+    fixed_directions = np.stack([exposure_direction(weights, phase_1_scales) for _, _, weights in controls[:2]])
     selected = stratified_maximin_indices(directions, cells, fixed_directions)
 
     fit_directions = directions[selected]
@@ -459,6 +462,10 @@ def build_design(prefix_weights_path: Path) -> tuple[pd.DataFrame, pd.DataFrame,
         "tv_bin_edges": list(TV_BIN_EDGES),
         "tv_quotas_by_exposure_bin": [list(row) for row in TV_QUOTAS_BY_EXPOSURE_BIN],
         "fit_tv_bin_counts": tv_counts,
+        "candidate_counts_by_exposure_tv_cell": {
+            f"{exposure_position}/{radial_position}": len(indices)
+            for exposure_position, radial_position, _quota, indices in cells
+        },
         "dirichlet_concentrations": list(DIRICHLET_CONCENTRATIONS),
         "dirichlet_draws_per_concentration": DIRICHLET_DRAWS_PER_CONCENTRATION,
         "candidate_pool_size": len(pool),
@@ -471,7 +478,9 @@ def build_design(prefix_weights_path: Path) -> tuple[pd.DataFrame, pd.DataFrame,
         "selection_geometry": (
             "exposure-by-TV stratification, then round-robin maximin over unit sqrt(c1 * w1) directions"
         ),
-        "endpoint_labels_used": False,
+        "endpoint_metric_values_used_for_fit_selection": False,
+        "outcome_selected_incumbent_used_only_as_control": True,
+        "outcome_selected_incumbent_used_as_fit_repeller": False,
         "minimum_fit_direction_distance": minimum_distance,
         "rejection_counts": rejection_counts,
         "fit_max_phase_1_epoch_range": [
@@ -511,14 +520,20 @@ historical phase-1 coordinates with deterministic proportional-centered Dirichle
 `1/{MIXTURE_BLOCK_SIZE}` runtime materialization.
 
 Three controls do not consume fit budget: proportional, UniMax-8, and the historical continuation paired
-with the observed cap-safe prefix incumbent `{INCUMBENT_ROW_ID}`. The launcher also adds prefix-specific
-tied controls and three prefix-seed stability sentinels per selected prefix; these remain outside fit budget.
+with the observed cap-safe prefix incumbent `{INCUMBENT_ROW_ID}`. The incumbent is outcome-selected, so it
+is not used as a maximin repeller for the fit panel. The launcher also adds prefix-specific tied controls,
+three prefix-seed stability sentinels per selected prefix, and four same-checkpoint phase-1 data-seed
+replicates; these remain outside fit budget.
 
 Every row stays within each bucket's observed canonical-panel phase-1 and total materialized-exposure
 envelopes for every frozen candidate prefix. The largest bucket-wise caps are
 {manifest['historical_phase_1_epoch_cap']:.6f} phase-1 epochs and
 {manifest['historical_total_epoch_cap']:.6f} total epochs. These remain coordinate-wise support guardrails,
 not a claim that every joint mixture is in-distribution.
+
+Historical support caps are measured before runtime lattice materialization, while every candidate is
+checked after exact materialization. This conservative asymmetry accounts for the rejected Dirichlet draws.
+The total-exposure cap is a verification guardrail and did not reject a candidate in this frozen pool.
 
 Fit exposure-bin counts: `{json.dumps(manifest['fit_exposure_bin_counts'], sort_keys=True)}`
 

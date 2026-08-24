@@ -8,7 +8,7 @@ from experiments.domain_phase_mix import launch_delphi_3e18_phase1_common_branch
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
 
 CANDIDATE_SHA256 = "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6"
-CONTINUATION_SHA256 = "9547515728e3c85ed564066cf8cfa36eefa80a7241cde3b32e351004f9afc883"
+CONTINUATION_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
 SELECTED_CANDIDATES = (
     "observed_cap10_best",
     "shared_bounded_ensemble_kl0p05",
@@ -76,9 +76,24 @@ def test_branch_panel_crosses_common_fit_rows_and_keeps_controls_outside_budget(
         prefix_specs,
     )
 
-    assert len(rows) == branches.TOTAL_BRANCH_ROWS == 228
+    assert len(rows) == branches.TOTAL_BRANCH_ROWS == 232
     assert sum(bool(row["fit_budget"]) for row in rows) == 200
     assert sum(row["branch_role"] == "primary_cross" for row in rows) == 212
     assert sum(row["branch_role"] == "prefix_tied_control" for row in rows) == 4
     assert sum(row["branch_role"] == "prefix_seed_stability_sentinel" for row in rows) == 12
+    assert sum(row["branch_role"] == "same_prefix_branch_noise" for row in rows) == 4
     assert len({row["run_name"] for row in rows}) == len(rows)
+
+    fit_rows = [row for row in rows if row["fit_budget"]]
+    fit_by_prefix = {
+        candidate_id: {row["continuation_id"] for row in fit_rows if row["prefix"].candidate_id == candidate_id}
+        for candidate_id in SELECTED_CANDIDATES
+    }
+    assert all(len(continuation_ids) == 50 for continuation_ids in fit_by_prefix.values())
+    assert len({frozenset(continuation_ids) for continuation_ids in fit_by_prefix.values()}) == 1
+
+    noise_rows = [row for row in rows if row["branch_role"] == "same_prefix_branch_noise"]
+    assert {row["prefix"].candidate_id for row in noise_rows} == {branches.BRANCH_NOISE_PREFIX_CANDIDATE}
+    assert len({row["data_seed"] for row in noise_rows}) == branches.BRANCH_NOISE_REPEAT_COUNT
+    assert len({row["trainer_seed"] for row in noise_rows}) == 1
+    assert len({branches.phase_weights_sha256(row["phase_weights"]) for row in noise_rows}) == 1

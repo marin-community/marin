@@ -97,6 +97,11 @@ class TrainLmConfig:
     log_entropy: bool = False
 
 
+def _validate_minimum_initial_step(initial_step: int, minimum_initial_step: int | None) -> None:
+    if minimum_initial_step is not None and initial_step < minimum_initial_step:
+        raise ValueError(f"Initial trainer step {initial_step} is below required minimum {minimum_initial_step}")
+
+
 def _restore_lm_model_from_partial_checkpoint(
     checkpointed_model: LmHeadModel,
     source_model: LmHeadModel,
@@ -267,10 +272,7 @@ def main(config: TrainLmConfig):
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
-        if config.minimum_initial_step is not None and int(state.step) < config.minimum_initial_step:
-            raise ValueError(
-                f"Initial trainer step {int(state.step)} is below required minimum {config.minimum_initial_step}"
-            )
+        _validate_minimum_initial_step(int(state.step), config.minimum_initial_step)
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?

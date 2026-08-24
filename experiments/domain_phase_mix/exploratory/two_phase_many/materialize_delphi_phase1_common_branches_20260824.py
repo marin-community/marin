@@ -24,8 +24,11 @@ DEFAULT_EXPERIMENT_ROOT = (
 )
 EXPECTED_EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_common_branches_20260824"
 EXPECTED_TERMINAL_STEP = 3_006
-EXPECTED_FULL_ROWS = 228
+EXPECTED_FULL_ROWS = 232
 EXPECTED_FIT_ROWS = 200
+EXPECTED_PREFIX_COUNT = 4
+EXPECTED_FIT_CONTINUATIONS = 50
+EXPECTED_BRANCH_NOISE_ROWS = 4
 PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 DIAGNOSTIC_METRIC = "eval/uncheatable_eval/github_cpp/bpb"
 BRANCH_PROVENANCE_FILENAME = "branch_provenance.json"
@@ -90,7 +93,8 @@ def matching_full_manifest(
             continue
         rows = payload.get("branch_rows")
         if (
-            payload.get("full_design_rows") == EXPECTED_FULL_ROWS
+            payload.get("expected_full_design_rows") == EXPECTED_FULL_ROWS
+            and payload.get("selected_design_rows") == EXPECTED_FULL_ROWS
             and isinstance(rows, list)
             and len(rows) == EXPECTED_FULL_ROWS
         ):
@@ -169,6 +173,7 @@ def materialize_rows(
             "prefix_replay_code_commit": prefix_replay_code_commit,
             "candidate_weights_sha256": candidate_sha256,
             "continuation_weights_sha256": continuation_sha256,
+            "continuation_id": str(design_row["continuation_id"]),
             "phase_weights_sha256": hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest(),
             "branch_code_commit": branch_code_commit,
             "terminal_checkpoint_uri": gs_uri(checkpoint_path),
@@ -181,6 +186,8 @@ def materialize_rows(
             "run_order": int(design_row["run_order"]),
             "run_id": int(design_row["run_id"]),
             "run_name": run_name,
+            "data_seed": int(design_row["data_seed"]),
+            "trainer_seed": int(design_row["trainer_seed"]),
             "fit_budget": bool(design_row["fit_budget"]),
             "branch_role": design_row["branch_role"],
             "continuation_id": design_row["continuation_id"],
@@ -212,6 +219,24 @@ def materialize_rows(
     results = pd.DataFrame(result_rows).sort_values("run_order").reset_index(drop=True)
     if len(results) != EXPECTED_FULL_ROWS or int(results.fit_budget.sum()) != EXPECTED_FIT_ROWS:
         raise ValueError(f"Branch coverage changed: rows={len(results)}, fit_rows={int(results.fit_budget.sum())}")
+    fit = results[results.fit_budget]
+    per_prefix = fit.groupby("prefix_candidate_id").continuation_id.nunique()
+    per_continuation = fit.groupby("continuation_id").prefix_candidate_id.nunique()
+    if len(per_prefix) != EXPECTED_PREFIX_COUNT or not per_prefix.eq(EXPECTED_FIT_CONTINUATIONS).all():
+        raise ValueError(f"Fit continuations are not fully crossed by prefix: {per_prefix.to_dict()}")
+    if len(per_continuation) != EXPECTED_FIT_CONTINUATIONS or not per_continuation.eq(EXPECTED_PREFIX_COUNT).all():
+        raise ValueError(f"Fit prefixes are not fully crossed by continuation: {per_continuation.to_dict()}")
+
+    noise = results[results.branch_role.eq("same_prefix_branch_noise")]
+    phase_columns = [column for column in results if column.startswith(("phase_0_", "phase_1_"))]
+    if (
+        len(noise) != EXPECTED_BRANCH_NOISE_ROWS
+        or noise.prefix_candidate_id.nunique() != 1
+        or noise.data_seed.nunique() != EXPECTED_BRANCH_NOISE_ROWS
+        or noise.trainer_seed.nunique() != 1
+        or any(noise[column].nunique() != 1 for column in phase_columns)
+    ):
+        raise ValueError("Same-checkpoint branch-noise controls changed")
     metrics = pd.DataFrame(metric_rows).sort_values(["run_name", "metric"]).reset_index(drop=True)
     return results, metrics
 
