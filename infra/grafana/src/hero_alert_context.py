@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assemble bounded first-pass evidence for hero-run Loom alerts.
+"""Build bounded, advisory operator context for hero-run Loom alerts.
 
-The collector deliberately does not search for a catalog of known failure
-strings. It combines structured telemetry and Iris state/events with log lines
-that are both close to an execution boundary and localized to a minority of the
-gang. That catches novel failures while suppressing the repeated barrier fallout
-and ordinary stderr chatter common to a distributed training job.
+Context collection fails open so an unavailable evidence source never blocks
+the alert, and callers must treat the result as a first pass rather than a
+diagnosis.
 """
 
 import asyncio

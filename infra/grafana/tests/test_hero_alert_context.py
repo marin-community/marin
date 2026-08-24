@@ -314,3 +314,19 @@ def test_context_assembler_spans_recent_executions_and_versions_its_schema():
     }
     assert [event["reason"] for event in context["taskEvents"]] == ["OOMKilled", "TaskRetryScheduled"]
     assert context["logEvidence"]["excerpts"][0]["sampleKey"].startswith("/rav/hero-example-coord-prior/")
+
+
+def test_context_assembler_keeps_partial_evidence_when_one_query_fails():
+    class FailingLogSource(_ContextSource):
+        def query(self, sql: str, *, max_rows: int) -> pa.Table:
+            if 'FROM "log"' in sql:
+                raise RuntimeError("finelog log table unavailable")
+            return super().query(sql, max_rows=max_rows)
+
+    context = asyncio.run(HeroAlertContextAssembler(FailingLogSource(), max_rows=1_000).assemble([alert()]))
+
+    assert context["status"] == "partial"
+    assert context["collectionErrors"] == ["logs: RuntimeError"]
+    assert context["recentExecutions"]
+    assert context["taskEvents"]
+    assert context["logEvidence"]["excerpts"] == []
