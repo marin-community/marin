@@ -5,3 +5,6 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 0	2026-08-24T18:25Z	baseline-dk-g8x	bench	dk g8x128 wheel	12.18	+4.62	baseline	from loop-260823-dknative bench64b
 0	2026-08-24	baseline-synth	synth	dk g8x128 s1 22.62 vs oneshot s64 22.77	22.62	-0.15	baseline	loop-260823 final standings
 0	2026-08-24	baseline-restore	restore	dk g8x128 s64 21.98 vs oneshot s64 22.46-22.60	21.98	-0.5	baseline	loop-260823 final standings
+1	2026-08-24T22:0xZ	dkp-a1-mode-symmem	bench	dk g8x128 + mode=COLLECTIVES_SYMMETRIC_MEMORY	-	-	running	expected null (put-path guards fallback only)
+1	2026-08-24T22:0xZ	b1-ilp4	build	g8x128 + 4-way ILP unroll LSA copy	-	-	running	job ra2a-mw-build-g8x128ilp4-20260824
+1	2026-08-24T22:1xZ	b2-cta0bar8	build	fork 8844d77b43 cta0-delegated barrier, grid 8x128	-	-	running	job ra2a-mw-build-cta0bar8c-20260824
