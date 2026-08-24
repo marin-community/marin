@@ -6,6 +6,7 @@ pub mod proto {
 
 pub mod errors;
 pub(crate) mod json;
+pub mod migrations;
 pub mod query;
 pub mod server;
 pub mod store;

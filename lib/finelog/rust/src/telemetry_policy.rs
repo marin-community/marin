@@ -3,15 +3,15 @@
 pub(crate) const TELEMETRY_NAMESPACE: &str = "telemetry_v1";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const DEFAULT_STREAM_MAX_BYTES: i64 = 2 * GIBIBYTE;
-const LEVANTER_NAMESPACE: &str = "telemetry_v1.levanter";
-const NODE_AGENT_NAMESPACE: &str = "telemetry_v1.node_agent";
-const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
-const VLLM_NAMESPACE: &str = "telemetry_v1.vllm";
-const LEVANTER_STATUS_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.levanter.status";
-const LEVANTER_DETAIL_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.levanter.detail";
-const NODE_AGENT_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.node_agent";
-const IRIS_RPC_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.iris_rpc";
-const VLLM_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.vllm";
+pub(crate) const LEVANTER_NAMESPACE: &str = "telemetry_v1.levanter";
+pub(crate) const NODE_AGENT_NAMESPACE: &str = "telemetry_v1.node_agent";
+pub(crate) const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
+pub(crate) const VLLM_NAMESPACE: &str = "telemetry_v1.vllm";
+pub(crate) const LEVANTER_STATUS_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.levanter.status";
+pub(crate) const LEVANTER_DETAIL_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.levanter.detail";
+pub(crate) const NODE_AGENT_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.node_agent";
+pub(crate) const IRIS_RPC_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.iris_rpc";
+pub(crate) const VLLM_STORAGE_NAMESPACE: &str = "telemetry_storage_v1.vllm";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TelemetryStorageShard {
@@ -73,6 +73,20 @@ const LEGACY_STORAGE_NAMESPACES: [(&str, &str); 12] = [
     ("telemetry_v1.vllm.standard", VLLM_NAMESPACE),
 ];
 
+pub(crate) fn migration_source_namespaces() -> impl Iterator<Item = &'static str> {
+    std::iter::once(TELEMETRY_NAMESPACE).chain(
+        LEGACY_STORAGE_NAMESPACES
+            .iter()
+            .map(|(storage, _logical)| *storage),
+    )
+}
+
+pub(crate) fn migration_source_logical_namespace(namespace: &str) -> Option<&'static str> {
+    LEGACY_STORAGE_NAMESPACES
+        .iter()
+        .find_map(|(storage, logical)| (*storage == namespace).then_some(*logical))
+}
+
 pub(crate) fn ingest_storage_namespace(
     logical_namespace: &str,
     record_name: &str,
@@ -96,6 +110,30 @@ pub(crate) fn ingest_storage_namespace(
         return Some(namespace.to_string());
     }
     is_semantic_namespace(logical_namespace).then(|| logical_namespace.to_string())
+}
+
+/// Classify a row written before semantic namespaces were available.
+///
+/// The legacy root carries no client-selected namespace, so the owning service
+/// is the only semantic boundary that can be recovered. Iris controller rows
+/// are narrower: only the native RPC and proxy metric families belong to the
+/// `iris.rpc` stream. Unknown services remain in the legacy root.
+pub(crate) fn legacy_storage_namespace(service: &str, record_name: &str) -> Option<&'static str> {
+    match service {
+        "levanter" => Some(if LEVANTER_STATUS_NAMES.contains(&record_name) {
+            LEVANTER_STATUS_STORAGE_NAMESPACE
+        } else {
+            LEVANTER_DETAIL_STORAGE_NAMESPACE
+        }),
+        "iris-node-agent" => Some(NODE_AGENT_STORAGE_NAMESPACE),
+        "iris-controller"
+            if record_name.starts_with("rpc_") || record_name.starts_with("proxy_") =>
+        {
+            Some(IRIS_RPC_STORAGE_NAMESPACE)
+        }
+        "vllm" => Some(VLLM_STORAGE_NAMESPACE),
+        _ => None,
+    }
 }
 
 pub(crate) fn storage_max_bytes(storage_namespace: &str) -> Option<i64> {

@@ -185,6 +185,71 @@ GiB, Levanter detail has 10 GiB, node-agent telemetry has 15 GiB, Iris RPC has
 1 GiB, and vLLM has 2 GiB. These server-owned shards total 50 GiB. Changing an
 allocation or routing rule does not change a writer or query namespace.
 
+### Migrate the legacy telemetry hot set
+
+`finelog-migrate` builds a replacement store from a frozen hub snapshot. It
+streams the legacy telemetry Parquets, routes each row through the current
+server policy, and writes the physical storage shards. Rows whose service does
+not identify a known semantic stream remain in `telemetry_v1`. Existing rows in
+the physical shards and every non-telemetry namespace are carried forward.
+
+The source must be an offline filesystem or volume snapshot. The migrator
+rejects stores with forwarding cursors, so it cannot be run against a `cw-*`
+sender. Run it on the `marin` or `marin-dev` hub store. Do not point it at a
+mounted directory that a Finelog process can still modify.
+
+Prepare the replacement in a sibling directory on the same filesystem. Files
+outside the legacy telemetry namespaces are hard-linked when possible and
+copied across filesystems. `--final-log-dir` is the path the replacement will
+occupy after cutover; catalog segment paths are written for that location.
+
+```bash
+finelog-migrate prepare-telemetry-v1 \
+  --source-dir /var/cache/finelog-before-telemetry-v1 \
+  --output-dir /var/cache/finelog-after-telemetry-v1 \
+  --final-log-dir /var/cache/finelog
+
+finelog-migrate verify-telemetry-v1 \
+  --source-dir /var/cache/finelog-before-telemetry-v1 \
+  --output-dir /var/cache/finelog-after-telemetry-v1
+```
+
+The manifest at
+`/var/cache/finelog-after-telemetry-v1/.finelog-telemetry-v1-migration.json`
+records every source checksum, destination sequence range, row count, stable
+row-identity checksum, output checksum, and the source catalog checksum.
+Re-running `prepare-telemetry-v1` resumes from verified output segments. It
+fails if the source snapshot or its catalog changed.
+
+For an in-place volume cutover, stop the Finelog deployment first, then move the
+current store aside before running the commands above:
+
+```bash
+mv /var/cache/finelog /var/cache/finelog-before-telemetry-v1
+```
+
+`prepare-telemetry-v1` writes catalog paths for the missing final location. Move
+the verified replacement into place:
+
+```bash
+mv /var/cache/finelog-after-telemetry-v1 /var/cache/finelog
+```
+
+Start the candidate image and check `/health`, `finelog namespaces`, and the
+training, cluster-capacity, RPC, and vLLM dashboards. Roll back while the
+deployment is stopped:
+
+```bash
+mv /var/cache/finelog /var/cache/finelog-migration-failed
+mv /var/cache/finelog-before-telemetry-v1 /var/cache/finelog
+```
+
+The replacement catalog preserves the archive state of unchanged segments.
+Migrated segments start as local data and upload under their new physical
+namespaces. Catalog entries for migrated legacy objects become remote-only, so
+boot reconciliation does not re-adopt them into the queryable hot set. The
+legacy objects remain unchanged in the archive.
+
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
