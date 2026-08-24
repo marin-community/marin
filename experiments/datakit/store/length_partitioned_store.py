@@ -3,6 +3,8 @@
 
 """Build a clustered token store with an added document-length bucket."""
 
+from __future__ import annotations
+
 import dataclasses
 import json
 import multiprocessing
@@ -11,21 +13,21 @@ import tempfile
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from enum import StrEnum
 from functools import partial
 from typing import TypedDict
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.store.cache import CacheLedger, CacheMetadata, _merge_sharded_ledgers
-from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
-from marin.execution.artifact import write_artifact
-from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    VerifiedFuzzyDupsAttrData,
-)
-from marin.processing.tokenize.attributes import TokenizedAttrData
+from marin.execution.artifact import read_artifact, write_artifact
 from pydantic import BaseModel
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -34,21 +36,49 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, format_shard_path
 
-from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
-from experiments.datakit.global_exact_dedup import GlobalExactDedupData
 from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache_from_spills
 from experiments.datakit.store.datakit_store import (
     DEFAULT_PARALLEL_BUCKET_WRITES,
     DEFAULT_PARTITION_PROCESSES,
-    _FilterStats,
-    _iter_surviving_docs,
-    _per_source_shard_tuples,
-    _resolve_dedup_attr_dir,
-    _validate_cluster_view,
 )
 
 DOCUMENT_LENGTH_THRESHOLD = 65_536
+SOURCE_STORE_PATH = "gs://marin-us-central2/datakit/store_8ac06c74"
+OUTPUT_PATH = "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24"
+QUALITY_THRESHOLDS = (0.2, 0.4, 0.6, 0.8)
+SPLIT = "train"
+CLUSTER_VIEW = 40
+SHARDS_PER_TASK = 16
+MAX_WORKERS = 512
+
+
+class _TokenizedAttrData(BaseModel):
+    output_dirs: dict[str, str]
+    source_main_dirs: dict[str, str]
+    tokenizer: str
+
+
+class _DeconAttributes(BaseModel):
+    output_dir: str
+
+
+class _AssignmentAttrData(BaseModel):
+    output_dir: str
+    source_main_dir: str
+    k_train: int
+    k_views: list[int]
+
+
+class _QualityOutput(BaseModel):
+    output_dir: str
+
+
+class _FuzzyDupsPerSource(BaseModel):
+    attr_dir: str
+
+
+class _FuzzyDupsAttrData(BaseModel):
+    sources: dict[str, _FuzzyDupsPerSource]
 
 
 class DocumentLengthBucket(StrEnum):
@@ -70,7 +100,7 @@ class LengthPartitionedStoreData(BaseModel):
     version: str = "v1"
     cache_path: DatakitArtifactPath
     cluster_view: int
-    bucket_edges: list[float]
+    quality_thresholds: list[float]
     split: str
     length_threshold: int
     buckets: list[LengthBucketCacheStats]
@@ -123,6 +153,163 @@ class _SpillShardResult:
     tokens: int
 
 
+@dataclasses.dataclass
+class _FilterStats:
+    records_in: int = 0
+    contaminated_dropped: int = 0
+    dedup_noncanonical_dropped: int = 0
+    records_out: int = 0
+
+    def counters(self) -> dict[str, int]:
+        return {
+            "datakit_store/records_in": self.records_in,
+            "datakit_store/contaminated_dropped": self.contaminated_dropped,
+            "datakit_store/dedup_noncanonical_dropped": self.dedup_noncanonical_dropped,
+            "datakit_store/records_out": self.records_out,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class _SurvivingDocument:
+    cluster: int
+    quality: int
+    input_ids: np.ndarray
+
+
+def _per_source_shard_tuples(
+    *,
+    source_name: str,
+    tokenize: _TokenizedAttrData,
+    decontam: _DeconAttributes,
+    cluster_assign: _AssignmentAttrData,
+    quality: _QualityOutput,
+    dedup_attr_dir: str,
+    split: str,
+) -> list[dict[str, str]]:
+    tokenize_dir = tokenize.output_dirs.get(split)
+    if tokenize_dir is None:
+        raise FileNotFoundError(f"{source_name}: tokenize has no split={split!r}")
+    tokenize_shards = sorted(str(path) for path in StoragePath(f"{tokenize_dir.rstrip('/')}/*.parquet").glob())
+    if not tokenize_shards:
+        raise FileNotFoundError(f"{source_name}: no tokenize shards under {tokenize_dir}")
+
+    return [
+        {
+            "tokenize": tokenize_path,
+            "decontam": f"{decontam.output_dir.rstrip('/')}/{os.path.basename(tokenize_path)}",
+            "cluster": f"{cluster_assign.output_dir.rstrip('/')}/{os.path.basename(tokenize_path)}",
+            "quality": (
+                f"{quality.output_dir.rstrip('/')}/" f"{os.path.basename(tokenize_path).replace('part-', 'data-', 1)}"
+            ),
+            "dedup": f"{dedup_attr_dir.rstrip('/')}/{os.path.basename(tokenize_path)}",
+            "source_name": source_name,
+            "basename": os.path.basename(tokenize_path),
+        }
+        for tokenize_path in tokenize_shards
+    ]
+
+
+def _read_columns(path: str, columns: list[str]) -> pa.Table:
+    with StoragePath(path).open("rb") as stream:
+        return pq.read_table(stream, columns=columns)
+
+
+def _load_decontam_table(path: str) -> tuple[pa.Array, np.ndarray]:
+    table = _read_columns(path, ["id", "attributes"])
+    ids = table.column("id").combine_chunks()
+    contaminated = np.asarray(table.column("attributes").combine_chunks().field("contaminated"), dtype=bool)
+    return ids, contaminated
+
+
+def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarray]:
+    table = _read_columns(path, ["id", cluster_col])
+    return table.column("id").combine_chunks(), np.asarray(table.column(cluster_col), dtype=np.int32)
+
+
+def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
+    table = _read_columns(path, ["id", "score"])
+    return table.column("id").combine_chunks(), np.asarray(table.column("score"), dtype=np.float64)
+
+
+def _load_dedup_canonical(path: str) -> dict[str, bool]:
+    if not StoragePath(path).exists():
+        return {}
+    with StoragePath(path).open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        if parquet.metadata.num_rows == 0:
+            return {}
+        table = parquet.read(columns=["id", "attributes"])
+    ids = table.column("id").to_pylist()
+    canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
+    return dict(zip(ids, canonical, strict=True))
+
+
+def _quality_bucket(score: float) -> int:
+    return sum(score >= threshold for threshold in QUALITY_THRESHOLDS)
+
+
+def _iter_surviving_docs(
+    spec: dict[str, str],
+    cluster_col: str,
+    *,
+    stats: _FilterStats,
+) -> Iterator[_SurvivingDocument]:
+    decontam_ids, contaminated = _load_decontam_table(spec["decontam"])
+    cluster_ids, cluster_values = _load_cluster_table(spec["cluster"], cluster_col)
+    quality_ids, scores = _load_quality_table(spec["quality"])
+    row_counts = (len(decontam_ids), len(cluster_ids), len(quality_ids))
+    if len(set(row_counts)) != 1:
+        raise RuntimeError(
+            f"{spec['source_name']}/{spec['basename']}: dense-table row count mismatch "
+            f"(decontam={row_counts[0]}, cluster={row_counts[1]}, quality={row_counts[2]})"
+        )
+    if not pc.all(pc.equal(decontam_ids, cluster_ids)).as_py():
+        raise RuntimeError(f"{spec['source_name']}/{spec['basename']}: decontam/cluster id mismatch")
+    if not pc.all(pc.equal(decontam_ids, quality_ids)).as_py():
+        raise RuntimeError(f"{spec['source_name']}/{spec['basename']}: decontam/quality id mismatch")
+    expected_ids = decontam_ids.to_pylist()
+    dedup_canonical = _load_dedup_canonical(spec["dedup"])
+
+    with StoragePath(spec["tokenize"]).open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        row_index = 0
+        for batch in parquet.iter_batches(batch_size=8192, columns=["id", "input_ids"]):
+            document_ids = batch.column("id").to_pylist()
+            input_ids = batch.column("input_ids")
+            for index, document_id in enumerate(document_ids):
+                if row_index >= len(expected_ids) or document_id != expected_ids[row_index]:
+                    raise RuntimeError(
+                        f"{spec['source_name']}/{spec['basename']}: tokenize/decontam id mismatch "
+                        f"at document {row_index}"
+                    )
+                stats.records_in += 1
+                if contaminated[row_index]:
+                    stats.contaminated_dropped += 1
+                elif dedup_canonical.get(document_id) is False:
+                    stats.dedup_noncanonical_dropped += 1
+                else:
+                    stats.records_out += 1
+                    yield _SurvivingDocument(
+                        cluster=int(cluster_values[row_index]),
+                        quality=_quality_bucket(float(scores[row_index])),
+                        input_ids=input_ids[index].values.to_numpy(),
+                    )
+                row_index += 1
+    if row_index != len(expected_ids):
+        raise RuntimeError(
+            f"{spec['source_name']}/{spec['basename']}: tokenize rows ({row_index}) "
+            f"!= decontam rows ({len(expected_ids)})"
+        )
+
+
+def _validate_cluster_view(cluster_assign: dict[str, _AssignmentAttrData], cluster_view: int) -> str:
+    for source_name, assignment in cluster_assign.items():
+        valid_views = {assignment.k_train, *assignment.k_views}
+        if cluster_view not in valid_views:
+            raise ValueError(f"cluster_view={cluster_view} not in {source_name}'s views {sorted(valid_views)}")
+    return f"cluster_{cluster_view}"
+
+
 def _document_length_bucket(length: int) -> DocumentLengthBucket:
     if length > DOCUMENT_LENGTH_THRESHOLD:
         return DocumentLengthBucket.GT_64K
@@ -137,27 +324,35 @@ def _spill_source_shard(
 ) -> _SpillShardResult:
     shard_dir = os.path.join(scratch_dir, f"shard-{shard_index:05d}")
     os.makedirs(shard_dir)
-    buckets: dict[tuple[int, int, DocumentLengthBucket], list[np.ndarray]] = defaultdict(list)
+    paths: dict[tuple[int, int, DocumentLengthBucket], tuple[str, str]] = {}
+    rows: dict[tuple[int, int, DocumentLengthBucket], int] = defaultdict(int)
+    tokens: dict[tuple[int, int, DocumentLengthBucket], int] = defaultdict(int)
     stats = _FilterStats()
-    for document in _iter_surviving_docs(spec, cluster_col, stats=stats):
-        length_bucket = _document_length_bucket(len(document.input_ids))
-        buckets[(document.cluster, document.quality, length_bucket)].append(
-            np.asarray(document.input_ids, dtype=np.int32)
-        )
+    streams = {}
+    with ExitStack() as stack:
+        for document in _iter_surviving_docs(spec, cluster_col, stats=stats):
+            input_ids = np.asarray(document.input_ids, dtype=np.int32)
+            length_bucket = _document_length_bucket(len(input_ids))
+            key = (document.cluster, document.quality, length_bucket)
+            if key not in streams:
+                cluster, quality, bucket = key
+                stem = os.path.join(shard_dir, f"cluster-{cluster}-quality-{quality}-length-{bucket}")
+                data_path = f"{stem}.tokens.i32"
+                lengths_path = f"{stem}.lengths.i64"
+                paths[key] = (data_path, lengths_path)
+                streams[key] = (
+                    stack.enter_context(open(data_path, "wb")),
+                    stack.enter_context(open(lengths_path, "wb")),
+                )
+            data_stream, lengths_stream = streams[key]
+            input_ids.tofile(data_stream)
+            np.asarray([len(input_ids)], dtype=np.int64).tofile(lengths_stream)
+            rows[key] += 1
+            tokens[key] += len(input_ids)
 
     results = []
-    total_tokens = 0
-    for (cluster, quality, length_bucket), documents in buckets.items():
-        stem = os.path.join(shard_dir, f"cluster-{cluster}-quality-{quality}-length-{length_bucket}")
-        data_path = f"{stem}.tokens.i32"
-        lengths_path = f"{stem}.lengths.i64"
-        lengths = np.fromiter((len(document) for document in documents), dtype=np.int64, count=len(documents))
-        tokens = int(lengths.sum())
-        with open(data_path, "wb") as stream:
-            for document in documents:
-                document.tofile(stream)
-        lengths.tofile(lengths_path)
-        total_tokens += tokens
+    for (cluster, quality, length_bucket), (data_path, lengths_path) in paths.items():
+        key = (cluster, quality, length_bucket)
         results.append(
             _SpillBucketRun(
                 cluster=cluster,
@@ -166,12 +361,12 @@ def _spill_source_shard(
                 run=BucketSpillRun(
                     data_path=data_path,
                     lengths_path=lengths_path,
-                    rows=len(documents),
-                    tokens=tokens,
+                    rows=rows[key],
+                    tokens=tokens[key],
                 ),
             )
         )
-    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens)
+    return _SpillShardResult(buckets=results, stats=stats, tokens=sum(tokens.values()))
 
 
 def _task_sidecar_path(output_path: str, task: int, total_tasks: int) -> str:
@@ -340,18 +535,17 @@ def _merge_buckets(task_bucket_stats: list[_TaskBucketStat], output_path: str) -
 
 def build_length_partitioned_store(
     *,
-    tokenize: dict[str, TokenizedAttrData],
-    decontam: dict[str, DeconAttributes],
-    cluster_assign: dict[str, AssignmentAttrData],
-    quality: dict[str, QualityScores],
-    exact_dedup: GlobalExactDedupData,
-    dedup: VerifiedFuzzyDupsAttrData,
+    tokenize: dict[str, _TokenizedAttrData],
+    decontam: dict[str, _DeconAttributes],
+    cluster_assign: dict[str, _AssignmentAttrData],
+    quality: dict[str, _QualityOutput],
+    dedup: _FuzzyDupsAttrData,
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 4096,
-    task_count: int | None = None,
+    shards_per_task: int = 1,
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES,
     partition_processes: int = DEFAULT_PARTITION_PROCESSES,
 ) -> LengthPartitionedStoreData:
@@ -367,64 +561,42 @@ def build_length_partitioned_store(
             missing = sorted(set(tokenize) - set(artifacts))
             extra = sorted(set(artifacts) - set(tokenize))
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
-    if task_count is not None and task_count < 1:
-        raise ValueError(f"task_count must be >= 1, got {task_count}")
+    if shards_per_task < 1:
+        raise ValueError(f"shards_per_task must be >= 1, got {shards_per_task}")
     if max_parallel_bucket_writes < 1:
         raise ValueError(f"max_parallel_bucket_writes must be >= 1, got {max_parallel_bucket_writes}")
     if partition_processes < 1:
         raise ValueError(f"partition_processes must be >= 1, got {partition_processes}")
 
-    models = {(item.model_dir, item.calib_file, tuple(item.bucket_edges)) for item in quality.values()}
-    if len(models) != 1:
-        raise ValueError(f"build_length_partitioned_store: sources span multiple quality models: {sorted(models)}")
-    bucket_edges = next(iter(quality.values())).bucket_edges
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
 
-    source_keys = {}
+    source_main_dirs = {}
     for source_name, tokenized in tokenize.items():
-        source_key = tokenized.source_keys.get(split)
-        if source_key is None:
-            raise ValueError(f"{source_name}: tokenize has no source_key for split={split!r}")
-        source_keys[source_name] = source_key
-    expected_source_keys = set(source_keys.values())
-    if len(expected_source_keys) != len(source_keys):
-        raise ValueError(f"tokenize sources must use unique source keys for split={split!r}")
-    for label, sources in (("exact_dedup", exact_dedup.sources), ("dedup", dedup.sources)):
-        if set(sources) != expected_source_keys:
-            missing = sorted(expected_source_keys - set(sources))
-            extra = sorted(set(sources) - expected_source_keys)
-            raise ValueError(f"{label} source set must equal tokenize source keys: missing={missing!r}, extra={extra!r}")
+        source_main_dir = tokenized.source_main_dirs.get(split)
+        if source_main_dir is None:
+            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
+        source_main_dirs[source_name] = source_main_dir
 
     for source_name, assignment in cluster_assign.items():
-        source_key = source_keys[source_name]
-        if assignment.source_key != source_key:
+        source_main_dir = source_main_dirs[source_name]
+        if assignment.source_main_dir != source_main_dir:
             raise ValueError(
-                f"{source_name}: cluster_assign.source_key={assignment.source_key!r} "
-                f"!= tokenize.source_keys[{split!r}]={source_key!r}"
+                f"{source_name}: cluster_assign.source_main_dir={assignment.source_main_dir!r} "
+                f"!= tokenize.source_main_dirs[{split!r}]={source_main_dir!r}"
             )
 
     def resolve_source_shards(source_name: str) -> list[dict[str, str]]:
-        source_key = source_keys[source_name]
-        dedup_attr_dir = _resolve_dedup_attr_dir(
-            source_name=source_name,
-            source_key=source_key,
-            sources=dedup.sources,
-            label="dedup",
-        )
-        exact_dedup_attr_dir = _resolve_dedup_attr_dir(
-            source_name=source_name,
-            source_key=source_key,
-            sources=exact_dedup.sources,
-            label="exact_dedup",
-        )
+        source_main_dir = source_main_dirs[source_name]
+        dedup_source = dedup.sources.get(source_main_dir)
+        if dedup_source is None:
+            raise KeyError(f"{source_name}: dedup has no source {source_main_dir!r}")
         return _per_source_shard_tuples(
             source_name=source_name,
             tokenize=tokenize[source_name],
             decontam=decontam[source_name],
             cluster_assign=cluster_assign[source_name],
             quality=quality[source_name],
-            exact_dedup_attr_dir=exact_dedup_attr_dir,
-            dedup_attr_dir=dedup_attr_dir,
+            dedup_attr_dir=dedup_source.attr_dir,
             split=split,
         )
 
@@ -435,8 +607,10 @@ def build_length_partitioned_store(
     if not shard_specs:
         raise ValueError("No input shards resolved -- nothing to do")
 
-    resolved_task_count = len(shard_specs) if task_count is None else min(task_count, len(shard_specs))
-    batched_specs = [shard_specs[index::resolved_task_count] for index in range(resolved_task_count)]
+    batched_specs = [
+        shard_specs[index : index + shards_per_task] for index in range(0, len(shard_specs), shards_per_task)
+    ]
+    resolved_task_count = len(batched_specs)
     if worker_resources is None:
         worker_resources = ResourceConfig(cpu=2, ram="16g", disk="16g")
 
@@ -492,7 +666,7 @@ def build_length_partitioned_store(
     artifact = LengthPartitionedStoreData(
         cache_path=output_path,
         cluster_view=cluster_view,
-        bucket_edges=bucket_edges,
+        quality_thresholds=list(QUALITY_THRESHOLDS),
         split=split,
         length_threshold=DOCUMENT_LENGTH_THRESHOLD,
         buckets=buckets,
@@ -502,3 +676,75 @@ def build_length_partitioned_store(
     )
     write_artifact(artifact, output_path)
     return artifact
+
+
+def _source_stage_paths() -> tuple[dict[str, dict[str, str]], str]:
+    executor_info = json.loads(StoragePath(prefix_join(SOURCE_STORE_PATH, ".executor_info")).read_text())
+    dependencies = executor_info["dependencies"]
+    stages: dict[str, dict[str, str]] = {stage: {} for stage in ("tokenize", "decontam", "cluster_assign", "quality")}
+    dedup_path = ""
+    for path in dependencies:
+        if path.startswith(f"{SOURCE_STORE_PATH.rsplit('/', 1)[0]}/dedup_"):
+            dedup_path = path
+            continue
+        for stage in stages:
+            prefix = f"gs://marin-us-central2/datakit/{stage}/"
+            if not path.startswith(prefix):
+                continue
+            source_and_hash = path.removeprefix(prefix)
+            source_name, _, fingerprint = source_and_hash.rpartition("_")
+            if not source_name or len(fingerprint) != 8:
+                raise ValueError(f"Cannot parse {stage} dependency {path!r}")
+            stages[stage][source_name] = path
+            break
+    source_names = set(stages["tokenize"])
+    for stage, paths in stages.items():
+        if set(paths) != source_names:
+            raise ValueError(f"{stage} source set does not match tokenize")
+    if not dedup_path:
+        raise ValueError("Source store has no dedup dependency")
+    return {name: {stage: paths[name] for stage, paths in stages.items()} for name in sorted(source_names)}, dedup_path
+
+
+def _read_source_artifacts():
+    source_paths, dedup_path = _source_stage_paths()
+
+    def read_source(item: tuple[str, dict[str, str]]):
+        source_name, paths = item
+        return source_name, (
+            read_artifact(paths["tokenize"], _TokenizedAttrData),
+            read_artifact(paths["decontam"], _DeconAttributes),
+            read_artifact(paths["cluster_assign"], _AssignmentAttrData),
+            read_artifact(paths["quality"], _QualityOutput),
+        )
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        artifacts = dict(executor.map(read_source, source_paths.items()))
+    return (
+        {name: source[0] for name, source in artifacts.items()},
+        {name: source[1] for name, source in artifacts.items()},
+        {name: source[2] for name, source in artifacts.items()},
+        {name: source[3] for name, source in artifacts.items()},
+        read_artifact(dedup_path, _FuzzyDupsAttrData),
+    )
+
+
+def main() -> None:
+    tokenize, decontam, cluster_assign, quality, dedup = _read_source_artifacts()
+    build_length_partitioned_store(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        dedup=dedup,
+        output_path=OUTPUT_PATH,
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="16g", preemptible=False),
+        max_workers=MAX_WORKERS,
+        shards_per_task=SHARDS_PER_TASK,
+    )
+
+
+if __name__ == "__main__":
+    main()

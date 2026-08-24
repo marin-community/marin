@@ -43,6 +43,11 @@ from experiments.datakit.store.datakit_store import (
 from experiments.datakit.store.length_partitioned_store import (
     DOCUMENT_LENGTH_THRESHOLD,
     DocumentLengthBucket,
+    _AssignmentAttrData,
+    _DeconAttributes,
+    _FuzzyDupsAttrData,
+    _QualityOutput,
+    _TokenizedAttrData,
     build_length_partitioned_store,
 )
 
@@ -174,7 +179,7 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
         )
 
 
-def _build_inputs(tmp_path, shard0: list[_Doc] = SHARD0, shard1: list[_Doc] = SHARD1):
+def _build_inputs(tmp_path):
     """Materialize the synthetic inputs and return the typed artifacts."""
     main_dir = str(tmp_path / "src")
     source_key = datakit_source_key(main_dir)
@@ -184,8 +189,8 @@ def _build_inputs(tmp_path, shard0: list[_Doc] = SHARD0, shard1: list[_Doc] = SH
         os.makedirs(d, exist_ok=True)
 
     shard_dirs = {**dirs, "tokenize": tok_train}
-    _write_shard(shard_dirs, "part-00000-of-00002.parquet", shard0)
-    _write_shard(shard_dirs, "part-00001-of-00002.parquet", shard1)
+    _write_shard(shard_dirs, "part-00000-of-00002.parquet", SHARD0)
+    _write_shard(shard_dirs, "part-00001-of-00002.parquet", SHARD1)
 
     tokenize = {
         "src": TokenizedAttrData(
@@ -511,27 +516,61 @@ def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
 
 def test_length_partitioned_store_routes_boundary_and_roundtrips(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    shard0: list[_Doc] = [
-        ("short", 0, 2, False, None, 1, DOCUMENT_LENGTH_THRESHOLD - 1),
-        ("boundary", 0, 2, False, None, 2, DOCUMENT_LENGTH_THRESHOLD),
-    ]
-    shard1: list[_Doc] = [
-        ("long", 0, 2, False, None, 3, DOCUMENT_LENGTH_THRESHOLD + 1),
-    ]
-    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path, shard0, shard1)
+    ids = ["short", "boundary", "long"]
+    lengths = [DOCUMENT_LENGTH_THRESHOLD - 1, DOCUMENT_LENGTH_THRESHOLD, DOCUMENT_LENGTH_THRESHOLD + 1]
+    directories = {name: str(tmp_path / name) for name in ("tokenize", "decontam", "cluster", "quality", "dedup")}
+    tokenize_dir = f"{directories['tokenize']}/{SPLIT}"
+    for directory in (*directories.values(), tokenize_dir):
+        os.makedirs(directory, exist_ok=True)
+    basename = "part-00000-of-00001.parquet"
+    _write_parquet(
+        f"{tokenize_dir}/{basename}",
+        pa.table({"id": ids, "input_ids": pa.array([[token] * length for token, length in enumerate(lengths, 1)])}),
+    )
+    _write_parquet(
+        f"{directories['decontam']}/{basename}",
+        pa.table({"id": ids, "attributes": pa.array([{"contaminated": False}] * len(ids))}),
+    )
+    _write_parquet(
+        f"{directories['cluster']}/{basename}",
+        pa.table({"id": ids, f"cluster_{CLUSTER_VIEW}": pa.array([0] * len(ids), type=pa.int32())}),
+    )
+    _write_parquet(
+        f"{directories['quality']}/{basename.replace('part-', 'data-', 1)}",
+        pa.table({"id": ids, "score": pa.array([0.5] * len(ids), type=pa.float64())}),
+    )
+    source_main_dir = str(tmp_path / "source")
+    tokenize = {
+        "src": _TokenizedAttrData(
+            output_dirs={SPLIT: tokenize_dir},
+            source_main_dirs={SPLIT: source_main_dir},
+            tokenizer="dummy",
+        )
+    }
+    decontam = {"src": _DeconAttributes(output_dir=directories["decontam"])}
+    cluster_assign = {
+        "src": _AssignmentAttrData(
+            output_dir=directories["cluster"],
+            source_main_dir=source_main_dir,
+            k_train=CLUSTER_VIEW,
+            k_views=[],
+        )
+    }
+    quality = {"src": _QualityOutput(output_dir=directories["quality"])}
+    dedup = _FuzzyDupsAttrData(sources={source_main_dir: {"attr_dir": directories["dedup"]}})
 
     artifact = build_length_partitioned_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
-        exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=str(tmp_path / "partitioned"),
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
         worker_resources=ResourceConfig(cpu=1, ram="2g", disk="1g"),
         max_workers=1,
+        shards_per_task=1,
     )
 
     recovered = {
