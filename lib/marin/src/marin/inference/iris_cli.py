@@ -71,7 +71,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
-    load_vllm_metric_families,
+    load_vllm_metric_family_additions,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -472,7 +472,7 @@ def main(
         raise click.ClickException("--proxy-timeout must be positive.")
 
     try:
-        metric_families = load_vllm_metric_families(vllm_metrics_config)
+        metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 

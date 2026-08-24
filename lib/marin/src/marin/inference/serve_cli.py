@@ -18,7 +18,7 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
-    load_vllm_metric_families,
+    load_vllm_metric_family_additions,
 )
 from marin.inference.iris_cli import main as iris
 from marin.inference.iris_cli import reject_backend_options
@@ -124,7 +124,7 @@ def local(
     )
     if backend == "vllm":
         try:
-            metric_families = load_vllm_metric_families(vllm_metrics_config)
+            metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
         engine = VllmEngineConfig(

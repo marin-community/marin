@@ -31,6 +31,7 @@ from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper,
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.config import (
+    VLLM_METRIC_PREFIX,
     WORKER_PYTHON_VERSION,
     InferenceModelConfig,
     VllmCompilationCacheMode,
@@ -101,10 +102,9 @@ _LINUX_PROC_ROOT = "/proc"
 _HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
-_VLLM_METRIC_PREFIX = "vllm:"
 # The complete standard contract is 1,128 samples at the observed ordinary eight-engine
 # cardinality. Keep optional additions bounded by the same post-selection envelope.
-_VLLM_METRIC_SAMPLE_LIMIT_8_ENGINE_ENVELOPE = 2048
+_VLLM_METRIC_SAMPLE_LIMIT = 2048
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -1114,11 +1114,11 @@ def _configure_vllm_telemetry(
         scraper=PrometheusScraper(metrics_url),
         processor=functools.partial(
             prefixed_metric_snapshots,
-            metric_prefix=_VLLM_METRIC_PREFIX,
+            metric_prefix=VLLM_METRIC_PREFIX,
             family_names=frozenset(metric_families),
         ),
         publisher=RejectOversizedMetricSnapshotPublisher(
-            max_records=_VLLM_METRIC_SAMPLE_LIMIT_8_ENGINE_ENVELOPE,
+            max_records=_VLLM_METRIC_SAMPLE_LIMIT,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),
     )

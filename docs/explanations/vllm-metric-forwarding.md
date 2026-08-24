@@ -71,6 +71,6 @@ and resumes forwarding.
 
 The upstream [production metrics guide](https://docs.vllm.ai/en/latest/usage/metrics/)
 documents `/metrics`, the broader family inventory, and vLLM's metric
-deprecation policy. No complete raw GPU or TPU scrape was available for this
-change; the pinned definitions, parsed generated exposition, and bounded
-Finelog inventory are the evidence used instead.
+deprecation policy. The 2,048-sample bound has not been checked against a
+complete retained raw GPU or TPU scrape. Its evidence is the pinned definitions,
+parsed generated exposition, and bounded Finelog inventory described above.

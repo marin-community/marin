@@ -14,8 +14,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import fsspec
 from fray.types import CpuConfig, EnvironmentConfig, ResourceConfig, TpuConfig
+from rigging.filesystem.storage_path import StoragePath
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
@@ -23,13 +23,13 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM runs in an isolated uv-tool environment and does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
-_VLLM_METRIC_PREFIX = "vllm:"
+VLLM_METRIC_PREFIX = "vllm:"
 
 
 def _normalize_vllm_metric_families(families: object, *, source: str) -> tuple[str, ...]:
     if not isinstance(families, (list, tuple)) or not all(isinstance(family, str) for family in families):
         raise ValueError(f"Invalid vLLM metrics config {source}: every family must be a string")
-    invalid = [family for family in families if not family.startswith(_VLLM_METRIC_PREFIX)]
+    invalid = [family for family in families if not family.startswith(VLLM_METRIC_PREFIX)]
     if invalid:
         raise ValueError(f"Invalid vLLM metrics config {source}: every family must start with 'vllm:'")
     return tuple(sorted(set(families)))
@@ -56,16 +56,15 @@ def standard_vllm_metric_families() -> tuple[str, ...]:
     return _STANDARD_VLLM_METRIC_FAMILIES
 
 
-def load_vllm_metric_families(path: Path | None) -> tuple[str, ...]:
-    """Load optional additions and union them with the standard contract."""
+def load_vllm_metric_family_additions(path: Path | None) -> tuple[str, ...]:
+    """Load optional additions for the standard contract."""
     if path is None:
-        return _STANDARD_VLLM_METRIC_FAMILIES
+        return ()
     try:
-        with fsspec.open(str(path), "rb") as source:
-            additions = _parse_vllm_metric_families(source.read(), source=str(path))
+        additions = _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
     except OSError as exc:
         raise ValueError(f"Cannot read vLLM metrics config {path}: {exc}") from exc
-    return tuple(sorted(set(_STANDARD_VLLM_METRIC_FAMILIES).union(additions)))
+    return additions
 
 
 class VllmLauncherType(StrEnum):

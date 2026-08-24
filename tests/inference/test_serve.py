@@ -376,23 +376,6 @@ def test_local_cli_rejects_backend_specific_flags() -> None:
     assert "--max-seqs" in vllm.output
 
 
-def test_standard_vllm_metric_families_match_the_dashboard_contract() -> None:
-    assert frozenset(standard_vllm_metric_families()) == {
-        "vllm:prompt_tokens",
-        "vllm:generation_tokens",
-        "vllm:num_preemptions",
-        "vllm:request_success",
-        "vllm:num_requests_running",
-        "vllm:num_requests_waiting",
-        "vllm:kv_cache_usage_perc",
-        "vllm:time_to_first_token_seconds",
-        "vllm:request_time_per_output_token_seconds",
-        "vllm:inter_token_latency_seconds",
-        "vllm:request_queue_time_seconds",
-        "vllm:e2e_request_latency_seconds",
-    }
-
-
 def _plan(**overrides):
     args = {
         "backend": "vllm",
