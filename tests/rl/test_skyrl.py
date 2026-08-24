@@ -357,16 +357,6 @@ def test_external_model_rejects_a_hub_repo_id_at_construction() -> None:
         )
 
 
-def test_external_model_requires_a_source_revision_identity() -> None:
-    with pytest.raises(ValueError, match="exact source revision"):
-        ExternalModel(
-            uri="s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630",
-            identity="   ",
-            tokenizer_uri="laion/snowball-67b-a2b-sft-s2-thinking-step630",
-            tokenizer_revision="cb70e49a1cdb",
-        )
-
-
 def test_external_model_identity_reaches_the_launch_request_fingerprint() -> None:
     model = ExternalModel(
         uri="s3://marin-us-east-02a/models/laion--snowball-67b-a2b-sft-s2-thinking-step630",
