@@ -97,7 +97,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
 
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
-    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
+    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, context, expert, model) mesh for
     # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- not the Trainer's logical axis
     # mapping), but the TrainerConfig still derives ``data_axis_size`` (and thus the batch-divisibility
     # check + per_device_parallelism) from this MeshConfig. With only ``expert`` declared, the
