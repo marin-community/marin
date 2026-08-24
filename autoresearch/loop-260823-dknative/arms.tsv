@@ -11,3 +11,4 @@ ra2a-dkn-03-posture-lhs	3e531bab3f	2026.08.23.21	ragged_all_to_all	synthetic	dis
 ra2a-dkn-04-ab-dk-6k	d7db1b2698	2026.08.24.1	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
 ra2a-dkn-04b-ab-dk-6k	aa1cc02fde	2026.08.24.2	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
 ra2a-dkn-04c-ab-dk-6k	c11c3d98b0	2026.08.24.3	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none
+ra2a-dkn-05-ab-oneshot-6k	91668c83bc	2026.08.24.4	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	none

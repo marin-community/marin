@@ -38,3 +38,18 @@ Port queue (one arm each; ledger below decides keep/drop):
 
 Every arm: synthetic data, hero shape, one rack, mean mfu steps 5-15 relative to first,
 per-arm rows in arms.tsv (reissuable), results in results.tsv.
+
+## Conclusion (2026-08-24): goal met
+
+- Synthetic hero shape, same compiler: dk 22.62 vs one-shot 22.77 (delta 0.15, within
+  same-night noise; one-shot-branch splits=64 actively hurts the dk, splits=1 is the keep).
+- Final verification, hero shape restored from the hero step-6000 checkpoint on mixture data,
+  transport the only variable: **dk 21.43 vs one-shot 21.25 (tie, dk nominally ahead)**;
+  drops 0.017% vs 0.018%; identical loss 1.4727@6019. The skew-weakness hypothesis is refuted.
+- Runtime: XLA main e5d008bb03 + the g8x128 device-kernel grid patch (5 lines: 8x-SM grid of
+  128-thread CTAs + matching barrier registration) + two flags (dk + scoped raggedalltoall
+  registration). The one-shot control instead needs the kMaxPeers patch. Neither transport runs
+  on truly flag-only stock main today; the dk's remaining diff is small and upstreamable.
+- Known cost on this branch: the main-vintage DataLoader depresses restore MFU ~1 vs the tune
+  branch's loader for BOTH transports (plateau ~21.7 with dips; fetch_batch_size=256 mapping).
+  Loader tuning is a follow-up port, orthogonal to the transport.
