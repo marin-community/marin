@@ -21,3 +21,9 @@
 02:12	dkp-bal-u3	per-call: 8.31 ms   payload/rank: 3.21 GB   egress: 386 GB/s	      1 VALIDATION OK;
 02:15	dkp-bal-u30	per-call: 10.90 ms   payload/rank: 3.21 GB   egress: 294 GB/s	      1 VALIDATION OK;
 02:19	dkp-bal-u120	per-call: 14.17 ms   payload/rank: 3.21 GB   egress: 227 GB/s	      1 VALIDATION OK;
+17:32	dkp-bal9-u3	per-call: 8.92 ms   payload/rank: 3.21 GB   egress: 360 GB/s	      1 VALIDATION OK;
+17:36	dkp-bal9-u30	per-call: 9.62 ms   payload/rank: 3.21 GB   egress: 333 GB/s	      1 VALIDATION OK;
+17:57	dkp-ab1b-stock	per-call: 22.53 ms   payload/rank: 3.21 GB   egress: 142 GB/s	      1 VALIDATION OK;
+18:00	dkp-ab1b-patched	per-call: 9.56 ms   payload/rank: 3.21 GB   egress: 336 GB/s	      1 VALIDATION OK;
+18:03	dkp-ab2b-stock	per-call: 22.46 ms   payload/rank: 3.21 GB   egress: 143 GB/s	      1 VALIDATION OK;
+18:07	dkp-ab2b-patched	per-call: 9.61 ms   payload/rank: 3.21 GB   egress: 334 GB/s	      1 VALIDATION OK;
