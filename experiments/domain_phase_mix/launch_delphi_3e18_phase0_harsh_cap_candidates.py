@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import fsspec
+import jax
 import pandas as pd
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import DatasetComponent
@@ -41,7 +42,7 @@ DEFAULT_CANDIDATE_DIR = (
 )
 DEFAULT_CANDIDATE_WEIGHTS = DEFAULT_CANDIDATE_DIR / "training_candidate_weights.csv"
 DEFAULT_ALIAS_PATH = DEFAULT_CANDIDATE_DIR / "candidate_aliases.csv"
-LOCAL_ARTIFACT_DIR = DEFAULT_CANDIDATE_DIR / "launch_dry_run"
+LOCAL_ARTIFACT_DIR = DEFAULT_CANDIDATE_DIR / "launch_dry_run_v6e_only"
 CANDIDATE_IDS = (
     "cap4_shared_bounded_ensemble_kl0",
     "cap4_shared_bounded_ensemble_kl0p05",
@@ -59,6 +60,12 @@ RUN_ID_BASE = 965_000
 DATA_SEED_BASE = 965_000
 MAX_CONCURRENT = len(CANDIDATE_IDS) * len(REPEAT_SEEDS)
 CANDIDATE_PROVENANCE_FILENAME = "prefix_provenance.json"
+TPU_TYPE = "v6e-8"
+TPU_REGION = "us-east5"
+TPU_ZONE = "us-east5-b"
+PARENT_ZONE = "us-east5-a"
+EXPECTED_GLOBAL_DEVICE_COUNT = 8
+PANEL_HARDWARE_STATUS = "v6e_only"
 
 
 @dataclass(frozen=True)
@@ -140,6 +147,7 @@ def candidate_specs(
     candidate_weights_path: Path,
     expected_sha256: str,
     analysis_output_path: str,
+    tpu_type: str,
     tpu_region: str,
     tpu_zone: str,
 ) -> tuple[list[base.DelphiSwarmRunSpec], dict[str, object]]:
@@ -172,6 +180,10 @@ def candidate_specs(
                     source_run_name=run_name,
                     source_experiment=EXPERIMENT_NAME,
                     panel_source="sequential_prefix_harsh_cap_candidate",
+                    tpu_type=tpu_type,
+                    tpu_region=tpu_region,
+                    tpu_zone=tpu_zone,
+                    tensor_parallel_size=base._tensor_parallel_size(template.model_hidden_dim, tpu_type),
                     data_seed=DATA_SEED_BASE + repeat,
                     trainer_seed=repeat,
                     max_simulated_epoch=max_epoch,
@@ -186,6 +198,18 @@ def candidate_specs(
 
 def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> None:
     """Train one prefix and bind the permanent checkpoint to frozen inputs."""
+    devices = jax.devices()
+    if (
+        jax.default_backend() != "tpu"
+        or jax.device_count() != EXPECTED_GLOBAL_DEVICE_COUNT
+        or jax.local_device_count() != EXPECTED_GLOBAL_DEVICE_COUNT
+        or any("v6" not in device.device_kind.lower() for device in devices)
+    ):
+        raise ValueError(
+            "Harsh-cap prefix validation requires exactly eight local/global v6 TPU devices: "
+            f"backend={jax.default_backend()}, global={jax.device_count()}, local={jax.local_device_count()}, "
+            f"kinds={[device.device_kind for device in devices]}"
+        )
     replay.run_phase_0_prefix(config.prefix_config)
     run_spec = config.prefix_config.run_spec
     checkpoint_uri = os.path.join(
@@ -216,6 +240,13 @@ def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> No
         "checkpoint_uri": checkpoint_uri,
         "checkpoint_step": replay.EXPECTED_PREFIX_HF_STEP,
         "trainer_state_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
+        "tpu_type": TPU_TYPE,
+        "tpu_region": TPU_REGION,
+        "tpu_zone": TPU_ZONE,
+        "observed_device_kinds": sorted({device.device_kind for device in devices}),
+        "observed_global_device_count": jax.device_count(),
+        "observed_local_device_count": jax.local_device_count(),
+        "panel_hardware_status": PANEL_HARDWARE_STATUS,
     }
     output_fs, output_path = fsspec.core.url_to_fs(config.prefix_config.output_path)
     provenance_path = os.path.join(output_path, CANDIDATE_PROVENANCE_FILENAME)
@@ -310,6 +341,8 @@ def build_steps(
                             f"replay_code_commit={replay_code_commit}",
                             f"data_seed={run_spec.data_seed}",
                             f"trainer_seed={run_spec.trainer_seed}",
+                            f"prefix_tpu={TPU_TYPE}",
+                            f"prefix_zone={TPU_ZONE}",
                             "selection_target=uncheatable",
                         ),
                     ),
@@ -344,8 +377,8 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--expected-candidate-sha256", required=True)
     parser.add_argument("--expected-aliases-sha256", required=True)
     parser.add_argument("--analysis-output-path", default=base.DEFAULT_ANALYSIS_OUTPUT_PATH)
-    parser.add_argument("--tpu-region", default=base.DEFAULT_TPU_REGION)
-    parser.add_argument("--tpu-zone", default=base.DEFAULT_TPU_ZONE)
+    parser.add_argument("--tpu-region", default=TPU_REGION)
+    parser.add_argument("--tpu-zone", default=TPU_ZONE)
     parser.add_argument("--max-concurrent", type=int, default=MAX_CONCURRENT)
     parser.add_argument("--replay-code-commit", required=True)
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
@@ -357,8 +390,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args, remaining = parse_args()
     sys.argv = [sys.argv[0], *remaining]
-    if args.tpu_region != base.DEFAULT_TPU_REGION or args.tpu_zone != base.DEFAULT_TPU_ZONE:
-        raise ValueError(f"This launcher is pinned to {base.DEFAULT_TPU_REGION}/{base.DEFAULT_TPU_ZONE}")
+    if args.tpu_region != TPU_REGION or args.tpu_zone != TPU_ZONE:
+        raise ValueError(f"This launcher is pinned to {TPU_REGION}/{TPU_ZONE}")
     if not 1 <= args.max_concurrent <= MAX_CONCURRENT:
         raise ValueError(f"--max-concurrent must be in [1, {MAX_CONCURRENT}]")
     expected_prefix = marin_prefix_for_region(args.tpu_region)
@@ -372,6 +405,7 @@ def main() -> None:
         candidate_weights_path=args.candidate_weights,
         expected_sha256=args.expected_candidate_sha256,
         analysis_output_path=args.analysis_output_path,
+        tpu_type=TPU_TYPE,
         tpu_region=args.tpu_region,
         tpu_zone=args.tpu_zone,
     )
@@ -402,18 +436,22 @@ def main() -> None:
         "native_table9_boundary_eval_scheduled": False,
         "full_trainer_state_retained": True,
         "max_concurrent": args.max_concurrent,
+        "parent_zone": PARENT_ZONE,
+        "prefix_hardware": {"tpu_type": TPU_TYPE, "region": TPU_REGION, "zone": TPU_ZONE},
+        "panel_hardware_status": PANEL_HARDWARE_STATUS,
         "identity_contract": {
             "preserved": [
                 "source panel bucket set and data-loader implementation",
                 "model architecture and optimizer configuration",
                 "3007-update optimizer schedule horizon",
-                "batch size, sequence length, precision, mesh, TPU type, region, and zone",
+                "batch size, sequence length, precision, and logical mesh",
             ],
             "deliberate_changes": [
                 "phase-0 weights follow the frozen cap-4/cap-6 KL ladder",
                 "data and trainer seeds follow the frozen paired three-seed validation design",
                 "execution stops after update 2400",
                 "candidate-specific output paths and W&B tags replace fit-panel tags",
+                "prefix hardware is v6e-8 in east5b",
             ],
         },
     }

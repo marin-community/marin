@@ -34,6 +34,11 @@ PRIMARY_BRANCH_SEED = 0
 STABILITY_BRANCH_SEED = 1
 PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 DIAGNOSTIC_METRIC = "eval/uncheatable_eval/github_cpp/bpb"
+EXPECTED_TPU_TYPE = "v6e-8"
+EXPECTED_TPU_REGION = "us-east5"
+EXPECTED_TPU_ZONE = "us-east5-b"
+EXPECTED_DEVICE_COUNT = 8
+PANEL_HARDWARE_STATUS = "v6e_only"
 
 
 def parse_args() -> argparse.Namespace:
@@ -128,12 +133,25 @@ def materialize_rows(
             "checkpoint_uri": checkpoint_uri,
             "checkpoint_step": EXPECTED_CHECKPOINT_STEP,
             "trainer_state_step": EXPECTED_CHECKPOINT_STEP + 1,
+            "tpu_type": EXPECTED_TPU_TYPE,
+            "tpu_region": EXPECTED_TPU_REGION,
+            "tpu_zone": EXPECTED_TPU_ZONE,
+            "observed_global_device_count": EXPECTED_DEVICE_COUNT,
+            "observed_local_device_count": EXPECTED_DEVICE_COUNT,
+            "panel_hardware_status": PANEL_HARDWARE_STATUS,
         }
         for key, expected_value in expected_provenance.items():
             if provenance.get(key) != expected_value:
                 raise ValueError(f"Candidate provenance mismatch for {identity}: {key}={provenance.get(key)!r}")
         if not isinstance(provenance.get("phase_weights_sha256"), str):
             raise ValueError(f"Candidate phase-weight hash is missing for {identity}")
+        device_kinds = provenance.get("observed_device_kinds")
+        if (
+            not isinstance(device_kinds, list)
+            or not device_kinds
+            or any("v6" not in str(kind).lower() for kind in device_kinds)
+        ):
+            raise ValueError(f"Candidate did not run on v6 hardware for {identity}: {device_kinds}")
         row = {
             "canonical_candidate_id": candidate_id,
             "repeat_seed": seed,
@@ -141,6 +159,10 @@ def materialize_rows(
             "checkpoint_uri": checkpoint_uri,
             "hf_checkpoint_uri": hf_checkpoint_uri,
             "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
+            "tpu_type": EXPECTED_TPU_TYPE,
+            "tpu_region": EXPECTED_TPU_REGION,
+            "tpu_zone": EXPECTED_TPU_ZONE,
+            "panel_hardware_status": PANEL_HARDWARE_STATUS,
         }
         row.update(
             {
@@ -222,6 +244,13 @@ def selected_manifest(
             "Within each cap, select the eligible KL candidate with the lowest three-seed mean boundary "
             "Uncheatable BPB; break an exact tie by the lower KL penalty. Controls are diagnostic only."
         ),
+        "prefix_hardware": {
+            "tpu_type": EXPECTED_TPU_TYPE,
+            "region": EXPECTED_TPU_REGION,
+            "zone": EXPECTED_TPU_ZONE,
+        },
+        "panel_hardware_status": PANEL_HARDWARE_STATUS,
+        "frontier_claim_requirement": "confirm the selected final policy with fresh v6e-8 repeats",
         "selected_aliases": selected.to_dict(orient="records"),
         "prefixes": (
             rows[["canonical_candidate_id", "repeat_seed", "checkpoint_uri", "provenance_sha256"]].to_dict(
