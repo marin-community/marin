@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rollout record: the deploy/rollback state a controller restart leaves in remote state.
+"""Rollout record: the deploy/rollback state an Iris rollout leaves in remote state.
 
-A ``controller restart`` writes this record next to the controller checkpoints in
+A controller deployment writes this record next to the controller checkpoints in
 the cluster's remote state dir. It carries the image being deployed, the image to
 roll back to, and the pre-deploy checkpoint to restore on rollback, plus a phase
 that drives the rollback state machine:

@@ -54,6 +54,33 @@ PULUMI_SERVICES = (
 )
 
 
+def run_pulumi_up(
+    project_directory: Path,
+    stack: str,
+    *,
+    yes: bool,
+    config: tuple[str, ...] = (),
+    stack_config: Path | None = None,
+    environment: dict[str, str] | None = None,
+) -> None:
+    """Apply one Pulumi stack with optional temporary configuration."""
+    if config and stack_config is None:
+        raise ValueError("Pulumi config overrides require a stack config file")
+
+    arguments = ["pulumi", "up", "--stack", stack]
+    if yes:
+        arguments.append("--yes")
+
+    with tempfile.TemporaryDirectory(prefix="marin-deploy-") as temporary_directory:
+        if stack_config is not None:
+            config_file = Path(temporary_directory) / stack_config.name
+            shutil.copyfile(stack_config, config_file)
+            arguments.extend(("--config-file", str(config_file)))
+        for value in config:
+            arguments.extend(("--config", value))
+        subprocess.run(arguments, cwd=project_directory, env=environment, check=True)
+
+
 def _secret_value(secret: SecretEnvironment) -> str:
     result = subprocess.run(
         [
@@ -84,21 +111,17 @@ def _rollout(service: PulumiService, *, yes: bool, config: tuple[str, ...]) -> N
     for secret in service.secret_environment:
         environment[secret.variable] = _secret_value(secret)
 
-    arguments = ["pulumi", "up", "--stack", service.stack]
-    if yes:
-        arguments.append("--yes")
-
-    with tempfile.TemporaryDirectory(prefix="marin-deploy-") as temporary_directory:
-        if config:
-            config_file = Path(temporary_directory) / service.stack_config.name
-            shutil.copyfile(service.stack_config, config_file)
-            arguments.extend(("--config-file", str(config_file)))
-            for value in config:
-                arguments.extend(("--config", value))
-
-        result = subprocess.run(arguments, cwd=service.project_directory, env=environment, check=False)
-    if result.returncode:
-        raise click.exceptions.Exit(result.returncode)
+    try:
+        run_pulumi_up(
+            service.project_directory,
+            service.stack,
+            yes=yes,
+            config=config,
+            stack_config=service.stack_config if config else None,
+            environment=environment,
+        )
+    except subprocess.CalledProcessError as error:
+        raise click.exceptions.Exit(error.returncode) from error
 
 
 def pulumi_service_group(service: PulumiService) -> click.Group:

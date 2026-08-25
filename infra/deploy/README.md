@@ -44,3 +44,16 @@ Pass `--yes` to skip confirmation. A rollback selects the next older retained
 Kubernetes revision by default; use `--to-revision N` to select an exact revision.
 Finelog status, logs, secret synchronization, and GCE operations remain under
 `uv run finelog deploy`.
+
+Iris controller deployments use one Pulumi stack per cluster:
+
+```bash
+uv run marin-deploy iris rollout <cluster>
+uv run marin-deploy iris rollback <cluster>
+```
+
+The rollout takes a controller checkpoint before building images. Pulumi then
+activates the pinned images on the existing GCE VM or Kubernetes controller. A
+failed activation restores the previous controller image with that checkpoint
+through the same stack and still exits with failure. Pulumi never receives
+resolved controller secrets and does not own controller deletion.

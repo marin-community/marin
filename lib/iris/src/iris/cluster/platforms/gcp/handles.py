@@ -123,14 +123,13 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
     Uses GceRemoteExec for SSH via `gcloud compute ssh`.
     Supports terminate, set_labels, and set_metadata operations via GcpService.
 
-    _vm_id is the Iris worker ID (may differ from GCE instance name after
-    construct_worker_id). _gce_vm_name is the real GCE instance name used for
-    gcloud commands.
+    ``vm_id`` is the Iris worker ID and may differ from ``gce_vm_name``, the
+    instance name used by gcloud.
     """
 
-    _gce_vm_name: str = ""
-    _zone: str = ""
-    _project_id: str = ""
+    gce_vm_name: str = ""
+    zone: str = ""
+    project_id: str = ""
     _service_account: str | None = None
     # Always populated at construction; Optional only for dataclass inheritance ordering.
     _gcp_service: GcpService | None = None
@@ -141,7 +140,7 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
 
     def status(self) -> WorkerStatus:
         assert self._gcp_service is not None
-        info = self._gcp_service.vm_describe(self._gce_vm_name, self._zone)
+        info = self._gcp_service.vm_describe(self.gce_vm_name, self.zone)
         if info is None:
             return WorkerStatus(state=CloudWorkerState.UNKNOWN)
         state_map = {
@@ -153,24 +152,24 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
 
     def terminate(self, *, wait: bool = False) -> None:
         assert self._gcp_service is not None
-        logger.info("Deleting GCE instance: %s", self._gce_vm_name)
-        self._gcp_service.vm_delete(self._gce_vm_name, self._zone, wait=wait)
+        logger.info("Deleting GCE instance: %s", self.gce_vm_name)
+        self._gcp_service.vm_delete(self.gce_vm_name, self.zone, wait=wait)
 
     def set_labels(self, labels: dict[str, str]) -> None:
         assert self._gcp_service is not None
-        logger.info("Setting labels on GCE instance: %s", self._gce_vm_name)
+        logger.info("Setting labels on GCE instance: %s", self.gce_vm_name)
         try:
-            self._gcp_service.vm_update_labels(self._gce_vm_name, self._zone, labels)
+            self._gcp_service.vm_update_labels(self.gce_vm_name, self.zone, labels)
         except InfraError as e:
-            logger.warning("Failed to set labels on %s: %s", self._gce_vm_name, e)
+            logger.warning("Failed to set labels on %s: %s", self.gce_vm_name, e)
 
     def set_metadata(self, metadata: dict[str, str]) -> None:
         assert self._gcp_service is not None
-        logger.info("Setting metadata on GCE instance: %s", self._gce_vm_name)
+        logger.info("Setting metadata on GCE instance: %s", self.gce_vm_name)
         try:
-            self._gcp_service.vm_set_metadata(self._gce_vm_name, self._zone, metadata)
+            self._gcp_service.vm_set_metadata(self.gce_vm_name, self.zone, metadata)
         except InfraError as e:
-            logger.warning("Failed to set metadata on %s: %s", self._gce_vm_name, e)
+            logger.warning("Failed to set metadata on %s: %s", self.gce_vm_name, e)
 
     def bootstrap(self, script: str) -> None:
         # Persist the script as the instance's startup-script before executing it
@@ -409,9 +408,9 @@ class GcpVmSliceHandle:
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,
             _port=self._worker_port,
-            _gce_vm_name=self._vm_name,
-            _zone=self._zone,
-            _project_id=self._project_id,
+            gce_vm_name=self._vm_name,
+            zone=self._zone,
+            project_id=self._project_id,
             _gcp_service=self._gcp_service,
             _remote_exec=remote_exec,
             _service_account=self._service_account,

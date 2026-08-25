@@ -187,7 +187,7 @@ def test_cluster_start_single_platform_task_uses_architecture_suffix(monkeypatch
     assert observed_task_images == ["ghcr.io/marin-community/iris-task:abc1234-amd64"]
 
 
-def test_controller_restart_rejects_prebuilt_image_missing_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prebuilt_kubernetes_images_reject_manifest_missing_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     config = _kubernetes_config()
     manifest = {
         "digest": f"sha256:{'b' * 64}",
@@ -198,17 +198,5 @@ def test_controller_restart_rejects_prebuilt_image_missing_platform(monkeypatch:
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr=""),
     )
-    monkeypatch.setattr(
-        cluster_cli,
-        "provider_bundle",
-        lambda _config: SimpleNamespace(controller=SimpleNamespace(preflight_controller=lambda _config: None)),
-    )
-
-    result = CliRunner().invoke(
-        cluster_cli.controller_restart,
-        ["--skip-checkpoint", "--prebuilt-tag", "abc1234"],
-        obj={"config": config, "controller_url": "http://127.0.0.1:1", "verbose": False},
-    )
-
-    assert result.exit_code == 1
-    assert "missing platforms: linux/arm64" in result.output
+    with pytest.raises(cluster_cli.click.ClickException, match="missing platforms: linux/arm64"):
+        cluster_cli.use_prebuilt_kubernetes_images(config, "abc1234")

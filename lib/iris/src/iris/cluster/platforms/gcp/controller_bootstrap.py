@@ -125,8 +125,8 @@ fi
 # Stop existing controller if running.
 # Use `docker kill` (SIGKILL) instead of `docker stop` (SIGTERM) because the
 # controller's SIGTERM handler runs autoscaler.shutdown() → terminate_all(),
-# which deletes every worker VM. On a controller restart the CLI has already
-# taken a checkpoint via RPC, so the graceful shutdown path is unnecessary.
+# which deletes every worker VM. The deploy wrapper handles rollout state, so
+# the graceful shutdown path is unnecessary.
 echo "[iris-controller] [5/5] Starting controller container..."
 if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; then
     echo "[iris-controller]       Killing existing container..."

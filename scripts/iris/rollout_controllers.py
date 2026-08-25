@@ -2,13 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-cluster steps of an evidence-gated Iris controller rollout.
-
-The ``deploy-iris-controllers`` skill drives these subcommands. The restart itself
-stays in ``iris cluster controller restart``: this script never restarts a
-controller and never walks the cluster list. The skill continues after passed
-gates and stops when a gate is blocked.
-"""
+"""Capture and verify the evidence gates around an Iris controller rollout."""
 
 import functools
 import json

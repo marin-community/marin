@@ -1,0 +1,44 @@
+# Iris controller Pulumi deployment
+
+This application has one stack per production Iris cluster. The stack owns a
+restart-only activation resource; it does not own the GCE VM, Kubernetes
+controller objects, SQLite storage, or deletion.
+
+Run deployments through the shared wrapper from the repository root:
+
+```bash
+uv sync --all-packages --extra deploy
+uv run marin-deploy iris rollout <cluster>
+uv run marin-deploy iris rollback <cluster>
+```
+
+The rollout wrapper resolves controller secrets, takes a checkpoint, builds and
+pins the controller images, and invokes `pulumi up`. When a prior deployment is
+recorded, it first writes a `pending` record with the paired rollback state.
+Pulumi records the cluster name, image references, activation ID, and digest.
+The dynamic resource loads the cluster configuration and resolves runtime
+values in the operator process; secret values do not enter Pulumi config,
+inputs, outputs, or state.
+
+GCE activation updates `startup-script` metadata and runs the script over SSH on
+the existing VM. CoreWeave activation reconciles the existing controller through
+the configured Kubernetes API. Resource deletion is a no-op, so removing the
+stack never stops a controller or deletes its state.
+
+If activation fails, the wrapper writes `rollback_requested` with the previous
+image and the new pre-deploy checkpoint, then applies that pair through Pulumi.
+The failed rollout exits nonzero after successful recovery. An explicit
+`marin-deploy iris rollback` uses the previous image and checkpoint in the committed
+rollout record. A Pulumi error before the resource reaches its mutation boundary
+restores the prior rollout record without requesting a checkpoint rollback.
+
+Direct `pulumi up` is intentionally unavailable: every update requires
+temporary image and activation configuration produced after the checkpoint and
+image build. To initialize a new stack, create it with the shared KMS provider
+before the first wrapper-driven deployment:
+
+```bash
+cd infra/iris
+pulumi stack init <cluster> \
+  --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
+```

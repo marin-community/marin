@@ -1,0 +1,8 @@
+name: iris
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Per-cluster Iris controller activation.

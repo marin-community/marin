@@ -266,7 +266,7 @@ def _controller_port(config: IrisClusterConfig) -> int:
     return DEFAULT_CONTROLLER_PORT
 
 
-def _discover_controller_vm(
+def discover_controller_vm(
     platform: WorkerInfraProvider,
     label_prefix: str,
 ) -> StandaloneWorkerHandle | None:
@@ -360,7 +360,7 @@ def start_controller(
     port = _controller_port(config)
 
     # Check for existing controller
-    existing_vm = _discover_controller_vm(platform, label_prefix)
+    existing_vm = discover_controller_vm(platform, label_prefix)
     if existing_vm:
         if fresh:
             logger.info(
@@ -427,7 +427,7 @@ def restart_controller(
     label_prefix = config.platform.label_prefix or "iris"
     port = _controller_port(config)
 
-    vm = _discover_controller_vm(platform, label_prefix)
+    vm = discover_controller_vm(platform, label_prefix)
     if vm is None:
         raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
 
@@ -454,7 +454,7 @@ def stop_controller(platform: WorkerInfraProvider, config: IrisClusterConfig) ->
     checkpoints after remote state is cleared.
     """
     label_prefix = config.platform.label_prefix or "iris"
-    vm = _discover_controller_vm(platform, label_prefix)
+    vm = discover_controller_vm(platform, label_prefix)
     if vm:
         logger.info("Stopping controller VM %s", vm.vm_id)
         vm.terminate(wait=True)
