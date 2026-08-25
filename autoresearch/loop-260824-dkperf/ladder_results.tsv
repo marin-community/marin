@@ -13,3 +13,7 @@
 01:34	dkp-usw-dk-u1	per-call: 7.95 ms   payload/rank: 3.21 GB   egress: 404 GB/s	      1 VALIDATION OK;
 01:37	dkp-usw-dk-u120	per-call: 20.40 ms   payload/rank: 3.21 GB   egress: 157 GB/s	      1 VALIDATION OK;
 01:41	dkp-usw-os-u1	per-call: 24.19 ms   payload/rank: 3.21 GB   egress: 133 GB/s	      1 VALIDATION OK;
+01:49	dkp-uc-dk-u2	per-call: 8.34 ms   payload/rank: 3.21 GB   egress: 385 GB/s	      2 VALIDATION OK;
+01:52	dkp-uc-dk-u3	per-call: 8.30 ms   payload/rank: 3.21 GB   egress: 387 GB/s	      1 VALIDATION OK;
+01:55	dkp-uc-dk-u6	per-call: 8.16 ms   payload/rank: 3.21 GB   egress: 393 GB/s	      1 VALIDATION OK;
+01:59	dkp-uc-dk-u15	per-call: 8.56 ms   payload/rank: 3.21 GB   egress: 375 GB/s	      1 VALIDATION OK;

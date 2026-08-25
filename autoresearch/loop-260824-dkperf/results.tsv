@@ -17,3 +17,4 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 3	2026-08-25T00:5xZ	ladder-r1	bench	interleaved 2x(g8x,cta8,cta16,cta32)	-	-	running	paired medians; ladder.sh r1
 4	2026-08-25T01:41Z	usweep	bench	dk U=1: 7.95ms/404GBs = ONE-SHOT SPEED; U=120: 20.4; oneshot U=1: 24.2	7.95	-	keep-insight	Granularity is the whole dk gap; transports have opposite U preferences
 4	2026-08-25T02:0xZ	b3-dkbal	build	work-proportional CTA assignment (fork ragged-a2a-dk-balanced 06df0ee8a6)	-	-	running	subsumes ctas_per_unit; targets skew regime without splits
+4	2026-08-25T01:59Z	ucurve	bench	dk U=2/3/6/15: 8.34/8.30/8.16/8.56; cliff at U=30 (12.2) = wave quantization (units>grid, 2nd wave 62% occupied x1.5); U=120 7 waves 20.4	8.30	-	keep-insight	skewed hero units starve under fixed assignment; balanced kernel targets both
