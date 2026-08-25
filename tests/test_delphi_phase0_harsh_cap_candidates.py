@@ -90,3 +90,28 @@ def test_select_aliases_uses_boundary_mean_and_lower_kl_tie_break(tmp_path: Path
     selected_by_cap = selected.set_index("cap_epochs")
     assert selected_by_cap.loc[4, "candidate_id"] == "shared_bounded_ensemble_kl0"
     assert selected_by_cap.loc[6, "candidate_id"] == "shared_bounded_ensemble_kl0p2"
+
+
+def test_select_aliases_can_freeze_one_completed_cap(tmp_path: Path) -> None:
+    cap4 = tmp_path / "cap4"
+    cap6 = tmp_path / "cap6"
+    _write_cap_artifacts(cap4, 4)
+    _write_cap_artifacts(cap6, 6)
+    _, _, aliases, _, _ = prepare.freeze_candidates({4: cap4, 6: cap6})
+    cap4_aliases = aliases[aliases.cap_epochs.eq(4) & aliases.selection_eligible].copy()
+    summary = pd.DataFrame(
+        {
+            "canonical_candidate_id": cap4_aliases.canonical_candidate_id,
+            "uncheatable_mean": [1.0, 0.9, 1.1, 1.2],
+            "uncheatable_sd": 0.01,
+            "github_cpp_mean": 1.0,
+            "github_cpp_sd": 0.01,
+            "uncheatable_sem": 0.01,
+        }
+    )
+
+    _, selected = materialize.select_aliases(cap4_aliases, summary, (4,))
+
+    assert selected[["cap_epochs", "candidate_id"]].to_dict("records") == [
+        {"cap_epochs": 4, "candidate_id": "shared_bounded_ensemble_kl0p05"}
+    ]

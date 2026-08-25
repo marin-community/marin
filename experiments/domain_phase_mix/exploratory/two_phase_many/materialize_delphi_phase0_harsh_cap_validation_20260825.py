@@ -49,6 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
+        "--caps",
+        type=int,
+        nargs="+",
+        default=(4, 6),
+        choices=(4, 6),
+        help="Materialize and select only completed candidate caps.",
+    )
+    parser.add_argument(
         "--selected-manifest-uri",
         default=f"{DEFAULT_EXPERIMENT_ROOT}/selected-prefixes/selected_prefixes.json",
     )
@@ -202,7 +210,11 @@ def kl_penalty(candidate_id: str) -> float:
     return float(label.replace("p", "."))
 
 
-def select_aliases(aliases: pd.DataFrame, summary: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def select_aliases(
+    aliases: pd.DataFrame,
+    summary: pd.DataFrame,
+    expected_caps: tuple[int, ...] = (4, 6),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     alias_results = aliases.merge(summary, on="canonical_candidate_id", validate="many_to_one")
     alias_results["kl_penalty"] = [
         kl_penalty(candidate_id) if eligible else math.nan
@@ -216,8 +228,8 @@ def select_aliases(aliases: pd.DataFrame, summary: pd.DataFrame) -> tuple[pd.Dat
         .groupby("cap_epochs", as_index=False)
         .first()
     )
-    if tuple(selected.cap_epochs.astype(int)) != (4, 6):
-        raise ValueError(f"Expected one selected prefix for cap 4 and cap 6; got {tuple(selected.cap_epochs)}")
+    if tuple(selected.cap_epochs.astype(int)) != expected_caps:
+        raise ValueError(f"Expected one selected prefix for caps {expected_caps}; got {tuple(selected.cap_epochs)}")
     return alias_results, selected
 
 
@@ -235,7 +247,7 @@ def selected_manifest(
         results.canonical_candidate_id.isin(selected_ids)
         & results.repeat_seed.isin((PRIMARY_BRANCH_SEED, STABILITY_BRANCH_SEED))
     ]
-    if len(rows) != 4:
+    if len(rows) != 2 * len(selected_ids):
         raise ValueError("Selected prefix checkpoint rows are incomplete")
     return {
         "candidate_weights_sha256": candidate_weights_sha256,
@@ -280,9 +292,15 @@ def main() -> None:
     args = parse_args()
     weights = pd.read_csv(args.candidate_weights)
     aliases = pd.read_csv(args.candidate_aliases)
-    candidate_ids = tuple(weights.candidate_id.drop_duplicates())
-    if set(aliases.canonical_candidate_id) != set(candidate_ids):
-        raise ValueError("Candidate alias map does not cover the canonical training candidates")
+    caps = tuple(sorted(set(args.caps)))
+    selected_aliases = aliases[
+        aliases.cap_epochs.astype(int).isin(caps) & aliases.selection_eligible.astype(bool)
+    ].copy()
+    candidate_ids = tuple(selected_aliases.canonical_candidate_id.drop_duplicates())
+    if not candidate_ids:
+        raise ValueError(f"No selection-eligible candidates for caps {caps}")
+    if not set(candidate_ids).issubset(set(weights.candidate_id)):
+        raise ValueError("Candidate alias map references an unknown canonical training candidate")
     candidate_weights_sha256 = file_sha256(args.candidate_weights)
     candidate_aliases_sha256 = file_sha256(args.candidate_aliases)
     results = materialize_rows(
@@ -293,7 +311,7 @@ def main() -> None:
         prefix_replay_code_commit=args.prefix_replay_code_commit,
     )
     summary = summarize(results)
-    alias_results, selected = select_aliases(aliases, summary)
+    alias_results, selected = select_aliases(selected_aliases, summary, caps)
     payload = selected_manifest(
         results=results,
         alias_results=alias_results,
