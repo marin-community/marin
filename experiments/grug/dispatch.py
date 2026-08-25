@@ -14,6 +14,8 @@ from iris.rpc.proto_display import priority_band_value
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
+from experiments.grug.pjrt_wheel import PJRT_WHEEL_ENV, pjrt_wheel_setup_scripts
+
 logger = logging.getLogger(__name__)
 
 ConfigT = TypeVar("ConfigT")
@@ -74,11 +76,21 @@ def dispatch_grug_training_run(
     scripts must install both themselves (``default_setup_script(extras=...)`` renders the
     standard one). Passing ``pip_packages`` alongside ``setup_scripts`` is rejected rather than
     silently dropped.
+
+    A caller that passes no ``setup_scripts`` still gets the ``MARIN_PJRT_WHEEL`` override when
+    that variable names a self-built PJRT wheel, and the task's default setup otherwise.
     """
-    if pip_packages and setup_scripts is not None:
+    extras = extras_for_resources(resources)
+    # An explicit script list wins; otherwise the PJRT wheel override installs itself when
+    # MARIN_PJRT_WHEEL is set, and leaves the default setup alone when it is not.
+    resolved_setup_scripts = (
+        setup_scripts if setup_scripts is not None else (pjrt_wheel_setup_scripts(extras=extras) or None)
+    )
+    if pip_packages and resolved_setup_scripts is not None:
+        origin = "setup_scripts" if setup_scripts is not None else PJRT_WHEEL_ENV
         raise ValueError(
-            "Iris ignores pip_packages when setup_scripts is set; install them from the scripts "
-            "instead (default_setup_script(pip_packages=...))."
+            f"Iris ignores pip_packages when setup_scripts is set (here by {origin}); install them "
+            "from the scripts instead (default_setup_script(pip_packages=...))."
         )
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(
@@ -91,9 +103,9 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(
             env_vars=env_vars,
-            extras=extras_for_resources(resources),
+            extras=extras,
             pip_packages=pip_packages,
-            setup_scripts=setup_scripts,
+            setup_scripts=resolved_setup_scripts,
         ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,
