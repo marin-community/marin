@@ -53,7 +53,7 @@ import numpy as np
 import polars as pl
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.build_pdf_source.quality.analyze_route_study import label, read_table
+from experiments.datakit.build_pdf_source.quality.analyze_route_study import label, read_table, route_ok
 from experiments.datakit.build_pdf_source.quality.build_adjudication_set import (
     ROUTE_STUDY_PREFIX,
     STRATA,
@@ -93,23 +93,40 @@ HEADLINE_METRIC = "inspector_vlm_bigram_recall_mean"
 # Timing columns, paired per document.
 TIMINGS = ("inspector_detect_ms_per_page", "inspector_extract_ms_per_page")
 
-CARRIED = (
-    "source_id",
-    "domain",
-    "num_pages",
-    "inspector_outcome",
-    "inspector_error",
-    "inspector_extracted_pages",
-    "inspector_markdown_chars",
+# Columns the stratum predicates read off an inspector table. Both builds' tables carry them, and
+# the strata are cut from the *baseline's* copy so the slices are identical on both sides.
+STRATUM_COLUMNS = (
+    "inspector_pdf_type",
     "inspector_page_count",
     "inspector_extract_pages_with_tables",
-    "inspector_extract_pages_with_columns",
-    "inspector_extract_is_complex_layout",
-    *METRICS,
-    *TIMINGS,
+    "inspector_vlm_bigram_recall_mean",
+    "inspector_vlm_frac_pages_bigram_below_50",
+    "inspector_docling_bigram_recall_mean",
+    "docling_vlm_bigram_recall_mean",
+    "docling_vlm_frac_pages_bigram_below_50",
 )
 
-# Columns the strata predicates read out of the route study, which is version-independent.
+CARRIED = tuple(
+    dict.fromkeys(
+        (
+            "source_id",
+            "domain",
+            "num_pages",
+            "inspector_outcome",
+            "inspector_error",
+            "inspector_extracted_pages",
+            "inspector_markdown_chars",
+            "inspector_page_count",
+            "inspector_extract_pages_with_tables",
+            "inspector_extract_pages_with_columns",
+            "inspector_extract_is_complex_layout",
+            *METRICS,
+            *TIMINGS,
+            *STRATUM_COLUMNS,
+        )
+    )
+)
+
 _OLD = "_old"
 
 
@@ -130,7 +147,28 @@ def joined(fs) -> pl.DataFrame:
     frame = candidate.join(baseline, on="source_id", how="inner", suffix=_OLD)
     frame = frame.join(route.drop("url", "num_pages", "pdf_bytes", "docling_missing"), on="source_id", how="inner")
     logger.info("joined %d documents", frame.height)
-    return frame.with_columns(stratum=stratum_of())
+    return frame.join(baseline_strata(route, baseline), on="source_id", how="left")
+
+
+def baseline_strata(route: pl.DataFrame, baseline: pl.DataFrame) -> pl.DataFrame:
+    """Each document's stratum, cut from the baseline build's signals.
+
+    The predicates in :data:`~...build_adjudication_set.STRATA` read the extractor's own output --
+    ``table_heavy`` is a threshold on ``inspector_extract_pages_with_tables``, and the
+    mutual-agreement stratum is defined on both cheap routes' labels. Cutting them from the
+    candidate build would move the slice boundaries at the same time as the quantity being sliced,
+    so a stratum's delta would mix a change in the documents with a change in how they were read.
+    Cutting them from the baseline is also what the adjudication set does, which keeps the metric
+    tables and the judged strata talking about the same documents.
+    """
+    frame = route.drop("url", "num_pages", "pdf_bytes", "docling_missing").join(
+        baseline.select(*STRATUM_COLUMNS, "source_id"), on="source_id", how="inner"
+    )
+    frame = frame.with_columns(
+        inspector_ok=route_ok("inspector_vlm", pl.col("inspector_vlm_bigram_recall_mean").is_null()),
+        docling_ok=route_ok("docling_vlm", pl.col("docling_vlm_bigram_recall_mean").is_null()),
+    )
+    return frame.select("source_id", stratum=stratum_of())
 
 
 def evaluable(frame: pl.DataFrame) -> pl.DataFrame:
