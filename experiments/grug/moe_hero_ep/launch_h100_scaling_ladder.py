@@ -4,13 +4,13 @@
 """H100 scaling ladder for the Grug MoE EP hero recipe.
 
 The three rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter
-scaling rules while mapping the expert and replica axes onto Hopper nodes. The global sequence batch
-is the largest power of two whose token batch does not exceed ``training_tokens ** 0.6``.
+scaling rules while mapping the expert and replica axes onto Hopper nodes. Every rung uses a global
+sequence batch of 1024.
 
     size   H100 GPUs  EP per task  global batch  steps  tokens
-    d384       4           4            128       12162   6.4B
-    d512       8           8            256       15721    16B
-    d768      16           8            512       22840    48B
+    d384       4           4           1024        1520   6.4B
+    d512       8           8           1024        3930    16B
+    d768      16           8           1024       11420    48B
 
 Use ``--batch-size`` for one-off batch comparisons. The step count and compute-scaled optimizer are
 recomputed from the override unless ``--num-steps`` is also set.
@@ -69,7 +69,7 @@ from experiments.grug.moe_hero_ep.train import (
 from experiments.marin_tokenizer import marin_tokenizer
 
 H100_LADDER_SIZES = ("d384", "d512", "d768")
-BATCH_TOKEN_EXPONENT = 0.6
+GLOBAL_BATCH_SIZE = 1024
 QB_HIST_BINS = 10_000
 WATCH_INTERVAL = 10
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
@@ -120,23 +120,12 @@ def _h100_ladder_model(rung: H100LadderRung):
     )
 
 
-def _h100_ladder_batch_size(training_tokens: int, global_device_count: int) -> int:
-    token_ceiling = training_tokens**BATCH_TOKEN_EXPONENT
-    max_sequences = int(token_ceiling) // SEQ_LEN
-    if max_sequences < global_device_count:
-        raise ValueError(f"token batch ceiling permits {max_sequences} sequences for {global_device_count} devices")
-    batch_size = 1 << (max_sequences.bit_length() - 1)
-    assert batch_size % global_device_count == 0
-    assert batch_size * SEQ_LEN <= token_ceiling
-    return batch_size
-
-
 def build_h100_ladder_run(
     *,
     run_id: str,
     size: str,
     num_steps: int | None = None,
-    batch_size: int | None = None,
+    batch_size: int = GLOBAL_BATCH_SIZE,
     checkpoint_every: int | None = None,
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
@@ -157,9 +146,7 @@ def build_h100_ladder_run(
     rung = _h100_ladder_rung(size)
     model = _h100_ladder_model(rung)
     training_tokens = TOKENS_PER_ACTIVE_PARAM * _active_params(model)
-    if batch_size is None:
-        batch_size = _h100_ladder_batch_size(training_tokens, rung.global_device_count)
-    elif batch_size <= 0 or batch_size % rung.global_device_count != 0:
+    if batch_size <= 0 or batch_size % rung.global_device_count != 0:
         raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
 
     global_tokens_per_step = batch_size * SEQ_LEN
@@ -311,8 +298,9 @@ def build_h100_ladder_run(
 @click.option(
     "--batch-size",
     type=click.IntRange(min=1),
-    default=None,
-    help="Global sequence batch override. Default follows the token-budget scaling rule.",
+    default=GLOBAL_BATCH_SIZE,
+    show_default=True,
+    help="Global sequence batch.",
 )
 @click.option(
     "--checkpoint-every",
@@ -332,7 +320,7 @@ def main(
     run_id: str,
     size: str,
     num_steps: int | None,
-    batch_size: int | None,
+    batch_size: int,
     checkpoint_every: int | None,
     wandb_project: str,
 ) -> ArtifactStep[HeroThroughputResult]:
