@@ -153,7 +153,7 @@ def test_gpu_fa4_thd_rejects_nonpositive_sliding_window():
 
 
 def test_gpu_fa4_thd_supports_hopper_kernel_config(monkeypatch):
-    monkeypatch.setattr(fa4_thd, "_gpu_compute_arch", lambda: 90)
+    monkeypatch.setattr(fa4_thd, "gpu_compute_capability", lambda: 90)
 
     config = fa4_thd._thd_kernel_config(128)
 
@@ -243,7 +243,7 @@ def test_real_gpu_fa4_thd_attention_matches_reference_value_and_gradients(slidin
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    arch_family = fa4_thd._gpu_compute_arch() // 10
+    arch_family = fa4_thd.gpu_compute_capability() // 10
     if arch_family not in fa4_thd._SUPPORTED_ARCH_FAMILIES:
         pytest.skip("gpu_fa4_thd_attention supports only SM90/SM100/SM110.")
     if sliding_window is not None and arch_family == fa4_thd._HOPPER_ARCH_FAMILY:

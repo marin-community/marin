@@ -341,7 +341,11 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
     assert rule["for"] == "5m"
     assert "isPaused" not in rule
-    assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
     route = _route_for(rule)
@@ -350,13 +354,27 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
+def test_training_loss_alert_selects_the_hero_operator_behavior():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-loss-spike"]
+
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
+
+
 def test_run_health_alerts_split_paging_from_announcing():
     # The hero on-call policy pages for a lost run or an unstable optimizer, and
     # announces the routing, throughput, and Iris signals an operator reads.
     rules = {rule["uid"]: rule for rule in _rules()}
     paging = ("training-telemetry-gone", "training-optimizer-unstable")
     for uid in paging:
-        assert rules[uid]["labels"] == {"severity": "critical", "notification": "hero-run"}
+        assert rules[uid]["labels"] == {
+            "severity": "critical",
+            "notification": "hero-run",
+            "operator_behavior": "hero",
+        }
         assert rules[uid]["for"] == "5m"
     assert rules["training-run-health-degraded"]["labels"] == {"severity": "warning", "notification": "slack"}
 

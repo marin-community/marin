@@ -10,7 +10,7 @@ on:
         type: number
         required: false
       tpu_type:
-        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v6e-4,v4-8)'
+        description: 'Override TPU slice type(s), comma-separated, primary first (default v6e-4)'
         type: string
         required: false
 
@@ -145,10 +145,9 @@ jobs:
         # _mirror_remote_prefixes() returns [] (to avoid anonymous-caller 401s
         # from gcsfs off-GCP), and the read raises FileNotFoundError. The
         # google-github-actions/auth step above provides the credentials
-        # gcsfs needs to actually scan the remote buckets. The canary lands on
-        # v5p (us-central1/us-east5), v6e (us-east1/us-east5/europe-west4), or
-        # v4 (us-central2); mirror://
-        # scans all marin-* regions, and us-central1 keeps the hit rate high.
+        # gcsfs needs to actually scan the remote buckets. The v6e canary can
+        # land in us-east1, us-east5, or europe-west4. mirror:// scans
+        # all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py

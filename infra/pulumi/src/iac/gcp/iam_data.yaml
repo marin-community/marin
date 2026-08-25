@@ -3,15 +3,14 @@
 #
 # Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
 # the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
-# `marin` stack composes every declaration and is their sole owner. Grants
-# remain additive until a separately reviewed change converts the imported
-# inventory to role-authoritative bindings. Human user principals are KMS
-# ciphertexts declared once under `principals`; grants reference their opaque
-# IDs so one principal cannot drift across roles.
+# `marin` stack composes every declaration and is their sole owner. Resources
+# use additive IAM members; changing to role-authoritative bindings requires a
+# complete live-policy audit. Human user principals are KMS ciphertexts
+# declared once under `principals`; grants reference their opaque IDs so one
+# principal cannot drift across roles.
 #
-# The owned service account and custom roles came from the retired
-# infra/permissions project. Do not add custom roles found live unless Pulumi
-# already owns them or their adoption has been reviewed separately.
+# Add a custom role found live only after confirming Pulumi already owns it or
+# reviewing its adoption separately.
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.
@@ -92,6 +91,7 @@ principals:
   human-069: CiQAKk3j6fZzTtHYIlJ9bvnupvzX042gQyAyC1VrsgIdfU9YMaASPQCdtF6iaHzI0Go083JD8qDnOWtdQ2IpJJa/jB1/BzJbQNIZxIdUpIlCcPmTbiY60SMC2v1rNnO9PCTZNUs=
   human-070: CiQAKk3j6fgMf61FVEtp0V9YlyIoV1cTlbQfsX3SUjkVvhqAlp8SOQCdtF6iWgYGtbPiXHphalp6BT4zzVcGCml7SGl/0WrrOv4xvqyA/cWaE4XCV9ShI1mROr681jsQEg==
   human-071: CiQAKk3j6cD5Sn3yMtL/TWv5wzcr/lNOmiC5fJKYNkU6t3ovHcUSTgCdtF6i2hQWfJcp+NOEds/fZ7CgpqViU7mgNXSd9TgLlzLJTO3eQO+gddA9WkKSbpFY++pbI0MfTUcoA4H/0Z0SL1IyltZRilV6h0mcuQ==
+  human-072: CiQAKk3j6ZQLD7r1vaRwiSHTnivaFUvKNXMMqXYuKdc5Js6e41ISQgCdtF6iUVQYgRvAP6ktihBwriBkTiNYuHkN8N8n0gulAVVONh2eQROrZyLGaXpHLm6LZtzXdBRKa45h17J8c7brDw==
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -880,6 +880,7 @@ project_grants:
   - principal: human-070
   - principal: human-006
   - principal: human-026
+  - principal: human-072
 - role: projects/hai-gcp-models/roles/ray1
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
@@ -1279,6 +1280,7 @@ project_grants:
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
+  - principal: human-037
 - role: roles/run.invoker
   members:
   - serviceAccount:hai-gcp-models@appspot.gserviceaccount.com
@@ -1319,14 +1321,14 @@ project_grants:
 - role: roles/servicenetworking.serviceAgent
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
-- role: roles/serviceusage.serviceUsageConsumer
-  members:
-  - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
-  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/serviceusage.serviceUsageAdmin
   members:
   - principal: human-037
   - principal: human-070
+- role: roles/serviceusage.serviceUsageConsumer
+  members:
+  - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
+  - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 - role: roles/storage.admin
   members:
   - serviceAccount:codalab-dev@hai-gcp-models.iam.gserviceaccount.com

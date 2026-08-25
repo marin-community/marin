@@ -55,6 +55,38 @@ class BuildMetrics:
     image_tag: str
 
 
+class TaskOutputArchiveState(StrEnum):
+    EMPTY = "empty"
+    UPLOADED = "uploaded"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+
+
+class TaskOutputRetention(StrEnum):
+    UNSPECIFIED = "unspecified"
+    TTL = "ttl"
+    LOCAL_CLUSTER = "local_cluster"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskOutputSkippedEntry:
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskOutputArchive:
+    state: TaskOutputArchiveState
+    uri: str
+    size_bytes: int
+    sha256: str
+    error_message: str
+    retention: TaskOutputRetention
+    ttl_days: int
+    skipped_count: int
+    skipped_sample: tuple[TaskOutputSkippedEntry, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class AttemptStatus:
     """One execution attempt reported for the current logical Task."""
@@ -72,6 +104,7 @@ class AttemptStatus:
     pod_uid: str
     node_name: str
     terminal_reason: str
+    output_archive: TaskOutputArchive | None
 
 
 @dataclass(frozen=True, slots=True)

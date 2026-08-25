@@ -8,7 +8,11 @@ description: Triage a failed canary ferry run only when invoked by CI with the r
 Triage a failed canary ferry run. Diagnose root cause, file a GitHub issue,
 write a Slack summary. Diagnosis and reporting only — no code changes, no PRs.
 
-## Inputs (environment variables)
+## CI invocation context
+
+The composite action includes these non-secret values in the prompt. Use the
+prompt values directly instead of inspecting the process environment. Matching
+environment variables remain available to commands invoked during triage.
 
 | Variable | Description |
 |---|---|

@@ -12,6 +12,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
@@ -280,22 +281,8 @@ def _fa4_cute_attention_forward_sharded(
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 
 
-def _gpu_compute_arch() -> int:
-    for device in jax.local_devices(backend="gpu"):
-        compute_capability = getattr(device, "compute_capability", None)
-        if callable(compute_capability):
-            compute_capability = compute_capability()
-        if isinstance(compute_capability, tuple) and len(compute_capability) >= 2:
-            return int(compute_capability[0]) * 10 + int(compute_capability[1])
-        if isinstance(compute_capability, str):
-            major, _, minor = compute_capability.partition(".")
-            if major.isdigit() and minor.isdigit():
-                return int(major) * 10 + int(minor)
-    raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
-
-
 def _segmented_kernel_config(head_dim: int):
-    arch = _gpu_compute_arch()
+    arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in

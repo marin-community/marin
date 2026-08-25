@@ -343,11 +343,11 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
 
 
 class ScatterReader:
-    """All scatter chunks for one target shard, across all source files.
+    """All scatter chunks for one target shard, across all source shards.
 
-    ``_files`` is a list of ``(source_path, chunk_paths)`` pairs — one entry
-    per source shard — where ``chunk_paths`` is the list of GCS parquet file
-    paths that source shard wrote for ``_target_shard``.
+    ``_chunk_paths`` lists every combined Parquet file the mappers wrote. Each
+    file holds rows for *all* target shards, so :meth:`get_frames` filters each
+    scan down to ``_target_shard``.
 
     Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
@@ -355,12 +355,12 @@ class ScatterReader:
 
     def __init__(
         self,
-        files: list[tuple[str, list[str]]],
+        chunk_paths: list[str],
         target_shard: int,
         avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
     ) -> None:
-        self._files = files
+        self._chunk_paths = chunk_paths
         self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
@@ -374,34 +374,33 @@ class ScatterReader:
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
-        files: list[tuple[str, list[str]]] = []
+        chunk_paths: list[str] = []
         weighted_bytes = 0.0
-        total_chunks = 0
         shard_payload_bytes = 0.0
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
-            for sidecar in _Sidecar.read_all(scatter_paths):
-                files.append((sidecar.path, sidecar.files))
+            sidecars = _Sidecar.read_all(scatter_paths)
+            for sidecar in sidecars:
+                chunk_paths.extend(sidecar.files)
                 weighted_bytes += sidecar.avg_item_bytes * len(sidecar.files)
-                total_chunks += len(sidecar.files)
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
 
-        avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
+        avg_item_bytes = weighted_bytes / len(chunk_paths) if chunk_paths else 0.0
 
         logger.info(
-            "ScatterReader for shard %d: %d source files, %d total chunks, "
+            "ScatterReader for shard %d: %d source shards, %d total chunks, "
             "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
             target_shard,
-            len(files),
-            total_chunks,
+            len(sidecars),
+            len(chunk_paths),
             avg_item_bytes,
             shard_payload_bytes,
         )
         return cls(
-            files=files,
+            chunk_paths=chunk_paths,
             target_shard=target_shard,
             avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
@@ -410,14 +409,13 @@ class ScatterReader:
     def get_frames(self) -> list[pl.LazyFrame]:
         frames = [
             scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
-            for _, chunk_paths in self._files
-            for path in chunk_paths
+            for path in self._chunk_paths
         ]
         return _unify_frame_schemas(frames)
 
     @property
     def total_chunks(self) -> int:
-        return sum(len(chunks) for _, chunks in self._files)
+        return len(self._chunk_paths)
 
     def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
         """Merge sorted chunks using k-way merge, yielding items in global sort order.

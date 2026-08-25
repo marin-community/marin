@@ -13,6 +13,16 @@ Pushover monitor applies.
 
 Each rule evaluates once a minute and stays pending for five. Each firing check is its own alert
 instance labeled with its `reason`; the hero-run route groups them by logical run.
+Every `notification=hero-run` group, including `TrainingProgressStalled` and
+`TrainingLossSpike`, carries `operator_behavior=hero`. The bridge resolves that
+trusted behavior to the `operator:hero` channel on Loom's shared `ops` profile,
+giving Hero operations a durable coordinator separate from generic Grafana incidents.
+The Hero behavior gives that coordinator stable discovery and query guidance,
+not a precomputed evidence snapshot. Starting from the alert's cluster, run, and
+job labels, the coordinator queries current execution UIDs and telemetry, derives
+prior coordinator roots for the same logical run, and then inspects exact Iris
+state, event, and task-log prefixes. It compares tasks and ranks without a fixed
+error-signature list and treats the first pass as lead gathering, not a diagnosis.
 
 ## Enrollment
 

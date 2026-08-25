@@ -370,6 +370,32 @@ class WorkerSettings(_Config):
     cache_dir: str = ""
 
 
+class TaskOutputPolicy(_Config):
+    """Cluster-owned policy for per-attempt temporary output archives.
+
+    ``destination`` is an fsspec URL prefix. When omitted, the execution
+    cluster resolves its region-local lifecycle-managed temporary prefix.
+    """
+
+    destination: str | None = None
+    ttl_days: int = 7
+    max_bytes: int = 2 * 1024**3
+    max_entries: int = 10_000
+    finalization_timeout: DurationField = Field(default_factory=lambda: Duration.from_seconds(300))
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> TaskOutputPolicy:
+        if self.destination != "file://" and self.ttl_days <= 0:
+            raise ValueError("task_outputs.ttl_days must be positive for object storage")
+        if self.max_bytes <= 0:
+            raise ValueError("task_outputs.max_bytes must be positive")
+        if self.max_entries <= 0:
+            raise ValueError("task_outputs.max_entries must be positive")
+        if self.finalization_timeout.to_ms() <= 0:
+            raise ValueError("task_outputs.finalization_timeout must be positive")
+        return self
+
+
 class ScaleGroupConfig(_Config):
     name: str = ""
     # Extra slices to keep warm beyond demand: target = min(demand + buffer, max).
@@ -443,6 +469,7 @@ class WorkerConfig(_Config):
     heartbeat_timeout: DurationField | None = None
     platform: PlatformConfig | None = None
     storage_prefix: str = ""  # task-artifact prefix; empty disables profile upload
+    task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""  # worker→controller bearer token; empty when auth disabled
 
 
@@ -767,6 +794,7 @@ class IrisClusterConfig(_OneofConfig):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    task_outputs: TaskOutputPolicy | None = Field(default_factory=TaskOutputPolicy)
     controller: ControllerVmConfig = Field(default_factory=ControllerVmConfig)
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
     auth: AuthConfig | None = None
@@ -1580,6 +1608,9 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
     config.platform.local = LocalPlatformConfig()
     config.controller = ControllerVmConfig(image=config.controller.image, local=LocalControllerConfig(port=0))
     config.storage.remote_state_dir = ""  # LocalCluster sets a temp path
+    if config.task_outputs is not None:
+        config.task_outputs = config.task_outputs.model_copy(update={"destination": "file://", "ttl_days": 0})
+        config.defaults.worker.task_outputs = config.task_outputs.model_copy(deep=True)
     # Fast timings for local dev (override any production timings).
     config.defaults.autoscaler = AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(0.5),

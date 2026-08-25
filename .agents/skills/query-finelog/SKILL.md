@@ -17,6 +17,8 @@ uv run finelog query <deployment> --format table <<'SQL'
 SQL
 ```
 
+`finelog query` reads SQL from stdin when the positional SQL argument is omitted.
+
 Use `marin` for the federated view and a regional deployment for peer-local truth or recent rows that may not have forwarded. Preserve `cluster` and full process/label identity until after per-series delta calculations.
 
 Bound the native time key. Keep `telemetry_v1.timestamp_ms` predicates numeric. Treat current snapshots as values, imported Prometheus counters as cumulative snapshots with `LAG` and reset handling, and native Rigging counters as deltas to `SUM` directly.

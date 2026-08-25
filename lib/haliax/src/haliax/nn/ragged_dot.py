@@ -109,6 +109,7 @@ def _triton_ragged_dot_kernel(
     *,
     block_m: int,
     block_k: int,
+    n: int,
 ):
     """Pallas-Triton ragged dot kernel (no quantization)."""
     lo = lo_ref[()]
@@ -118,21 +119,34 @@ def _triton_ragged_dot_kernel(
     @pl.when(start_m < hi)
     def _compute():
         span_m = pl.ds(start_m, block_m)
+        start_n = pl.program_id(1) * out_ref.shape[1]
         acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
         k = a_ref.shape[1]
 
         def body(i, acc):
             start_k = i * block_k
             span_k = pl.ds(start_k, block_k)
-            a = plgpu.load(a_ref.at[span_m, span_k])
-            b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
+            if k % block_k:
+                contraction_mask = start_k + jnp.arange(block_k) < k
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=contraction_mask[None, :], other=0.0)
+                b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])], mask=contraction_mask[:, None], other=0.0)
+            else:
+                a = plgpu.load(a_ref.at[span_m, span_k])
+                b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + pl.dot(a.astype(dtype), b.astype(dtype))
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
-        mask = (start_m + jnp.arange(block_m)) < hi
-        plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
+        # Tokamax's BlockRef masks logical output edges; raw Pallas refs do not.
+        store_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
+        if n % out_ref.shape[1]:
+            store_mask &= (start_n + jnp.arange(out_ref.shape[1]) < n)[None, :]
+        plgpu.store(
+            out_ref.at[span_m, pl.ds(0, out_ref.shape[1])],
+            acc.astype(out_ref.dtype),
+            mask=store_mask,
+        )
 
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
@@ -153,7 +167,16 @@ def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Ca
     """
     block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
     return pl.pallas_call(
-        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(a, b, lo, hi, out, block_m=block_m, block_k=block_k),
+        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
+            a,
+            b,
+            lo,
+            hi,
+            out,
+            block_m=block_m,
+            block_k=block_k,
+            n=n,
+        ),
         out_shape=jax.ShapeDtypeStruct((m, n), dtype),
         in_specs=[
             pl.no_block_spec,
@@ -185,6 +208,8 @@ def _triton_ragged_contracting_dim_dot_kernel(
     *,
     block_m: int,
     block_k: int,
+    m: int,
+    n: int,
 ):
     """Pallas-Triton ragged dot where the ragged dimension is also contracting."""
     lo = lo_ref[()]
@@ -207,7 +232,13 @@ def _triton_ragged_contracting_dim_dot_kernel(
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
     acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
     acc = body(num_k_blocks - 1, acc, mask_k=True)
-    plgpu.store(out_ref, acc.astype(out_ref.dtype))
+    store_mask = None
+    if m % block_m:
+        store_mask = (pl.program_id(0) * block_m + jnp.arange(block_m) < m)[:, None]
+    if n % out_ref.shape[1]:
+        column_mask = (pl.program_id(1) * out_ref.shape[1] + jnp.arange(out_ref.shape[1]) < n)[None, :]
+        store_mask = column_mask if store_mask is None else store_mask & column_mask
+    plgpu.store(out_ref, acc.astype(out_ref.dtype), mask=store_mask)
 
 
 @functools.lru_cache(maxsize=None)
@@ -225,6 +256,8 @@ def _triton_ragged_contracting_dim_matmul(k: int, m: int, n: int, dtype) -> Call
             out,
             block_m=block_m,
             block_k=block_k,
+            m=m,
+            n=n,
         ),
         out_shape=jax.ShapeDtypeStruct((m, n), dtype),
         in_specs=[

@@ -41,14 +41,18 @@ from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
+    HERO_MODEL_CONFIG,
+    HERO_NODE_CPU,
+    HERO_NODE_DISK,
+    HERO_NODE_RAM,
+    HERO_QB_HIST_BINS,
     HeroThroughputResult,
 )
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SMALL_SHAPES,
@@ -90,7 +94,6 @@ CHECKPOINT_TTL_DAYS = 1
 # Falsy `timedelta(0)` disables time-policy saves outright. A microsecond is below even a compiled
 # no-op step, making every call a real temporary save without retaining 100 permanent checkpoints.
 EVERY_STEP = timedelta(microseconds=1)
-QB_HIST_BINS = 10_000
 SOAK_SHAPES = {**SMALL_SHAPES, "d384": SmallShape(384, 4, 3, 1, 1)}
 
 
@@ -148,24 +151,22 @@ def build_memory_soak_run(
         # FA4's packed-segment helper gives equivalent size-one mesh axes distinct explicit
         # shardings. Reference attention avoids that single-device-only mismatch; attention
         # implementation does not participate in checkpoint host staging.
-        attention_implementation="reference" if devices == 1 else HERO_MODEL.attention_implementation,
-        moe_implementation=HERO_MODEL.moe_implementation,
-        expert_chunks=HERO_MODEL.expert_chunks,
+        attention_implementation="reference" if devices == 1 else HERO_MODEL_CONFIG.attention_implementation,
+        moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
+        expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
         seq_len=seq_len,
         num_experts=num_experts,
-        num_experts_per_token=HERO_MODEL.num_experts_per_token,
+        num_experts_per_token=HERO_MODEL_CONFIG.num_experts_per_token,
         intermediate_dim=None,
         latent_dim=None,
-        pooled_transport_capacity_factor=HERO_MODEL.pooled_transport_capacity_factor,
-        num_expert_waves=HERO_MODEL.num_expert_waves,
+        pooled_transport_capacity_factor=HERO_MODEL_CONFIG.pooled_transport_capacity_factor,
+        num_expert_waves=HERO_MODEL_CONFIG.num_expert_waves,
         qb_use_histogram=True,
-        qb_hist_bins=QB_HIST_BINS,
+        qb_hist_bins=HERO_QB_HIST_BINS,
     )
     local_experts = num_experts // expert_axis
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(f"local expert count={local_experts} must divide num_expert_waves={model.num_expert_waves}")
-    model = dataclasses.replace(model, qb_estimator=QbEstimator.HIST, qb_hist_bins=QB_HIST_BINS)
-
     if devices == 1:
         # MuonH's Newton--Schulz contraction expects a nontrivial model axis. Adam keeps the
         # single-device soak on the same training/checkpoint path without introducing a fake axis.
@@ -198,9 +199,9 @@ def build_memory_soak_run(
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=gpus_per_task,
-        cpu=120 if gpus_per_task == HERO_GPUS_PER_NODE else 32,
-        ram="890g" if gpus_per_task == HERO_GPUS_PER_NODE else "192g",
-        disk="1t" if gpus_per_task == HERO_GPUS_PER_NODE else "256g",
+        cpu=HERO_NODE_CPU if gpus_per_task == HERO_GPUS_PER_NODE else 32,
+        ram=HERO_NODE_RAM if gpus_per_task == HERO_GPUS_PER_NODE else "192g",
+        disk=HERO_NODE_DISK if gpus_per_task == HERO_GPUS_PER_NODE else "256g",
         replicas=tasks,
     )
     name = f"grug/{run_id}"
