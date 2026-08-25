@@ -228,7 +228,7 @@ pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
     let manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
     if manifest.phase != MigrationPhase::Staged {
-        verify_published_catalog(&store_dir, &manifest)?;
+        verify_published_layout(&store_dir, &manifest)?;
     }
     if manifest.phase == MigrationPhase::Retired {
         verify_root_namespace_retired(&store_dir)?;
@@ -265,14 +265,14 @@ pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Sta
     }
     let publish_backup = catalog_backup_path(&migration_dir, "pre-publish");
     if publish_backup.exists() {
-        verify_published_catalog(&store_dir, &manifest)?;
+        verify_published_files(&store_dir, &manifest)?;
     } else {
         replace_catalog_for_publish(&store_dir, &migration_dir, &manifest)?;
     }
     manifest.published_files = published_files;
+    verify_published_files(&store_dir, &manifest)?;
     manifest.phase = MigrationPhase::Published;
     write_manifest(&manifest_path, &manifest)?;
-    verify_published_catalog(&store_dir, &manifest)?;
     Ok(manifest)
 }
 
@@ -292,7 +292,7 @@ pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
             "telemetry migration must be published before root retirement",
         ));
     }
-    verify_published_catalog(&store_dir, &manifest)?;
+    verify_published_layout(&store_dir, &manifest)?;
 
     let rollback_sources = migration_dir.join(ROLLBACK_DIRECTORY).join("root-files");
     for namespace in migration_source_namespaces() {
@@ -577,7 +577,7 @@ fn catalog_backup_path(migration_dir: &Path, backup_name: &str) -> PathBuf {
         .join(format!("{backup_name}.sqlite"))
 }
 
-fn verify_published_catalog(
+fn verify_published_files(
     store_dir: &Path,
     manifest: &MigrationManifest,
 ) -> Result<(), StatsError> {
@@ -609,6 +609,55 @@ fn verify_published_catalog(
             return Err(validation_error(format!(
                 "published telemetry catalog row is missing for {}",
                 path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verify_published_layout(
+    store_dir: &Path,
+    manifest: &MigrationManifest,
+) -> Result<(), StatsError> {
+    let expected_files = manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+        .map(|output| output.relative_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let published_files = manifest
+        .published_files
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if manifest.published_files.len() != expected_files.len() || published_files != expected_files {
+        return Err(validation_error(
+            "published telemetry file set differs from the migration plan",
+        ));
+    }
+
+    let connection = rusqlite::Connection::open_with_flags(
+        store_dir.join(CATALOG_DB_FILENAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(internal_error("open published catalog"))?;
+    let output_namespaces = manifest
+        .source_segments
+        .iter()
+        .flat_map(|source| source.outputs.iter())
+        .map(|output| output.namespace.as_str())
+        .collect::<BTreeSet<_>>();
+    for namespace in output_namespaces {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM namespaces WHERE namespace = ?1",
+                [namespace],
+                |row| row.get(0),
+            )
+            .map_err(internal_error("verify published telemetry namespace"))?;
+        if count != 1 {
+            return Err(validation_error(format!(
+                "published telemetry namespace is missing: {namespace:?}"
             )));
         }
     }
@@ -1635,6 +1684,38 @@ mod tests {
                 .map(|source| source.outputs.len())
                 .sum::<usize>()
         );
+        let rewritten = &published.source_segments[0].outputs[0];
+        let published_path = dirs.store.join(&rewritten.relative_path);
+        let compacted_path = published_path
+            .parent()
+            .unwrap()
+            .join(seg_filename(1, rewritten.min_seq));
+        fs::rename(&published_path, &compacted_path).unwrap();
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        catalog
+            .remove_segment(&rewritten.namespace, &published_path.to_string_lossy())
+            .unwrap();
+        catalog
+            .upsert_segment(&SegmentRow {
+                namespace: rewritten.namespace.clone(),
+                path: compacted_path.to_string_lossy().into_owned(),
+                level: 1,
+                min_seq: rewritten.min_seq,
+                max_seq: rewritten.max_seq,
+                row_count: rewritten.rows,
+                byte_size: fs::metadata(&compacted_path).unwrap().len() as i64,
+                created_at_ms: now_ms().unwrap(),
+                min_key_value: Some(rewritten.min_timestamp_ms.to_string()),
+                max_key_value: Some(rewritten.max_timestamp_ms.to_string()),
+                location: SegmentLocation::Local,
+            })
+            .unwrap();
+        drop(catalog);
+        verify_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
         let repeated_prepare = prepare_in_place(&InPlaceConfig {
             store_dir: dirs.store.clone(),
             batch_rows: 2,

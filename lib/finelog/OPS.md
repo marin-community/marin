@@ -241,6 +241,10 @@ and replaces a catalog derived from the latest live catalog. It leaves the
 root namespace queryable. Old root-only queries and new semantic-only queries
 therefore each see one copy of the rows; a root-plus-semantic union would count
 them twice. Deploy the semantic-only Grafana and Iris queries after publish.
+Publish verifies every linked file and catalog row before recording the phase.
+After the server restarts, ordinary compaction may replace those L0 paths;
+subsequent verification checks the immutable staged outputs and registered
+physical namespaces instead of requiring the original live filenames.
 
 Once those queries are live, stop Finelog for the second short cutover:
 
