@@ -64,6 +64,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/evaldash/src", "."),
+    SourceRoot("scripts/ci", "."),
 )
 
 # Dependency and native-build changes can affect every local test environment.

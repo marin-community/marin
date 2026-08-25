@@ -200,6 +200,24 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("changed_file", "test_file"),
+    [
+        ("scripts/ci/dependency_update.py", "tests/ci/test_dependency_update.py"),
+        ("scripts/ci/wait_for.py", "tests/ci/test_wait_for.py"),
+    ],
+)
+def test_ci_script_change_selects_dependent_test(tmp_path: Path, changed_file: str, test_file: str) -> None:
+    module = Path(changed_file).stem
+    write(tmp_path, "scripts/ci/__init__.py")
+    write(tmp_path, changed_file, "def main(): ...\n")
+    write(tmp_path, test_file, f"from scripts.ci.{module} import main\n\ndef test_main(): ...\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "marin") == [test_file]
+
+
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     write(tmp_path, "lib/levanter/src/levanter/store/cache.py")
     assert classify(["lib/levanter/src/levanter/store/cache.py"], tmp_path).src_modules == {"levanter.store.cache"}
