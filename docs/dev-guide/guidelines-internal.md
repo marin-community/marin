@@ -40,7 +40,11 @@ under [`lib/iris/config/`](https://github.com/marin-community/marin/tree/main/li
 
 - `marin.yaml` — production TPU cluster on GCP
 - `marin-dev.yaml` — dev TPU cluster on GCP (smaller scale caps)
-- `coreweave.yaml` — GPU cluster on CoreWeave
+- `cw-<region>.yaml` — GPU clusters on CoreWeave, one per region (`cw-us-east-02a.yaml`, `cw-rno2a.yaml`, …)
+
+`--cluster=<name>` resolves `<name>` against the top-level `*.yaml` files in that directory (and
+`~/.config/marin/clusters`, which wins on conflict). `ci-*.yaml` are test-harness configs, and
+`examples/` is deliberately outside name resolution — pass an explicit path to use one.
 
 **Iris uses these configs as the single source of truth for cluster operations** -- controller URL, SSH tunneling, and
 auth are all derived from the config file you pass with `--config`. You don't need to manage SSH keys, head-node IPs,
@@ -72,17 +76,17 @@ To submit jobs, use `iris job run`. Job IDs are canonical paths of the form `/<u
 # [Terminal 2] Submit a job and return immediately.
 #   =>> Will print a line like `Job submitted: /<user>/hello_world-20260420-120000`
 uv run iris --cluster=marin job run \
-    --no-wait --extra marin-core:tpu --tpu v5litepod-16 \
+    --enable-extra-resources --no-wait --extra marin-core:tpu --tpu v5litepod-16 \
     -- python experiments/tutorials/hello_world.py
 
-# List jobs (filter by --state, --user, --prefix, etc).
+# List jobs (filter by --state and --prefix; --limit bounds how many are fetched).
 uv run iris --cluster=marin job list
 
 # Follow logs (includes child-job task logs by default).
 uv run iris --cluster=marin job logs /<user>/<job-name>
 
-# Kill / Stop Job (if necessary / error / bug) -- kills the job and all its child tasks.
-uv run iris --cluster=marin job stop /<user>/<job-name>
+# Cancel Job (if necessary / error / bug) -- cancels the job and all its child tasks.
+uv run iris --cluster=marin job cancel /<user>/<job-name>
 ```
 
 Notes:
@@ -90,10 +94,11 @@ Notes:
 - `--extra marin-core:tpu` installs the Marin TPU deps into the task container; use `--extra marin-core:cpu` for CPU-only
   entrypoints. On CoreWeave, `--gpu` requests hardware and `--extra gpu` requests the Python deps; see
   [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for current request names.
-- Request TPU hardware with `--tpu v5litepod-16` (or similar). `--reserve` only holds capacity for scheduling; it does
-  not attach accelerator devices to the task container.
-- `WANDB_API_KEY`, `HF_TOKEN`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from
-  your shell. Pass other env vars with `-e KEY VALUE` (two positional args — quote `$VALUE` if it may be unset).
+- Request TPU hardware with `--tpu v5litepod-16` (or similar). `--reserve` is only a placement constraint — it holds
+  no capacity and attaches no device, so a job that needs an accelerator still has to ask for it with `--tpu`/`--gpu`.
+- `HF_TOKEN` and `WANDB_API_KEY` are forwarded from your shell when they are set, and jobs default to
+  `HF_DATASETS_TRUST_REMOTE_CODE=1` and `TOKENIZERS_PARALLELISM=false`. Pass other env vars with
+  `-e KEY VALUE` (two positional args — quote `$VALUE` if it may be unset).
 - See `iris job run --help` and [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
   for the full flag list (`--memory`, `--job-name`, priority bands, etc.).
 

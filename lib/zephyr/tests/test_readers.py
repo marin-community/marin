@@ -7,12 +7,19 @@
 import itertools
 import sys
 
+import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
+import zstandard as zstd
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
+from zephyr.input_file import InputFileSpec
 from zephyr.readers import (
-    InputFileSpec,
+    SUPPORTED_EXTENSIONS,
     compute_parquet_splits,
+    load_file,
+    load_file_batch,
+    load_jsonl,
     load_parquet,
     load_parquet_batch,
 )
@@ -190,3 +197,54 @@ def test_load_parquet_batch_consistent_with_load_parquet(tmp_path):
     via_batch = [row for b in load_parquet_batch(spec) for row in b.to_pylist()]
     via_dict = list(load_parquet(spec))
     assert via_batch == via_dict
+
+
+@pytest.mark.parametrize("ext", [".jsonl.zst", ".jsonl.zstd"])
+def test_load_jsonl_decompresses_zstd_extensions(tmp_path, ext):
+    """Both the ``.zst`` and ``.zstd`` extensions must be zstd-decompressed.
+
+    ``.zstd`` is advertised in SUPPORTED_EXTENSIONS; a genuinely-compressed
+    file written under it must decode, not be read back as raw bytes.
+    """
+    path = str(tmp_path / f"data{ext}")
+    encoder = msgspec.json.Encoder()
+    raw = b"".join(encoder.encode(r) + b"\n" for r in RECORDS)
+    with open(path, "wb") as f:
+        f.write(zstd.ZstdCompressor().compress(raw))
+
+    assert path.endswith(SUPPORTED_EXTENSIONS)
+    assert list(load_jsonl(path)) == RECORDS
+
+
+def test_load_file_honors_explicit_format_over_extension(tmp_path):
+    """An explicit ``format`` picks the reader, whatever the file is named.
+
+    ``Dataset.load_parquet`` and friends record the format on the spec; a
+    corpus of extension-less shards (Spark ``part-00000``) must still read.
+    """
+    path = str(tmp_path / "part-00000")
+    _write_test_parquet(path, RECORDS)
+
+    assert list(load_file(InputFileSpec(path=path, format="parquet"))) == RECORDS
+    with pytest.raises(ValueError, match="Unsupported extension"):
+        list(load_file(path))
+
+
+def test_load_file_explicit_format_beats_a_misleading_extension(tmp_path):
+    """A ``.parquet``-named JSONL file reads as JSONL when the spec says so."""
+    path = str(tmp_path / "data.parquet")
+    encoder = msgspec.json.Encoder()
+    with open(path, "wb") as f:
+        f.write(b"".join(encoder.encode(r) + b"\n" for r in RECORDS))
+
+    assert list(load_file(InputFileSpec(path=path, format="jsonl"))) == RECORDS
+
+
+def test_load_file_batch_honors_explicit_parquet_format(tmp_path):
+    path = str(tmp_path / "part-00000")
+    _write_test_parquet(path, RECORDS)
+
+    spec = InputFileSpec(path=path, format="parquet")
+    assert [row for b in load_file_batch(spec) for row in b.to_pylist()] == RECORDS
+    with pytest.raises(RuntimeError, match="only supports Parquet"):
+        list(load_file_batch(path))

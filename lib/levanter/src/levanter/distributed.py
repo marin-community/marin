@@ -1,15 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import atexit
 import itertools
 import logging
 import os
 import re
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
@@ -22,12 +27,27 @@ logger = logging.getLogger(__name__)
 _JOBID_PARAM = "SLURM_JOB_ID"
 _NODE_LIST_CHOICES = ["SLURM_STEP_NODELIST", "SLURM_JOB_NODELIST", "SLURM_NODELIST"]
 _PROCESS_COUNT = "SLURM_NTASKS"
-_PROCESS_ID = "SLURM_PROCID"
-_LOCAL_PROCESS_ID = "SLURM_LOCALID"
 _NUM_NODES = "SLURM_STEP_NUM_NODES"
 _TASKS_PER_NODE = "SLURM_STEP_TASKS_PER_NODE"
 _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
+
+
+def _finalize_iris_jax_after_clean_exit(complete_job: Callable[[], None] | None = None) -> None:
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    if jax.distributed.is_initialized():
+        try:
+            jax.distributed.shutdown()
+        except BaseException:  # noqa: BLE001 - atexit exceptions do not reliably affect the process exit code
+            logger.exception("JAX distributed shutdown failed")
+            os._exit(1)
+    if complete_job is not None:
+        complete_job()
+
+
+def _unregister_iris_exit_handler() -> None:
+    atexit.unregister(_finalize_iris_jax_after_clean_exit)
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -232,9 +252,15 @@ class DistributedConfig:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
             configure_megascale_from_iris()
             initialize_iris_jax()
-            return
-
-        if self._is_distributed():
+            if jax.process_index() == 0:
+                ctx = iris_ctx()
+                if ctx.client is None:
+                    raise RuntimeError("Iris context has no client for completing the current job")
+                complete_job = partial(ctx.client.complete_job, job_info.job_id)
+                atexit.register(_finalize_iris_jax_after_clean_exit, complete_job)
+            else:
+                atexit.register(_finalize_iris_jax_after_clean_exit)
+        elif self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address
 
@@ -269,3 +295,4 @@ class DistributedConfig:
                 "Not initializing jax.distributed because no distributed config "
                 "was provided, and no cluster was detected."
             )
+            return

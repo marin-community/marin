@@ -5,6 +5,11 @@
 # otherwise provides stubs that raise ImportError on use. This allows
 # `import dupekit` to succeed without building the Rust extension, deferring
 # the error to when native functionality is actually called.
+#
+# The extension is the TOP-LEVEL module `dupekit_native` (shipped by the
+# companion marin-dupekit-native wheel), not a nested `dupekit._native`: this
+# package is an editable workspace member, and an editable src/dupekit on
+# sys.path would shadow a nested `dupekit/_native.so` in site-packages.
 
 import sys
 import types
@@ -12,8 +17,8 @@ import types
 __path__: list[str]
 
 try:
-    from dupekit._native import *  # noqa: F403
-    from dupekit._native import (
+    from dupekit_native import *  # noqa: F403
+    from dupekit_native import (
         Bloom,
         Document,
         HashAlgorithm,
@@ -21,8 +26,8 @@ try:
     )
 except ImportError:
     _INSTALL_MSG = (
-        "dupekit native extension is not installed. "
-        "Run 'uv sync --all-packages' to install the pre-built wheel. "
+        "dupekit native extension (dupekit_native) is not installed. "
+        "Run 'uv sync' to install the pre-built marin-dupekit-native wheel. "
         "For source builds (requires Cargo), run 'make rust-dev' first."
     )
 

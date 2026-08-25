@@ -22,6 +22,7 @@ import levanter.tracker
 import levanter.callbacks
 import levanter.eval
 from levanter import callbacks
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.adaptor import (
     AdaptorConfig,
     AdaptorExportConfig,
@@ -769,28 +770,16 @@ def main(config: TrainDpoConfig):
             every=1,
         )
         trainer.add_hook(
-            callbacks.iris_status_reporter(
+            iris_status_reporter(
                 Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
             ),
             every=10,
         )
 
         if isinstance(train_dataset, MixtureDataset):
-            last_stage = -1
-
-            def log_mixture_weights(step_info):
-                nonlocal last_stage
-                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // train_dataset.block_size
-                stage = train_dataset._get_stage_for_block(block_id)
-                weights = train_dataset.weight_stages[stage][1]
-                if stage != last_stage:
-                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
-                    metrics["mixture/stage"] = stage
-                    levanter.tracker.log(metrics, step=step_info.step)
-                    last_stage = stage
-
-            trainer.add_hook(log_mixture_weights, every=1)
+            trainer.add_hook(
+                callbacks.mixture_weight_logging_hook(trainer.config.batch_schedule, train_dataset), every=1
+            )
 
         lm_eval_callback: Callable[[Any], Any] | None = None
         if config.lm_validation_data is not None:
@@ -906,7 +895,6 @@ def main(config: TrainDpoConfig):
         trainer.train(state, train_loader)
 
         if trainer.config.checkpointer is not None:
-            trainer.run_hooks(last_info, force=True)
             trainer._checkpointer.wait_until_finished()
 
     trainer.tracker.finish()

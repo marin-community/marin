@@ -14,13 +14,17 @@ import pytest
 
 import haliax as hax
 
+from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
     ChatDataset,
+    DEFAULT_LM_DATA_SHUFFLE,
     DatasetComponent,
+    DirectDatasetComponent,
     LmDataConfig,
     UrlDatasetSourceConfig,
+    _stable_simulated_epoch_subset_key,
     count_corpus_sizes,
     dataset_for_component,
 )
@@ -29,7 +33,7 @@ from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
-    SupervisedLmDatasetFormat,
+    TextLmDatasetFormat,
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
@@ -181,6 +185,25 @@ def test_long_string_workaround_matches_whole_encoding_across_many_chunks(local_
     batch = [{"text": text}]
 
     assert split_tok(batch) == whole_tok(batch)
+
+
+def test_batch_tokenizer_mixed_lengths_matches_individual_encoding(local_gpt2_marin_tokenizer):
+    tokenizer = local_gpt2_marin_tokenizer
+    texts = [f"ordinary document {index} with a few words" for index in range(70)]
+    texts.insert(17, "long document with safe boundaries " * 200)
+    texts.insert(53, "")
+    batch_tokenizer = BatchTokenizer(
+        tokenizer,
+        enforce_bos=False,
+        enforce_eos=False,
+        _workaround_len=500,
+        long_string_workaround=True,
+    )
+
+    actual = batch_tokenizer([{"text": text} for text in texts])
+    expected = [{"input_ids": tokenizer.encode(text, add_special_tokens=False)} for text in texts]
+
+    assert actual == expected
 
 
 # ---------------------------------------------------------------------------
@@ -427,119 +450,6 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 
-def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_path):
-    records = [
-        {"input": "1 2 ", "target": "3 4"},
-        {"input": "5 ", "target": "6 7 8"},
-    ]
-    data_path = tmp_path / "supervised.jsonl"
-    with data_path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[str(data_path)]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-    )
-    config = LmDataConfig(
-        components={"supervised": component},
-        tokenizer="passthrough",
-        vocab_size=16,
-    )
-
-    train_cache = config.build_caches("train")["supervised"]
-    first_row = train_cache.as_sync_dataset()[0]
-    np.testing.assert_array_equal(first_row["input_ids"], np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(first_row["loss_weights"], np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
-
-    Pos = hax.Axis("position", 4)
-    train_example = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
-        "supervised"
-    ].as_sync_dataset()[0]
-    np.testing.assert_array_equal(np.asarray(train_example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(train_example.loss_weight), np.array([0.0, 1.0, 1.0, 0.0]))
-
-    tagged_eval_sets = config.tagged_eval_sets(Pos)
-    assert tagged_eval_sets[0][1] == ["supervised"]
-    eval_example = tagged_eval_sets[0][0].as_sync_dataset()[0]
-    np.testing.assert_array_equal(eval_example.tokens.array, np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(eval_example.loss_weight.array, np.array([0.0, 1.0, 1.0, 0.0]))
-
-
-def test_supervised_text_processor_preserves_input_target_token_boundary():
-    class BoundaryMergingTokenizer:
-        name_or_path = "boundary-merging"
-        vocab_size = 128
-        bos_token_id = None
-        eos_token_id = None
-        pad_token_id = None
-        bos_token = None
-        eos_token = None
-        chat_template = None
-
-        def __len__(self):
-            return self.vocab_size
-
-        def encode(self, text, *, add_special_tokens=False):
-            if text == "ab":
-                return [99]
-            if text == "a":
-                return [1]
-            if text == "b":
-                return [2]
-            raise ValueError(f"Unexpected text: {text!r}")
-
-    processor = preprocessor_for_format(
-        SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        BoundaryMergingTokenizer(),  # type: ignore[arg-type]
-        enforce_bos=False,
-        enforce_eos=False,
-    )
-
-    row = processor([{"input": "a", "target": "b"}])[0]
-
-    np.testing.assert_array_equal(row["input_ids"], np.array([1, 2], dtype=np.int32))
-    np.testing.assert_array_equal(row["loss_weights"], np.array([1.0, 0.0], dtype=np.float32))
-
-
-def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
-    records = [
-        {"input": "1 ", "target": "2"},
-        {"input": "3 ", "target": "4"},
-    ]
-    data_path = tmp_path / "supervised_pack.jsonl"
-    with data_path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-        pack=2,
-    )
-    config = LmDataConfig(
-        components={"supervised": component},
-        tokenizer="passthrough",
-        vocab_size=16,
-    )
-
-    cache = config.build_caches("train")["supervised"]
-    Pos = hax.Axis("position", 4)
-    dataset = dataset_for_component(
-        component,
-        Pos,
-        cache,
-        eos_id=None,
-        block_cross_document_attention=config.block_cross_document_attention,
-    ).as_sync_dataset()
-
-    example = dataset[0]
-    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
-
-
 def test_train_set_last_mile_wraps_to_named(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_train.jsonl"
@@ -566,6 +476,152 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     named_train_set = config.train_set(Pos, BatchSchedule(1), key=jax.random.PRNGKey(0)).as_sync_dataset()
     named_example = named_train_set[0]
     assert isinstance(named_example, LmExample)
+
+
+def test_max_train_batches_fixed_subset_is_independent_of_training_shuffle():
+    Pos = hax.Axis("position", 4)
+    components = {
+        name: DirectDatasetComponent(
+            datasets={
+                "train": ListAsyncDataset(
+                    [
+                        GrugLmExample.causal(jnp.full((Pos.size,), offset + value, dtype=jnp.int32))
+                        for value in range(size)
+                    ]
+                )
+            }
+        )
+        for name, offset, size in (("first", 0, 4_096), ("second", 5_000, 4_096), ("uncapped", 10_000, 1_024))
+    }
+
+    def token_orders(subset_seed: int, training_seed: int) -> dict[str, list[int]]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=16_384,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"first": 1_024, "second": 1_024},
+            max_train_batches_subset_seed=subset_seed,
+        )
+        dataset = config.train_sets(
+            Pos,
+            initial_batch_size=1,
+            key=jax.random.PRNGKey(training_seed),
+        )
+        return {
+            name: [int(np.asarray(row.tokens)[0]) for row in component.as_sync_dataset()]
+            for name, component in dataset.items()
+        }
+
+    first_order = token_orders(subset_seed=123, training_seed=1)
+    second_order = token_orders(subset_seed=123, training_seed=2)
+    different_support = token_orders(subset_seed=456, training_seed=1)
+    for name in ("first", "second"):
+        assert set(first_order[name]) == set(second_order[name])
+        assert first_order[name] != second_order[name]
+        assert set(first_order[name]) != set(different_support[name])
+    assert len(first_order["uncapped"]) == 1_024
+
+
+def test_train_holdout_precedes_fixed_support_and_training_shuffle():
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(4_096)]
+    )
+    components = {"source": DirectDatasetComponent(datasets={"train": source})}
+
+    _, expected_holdout = source.random_holdout_split(
+        128,
+        key=_stable_simulated_epoch_subset_key("source", "train_holdout", 123),
+        perm_type=DEFAULT_LM_DATA_SHUFFLE.perm_type,
+    )
+    expected_holdout_sync = expected_holdout.as_sync_dataset()
+    expected_holdout_tokens = {
+        int(np.asarray(expected_holdout_sync[index].tokens)[0]) for index in range(len(expected_holdout_sync))
+    }
+
+    def selected_tokens(*, support_seed: int | None, training_seed: int) -> list[int]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=4_096,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"source": 1_024} if support_seed is not None else None,
+            max_train_batches_subset_seed=support_seed,
+            train_holdout_sequences={"source": 128},
+            train_holdout_seed=123,
+            train_holdout_partition="random_sparse_swap",
+        )
+        datasets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(training_seed))
+        sync_dataset = datasets["source"].as_sync_dataset()
+        return [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
+
+    capped_first = selected_tokens(support_seed=456, training_seed=1)
+    capped_second = selected_tokens(support_seed=456, training_seed=2)
+    capped_other_support = selected_tokens(support_seed=789, training_seed=1)
+    full = selected_tokens(support_seed=None, training_seed=1)
+    holdout_config = LmDataConfig(
+        components=components,
+        tokenizer="passthrough",
+        vocab_size=4_096,
+        shuffle=False,
+        train_holdout_sequences={"source": 128},
+        train_holdout_seed=123,
+        train_holdout_partition="random_sparse_swap",
+    )
+    exposed_holdout = holdout_config.holdout_sets(Pos)["source"].as_sync_dataset()
+    exposed_holdout_tokens = {
+        int(np.asarray(exposed_holdout[index].tokens)[0]) for index in range(len(exposed_holdout))
+    }
+
+    assert exposed_holdout_tokens == expected_holdout_tokens
+    assert expected_holdout_tokens.isdisjoint(full)
+    assert expected_holdout_tokens.isdisjoint(capped_first)
+    assert set(capped_first).issubset(full)
+    assert set(capped_first) == set(capped_second)
+    assert capped_first != capped_second
+    assert set(capped_first) != set(capped_other_support)
+    assert len(full) == 4_096 - 128
+
+
+def test_fixed_support_offsets_produce_disjoint_slices_after_holdout():
+    Pos = hax.Axis("position", 4)
+    source = ListAsyncDataset(
+        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(5_000)]
+    )
+    components = {"source": DirectDatasetComponent(datasets={"train": source})}
+
+    def selected_tokens(start_batch: int, training_seed: int) -> list[int]:
+        config = LmDataConfig(
+            components=components,
+            tokenizer="passthrough",
+            vocab_size=5_000,
+            shuffle=DEFAULT_LM_DATA_SHUFFLE,
+            max_train_batches={"source": 1_024},
+            max_train_batches_subset_seed=456,
+            max_train_batches_start={"source": start_batch},
+            train_holdout_sequences={"source": 128},
+            train_holdout_seed=123,
+            train_holdout_partition="random_sparse_swap",
+        )
+        datasets = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(training_seed))
+        sync_dataset = datasets["source"].as_sync_dataset()
+        return [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
+
+    first = selected_tokens(start_batch=0, training_seed=1)
+    first_other_shuffle = selected_tokens(start_batch=0, training_seed=2)
+    second = selected_tokens(start_batch=1_024, training_seed=1)
+
+    assert set(first) == set(first_other_shuffle)
+    assert first != first_other_shuffle
+    assert set(first).isdisjoint(second)
+
+
+def test_train_holdout_contract_is_explicit():
+    with pytest.raises(ValueError, match="must be specified together"):
+        LmDataConfig(train_holdout_sequences={"source": 128}, train_holdout_seed=123)
+    with pytest.raises(ValueError, match="must be specified together"):
+        LmDataConfig(train_holdout_partition="random_sparse_swap")
 
 
 def test_dataset_for_component_rejects_preference_format():
@@ -829,6 +885,94 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+# --- one example per document ----------------------------------------------
+#
+# A falsy pack (for chat/trace) and pack=1 select one document per example, padded to
+# Pos. These tests drive the config-level dispatch (dataset_for_component /
+# dataset_for_trace_chat_format) rather than the dataset classes directly, since the
+# crash and bool/int coercion defects lived in that dispatch.
+
+
+def _build_train_cache(component, tokenizer):
+    source = component.source.get_shard_source("train")
+    return build_lm_dataset_cache(component.cache_dir, source, component.format, tokenizer)
+
+
+def assert_padding_never_contributes_loss(example):
+    """The pad value must not leak into the objective.
+
+    GreedyPrepackedDataset marks padding positions with segment id -1. Both a padding
+    position and any position whose successor is padding (i.e. that would predict a pad
+    token) must carry zero loss weight.
+    """
+    segment_ids = np.asarray(example.attn_mask.segment_ids[0])
+    loss_weight = np.asarray(example.loss_weight)
+    is_padding = segment_ids == -1
+    assert is_padding.any(), "expected the document to be shorter than Pos, leaving padding"
+    predicts_padding = np.roll(segment_ids, -1) == -1
+    leaking = loss_weight[is_padding | predicts_padding]
+    np.testing.assert_array_equal(leaking, np.zeros_like(leaking))
+
+
+@pytest.mark.parametrize("pack", [False, 1])
+def test_dataset_for_component_chat_unpacked_yields_one_padded_example_per_conversation(
+    dummy_chat_data, tmp_path, pack
+):
+    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
+        format=ChatLmDatasetFormat(messages_field="messages"),
+        cache_dir=str(tmp_path),
+        pack=pack,
+    )
+    cache = _build_train_cache(component, tokenizer)
+    Pos = hax.Axis("position", 128)
+    ds = dataset_for_component(
+        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+
+    # dummy_chat_data holds two conversations; unpacked mode never merges them
+    assert len(ds) == 2
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        assert ex.loss_weight.shape == (Pos.size,)
+        assert_padding_never_contributes_loss(ex)
+        # assistant spans survive intact
+        assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+def test_dataset_for_component_text_unpacked_masks_padding(tmp_path):
+    """Regression: one-document-per-example raw text must not train on padding.
+
+    PackedTokenDataset supplies loss_weight=1 everywhere for raw text, so without the
+    padding-aware masking the pad positions (and the final real token that would predict
+    a pad token) would leak into the loss.
+    """
+    records = [{"text": "Hello world"}, {"text": "Short"}]
+    data_path = tmp_path / "text_pad.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=TextLmDatasetFormat(text_key="text"),
+        cache_dir=str(tmp_path),
+        pack=1,
+    )
+    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    cache = _build_train_cache(component, tokenizer)
+    Pos = hax.Axis("position", 16)
+    ds = dataset_for_component(
+        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+
+    assert len(ds) == 2
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        assert_padding_never_contributes_loss(ex)
 
 
 # --- LmDataConfig.build_caches ---------------------------------------------

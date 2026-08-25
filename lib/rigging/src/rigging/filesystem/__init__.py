@@ -9,13 +9,15 @@ Focused submodules with one-directional imports:
   ``prefix_join``, ``rebase_file_path``, ``split_gcs_path``.
 - ``cluster_config`` — the cluster :class:`DataConfig`, region/prefix resolution,
   region-local temp storage, and GCS-location utils.
+- ``buckets`` — :func:`filesystem_for`, which routes a URL to its declared backend
+  instead of the process-wide fsspec config.
 - ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
 - ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
-  points, ``atomic_rename``, and ``fetch_file_atomic``.
+  points with fresh cloud listings, ``atomic_rename``, and ``fetch_file_atomic``.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
-This module re-exports the public API of the first four so
+This module re-exports the public API of the first five so
 ``from rigging.filesystem import …`` keeps working. ``mirror`` and
 ``distributed_lock`` are reached by their submodule path; the lazy ``mirror://``
 registration below keeps them — and the ``botocore`` import they pull in for the
@@ -24,25 +26,35 @@ S3 lock backend — off a plain ``import rigging.filesystem``.
 
 import fsspec
 
+from rigging.filesystem.atomic import atomic_rename, fetch_file_atomic, unique_temp_path
+from rigging.filesystem.buckets import (
+    MissingCredentials,
+    filesystem_for,
+)
 from rigging.filesystem.cluster_config import (
     MARIN_CLUSTER_CONFIG_DIRS,
     PER_USER_CLUSTER_CONFIG_DIR,
     BucketSpec,
     DataConfig,
+    StoreConfig,
     StoreType,
     check_gcs_paths_same_region,
     check_path_in_region,
     collect_gcs_paths,
+    data_buckets,
     data_config,
     get_bucket_location,
     load_cluster_config,
     marin_prefix,
+    marin_prefix_for_region,
     marin_region,
     marin_temp_bucket,
     region_from_metadata,
     region_from_prefix,
     reset_data_config_cache,
     s3_data_buckets,
+    store_config,
+    store_configs,
     use_data_config,
 )
 from rigging.filesystem.cross_region import (
@@ -60,12 +72,9 @@ from rigging.filesystem.cross_region import (
     set_mirror_budget,
 )
 from rigging.filesystem.factory import (
-    atomic_rename,
-    fetch_file_atomic,
     filesystem,
     is_remote_path,
     open_url,
-    unique_temp_path,
     url_to_fs,
 )
 from rigging.filesystem.storage_path import (

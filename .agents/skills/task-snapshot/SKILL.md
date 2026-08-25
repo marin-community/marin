@@ -1,6 +1,6 @@
 ---
 name: task-snapshot
-description: "Create stable commit or tag snapshots for task milestones, experiment results, and reproducible artifact links."
+description: Create a commit or tag snapshot only when explicitly requested for a milestone, reproducibility checkpoint, handoff, or pinned artifact.
 ---
 
 # Skill: Task Snapshot
@@ -28,7 +28,7 @@ When posting a snapshot to an issue or PR, include:
 Pinned GitHub tree links should include the commit or tag, for example:
 
 ```text
-https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/foo.md
+https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/<topic>.md
 ```
 
 Prefer to use anchor text, even if it's just the filename.

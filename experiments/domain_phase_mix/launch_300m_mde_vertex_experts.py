@@ -18,16 +18,23 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any, cast
 
 import fsspec
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, executor_main, output_path_of, this_output_path
-from marin.rl.placement import marin_prefix_for_region
+from marin.execution.executor import (
+    ExecutorMainConfig,
+    ExecutorStep,
+    InputName,
+    executor_main,
+    output_path_of,
+    this_output_path,
+)
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.exploratory.two_phase_many.compact_mde_vertex_expert_features_300m import (
@@ -45,13 +52,12 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.extract_mde_uncheat
 from experiments.domain_phase_mix.launch_300m_checkpoint_features_canary import (
     DEFAULT_MCQ_REQUEST_CACHE_URI,
     DEFAULT_TEACHER_FORCED_REQUEST_CACHE_URI,
-    DEFAULT_TEXT_BUNDLES,
     MCQ_REQUEST_FEATURES_PARQUET,
     MCQ_SURFACE,
     TEACHER_FORCED_REQUEST_FEATURES_PARQUET,
     TEACHER_FORCED_SURFACE,
-    TEXT_FEATURE_SURFACE,
     TEXT_BUNDLE_CHOICES,
+    TEXT_FEATURE_SURFACE,
     CheckpointFeatureCanarySpec,
     _parse_text_bundles,
     _require_nonempty_request_cache,
@@ -75,11 +81,7 @@ logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOCAL_ARTIFACT_DIR = (
-    SCRIPT_DIR
-    / "exploratory"
-    / "two_phase_many"
-    / "reference_outputs"
-    / "mde_vertex_experts_300m_20260531"
+    SCRIPT_DIR / "exploratory" / "two_phase_many" / "reference_outputs" / "mde_vertex_experts_300m_20260531"
 )
 DEFAULT_NAME_PREFIX = "pinlin_calvin_xu/data_mixture/ngd3dm2_mde_vertex_experts_300m_20260531"
 DEFAULT_MAX_CONCURRENT = 8

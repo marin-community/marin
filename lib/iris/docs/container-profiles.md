@@ -1,13 +1,14 @@
 # Container Security Profiles
 
 A job's **container profile** selects a named bundle of container/pod security
-settings instead of exposing individual docker/k8s knobs. Four profiles exist
+settings instead of exposing individual docker/k8s knobs. Five profiles exist
 (defined in [`job.proto`](../src/iris/rpc/job.proto)), ordered by privilege:
 
 | Profile | Selected via | Behavior |
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
+| `CONTAINER_PROFILE_GVISOR` | `--container-profile CONTAINER_PROFILE_GVISOR` | Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). In-container root gets the docker default capability set (so `setuid`/`apt` work), while the intercepted guest kernel isolates the host. **Not elevated** — safe to grant without admin. Requires `runsc` installed on the worker/node; CPU-only (no GPU/TPU passthrough). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -62,17 +63,30 @@ container is created.
 |---|---|
 | `RESTRICTED` | `capabilities.drop:[ALL]`, `allowPrivilegeEscalation:false`, `seccompProfile.type:RuntimeDefault` (not full PSS Restricted — `runAsNonRoot` is not forced) |
 | `DEFAULT` | `capabilities.add:[SYS_PTRACE (+SYS_RESOURCE on TPU)]` |
+| `GVISOR` | DEFAULT `securityContext` (no privilege) plus `spec.runtimeClassName: gvisor` on the pod — the node RuntimeClass provides isolation, not the container context |
 | `DOCKER_ACCESS` | **rejected** — k8s nodes run containerd, not dockerd, so there is no host docker socket. Use the docker worker backend, or `PRIVILEGED` with an in-pod runtime. |
 | `PRIVILEGED` | `privileged:true`, `allowPrivilegeEscalation:true`, plus the DEFAULT caps |
 
-## Running gVisor inside a container
+## Running under gVisor
 
-To run a gVisor (`runsc`) sandbox to isolate an untrusted child workload, submit
-with `--container-profile CONTAINER_PROFILE_PRIVILEGED` and run `runsc` (or
-`docker run --runtime=runsc ...`) inside your container. The parent must be
-privileged because `runsc` creates user/mount namespaces. (Running the *whole*
-pod under a gVisor `RuntimeClass` is a separate, operator-side feature and
-requires `runsc` installed on the nodes.)
+The `GVISOR` profile runs the **whole** container under gVisor's `runsc` runtime
+(docker `--runtime=runsc`; k8s `runtimeClassName: gvisor`). The worker/node's
+container runtime — running as root — builds the sandbox, so the container itself
+needs no privilege: in-container root gets the docker default capability set
+(`setuid`, `apt`, etc. work) while the intercepted guest kernel isolates the
+host. This makes it safe to hand out **without** the admin role, unlike
+`PRIVILEGED`. It is CPU-only — `runsc` cannot pass a GPU/TPU through, so
+accelerator tasks are rejected at submit.
+
+**Operator prerequisite:** `runsc` must be installed and registered on the
+workers — as a docker runtime named `runsc` in `/etc/docker/daemon.json` on
+docker-worker clusters, or as a `RuntimeClass` named `gvisor` on k8s. Without it,
+a `GVISOR` job fails at container creation.
+
+To instead run an *inner* gVisor sandbox around an untrusted child image while
+keeping the outer container normal, use `CONTAINER_PROFILE_PRIVILEGED` and run
+`runsc` (or `docker run --runtime=runsc ...`) yourself inside the container; the
+parent must be privileged because nested `runsc` creates user/mount namespaces.
 
 ## See also
 

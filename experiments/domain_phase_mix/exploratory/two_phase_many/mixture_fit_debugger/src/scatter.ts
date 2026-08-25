@@ -6,8 +6,9 @@ interface ScatterOptions {
   target: TargetMetadata;
   view: ViewMode;
   selectedId: string | null;
+  counterpartPoints: readonly PointDatum[];
   tooltip: HTMLElement;
-  onSelect: (id: string) => void;
+  onSelect: (id: string | null) => void;
 }
 
 const INK = "#17324a";
@@ -15,6 +16,7 @@ const MUTED = "#75828a";
 const GRID = "#d9d6ca";
 const ONE_PHASE = "#e46f38";
 const TWO_PHASE = "#153d55";
+const DIMMED_POINT_OPACITY = 0.16;
 
 function pointSymbol(datum: PointDatum): d3.SymbolType {
   if (datum.displaySplit === "fit") return d3.symbolCircle;
@@ -62,6 +64,26 @@ function paddedExtent(values: number[], fraction = 0.06): [number, number] {
   return [extent[0] - span * fraction, extent[1] + span * fraction];
 }
 
+function counterpartPair(
+  datum: PointDatum | undefined,
+  pointsByName: ReadonlyMap<string, PointDatum>,
+  points: readonly PointDatum[],
+): readonly [PointDatum, PointDatum] | null {
+  if (!datum) return null;
+  const directCounterpart = datum.row.pairedRow ? pointsByName.get(datum.row.pairedRow) : undefined;
+  const counterpart =
+    directCounterpart && directCounterpart.row.id !== datum.row.id
+      ? directCounterpart
+      : points
+          .filter(
+            (candidate) =>
+              candidate.row.id !== datum.row.id && candidate.row.pairedRow === datum.row.name,
+          )
+          .sort((left, right) => Number(left.row.split !== "fit") - Number(right.row.split !== "fit"))[0];
+  if (!counterpart) return null;
+  return [datum, counterpart];
+}
+
 export function renderScatter(
   container: HTMLElement,
   points: PointDatum[],
@@ -78,6 +100,14 @@ export function renderScatter(
   const margin = { top: 28, right: 30, bottom: 64, left: 78 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
+  const counterpartPointsByName = new Map(
+    options.counterpartPoints.map((datum) => [datum.row.name, datum]),
+  );
+  const selected = options.counterpartPoints.find((datum) => datum.row.id === options.selectedId);
+  const selectedPair = counterpartPair(selected, counterpartPointsByName, options.counterpartPoints);
+  const extentPoints = selectedPair
+    ? [...points, ...selectedPair.filter((datum) => !points.some((point) => point.row.id === datum.row.id))]
+    : points;
   const maxStandardizedError = Math.max(
     2,
     d3.quantile(points.map((point) => Math.abs(point.standardizedResidual)).sort(d3.ascending), 0.95) ?? 2,
@@ -85,10 +115,10 @@ export function renderScatter(
 
   const x = d3
     .scaleLinear()
-    .domain(paddedExtent(points.map((point) => point.observed)))
+    .domain(paddedExtent(extentPoints.map((point) => point.observed)))
     .nice()
     .range([0, innerWidth]);
-  const yValues = points.map((point) => {
+  const yValues = extentPoints.map((point) => {
     if (options.view === "prediction") return point.prediction;
     if (options.view === "residual") return point.residual;
     return point.standardizedResidual;
@@ -99,6 +129,11 @@ export function renderScatter(
     yDomain = [-magnitude, magnitude];
   }
   const y = d3.scaleLinear().domain(yDomain).nice().range([innerHeight, 0]);
+  const plottedY = (datum: PointDatum): number => {
+    if (options.view === "prediction") return datum.prediction;
+    if (options.view === "residual") return datum.residual;
+    return datum.standardizedResidual;
+  };
 
   const svg = d3
     .select(container)
@@ -109,7 +144,8 @@ export function renderScatter(
     .attr(
       "aria-label",
       `${options.target.label}: ${options.view} plot with ${points.length} checkpoints`,
-    );
+    )
+    .on("click", () => options.onSelect(null));
   const plot = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
   plot
@@ -177,20 +213,13 @@ export function renderScatter(
 
   const pointLayer = plot.append("g").attr("class", "point-layer");
   const symbol = d3.symbol<PointDatum>().size((datum) => (datum.displaySplit === "noise_reference" ? 76 : 68));
+  let selectedHalo: d3.Selection<SVGCircleElement, unknown, null, undefined> | null = null;
   const point = pointLayer
     .selectAll<SVGPathElement, PointDatum>("path")
     .data(points, (datum) => datum.row.id)
     .join("path")
     .attr("d", (datum) => symbol.type(pointSymbol(datum))(datum) ?? "")
-    .attr("transform", (datum) => {
-      const yValue =
-        options.view === "prediction"
-          ? datum.prediction
-          : options.view === "residual"
-            ? datum.residual
-            : datum.standardizedResidual;
-      return `translate(${x(datum.observed)},${y(yValue)})`;
-    })
+    .attr("transform", (datum) => `translate(${x(datum.observed)},${y(plottedY(datum))})`)
     .attr("fill", (datum) => pointColor(datum, maxStandardizedError))
     .attr("fill-opacity", (datum) => (datum.displaySplit === "fit" ? 0.78 : 0.94))
     .attr("stroke", (datum) => (datum.row.phaseFamily === "single_phase" ? ONE_PHASE : TWO_PHASE))
@@ -199,18 +228,103 @@ export function renderScatter(
     .attr("role", "button")
     .attr("aria-label", (datum) => `${datum.row.name}; observed ${datum.observed}; predicted ${datum.prediction}`)
     .style("cursor", "pointer")
-    .on("mouseenter", (event, datum) => showTooltip(event as MouseEvent, datum, options.tooltip))
+    .on("mouseenter", (event, datum) => {
+      if (!selected) applyFocus(datum);
+      showTooltip(event as MouseEvent, datum, options.tooltip);
+    })
     .on("mousemove", (event, datum) => showTooltip(event as MouseEvent, datum, options.tooltip))
-    .on("mouseleave", () => hideTooltip(options.tooltip))
-    .on("click", (_event, datum) => options.onSelect(datum.row.id))
+    .on("mouseleave", () => {
+      hideTooltip(options.tooltip);
+      applyFocus(selected);
+    })
+    .on("focus", (_event, datum) => {
+      if (!selected) applyFocus(datum);
+    })
+    .on("blur", () => applyFocus(selected))
+    .on("click", (event, datum) => {
+      event.stopPropagation();
+      options.onSelect(datum.row.id);
+    })
     .on("keydown", (event, datum) => {
       if ((event as KeyboardEvent).key === "Enter" || (event as KeyboardEvent).key === " ") {
         event.preventDefault();
         options.onSelect(datum.row.id);
       }
     });
+  const focusLayer = plot
+    .append("g")
+    .attr("class", "pair-focus-layer")
+    .attr("pointer-events", "none");
 
-  const selected = points.find((datum) => datum.row.id === options.selectedId);
+  function renderPairOverlay(focusedPair: readonly PointDatum[]): void {
+    focusLayer.selectAll("*").remove();
+    if (focusedPair.length !== 2) return;
+    const [first, second] = focusedPair;
+    const firstX = x(first!.observed);
+    const firstY = y(plottedY(first!));
+    const secondX = x(second!.observed);
+    const secondY = y(plottedY(second!));
+    for (const [stroke, width, dash] of [
+      ["#fffdf7", 5, null],
+      [MUTED, 1.8, "5,4"],
+    ] as const) {
+      focusLayer
+        .append("line")
+        .attr("x1", firstX)
+        .attr("y1", firstY)
+        .attr("x2", secondX)
+        .attr("y2", secondY)
+        .attr("stroke", stroke)
+        .attr("stroke-width", width)
+        .attr("stroke-dasharray", dash);
+    }
+    for (const datum of focusedPair) {
+      const centerX = x(datum.observed);
+      const centerY = y(plottedY(datum));
+      focusLayer
+        .append("path")
+        .attr("d", symbol.type(pointSymbol(datum))(datum) ?? "")
+        .attr("transform", `translate(${centerX},${centerY})`)
+        .attr("fill", pointColor(datum, maxStandardizedError))
+        .attr("fill-opacity", datum.displaySplit === "fit" ? 0.78 : 0.94)
+        .attr("stroke", datum.row.phaseFamily === "single_phase" ? ONE_PHASE : TWO_PHASE)
+        .attr("stroke-width", 2.6);
+      focusLayer
+        .append("circle")
+        .attr("cx", centerX)
+        .attr("cy", centerY)
+        .attr("r", 11)
+        .attr("fill", "none")
+        .attr("stroke", "#fffdf7")
+        .attr("stroke-width", 6);
+      focusLayer
+        .append("circle")
+        .attr("cx", centerX)
+        .attr("cy", centerY)
+        .attr("r", 11)
+        .attr("fill", "none")
+        .attr("stroke", datum.row.phaseFamily === "single_phase" ? ONE_PHASE : TWO_PHASE)
+        .attr("stroke-width", 3);
+    }
+  }
+
+  function applyFocus(datum: PointDatum | undefined): void {
+    const focusedPair = counterpartPair(datum, counterpartPointsByName, options.counterpartPoints);
+    const focusedIds = focusedPair
+      ? new Set(focusedPair.map((pointDatum) => pointDatum.row.id))
+      : null;
+    point
+      .attr("opacity", (pointDatum) =>
+        focusedIds && !focusedIds.has(pointDatum.row.id) ? DIMMED_POINT_OPACITY : 1,
+      )
+      .attr("stroke-width", (pointDatum) => {
+        if (pointDatum.row.id === options.selectedId) return 3;
+        return focusedIds?.has(pointDatum.row.id) ? 2.6 : 1.6;
+      });
+    selectedHalo?.attr("opacity", focusedIds ? 0 : 1);
+    renderPairOverlay(focusedPair ?? []);
+  }
+
   if (selected) {
     const selectedY =
       options.view === "prediction"
@@ -218,7 +332,7 @@ export function renderScatter(
         : options.view === "residual"
           ? selected.residual
           : selected.standardizedResidual;
-    pointLayer
+    selectedHalo = pointLayer
       .insert("circle", ":first-child")
       .attr("cx", x(selected.observed))
       .attr("cy", y(selectedY))
@@ -251,4 +365,5 @@ export function renderScatter(
   });
 
   point.raise();
+  applyFocus(selected);
 }

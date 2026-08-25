@@ -8,11 +8,10 @@ import subprocess
 from unittest.mock import mock_open, patch
 
 import pytest
-from iris.cluster import endpoints
 from iris.cluster.endpoints import register_scheme, resolve_endpoint_uri
 
 
-def test_http_passthrough():
+def test_http_endpoint_uri_is_returned_unchanged():
     assert resolve_endpoint_uri("http://example:1234") == "http://example:1234"
     assert resolve_endpoint_uri("https://example:1234") == "https://example:1234"
 
@@ -29,12 +28,10 @@ def test_register_scheme_extensibility():
         calls.append((uri, md))
         return "http://fake:1"
 
-    register_scheme("xfake", fake)
-    try:
-        assert resolve_endpoint_uri("xfake://blah", {"k": "v"}) == "http://fake:1"
-        assert calls == [("xfake://blah", {"k": "v"})]
-    finally:
-        endpoints._REGISTRY.pop("xfake", None)
+    register_scheme("test-endpoint-resolver", fake)
+
+    assert resolve_endpoint_uri("test-endpoint-resolver://blah", {"k": "v"}) == "http://fake:1"
+    assert calls == [("test-endpoint-resolver://blah", {"k": "v"})]
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +43,7 @@ def _gcloud_ok(stdout: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
-def test_gcp_basic():
+def test_gcp_endpoint_with_instance_metadata_resolves_internal_address():
     payload = json.dumps({"networkInterfaces": [{"networkIP": "10.0.0.5"}]})
     with patch("iris.cluster.endpoints.subprocess.run", return_value=_gcloud_ok(payload)) as run:
         out = resolve_endpoint_uri(
@@ -125,8 +122,7 @@ def test_k8s_namespace_from_metadata():
 
 
 def test_k8s_namespace_from_pod_file():
-    mo = patch("builtins.open", new=_mock_open_returning("iris\n"))
-    with mo:
+    with patch("builtins.open", new=mock_open(read_data="iris\n")):
         out = resolve_endpoint_uri("k8s://svc:1234")
     assert out == "http://svc.iris.svc.cluster.local:1234"
 
@@ -156,8 +152,3 @@ def test_k8s_no_api_calls():
     assert out == "http://svc.ns.svc.cluster.local:1234"
     run.assert_not_called()
     adc.assert_not_called()
-
-
-def _mock_open_returning(data: str):
-    """Return a patcher target callable mimicking ``open()`` for a single file."""
-    return mock_open(read_data=data)

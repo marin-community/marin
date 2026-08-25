@@ -11,13 +11,13 @@ GcpVmSliceHandle: Single-VM GCE-backed slice
 
 import logging
 import re
-import threading
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
 from iris.cluster.config import SshConfig
 from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
+from iris.cluster.platforms.bootstrap import SliceBootstrap, slice_status_with_bootstrap
 from iris.cluster.platforms.gcp.service import GcpService
 from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
 from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
@@ -95,48 +95,6 @@ def _build_gce_resource_name(name_prefix: str, suffix: str) -> str:
         trimmed = "slice"
 
     return f"{trimmed}-{suffix}"
-
-
-def _composite_slice_state(
-    cloud_state: CloudSliceState,
-    bootstrap_state: CloudSliceState | None,
-) -> CloudSliceState:
-    """Compose cloud lifecycle with bootstrap lifecycle into effective slice state.
-
-    Worker health is canonical for liveness: once bootstrap is READY the slice
-    is READY even if the GCP-reported cloud state still lags at CREATING — a TPU
-    can boot and serve long before its create operation flips to READY. A slice
-    rediscovered on controller restart (no bootstrap monitoring) carries a READY
-    bootstrap sentinel, so it too becomes READY and is validated by the
-    autoscaler's health probe, which reaps it if the workers are in fact dead.
-
-    A bootstrap that definitively FAILED is authoritative — even when the cloud
-    is no longer describable (UNKNOWN). A stockout/quota create failure leaves no
-    TPU resource to describe, so describe() reports UNKNOWN; without surfacing the
-    FAILED bootstrap verdict the autoscaler would wait out the full
-    unresolvable-timeout grace period (and keep re-describing the dead TPU) before
-    reaping a slice it already knows never came up.
-
-    Cloud states that mean "gone or doomed" — FAILED and DELETING — are likewise
-    authoritative. A bare UNKNOWN (cloud no longer describable, bootstrap still in
-    progress or a stale READY sentinel) is reported as UNKNOWN so a vanished node
-    never lingers as READY and the unresolvable-timeout path can reap it.
-    """
-    if cloud_state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
-        return cloud_state
-    # A definitive bootstrap failure wins over UNKNOWN: the slice never came up,
-    # so reap it now instead of waiting out the unresolvable timeout.
-    if bootstrap_state == CloudSliceState.FAILED:
-        return CloudSliceState.FAILED
-    if cloud_state == CloudSliceState.UNKNOWN:
-        return CloudSliceState.UNKNOWN
-    if bootstrap_state == CloudSliceState.READY:
-        return CloudSliceState.READY
-    # Bootstrap still in progress: surface BOOTSTRAPPING once cloud is READY,
-    # otherwise reflect the raw cloud state (CREATING/REPAIRING).
-    if cloud_state == CloudSliceState.READY:
-        return CloudSliceState.BOOTSTRAPPING
-    return cloud_state
 
 
 # ============================================================================
@@ -262,12 +220,7 @@ class GcpSliceHandle:
         self._service_account = _service_account
         self.is_queued_resource: bool = _is_queued_resource
         self._create_operation = _create_operation
-        self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
-        # Failure detail captured when bootstrap fails (e.g. the create-LRO error
-        # "no more capacity ..."); surfaced via describe() so the autoscaler can
-        # classify the outcome (stockout vs error) instead of losing it.
-        self._bootstrap_error: str = ""
-        self._bootstrap_lock = threading.Lock()
+        self.bootstrap = SliceBootstrap(bootstrapping=_bootstrapping)
 
     @property
     def slice_id(self) -> str:
@@ -297,21 +250,7 @@ class GcpSliceHandle:
         the reported state reflects the bootstrap lifecycle rather than the
         raw cloud state.
         """
-        cloud_status = self._describe_cloud()
-        cloud_state = cloud_status.state
-
-        with self._bootstrap_lock:
-            bs = self._bootstrap_state
-            bootstrap_error = self._bootstrap_error
-
-        effective_state = _composite_slice_state(cloud_state, bs)
-
-        return SliceStatus(
-            state=effective_state,
-            worker_count=cloud_status.worker_count,
-            workers=cloud_status.workers,
-            error_message=bootstrap_error if effective_state == CloudSliceState.FAILED else "",
-        )
+        return slice_status_with_bootstrap(self._describe_cloud(), self.bootstrap)
 
     def _describe_cloud(self) -> SliceStatus:
         """Query raw TPU state and VM endpoints via GcpService."""
@@ -422,10 +361,7 @@ class GcpVmSliceHandle:
         self._iris_labels = Labels(_label_prefix)
         self._ssh_config = _ssh_config
         self._service_account = _service_account
-        self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
-        # See GcpSliceHandle._bootstrap_error.
-        self._bootstrap_error: str = ""
-        self._bootstrap_lock = threading.Lock()
+        self.bootstrap = SliceBootstrap(bootstrapping=_bootstrapping)
 
     @property
     def slice_id(self) -> str:
@@ -448,21 +384,8 @@ class GcpVmSliceHandle:
         return self._created_at
 
     def describe(self) -> SliceStatus:
-        cloud_status = self._describe_cloud()
-        cloud_state = cloud_status.state
-
-        with self._bootstrap_lock:
-            bs = self._bootstrap_state
-            bootstrap_error = self._bootstrap_error
-
-        effective_state = _composite_slice_state(cloud_state, bs)
-
-        return SliceStatus(
-            state=effective_state,
-            worker_count=cloud_status.worker_count,
-            workers=cloud_status.workers,
-            error_message=bootstrap_error if effective_state == CloudSliceState.FAILED else "",
-        )
+        """Query VM state and endpoint, compositing bootstrap state."""
+        return slice_status_with_bootstrap(self._describe_cloud(), self.bootstrap)
 
     def _describe_cloud(self) -> SliceStatus:
         vm_info = self._gcp_service.vm_describe(self._vm_name, self._zone)

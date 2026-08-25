@@ -3,12 +3,16 @@
 
 import dataclasses
 import gc
+import json
 import logging
 import os
+import posixpath
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Optional
 
 import equinox as eqx
+import fsspec
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -23,6 +27,7 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
@@ -36,13 +41,47 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
+from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
+
+
+def _write_initial_state_evidence(
+    path: str,
+    *,
+    checkpoint_search_paths: list[str],
+    run_id: str,
+    state_step: int,
+) -> None:
+    """Persist the initialized trainer step for an operational recovery audit."""
+    expected = {
+        "checkpoint_search_paths": checkpoint_search_paths,
+        "run_id": run_id,
+        "state_step": state_step,
+    }
+    evidence = {**expected, "written_at": datetime.now(UTC).isoformat()}
+    payload = (json.dumps(evidence, sort_keys=True) + "\n").encode()
+    fs, plain_path = fsspec.core.url_to_fs(path)
+    parent = posixpath.dirname(plain_path)
+    if parent:
+        fs.makedirs(parent, exist_ok=True)
+    try:
+        with fs.open(plain_path, "xb") as handle:
+            handle.write(payload)
+    except FileExistsError as error:
+        with fs.open(plain_path, "rb") as handle:
+            existing = json.load(handle)
+            if {key: existing.get(key) for key in expected} != expected or not existing.get("written_at"):
+                raise RuntimeError(f"Initial-state evidence path is already claimed: {path}") from error
+        return
+    with fs.open(plain_path, "rb") as handle:
+        if handle.read() != payload:
+            raise RuntimeError(f"Initial-state evidence did not persist exactly: {path}")
 
 
 @dataclass
@@ -53,7 +92,9 @@ class TrainLmConfig:
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     optimizer_schedule_num_train_steps: int | None = None
-    """Optional optimizer schedule horizon when execution intentionally stops earlier."""
+    """Build the optimizer schedule for this horizon while allowing a shorter exact-state continuation."""
+    initial_state_evidence_path: str | None = None
+    """Optional create-only JSON evidence for the trainer state after checkpoint initialization."""
     minimum_initial_step: int | None = None
     """Fail before training if checkpoint restoration starts before this completed-update count."""
 
@@ -89,6 +130,14 @@ class TrainLmConfig:
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
     """
+    initialize_model_from_checkpoint_path: Optional[str] = None
+    """
+    If provided, initialize only the model weights from the ``model`` subtree of this native Levanter
+    checkpoint, leaving a fresh optimizer state and step 0 (the same init as ``initialize_from_hf``, from a
+    native checkpoint). Unlike ``initialize_from_checkpoint_path`` (a full-state restore) it never reads the
+    checkpoint's optimizer state or step. The load is strict: every model leaf must be present. ``config.model``
+    must be the architecture the checkpoint was saved with.
+    """
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
     labeled_eval: LabeledLmEvalConfig | None = None
@@ -100,6 +149,18 @@ class TrainLmConfig:
 def _validate_minimum_initial_step(initial_step: int, minimum_initial_step: int | None) -> None:
     if minimum_initial_step is not None and initial_step < minimum_initial_step:
         raise ValueError(f"Initial trainer step {initial_step} is below required minimum {minimum_initial_step}")
+
+
+def _optimizer_schedule_steps(config: TrainLmConfig) -> int:
+    schedule_steps = config.optimizer_schedule_num_train_steps
+    if schedule_steps is None:
+        return config.trainer.num_train_steps
+    if schedule_steps < config.trainer.num_train_steps:
+        raise ValueError(
+            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
+            f"{schedule_steps} < {config.trainer.num_train_steps}"
+        )
+    return schedule_steps
 
 
 def _restore_lm_model_from_partial_checkpoint(
@@ -130,8 +191,11 @@ def _load_lm_model_from_configured_source(
             dtype=trainer.mp.compute_dtype,
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
-    elif config.initialize_from_checkpoint_path is not None:
-        checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+    elif config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None:
+        # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
+        # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
+        source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
+        checkpoint_path = latest_checkpoint_path(source)
         model = config.model.build(Vocab, key=model_key)
         model = load_checkpoint(model, checkpoint_path, subpath="model")
         model = hax.shard(model, parameter_axis_mapping)
@@ -145,20 +209,26 @@ def _load_lm_model_from_configured_source(
     return model
 
 
-def _optimizer_schedule_steps(config: TrainLmConfig) -> int:
-    schedule_steps = config.optimizer_schedule_num_train_steps
-    if schedule_steps is None:
-        return config.trainer.num_train_steps
-    if schedule_steps < config.trainer.num_train_steps:
-        raise ValueError(
-            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
-            f"{schedule_steps} < {config.trainer.num_train_steps}"
-        )
-    return schedule_steps
-
-
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
+
+    # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
+    # native weights-only init.
+    _init_sources = [
+        config.initialize_from_hf,
+        config.initialize_from_checkpoint_path is not None,
+        config.initialize_model_from_checkpoint_path is not None,
+    ]
+    if sum(bool(s) for s in _init_sources) > 1:
+        raise ValueError(
+            "Specify at most one of initialize_from_hf, initialize_from_checkpoint_path, "
+            "initialize_model_from_checkpoint_path."
+        )
+    # trainer.initialize_from is a full-state resume that restores step > 0, which would skip the
+    # step-0 weights-only init below and silently use the resumed checkpoint instead. Reject the combo,
+    # matching how initialize_from_hf rejects it.
+    if config.initialize_model_from_checkpoint_path is not None and config.trainer.initialize_from is not None:
+        raise ValueError("Cannot specify both initialize_model_from_checkpoint_path and trainer.initialize_from")
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
@@ -199,7 +269,10 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
-    with Trainer(config.trainer, optimizer, loss_function) as trainer:
+    with (
+        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
+    ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
         seed = config.trainer.seed
@@ -283,6 +356,20 @@ def main(config: TrainLmConfig):
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
                 )
+                source = "HF checkpoint"
+            elif config.initialize_model_from_checkpoint_path is not None:
+                # Weights-only native init: the same "load weights, fresh optimizer, step 0" path as
+                # initialize_from_hf, so it goes through the same loader (which also applies any adapter to
+                # the loaded base). The load itself is strict — every model leaf must be present.
+                logger.info(
+                    "No training checkpoint found. Initializing model weights from native checkpoint"
+                    f" '{config.initialize_model_from_checkpoint_path}' (fresh optimizer, step 0)."
+                )
+                source = "native checkpoint"
+            else:
+                source = None
+
+            if source is not None:
                 # this is a bit gross, but we want to free up the memory from the model we just built
                 state = dataclasses.replace(state, model=None)
                 gc.collect()
@@ -319,6 +406,14 @@ def main(config: TrainLmConfig):
                     source_model,
                     config.adapter.trainable_filter(source_model),
                 ),
+            )
+
+        if config.initial_state_evidence_path is not None:
+            _write_initial_state_evidence(
+                config.initial_state_evidence_path,
+                checkpoint_search_paths=trainer.checkpoint_search_paths,
+                run_id=trainer.run_id,
+                state_step=int(state.step),
             )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
@@ -367,28 +462,16 @@ def main(config: TrainLmConfig):
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
         trainer.add_hook(
-            callbacks.iris_status_reporter(
+            iris_status_reporter(
                 Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
             ),
             every=10,
         )
 
         if isinstance(train_dataset, MixtureDataset):
-            last_stage = -1
-
-            def log_mixture_weights(step_info):
-                nonlocal last_stage
-                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                block_id = seq_index // train_dataset.block_size
-                stage = train_dataset._get_stage_for_block(block_id)
-                weights = train_dataset.weight_stages[stage][1]
-                if stage != last_stage:
-                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
-                    metrics["mixture/stage"] = stage
-                    levanter.tracker.log(metrics, step=step_info.step)
-                    last_stage = stage
-
-            trainer.add_hook(log_mixture_weights, every=1)
+            trainer.add_hook(
+                callbacks.mixture_weight_logging_hook(trainer.config.batch_schedule, train_dataset), every=1
+            )
 
         config.adapter.install_export_hooks(
             trainer=trainer,
@@ -422,7 +505,7 @@ def main(config: TrainLmConfig):
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
-            activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            activations, _ = split_activations(model.activations(example.tokens, key=None, attn_mask=example.attn_mask))
             head = model.get_lm_head()
             logits = hax.dot(activations, head, axis=model.Embed)
             return logits

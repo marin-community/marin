@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 
 const props = defineProps<{
   /** The raw value to copy (e.g. "https://10.0.0.1:8080"). Protocol and port are stripped before copying. */
@@ -8,13 +8,11 @@ const props = defineProps<{
   title?: string
 }>()
 
-const copied = ref(false)
+const { copied, copy: copyToClipboard } = useCopyToClipboard()
 
-async function copy() {
+function copy() {
   const ip = props.value.replace(/^https?:\/\//, '').replace(/:\d+$/, '')
-  await navigator.clipboard.writeText(ip)
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 1500)
+  copyToClipboard(ip)
 }
 </script>
 

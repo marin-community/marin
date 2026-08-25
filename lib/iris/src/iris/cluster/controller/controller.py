@@ -6,20 +6,23 @@
 import asyncio
 import atexit
 import enum
+import json
 import logging
+import secrets
 import socket
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
-from rigging.filesystem import prefix_join
-from rigging.server_auth import TokenVerifier
+from rigging import telemetry
+from rigging.filesystem.storage_path import prefix_join
+from rigging.server_auth import IAP_ISSUER, IAP_PUBLIC_KEYS_URL, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -27,7 +30,22 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
-from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
+from iris.cluster.controller.auth import (
+    CONTROL_PLANE_AUDIENCE,
+    DEFAULT_USER_ROLE,
+    ENDPOINT_TOKEN_SCOPE,
+    FEDERATION_AUDIENCE,
+    NATIVE_PROXY_JWT_CACHE_CAPACITY,
+    NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+    NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+    PROXY_PLANE_AUDIENCE,
+    ControllerAuth,
+    FederationTokenProvider,
+    NativeProxyAuthConfig,
+    NativeProxyAuthMode,
+    native_proxy_auth_policy,
+    request_auth_policy,
+)
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -50,10 +68,16 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
+from iris.cluster.controller.native_proxy import NativeProxy, NativeProxyStats
+from iris.cluster.controller.native_proxy_metrics import (
+    NativeProxyTelemetry,
+    install_native_proxy_metrics,
+    uninstall_native_proxy_metrics,
+)
 from iris.cluster.controller.ops.task import (
     Assignment,
     finalize,
@@ -82,15 +106,17 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
+from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
+from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import build_peers
+from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
@@ -102,6 +128,7 @@ from iris.cluster.types import (
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import SESSION_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -114,23 +141,22 @@ logger = logging.getLogger(__name__)
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
 _RPC_HANDLER_THREADS = 64
+_CONTROLLER_KEEPALIVE = 120
+_PRIVATE_CONTROLLER_HOST = "127.0.0.1"
+_SYNCHRONOUS_PHASE_INTERVAL = 0.0
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
     """Replace ``server.run`` with a variant that pins a sized default executor."""
 
     def run_with_executor(sockets: list[socket.socket] | None = None) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
-        try:
-            loop.run_until_complete(server.serve())
-        finally:
-            try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
-            finally:
-                asyncio.set_event_loop(None)
-                loop.close()
+        # Preserve Uvicorn's configured loop factory. Constructing an asyncio
+        # loop directly bypasses ``loop=auto`` and silently disables uvloop.
+        with asyncio.Runner(loop_factory=server.config.get_loop_factory()) as runner:
+            runner.get_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler")
+            )
+            runner.run(server.serve(sockets=sockets))
 
     server.run = run_with_executor
 
@@ -276,7 +302,18 @@ class ControllerConfig:
     """This cluster's real federation identity (from the cluster config ``name``).
 
     Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
-    hands jobs off; unused otherwise."""
+    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
+    federation parent can relay it back here."""
+
+    dashboard_url: str = ""
+    """This cluster's public origin (cluster config ``dashboard_url``); the local origin
+    a minted capability URL uses when no public parent is configured."""
+
+    federation_public_parent: str = ""
+    """Public origin of the federation parent that fronts this cluster (cluster config
+    ``federation_public_parent``). Set on a child whose own origin is not world-visible:
+    a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
+    which relays it back here."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
@@ -324,6 +361,8 @@ class Controller:
             backends (the meta-scheduler index + allow policies) and to map each
             worker's scale group to its owning backend. Defaults to one implicit
             worker-daemon backend per entry in ``backends``.
+        federation_peers: Optional prebuilt peer connections for an embedding
+            that owns transport composition. Production builds peers from config.
     """
 
     def __init__(
@@ -334,6 +373,7 @@ class Controller:
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
         backend_configs: dict[str, BackendConfig] | None = None,
+        federation_peers: Sequence[FederationPeer] | None = None,
     ):
         if not config.remote_state_dir:
             raise ValueError(
@@ -409,8 +449,13 @@ class Controller:
             else None
         )
         self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
+        peers = (
+            list(federation_peers)
+            if federation_peers is not None
+            else build_peers(config.peers, federation_token_provider=federation_token_provider)
+        )
         self._federation = FederationManager(
-            build_peers(config.peers, federation_token_provider=federation_token_provider),
+            peers,
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
@@ -432,6 +477,13 @@ class Controller:
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
+
+        # Periodic iris.task_state emitter: per-root-job task counts + wait ages
+        # aggregated from the controller DB. Only cluster-view (k8s) controllers
+        # emit it — their rows must ride finelog federation, while a GCP
+        # controller's DB is directly queryable via ExecuteRawQuery. Construction
+        # starts the emitter thread, so it is built in start(), closed in stop().
+        self._task_state_collector: TaskStateCollector | None = None
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
@@ -462,12 +514,17 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            capability_url_config=CapabilityUrlConfig(
+                cluster_name=config.cluster_id,
+                local_origin=config.dashboard_url,
+                parent_origin=config.federation_public_parent,
+            ),
         )
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
         # Present only when this controller has peers and a signing key to mint with.
-        federated_proxy = (
-            FederatedEndpointProxy(self._federation.peer_controller_address, federation_token_provider.get_token)
+        federated_handoff = (
+            FederatedEndpointHandoff(self._federation.peer_controller_address, federation_token_provider.get_token)
             if federation_token_provider is not None
             else None
         )
@@ -476,16 +533,20 @@ class Controller:
             with self._db.read_snapshot() as q:
                 return reads.has_received_job_from_peer(q, peer_id, root_job)
 
+        external_auth_policy = request_auth_policy(config.auth)
+        proxy_decision_secret = secrets.token_urlsafe(32)
+        self._auth_policy = native_proxy_auth_policy(external_auth_policy)
+        self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
-            host=config.host,
-            port=config.port,
             auth_provider=config.auth_provider,
-            auth_policy=request_auth_policy(config.auth),
+            auth_policy=self._auth_policy,
+            reported_auth_policy=external_auth_policy,
             jwt_manager=config.auth.jwt_manager if config.auth else None,
-            federated_proxy=federated_proxy,
+            federated_handoff=federated_handoff,
             federation_owner_check=_federation_owner_check,
+            proxy_decision_secret=proxy_decision_secret,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -504,6 +565,9 @@ class Controller:
         self._pending_kicks: list[PendingKick] = []
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
+        self._native_proxy = None
+        self._native_proxy_metrics: NativeProxyTelemetry | None = None
+        self._endpoint_service.subscribe_proxy_updates(self._publish_native_proxy_update)
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
@@ -620,6 +684,10 @@ class Controller:
         """Whether the controller loops have been started."""
         return self._started
 
+    def begin_shutdown(self) -> None:
+        """Reject new control-plane requests without stopping workers."""
+        self._dashboard.begin_shutdown()
+
     def start(self) -> None:
         """Start the dashboard server and the control + housekeeping threads.
 
@@ -636,27 +704,24 @@ class Controller:
 
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
+            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
+                self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
         # timeout_keep_alive: uvicorn defaults to 5s, which races with client polling
         # intervals of the same length, causing TCP resets on idle connections. Use 120s
         # to safely cover long polling gaps during job waits.
-        # proxy_headers / forwarded_allow_ips: production traffic arrives via
-        # GCP IAP + an HTTPS load balancer. Without trusting their forwarded
-        # headers, ``scope["server"]`` is the controller's bind address, so
-        # any absolute URL built by Starlette (notably the trailing-slash
-        # redirect on routes like ``/proxy/<name>``) leaks the internal IP
-        # back to the browser as ``http://10.x.x.x:10000/...`` — unreachable
-        # outside the VPC. Trusting all upstream IPs is safe because the
-        # controller's only ingress is the LB.
+        # The native listener is Uvicorn's only ingress and preserves the load
+        # balancer's forwarded headers. Trust its loopback connection so
+        # Starlette builds externally reachable absolute URLs.
         server_config = uvicorn.Config(
             self._dashboard.app,
-            host=self._config.host,
-            port=self._config.port,
+            host=_PRIVATE_CONTROLLER_HOST,
+            port=0,
             log_level="warning",
             log_config=None,
-            timeout_keep_alive=120,
+            timeout_keep_alive=_CONTROLLER_KEEPALIVE,
             proxy_headers=True,
             forwarded_allow_ips="*",
         )
@@ -698,18 +763,104 @@ class Controller:
             lambda: self._server is not None and self._server.started,
             timeout=Duration.from_seconds(5.0),
         )
+        assert self._server is not None
+        assert self._server.servers
+        private_port = self._server.servers[0].sockets[0].getsockname()[1]
+        self._native_proxy = NativeProxy(
+            self._config.host,
+            self._config.port,
+            f"http://{_PRIVATE_CONTROLLER_HOST}:{private_port}",
+            self._dashboard.proxy_decision_secret,
+            json.dumps(asdict(self._native_proxy_auth_config())),
+        )
+        telemetry.configure(
+            endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+            service="iris-controller",
+            attributes={"role": "controller"},
+        )
+        self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)
+        self._replace_native_proxy_registry()
+
+    def _publish_native_proxy_update(self, update: ProxyMappingDelta | ProxyRegistryReset) -> None:
+        if self._native_proxy is None:
+            return
+        if isinstance(update, ProxyRegistryReset):
+            self._recover_native_proxy_registry()
+            return
+        payload = json.dumps(asdict(update))
+        try:
+            self._native_proxy.update_mappings(payload)
+        except ValueError:
+            logger.exception(
+                "Native proxy rejected endpoint mapping generation %d -> %d; replacing registry",
+                update.base_generation,
+                update.next_generation,
+            )
+            self._recover_native_proxy_registry()
+
+    def _recover_native_proxy_registry(self) -> None:
+        assert self._native_proxy is not None
+        try:
+            self._replace_native_proxy_registry()
+        except ValueError:
+            logger.exception("Native proxy registry replacement failed; pausing native routing")
+            self._native_proxy.pause_registry()
+
+    def _replace_native_proxy_registry(self) -> None:
+        if self._native_proxy is None:
+            return
+        self._native_proxy.pause_registry()
+        snapshot = self._endpoint_service.proxy_registry_snapshot()
+        self._native_proxy.replace_registry(json.dumps(asdict(snapshot)))
+
+    def _native_proxy_auth_config(self) -> NativeProxyAuthConfig:
+        auth = self._config.auth
+        if auth is None or auth.provider is None:
+            mode = NativeProxyAuthMode.PERMISSIVE
+        elif self._external_auth_allows_anonymous:
+            mode = NativeProxyAuthMode.OPTIONAL
+        else:
+            mode = NativeProxyAuthMode.ENFORCING
+        if auth is not None and auth.jwt_manager is not None:
+            issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+        else:
+            issuers, jwks = (), {"keys": []}
+        return NativeProxyAuthConfig(
+            mode=mode,
+            issuers=issuers,
+            jwks=jwks,
+            leeway_seconds=NATIVE_PROXY_JWT_LEEWAY_SECONDS,
+            cache_capacity=NATIVE_PROXY_JWT_CACHE_CAPACITY,
+            cache_ttl_seconds=NATIVE_PROXY_JWT_CACHE_TTL_SECONDS,
+            trusted_cidrs=auth.trusted_cidrs if auth is not None else (),
+            control_audience=CONTROL_PLANE_AUDIENCE,
+            proxy_audience=PROXY_PLANE_AUDIENCE,
+            proxy_scope=ENDPOINT_TOKEN_SCOPE,
+            federation_audience=FEDERATION_AUDIENCE,
+            session_cookie=SESSION_COOKIE,
+            iap_public_keys_url=IAP_PUBLIC_KEYS_URL,
+            iap_issuer=IAP_ISSUER,
+            iap_audience=auth.iap_audience if auth is not None else None,
+            federation_keys=auth.federation_keys if auth is not None else {},
+            admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            default_user_role=(
+                auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
+            ),
+        )
 
     def stop(self) -> None:
         """Stop all background components gracefully. Idempotent.
 
         Shutdown ordering:
-        1. Unregister atexit hook so it doesn't fire against a closed DB.
-        2. Stop the control loop so no new work is triggered.
-        3. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
-        4. Stop remaining threads (server) and executors.
+        1. Reject new control-plane requests.
+        2. Unregister atexit hook so it doesn't fire against a closed DB.
+        3. Stop the control loop so no new work is triggered.
+        4. Shut down the autoscaler (stops monitors, terminates VMs, stops platform).
+        5. Stop remaining threads (server) and executors.
         """
         if self._stopped:
             return
+        self.begin_shutdown()
         self._stopped = True
         # Unregister atexit hook before closing DB connections.
         if self._atexit_registered:
@@ -726,8 +877,15 @@ class Controller:
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
+        if self._task_state_collector is not None:
+            self._task_state_collector.close()
         self._federation.stop()
 
+        if self._native_proxy_metrics is not None and self._native_proxy is not None:
+            uninstall_native_proxy_metrics(self._native_proxy)
+            self._native_proxy_metrics = None
+        if self._native_proxy is not None:
+            self._native_proxy.stop()
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
         # stops the platform) and releases the backend's own resources.
@@ -841,6 +999,7 @@ class Controller:
         schedule_limiter: RateLimiter,
         reconcile_limiter: RateLimiter,
         autoscale_limiter: RateLimiter,
+        force_timeout_scan: bool = False,
     ) -> None:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
 
@@ -869,13 +1028,12 @@ class Controller:
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
         self._force_reconcile = False
-        scan_timeouts = run_reconcile and self._timeout_rate_limiter.should_run()
+        scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
 
         inputs = self._build_tick_inputs(
             now=now,
             run_schedule=run_schedule,
             run_reconcile=run_reconcile,
-            run_autoscale=run_autoscale,
             scan_timeouts=scan_timeouts,
         )
 
@@ -969,7 +1127,6 @@ class Controller:
         now: Timestamp,
         run_schedule: bool,
         run_reconcile: bool,
-        run_autoscale: bool,
         scan_timeouts: bool,
     ) -> _TickInputs:
         """Assemble the due phases' controller-owned inputs.
@@ -981,7 +1138,6 @@ class Controller:
         each backend reads its own workers, so nothing here is partitioned.
         """
         inputs = _TickInputs()
-        worker_daemon_backends = [bid for bid in self._backend_ids if bid not in self._dispatch_backends]
 
         # Placement-owning backends each drain their own pending dispatch first.
         if run_reconcile:
@@ -1000,9 +1156,10 @@ class Controller:
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
-            # Execution-timeout finalization is controller-owned and global; it
-            # runs alongside the worker-daemon reconcile.
-            if run_reconcile and scan_timeouts and worker_daemon_backends:
+            # Execution-timeout finalization is global across worker-daemon and
+            # K8s backends. K8s gangs rely on it because they omit
+            # activeDeadlineSeconds.
+            if run_reconcile and scan_timeouts:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
 
@@ -1522,7 +1679,12 @@ class Controller:
         max_promotions = self._promotion_bucket.available
         backend_filter = None if len(self._backends) == 1 else backend_id
         with self._db.transaction() as cur:
-            batch = dispatch.drain_for_dispatch(cur, max_promotions=max_promotions, backend_id=backend_filter)
+            batch = dispatch.drain_for_dispatch(
+                cur,
+                max_promotions=max_promotions,
+                backend_id=backend_filter,
+                defaults=self._config.user_budget_defaults,
+            )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         return reads.ControlSnapshot(
@@ -1619,6 +1781,25 @@ class Controller:
         """Submit a job to the controller."""
         return self._service.launch_job(request, None)
 
+    def run_control_tick(self) -> None:
+        """Run one complete control cycle synchronously before :meth:`start`.
+
+        This is the deterministic embedding boundary for callers that own the
+        controller lifecycle themselves. It drives scheduling, reconciliation,
+        and autoscaling once without starting background threads. A running
+        controller already owns its control loop, so mixing the two modes is an
+        error.
+        """
+        if self.started:
+            raise RuntimeError("run_control_tick cannot be used after Controller.start")
+        self._control_tick(
+            woken=True,
+            schedule_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            reconcile_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            autoscale_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            force_timeout_scan=True,
+        )
+
     def get_job_status(
         self,
         job_id: str,
@@ -1627,6 +1808,23 @@ class Controller:
         request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
+    def list_jobs(
+        self,
+        request: controller_pb2.Controller.ListJobsRequest | None = None,
+    ) -> controller_pb2.Controller.ListJobsResponse:
+        """Return Jobs matching the request query."""
+        return self._service.list_jobs(request or controller_pb2.Controller.ListJobsRequest(), None)
+
+    def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
+        """Return current public Task rows for a Job."""
+        request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
+        return self._service.list_tasks(request, None)
+
+    def get_task_status(self, task_id: str) -> controller_pb2.Controller.GetTaskStatusResponse:
+        """Get one Task and its Attempt history."""
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        return self._service.get_task_status(request, None)
+
     def terminate_job(
         self,
         job_id: str,
@@ -1634,6 +1832,85 @@ class Controller:
         """Terminate a running job."""
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
+
+    def complete_job(
+        self,
+        job_id: str,
+    ) -> job_pb2.Empty:
+        """Complete a running job successfully."""
+        request = controller_pb2.Controller.CompleteJobRequest(job_id=job_id)
+        return self._service.complete_job(request, None)
+
+    def kick_tasks(
+        self,
+        request: controller_pb2.Controller.KickTasksRequest,
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Queue validated administrative state overrides for Tasks."""
+        return self._service.kick_tasks(request, None)
+
+    def register_endpoint(
+        self,
+        request: controller_pb2.Controller.RegisterEndpointRequest,
+    ) -> controller_pb2.Controller.RegisterEndpointResponse:
+        """Register or renew a Task endpoint."""
+        return self._service.endpoint_service.register_endpoint(request, None)
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest | None = None,
+    ) -> controller_pb2.Controller.ListEndpointsResponse:
+        """Return Task endpoints matching the optional query."""
+        return self._service.endpoint_service.list_endpoints(
+            request or controller_pb2.Controller.ListEndpointsRequest(),
+            None,
+        )
+
+    def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
+        """Remove a Task endpoint by ID."""
+        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
+        return self._service.endpoint_service.unregister_endpoint(request, None)
+
+    def set_user_budget(
+        self,
+        request: controller_pb2.Controller.SetUserBudgetRequest,
+    ) -> controller_pb2.Controller.SetUserBudgetResponse:
+        """Set the budget limit and maximum priority band for one user."""
+        return self._service.set_user_budget(request, None)
+
+    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
+        """Return one user's budget configuration and current spend."""
+        request = controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id)
+        return self._service.get_user_budget(request, None)
+
+    def register_worker(
+        self,
+        request: controller_pb2.Controller.RegisterRequest,
+    ) -> controller_pb2.Controller.RegisterResponse:
+        """Register or renew a worker identity and capacity."""
+        return self._service.register(request, None)
+
+    def list_workers(
+        self,
+        request: controller_pb2.Controller.ListWorkersRequest | None = None,
+    ) -> controller_pb2.Controller.ListWorkersResponse:
+        """Return workers matching the optional request filters."""
+        return self._service.list_workers(request or controller_pb2.Controller.ListWorkersRequest(), None)
+
+    def get_worker_status(self, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
+        """Return current health and metadata for one worker."""
+        request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
+        return self._service.get_worker_status(request, None)
+
+    def federation_sync(
+        self,
+        request: controller_pb2.Controller.FederationSyncRequest,
+    ) -> controller_pb2.Controller.FederationSyncResponse:
+        """Apply an authenticated federation delta from a peer."""
+        return self._service.federation_sync(request, None)
+
+    def list_peers(self) -> controller_pb2.Controller.ListPeersResponse:
+        """Return configured federation peers and their current status."""
+        return self._service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
 
     # Properties
 
@@ -1682,10 +1959,14 @@ class Controller:
     @property
     def port(self) -> int:
         """Actual bound port (may differ from config if port=0 was specified)."""
-        if self._server and self._server.started:
-            if self._server.servers and self._server.servers[0].sockets:
-                return self._server.servers[0].sockets[0].getsockname()[1]
-        return self._config.port
+        return self._native_proxy.port if self._native_proxy is not None else self._config.port
+
+    @property
+    def native_proxy_stats(self) -> NativeProxyStats | None:
+        """Return native registry and JWT-cache counters, or ``None`` before startup."""
+        if self._native_proxy is None:
+            return None
+        return NativeProxyStats.from_json(self._native_proxy.stats_json)
 
     @property
     def external_host(self) -> str:

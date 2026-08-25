@@ -24,11 +24,15 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.env import (
+    IRIS_ATTEMPT_UID_ENV,
+    IRIS_WORKER_REGION_ENV,
+    STANDARD_MOUNTS,
+    build_common_iris_env,
+)
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -37,14 +41,12 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    MountKind,
-    MountSpec,
     RuntimeLogReader,
 )
-from iris.cluster.types import AttemptUid, JobName, is_task_finished
+from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
@@ -145,6 +147,7 @@ def build_iris_env(
     env = build_common_iris_env(
         task_id=req.task_id,
         attempt_id=task.attempt_id,
+        attempt_uid=str(task.attempt_uid),
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
@@ -370,9 +373,7 @@ class TaskAttempt:
             log_reader = handle.log_reader()
             self._monitor_loop(handle, log_reader)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Monitoring failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -627,13 +628,9 @@ class TaskAttempt:
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Infrastructure error:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_WORKER_FAILED, "Infrastructure error", e)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Task failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Task failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -721,15 +718,16 @@ class TaskAttempt:
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
+        # The controller owns the process-incarnation identity. User and cluster
+        # env cannot replace it with a value shared by two attempts.
+        env.pop(IRIS_ATTEMPT_UID_ENV, None)
+        if attempt_uid := iris_env.get(IRIS_ATTEMPT_UID_ENV):
+            env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
 
-        # Surface the worker's region so in-task code (e.g. the Marin
-        # executor) and IrisClient.submit_job's parent->child region
-        # inheritance can read it via get_job_info().worker_region.
-        # Set last: this is a physical fact about the worker, not a
-        # user-configurable preference, so task/user env_vars cannot spoof it.
-        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
-        if region_attr and region_attr.string_value:
-            env["IRIS_WORKER_REGION"] = region_attr.string_value
+        # The worker's physical location is authoritative over task-provided env.
+        region = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region and region.string_value:
+            env[IRIS_WORKER_REGION_ENV] = region.string_value
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -742,14 +740,6 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        mounts = [
-            MountSpec("/app", kind=MountKind.WORKDIR),
-            MountSpec("/tmp", kind=MountKind.TMPFS),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
-        ]
-
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -757,7 +747,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=mounts,
+            mounts=list(STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
@@ -991,6 +981,17 @@ class TaskAttempt:
     def _append_log(self, *, source: str, data: str) -> None:
         """Push a single log entry (for rare events like errors)."""
         self._push_logs([self._make_log_entry(source=source, data=data)])
+
+    def _fail_from_exception(self, state: TaskState, summary: str, exc: Exception) -> None:
+        """Log ``exc``'s traceback as an injected error and move to a terminal ``state``.
+
+        ``summary`` heads the log line (e.g. "Task failed"); the formatted
+        traceback becomes both the log body and the terminal error stored on
+        the attempt.
+        """
+        error_msg = format_exception_with_traceback(exc)
+        self._append_log(source=INJECTED_ERROR_SOURCE, data=f"{summary}:\n{error_msg}")
+        self.transition_to(state, error=error_msg)
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
         """Fetch new logs from container and push as a batch."""

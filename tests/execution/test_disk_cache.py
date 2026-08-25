@@ -11,7 +11,11 @@ from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.step_runner import check_cache, run_step
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile, distributed_lock
+from marin.execution.step_status import (
+    STATUS_SUCCESS,
+    StatusFile,
+    distributed_lock,
+)
 from pydantic import BaseModel
 
 

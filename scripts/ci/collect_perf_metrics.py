@@ -11,8 +11,9 @@ Given an iris job id, this uses the Iris client to extract:
   tasks, fetched from each leaf worker job
 
 The report is written as JSON locally and (optionally) mirrored to a GCS prefix
-under a ``report_<utc-ts>_<short-name>/`` directory so that runs can be compared
-across time and architecture changes.
+under a ``report_<utc-ts>_<short-name>/`` directory so that canary operation can
+be compared across time and architecture changes. It reports Iris lifecycle and
+resource telemetry. Per-stage Zephyr CPU statistics are outside its scope.
 
 Used by the scheduled ``marin-canary-datakit-tier{1,2,3}`` workflows.
 """
@@ -28,14 +29,14 @@ from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
-from google.protobuf import json_format
-from iris.cli.connect import open_controller_endpoint, rpc_client
-from iris.cli.job import build_job_summary
-from iris.client import IrisClient
+from iris.cli.connect import connect_controller, rpc_client
+from iris.client.client import IrisClient
+from iris.client.workload import JobStatus
+from iris.client.workload_summary import job_summary_data
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -170,19 +171,29 @@ class PerfReport:
 # --------------------------------------------------------------------------- #
 
 
-def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
-    data = json_format.MessageToDict(job, preserving_proto_field_name=True)
-    data["has_children"] = bool(job.has_children)
-    return data
+def _job_tree_entry_dict(job: JobStatus) -> dict:
+    def timestamp_dict(value):
+        return {"epoch_ms": value.epoch_ms()} if value is not None else None
+
+    return {
+        "job_id": str(job.job_id),
+        "state": job.state.name.lower(),
+        "started_at": timestamp_dict(job.started_at),
+        "finished_at": timestamp_dict(job.finished_at),
+        "failure_count": job.failure_count,
+        "preemption_count": job.preemption_count,
+        "task_state_counts": {state.name.lower(): count for state, count in job.task_state_counts.items()},
+        "has_children": job.has_children,
+    }
 
 
-def fetch_job_summary(client: IrisClient, job_id: str) -> dict | None:
-    """Return a job summary, or None when the Iris RPC fails."""
+def fetch_job_description(client: IrisClient, job_id: str) -> dict | None:
+    """Return a Job description, or None when the Iris RPC fails."""
     try:
         job_name = JobName.from_wire(job_id)
-        return build_job_summary(client.status(job_name), client.list_tasks(job_name))
+        return job_summary_data(client.job_status(job_name), client.list_tasks(job_name))
     except ConnectError as exc:
-        logger.warning("iris client job summary failed for %s: %s", job_id, exc)
+        logger.warning("iris client Job description failed for %s: %s", job_id, exc)
         return None
 
 
@@ -196,8 +207,8 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
     """
     try:
         jobs = client.list_jobs(prefix=job_id)
-        jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
-        return [_job_status_to_dict(job) for job in jobs]
+        jobs.sort(key=lambda job: job.submitted_at.epoch_ms() if job.submitted_at is not None else 0, reverse=True)
+        return [_job_tree_entry_dict(job) for job in jobs]
     except ConnectError as exc:
         logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None
@@ -220,7 +231,7 @@ def fetch_leaf_summaries(client: IrisClient, job_tree: list[dict]) -> list[dict]
         job_id = job.get("job_id")
         if not job_id:
             continue
-        s = fetch_job_summary(client, job_id)
+        s = fetch_job_description(client, job_id)
         if s is not None:
             summaries.append(s)
     return summaries
@@ -317,10 +328,10 @@ def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, in
 def aggregate_job_tree(jobs: list[dict]) -> dict:
     """Sum preemption / failure / task-state counts across every job in the tree.
 
-    Returns a dict with the same field names as ``iris job summary``:
+    Returns a dict with the same field names as ``iris job describe``:
     ``preemption_count``, ``failure_count``, ``task_state_counts``, plus
     ``job_count`` for sanity-checking. Used to override the parent-only
-    counts that ``iris job summary <parent>`` returns, since those only
+    counts that ``iris job describe <parent>`` returns, since those only
     describe the launcher task and miss the fan-out workers.
     """
     preemption_count = 0
@@ -465,11 +476,11 @@ def build_report(
     """Assemble a PerfReport from iris summary + tree + leaf summaries + status.
 
     Sources, in order of who-knows-what:
-    - parent ``iris job summary``: launcher task duration → ``wall_seconds_total``.
+    - parent ``iris job describe``: launcher task duration → ``wall_seconds_total``.
     - ``iris job list --prefix``: per-step wall times (deterministic zephyr-*
       child names) and aggregated preemption / failure / task-state counts
       across the whole tree.
-    - per-leaf ``iris job summary``: per-task ``memory_peak_mb`` and ``error``
+    - per-leaf ``iris job describe``: per-task ``memory_peak_mb`` and ``error``
       strings, which only live on the leaf workers, not on the parent.
     """
     report = PerfReport(
@@ -488,7 +499,7 @@ def build_report(
         report.warnings.append("ferry_status_path: not readable; status/marin_prefix unset")
 
     if summary is None:
-        report.warnings.append("iris client job summary failed; wall_seconds_total unavailable")
+        report.warnings.append("iris client Job description failed; wall_seconds_total unavailable")
     else:
         tasks = summary.get("tasks") or []
         durations = [t.get("duration_ms") for t in tasks if t.get("duration_ms")]
@@ -581,7 +592,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     "--status",
     "status_path",
     default=None,
-    help="Optional FERRY_STATUS_PATH gs:// URL written by the ferry's _write_status helper.",
+    help="Optional FERRY_STATUS_PATH gs:// URL written by infra.ci.run_status.",
 )
 @click.option(
     "--report-name",
@@ -639,12 +650,12 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    with open_controller_endpoint(config_file=iris_config) as endpoint:
+    with connect_controller(config_file=iris_config) as endpoint:
         with (
             IrisClient.remote(endpoint.url, workspace=_REPO_ROOT, credentials=endpoint.credentials) as client,
             rpc_client(endpoint.url, endpoint.credentials) as controller,
         ):
-            summary = fetch_job_summary(client, job_id)
+            summary = fetch_job_description(client, job_id)
             job_tree = fetch_job_tree(client, job_id)
             leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
             status = load_ferry_status(status_path)

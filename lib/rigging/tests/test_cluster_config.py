@@ -13,6 +13,7 @@ from rigging.filesystem.cluster_config import (
     data_config,
     load_cluster_config,
     marin_prefix,
+    marin_prefix_for_region,
     marin_temp_bucket,
     reset_data_config_cache,
     s3_data_buckets,
@@ -97,6 +98,21 @@ def test_marin_prefix_routes_through_active_config():
         assert marin_prefix() == "gs://pinned/root"
 
 
+def test_marin_prefix_for_region_uses_configured_gcs_bucket():
+    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
+    with use_data_config(config):
+        assert marin_prefix_for_region("US-EAST5") == "gs://marin-us-east5"
+
+
+def test_marin_prefix_for_region_rejects_unknown_or_non_gcs_region():
+    config = DataConfig(region_buckets={"us-east-02a": BucketSpec("marin-us-east-02a", StoreType.COREWEAVE)})
+    with use_data_config(config):
+        with pytest.raises(ValueError, match="does not use GCS"):
+            marin_prefix_for_region("us-east-02a")
+        with pytest.raises(ValueError, match="No Marin data bucket configured"):
+            marin_prefix_for_region("unknown")
+
+
 def test_resolved_root_env_wins(monkeypatch):
     """MARIN_PREFIX env wins over an explicit root."""
     monkeypatch.setenv("MARIN_PREFIX", "gs://override-bucket/data")
@@ -176,6 +192,33 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
     with use_data_config(cfg):
         path = marin_temp_bucket(3, source_prefix="s3://random-bucket/marin")
     assert path == "s3://random-bucket/marin/tmp"
+
+
+def test_marin_temp_bucket_prefers_cluster_override(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(
+            14,
+            "checkpoints/run",
+            source_prefix="s3://marin-us-east-02a/marin",
+        )
+    assert path == "s3://hero-checkpoints/tmp/ttl=14d/checkpoints/run"
+
+
+def test_marin_temp_bucket_can_resolve_legacy_data_local_scratch(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://hero-checkpoints")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(
+            14,
+            "checkpoints/run",
+            source_prefix="s3://marin-us-east-02a/marin",
+            use_env_override=False,
+        )
+    assert path == "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints/run"
 
 
 # --- config-driven S3 bucket registry --------------------------------------

@@ -2,6 +2,93 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
+## Pulumi service rollouts
+
+`ops-pulumi-rollout.yaml` runs
+`uv run --all-packages --extra deploy --frozen marin-deploy <service> rollout` for
+registered service projects after their source paths change on `main`.
+`scripts/ci/pulumi_rollouts.py` maps each service to its Pulumi directory, deploy
+identity, tests, and additional source roots.
+The registry currently covers Ducky, Echo, EvalDash, Grafana, and XProf. Add one `Rollout` entry when
+another service should deploy through this workflow.
+
+For an `IrisService`, every registered shared source root must also be present in that
+service's `code_paths`. The rollout selector starts the shared deploy command;
+`code_paths` changes the `command.local.Command` input that resubmits the Iris job.
+
+Pull requests run each affected service's registered pytest path. Manual dispatch selects one
+registered service and accepts a deploy-generation override for Ducky and XProf. Ducky and
+XProf still read their runtime credentials from GitHub Actions secrets; the rollout job exposes
+those values only to the matching matrix entry.
+
+Run one stack manually from `main` with:
+
+```bash
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
+```
+
+## Agent prose cleanup
+
+`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
+`agent-generated` label. It runs when an item is opened, edited, reopened, or
+labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
+default branch; `pull_request_target` never checks out the PR head.
+
+Claude reads the common writing-style guide, the AI-writing checklist, and the
+applicable issue or pull request guide from `.agents/skills/writing-style/`, then
+rewrites the description as a permanent record for a technical reader. The
+workflow prompt narrows that policy to a soft edit: preserve source facts,
+measurements, caveats, links, and useful code examples; do not import facts from
+the diff or comments; do not target a word count; and leave compliant text and
+titles unchanged.
+
+The model job has read-only repository permissions, receives only the filesystem
+`Read` tool, and returns a schema-validated body. A separate write job runs the
+Python finalizer, which applies deterministic presentation checks outside fenced
+and inline code, rejects empty or oversized rewrites, and prepares the GitHub
+update.
+
+Before an edit, the workflow stores the exact prior description in a collapsed
+`github-actions[bot]` comment. The edited description ends with an `Original
+description` link to that comment. Content hashes make archive creation
+idempotent across retries, and the workflow rechecks the current description
+before writing so a queued run cannot overwrite a newer edit. It skips cleanup
+when the archive or updated body would exceed GitHub's size limit.
+
+## External dependency updates
+
+`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
+MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
+`uv run config/update-external.py` without a project selector, records each
+resolved version and commit in the job summary, and includes every upstream
+commit subject between the old and new revisions. It opens or refreshes one
+`automation/external-dependencies` pull request when generated state changes
+using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
+checks the app author, branch, title, exact head SHA, and changed-file allowlist,
+then waits up to one hour for the four required main checks before squash
+merging. A failure or timeout leaves the pull request open and makes the
+scheduled workflow red.
+
+The app key is an environment secret released only to `main`; a pull-request
+workflow cannot receive it. The GitHub Pulumi stack gives the app a
+pull-request-only review bypass in both the current ruleset and the repository's
+imported classic protection, but no required-CI bypass. Organization admins
+retain their emergency bypass on both rulesets. Required checks are bound to
+the GitHub Actions integration, so the app cannot merge a failing update or
+supply the required contexts itself. An upstream commit is discovered within
+six hours under normal Actions scheduling; a green update lands in that run,
+while a blocked update raises a visible failure within the workflow's
+90-minute deadline.
+
+`ops-native-package-dependencies.yaml` applies the same policy to Marin's
+published native wheels. A successful non-PR `Marin - Release Packages` run
+triggers the updater from the default branch, where the protected environment
+can release the app key. The updater reads the newest published DupeKit,
+Finelog, and Iris native versions from PyPI, advances their compatibility floors
+and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
+pass. Manual dispatch retries a failed or missed update without republishing the
+wheels.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.

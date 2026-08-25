@@ -1,15 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""finelog deploy CLI — config-driven deployment management.
-
-Each subcommand takes a logical config name (or path), loads it via
-`load_finelog_config`, and dispatches to either the GCE or Kubernetes
-backend based on which `deployment.*` block the config sets. The CLI
-itself is platform-agnostic; finelog owns the platform decision via its
-config schema, mirroring how `iris cluster start` decides backend from
-cluster yaml.
-"""
+"""Finelog deployment and operational commands."""
 
 import csv
 import json
@@ -31,24 +23,38 @@ from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
 from rigging.tunnel import open_tunnel
 
-from finelog.client.log_client import LogClient
+from finelog.client.log_client import LogClient, NamespaceInfo
 from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
+from finelog.errors import StatsError
+from finelog.policy import StoragePolicy
+from finelog.rpc import finelog_stats_pb2 as stats_pb2
+from finelog.schema import IMPLICIT_SEQ_COLUMN, Column, GroupedExtrema, Schema
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 
+# Sits just past the server's own 10s query deadline so a long query is ended by
+# the server, which reports why, rather than by a client-side timeout that
+# reports only that time ran out.
+DEFAULT_REQUEST_TIMEOUT = 15.0
+DEFAULT_TUNNEL_TIMEOUT = 60.0
+
 
 @contextmanager
-def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generator[LogClient, None, None]:
+def _log_client(
+    cfg: FinelogConfig, name: str, tunnel_timeout: float, request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+) -> Generator[LogClient, None, None]:
     """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
+    timeout_ms = int(request_timeout * 1000)
     if cfg.client_url:
         provider = iap_edge_provider(name)
         if provider is None:
             raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
         client = connect(
             cfg.client_url,
-            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),
+            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors, timeout_ms=timeout_ms),
             auth=IapAuth(provider),
             connect_timeout=tunnel_timeout,
         )
@@ -60,32 +66,31 @@ def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generat
     else:
         target = tunnel_target_for(cfg)
         with open_tunnel(target, timeout=tunnel_timeout) as url:
-            client = LogClient.connect(url)
+            client = LogClient.connect(url, timeout_ms=timeout_ms)
             try:
                 yield client
             finally:
                 client.close()
 
 
-def _dispatch_up(cfg: FinelogConfig) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_up(cfg)
-    else:
-        _k8s.k8s_up(cfg)
+@contextmanager
+def _open_cli_client(name: str, tunnel_timeout: float, request_timeout: float) -> Generator[LogClient, None, None]:
+    """Open a configured client and present expected connection/query failures as CLI errors."""
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    try:
+        with _log_client(cfg, name, tunnel_timeout, request_timeout) as client:
+            yield client
+    except (IapLoginRequired, StatsError, ConnectionError, OSError, TimeoutError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
-def _dispatch_down(cfg: FinelogConfig, *, yes: bool) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_down(cfg, yes=yes)
-    else:
-        _k8s.k8s_down(cfg, yes=yes)
-
-
-def _dispatch_restart(cfg: FinelogConfig) -> None:
-    if cfg.deployment.gcp is not None:
-        _gcp.gcp_restart(cfg)
-    else:
-        _k8s.k8s_restart(cfg)
+def _require_gcp_mutation(cfg: FinelogConfig) -> None:
+    if cfg.deployment.gcp is None:
+        raise click.ClickException(
+            "Kubernetes workload resources are managed by the infra/finelog Pulumi project; "
+            "use `pulumi preview` and `pulumi up` from that directory"
+        )
 
 
 def _dispatch_status(cfg: FinelogConfig) -> None:
@@ -105,6 +110,27 @@ def _dispatch_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
 @click.group()
 def cli() -> None:
     """Manage finelog deployments."""
+
+
+@cli.command("build-image")
+@click.option("--image", "images", multiple=True, required=True, help="Image tag to publish. Repeat for aliases.")
+@click.option("--platform", default=DEFAULT_PLATFORM, show_default=True)
+@click.option("--cargo-profile", type=click.Choice(["release", "fast"]), default="release", show_default=True)
+@click.option("--cache-image", help="Registry image used for BuildKit cache import and export.")
+def build_image_cmd(
+    images: tuple[str, ...],
+    platform: str,
+    cargo_profile: str,
+    cache_image: str | None,
+) -> None:
+    """Build and publish a finelog image."""
+    build_finelog_image(
+        image=images[0],
+        additional_tags=images[1:],
+        platform=platform,
+        cargo_profile=cargo_profile,
+        cache_image=cache_image,
+    )
 
 
 @cli.group("deploy")
@@ -128,20 +154,22 @@ def deploy() -> None:
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
 def up_cmd(name: str, build: bool, fast: bool) -> None:
-    """Provision the finelog deployment described by `<name>` (idempotent)."""
+    """Provision the GCE deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
-    _dispatch_up(cfg)
+    _gcp.gcp_up(cfg)
 
 
 @deploy.command("down")
 @click.argument("name")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation; for k8s also deletes the PVC.")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
 def down_cmd(name: str, yes: bool) -> None:
-    """Tear down the finelog deployment described by `<name>`."""
+    """Tear down the GCE deployment described by `<name>`."""
     cfg = load_finelog_config(name)
-    _dispatch_down(cfg, yes=yes)
+    _require_gcp_mutation(cfg)
+    _gcp.gcp_down(cfg, yes=yes)
 
 
 @deploy.command("restart")
@@ -160,11 +188,32 @@ def down_cmd(name: str, yes: bool) -> None:
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
 def restart_cmd(name: str, build: bool, fast: bool) -> None:
-    """Restart the finelog deployment in place (refresh the container/image)."""
+    """Restart a GCE deployment in place (refresh the container/image)."""
     cfg = load_finelog_config(name)
+    _require_gcp_mutation(cfg)
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
-    _dispatch_restart(cfg)
+    _gcp.gcp_restart(cfg)
+
+
+@deploy.command("sync-secret")
+@click.argument("name")
+def sync_secret_cmd(name: str) -> None:
+    """Create or rotate a Kubernetes deployment's environment Secret."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("sync-secret requires a Kubernetes deployment config")
+    _k8s.k8s_sync_secret(cfg)
+
+
+@deploy.command("verify")
+@click.argument("name")
+def verify_cmd(name: str) -> None:
+    """Verify that a Kubernetes deployment is accepting writes."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("verify requires a Kubernetes deployment config")
+    _k8s.k8s_verify_ingest_ready(cfg)
 
 
 @deploy.command("status")
@@ -235,9 +284,94 @@ _PRINTERS = {
 }
 
 
+def _read_sql_argument(sql: str | None) -> str:
+    if sql not in (None, "-"):
+        return sql
+    if sys.stdin.isatty():
+        raise click.UsageError("pass SQL as an argument, pipe it on stdin, or use '-' to read stdin")
+    value = sys.stdin.read()
+    if not value.strip():
+        raise click.UsageError("SQL input is empty")
+    return value
+
+
+def _column_record(column: Column) -> dict[str, object]:
+    column_type = stats_pb2.ColumnType.Name(column.type).removeprefix("COLUMN_TYPE_").lower()
+    return {
+        "name": column.name,
+        "type": column_type,
+        "nullable": column.nullable,
+        "trigram_index": column.trigram_index,
+        "exact_values": list(column.exact_values),
+        "value_counts": column.value_counts,
+    }
+
+
+def _grouped_extrema_record(config: GroupedExtrema) -> dict[str, str]:
+    return {
+        "filter_column": config.filter_column,
+        "group_json_column": config.group_json_column,
+        "group_json_key": config.group_json_key,
+        "extrema_column": config.extrema_column,
+    }
+
+
+def _schema_record(schema: Schema) -> dict[str, object]:
+    return {
+        "columns": [_column_record(column) for column in schema.columns],
+        "implicit_columns": [
+            {
+                "name": IMPLICIT_SEQ_COLUMN,
+                "type": "int64",
+                "nullable": False,
+                "server_assigned": True,
+            }
+        ],
+        "key_column": schema.key_column,
+        "sort_columns": list(schema.sort_columns),
+        "max_row_group_rows": schema.max_row_group_rows,
+        "projections": [
+            {
+                "name": projection.name,
+                "predicate_column": projection.predicate_column,
+                "predicate_values": list(projection.predicate_values),
+                "columns": list(projection.columns),
+            }
+            for projection in schema.projections
+        ],
+        "grouped_extrema": [_grouped_extrema_record(config) for config in schema.grouped_extrema],
+    }
+
+
+def _storage_policy_record(policy: StoragePolicy) -> dict[str, int | None]:
+    return {
+        "max_segments": policy.max_segments,
+        "max_bytes": policy.max_bytes,
+        "max_age_seconds": policy.max_age_seconds,
+    }
+
+
+def _namespace_record(info: NamespaceInfo) -> dict[str, object]:
+    return {
+        "namespace": info.namespace,
+        "row_count": info.row_count,
+        "byte_size": info.byte_size,
+        "min_seq": info.min_seq,
+        "max_seq": info.max_seq,
+        "segment_count": info.segment_count,
+        "storage_policy": _storage_policy_record(info.storage_policy),
+        "schema": _schema_record(info.schema),
+    }
+
+
+def _print_record(record: dict[str, object], *, indent: int | None = None) -> None:
+    json.dump(record, sys.stdout, indent=indent)
+    sys.stdout.write("\n")
+
+
 @cli.command("query")
 @click.argument("name")
-@click.argument("sql")
+@click.argument("sql", required=False)
 @click.option(
     "--format",
     "output_format",
@@ -256,26 +390,63 @@ _PRINTERS = {
 @click.option(
     "--tunnel-timeout",
     type=float,
-    default=60.0,
+    default=DEFAULT_TUNNEL_TIMEOUT,
     show_default=True,
     help="Seconds to wait for the local tunnel to become reachable.",
 )
-def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_timeout: float) -> None:
+@click.option(
+    "--timeout",
+    "request_timeout",
+    type=float,
+    default=DEFAULT_REQUEST_TIMEOUT,
+    show_default=True,
+    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
+)
+def query_cmd(
+    name: str,
+    sql: str | None,
+    output_format: str,
+    max_rows: int,
+    tunnel_timeout: float,
+    request_timeout: float,
+) -> None:
     """Run SQL against the deployed finelog `<name>`.
 
     Connects via the controller IAP proxy when ``client_url`` is configured in
     the finelog config, otherwise opens an SSH (GCP) or ``kubectl port-forward``
     (k8s) tunnel to the configured finelog server. Runs ``<sql>`` through
-    ``StatsService.Query`` and prints results in ``--format`` (table/json/csv).
+    ``StatsService.Query`` and prints results in ``--format``. Omit ``<sql>``
+    or pass ``-`` to read SQL from stdin, which is safest for multiline queries
+    and quoted namespace names.
     """
-    configure_logging(level=logging.INFO)
-    cfg = load_finelog_config(name)
-    try:
-        with _log_client(cfg, name, tunnel_timeout) as client:
-            table = client.query(sql, max_rows=max_rows)
-    except IapLoginRequired as exc:
-        raise click.ClickException(str(exc)) from exc
+    query = _read_sql_argument(sql)
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        table = client.query(query, max_rows=max_rows)
     _PRINTERS[OutputFormat(output_format)](table)
+
+
+@cli.command("namespaces")
+@click.argument("name")
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def namespaces_cmd(name: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """List queryable namespaces, schemas, indexes, and storage statistics as JSONL."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        namespaces = client.list_namespaces()
+    for namespace in namespaces:
+        _print_record(_namespace_record(namespace))
+
+
+@cli.command("schema")
+@click.argument("name")
+@click.argument("namespace")
+@click.option("--tunnel-timeout", type=float, default=DEFAULT_TUNNEL_TIMEOUT, show_default=True)
+@click.option("--timeout", "request_timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, show_default=True)
+def schema_cmd(name: str, namespace: str, tunnel_timeout: float, request_timeout: float) -> None:
+    """Print one registered namespace schema as JSON."""
+    with _open_cli_client(name, tunnel_timeout, request_timeout) as client:
+        schema = client.get_table_schema(namespace)
+    _print_record({"namespace": namespace, "schema": _schema_record(schema)}, indent=2)
 
 
 def _list_namespace_dirs(remote_log_dir: str, fs: fsspec.AbstractFileSystem) -> list[str]:

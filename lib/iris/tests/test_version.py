@@ -3,7 +3,6 @@
 
 """Tests for iris.version client revision date resolution."""
 
-import re
 import subprocess
 
 import pytest
@@ -11,20 +10,24 @@ from iris import version as iris_version
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(monkeypatch):
+    monkeypatch.delenv(iris_version.REVISION_DATE_ENV, raising=False)
     iris_version._reset_cache_for_tests()
     yield
     iris_version._reset_cache_for_tests()
 
 
-def test_client_revision_date_uses_build_info(monkeypatch):
-    """When BUILD_DATE is set (wheel build), the resolver short-circuits to it."""
+def test_client_revision_date_prefers_the_image_stamp(monkeypatch):
+    """A container image carries no `.git`, so the build-time env var wins outright."""
+    monkeypatch.setenv(iris_version.REVISION_DATE_ENV, "2026-03-09")
     monkeypatch.setattr(iris_version, "BUILD_DATE", "2026-01-15")
 
-    def _fail(*args, **kwargs):
-        raise AssertionError("git should not be invoked when BUILD_DATE is set")
+    assert iris_version.client_revision_date() == "2026-03-09"
 
-    monkeypatch.setattr(iris_version, "_git_iris_date", _fail)
+
+def test_client_revision_date_uses_build_info(monkeypatch):
+    """A wheel build exposes its stamped revision date."""
+    monkeypatch.setattr(iris_version, "BUILD_DATE", "2026-01-15")
 
     assert iris_version.client_revision_date() == "2026-01-15"
 
@@ -32,9 +35,9 @@ def test_client_revision_date_uses_build_info(monkeypatch):
 def test_client_revision_date_falls_back_to_git(monkeypatch):
     """Editable install (BUILD_DATE empty) falls back to git log on lib/iris."""
     monkeypatch.setattr(iris_version, "BUILD_DATE", "")
-    result = iris_version.client_revision_date()
-    # Inside this repo we expect a real ISO date back from `git log`.
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", result), f"got {result!r}"
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "2026-02-02\n")
+
+    assert iris_version.client_revision_date() == "2026-02-02"
 
 
 def test_client_revision_date_empty_when_git_fails(monkeypatch):
@@ -46,19 +49,3 @@ def test_client_revision_date_empty_when_git_fails(monkeypatch):
 
     monkeypatch.setattr(subprocess, "check_output", _raise)
     assert iris_version.client_revision_date() == ""
-
-
-def test_client_revision_date_is_cached(monkeypatch):
-    """Resolver computes once per process; subsequent calls reuse the result."""
-    monkeypatch.setattr(iris_version, "BUILD_DATE", "")
-    calls = {"n": 0}
-
-    def _count(*args, **kwargs):
-        calls["n"] += 1
-        return "2026-02-02"
-
-    monkeypatch.setattr(iris_version, "_git_iris_date", _count)
-    iris_version.client_revision_date()
-    iris_version.client_revision_date()
-    iris_version.client_revision_date()
-    assert calls["n"] == 1

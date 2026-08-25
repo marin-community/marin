@@ -61,7 +61,14 @@ stack = hax.nn.ArrayStacked.init(num_layers, Block)(
 )
 ```
 
-The init arguments are sliced per-layer on leading axis `0` when they match `num_layers`.
+The init arguments are sliced per-layer on leading axis `0` when they match `num_layers`. Every
+other argument, including a non-array one such as a config object, is shared by all layers.
+
+All layers are built in a single mapped trace, so `Module.init` must be traceable: it may branch in
+Python on a shared argument such as a config field, but not on a per-layer value. `scan` already
+requires the same of `__call__`, since one compiled body runs every layer, so per-layer variation
+belongs in an argument of leading size `num_layers`. A non-array value the module returns is kept
+as that value rather than stacked, so a non-static `int` field reads back as an `int`.
 
 ## Fold / Scan Usage
 

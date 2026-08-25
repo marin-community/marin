@@ -677,10 +677,6 @@ def _te_get_mask_type(mask):
         return AttnMaskType.NO_MASK
 
 
-_DUMMY_HEAD = "__head__"
-_DUMMY_BATCH = "__batch__"
-
-
 def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     """
     NVTE and the Splash Attention kernel require the Q, K, and V to be in a specific format. This function groups the axes
@@ -1060,6 +1056,7 @@ def _tpu_splash_attention(
             is_causal=mask.is_causal,
             causal_offset=mask.causal_offset,
             sliding_window=mask.sliding_window,
+            bidirectional_window=mask.bidirectional_window,
             has_explicit_mask=mask.explicit_mask is not None,
         )
     elif isinstance(mask, NamedArray):

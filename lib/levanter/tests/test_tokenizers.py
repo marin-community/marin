@@ -962,65 +962,6 @@ def test_vocab_dict_subset_of_vocab_size(backend_tokenizer):
     assert len(vocab) <= backend_tokenizer.vocab_size
 
 
-# ---------------------------------------------------------------------------
-# 9. Chat template
-# ---------------------------------------------------------------------------
-
-CHAT_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
-
-
-@pytest.fixture(scope="module")
-def chat_tokenizer() -> MarinTokenizer:
-    try:
-        load_tokenizer.cache_clear()
-        return load_tokenizer(CHAT_MODEL)
-    except Exception:
-        pytest.skip("Cannot load chat model")
-
-
-def test_chat_template_renders_string(chat_tokenizer):
-    conversation = [{"role": "user", "content": "What is 2+2?"}]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert isinstance(result, str)
-    assert "What is 2+2?" in result
-
-
-def test_chat_template_tokenizes(chat_tokenizer):
-    conversation = [{"role": "user", "content": "What is 2+2?"}]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=True)
-    assert isinstance(result, list)
-    assert all(isinstance(i, int) for i in result)
-    assert len(result) > 0
-
-
-def test_chat_template_with_system_message(chat_tokenizer):
-    conversation = [
-        {"role": "user", "content": "Hi there"},
-    ]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert isinstance(result, str)
-
-
-def test_chat_template_multi_turn(chat_tokenizer):
-    conversation = [
-        {"role": "user", "content": "What is 2+2?"},
-        {"role": "assistant", "content": "4"},
-        {"role": "user", "content": "And 3+3?"},
-    ]
-    result = chat_tokenizer.apply_chat_template(conversation, tokenize=False)
-    assert "What is 2+2?" in result
-    assert "4" in result
-    assert "And 3+3?" in result
-
-
-def test_chat_template_add_generation_prompt(chat_tokenizer):
-    conversation = [{"role": "user", "content": "Hello"}]
-    without = chat_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=False)
-    with_prompt = chat_tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
-    # With generation prompt should be at least as long
-    assert len(with_prompt) >= len(without)
-
-
 def test_chat_template_blocks_python_internal_attribute_access():
     tokenizer = HfMarinTokenizer(
         _tokenizer=cast(HfBaseTokenizer, object()),

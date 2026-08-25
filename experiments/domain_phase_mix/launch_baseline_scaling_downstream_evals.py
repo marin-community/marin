@@ -27,7 +27,7 @@ from marin.execution.executor import (
     output_path_of,
 )
 from marin.execution.types import this_output_path
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 logger = logging.getLogger(__name__)
 
@@ -450,8 +450,11 @@ def build_eval_steps(
     only_launch_tpu_region: str | None,
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build eval steps for state rows whose launch decision is `launch`."""
-    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness, evaluate_lm_evaluation_harness
-    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT, MMLU_5_SHOT
+    from experiments.evals.evals import (  # noqa: PLC0415
+        evaluate_levanter_lm_evaluation_harness,
+        evaluate_lm_evaluation_harness,
+    )
+    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT, MMLU_5_SHOT  # noqa: PLC0415
 
     eval_steps: list[ExecutorStep] = []
     results_by_eval_key: dict[str, InputName] = {}

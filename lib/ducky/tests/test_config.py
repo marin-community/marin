@@ -110,6 +110,16 @@ def test_allowed_buckets_parsed_from_env(monkeypatch):
     assert config.allowed_buckets == ("gs://marin-", "s3://marin-")
 
 
+def test_persist_cache_defaults_on_and_parses_falsey(monkeypatch):
+    _set(monkeypatch, _BASE_ENV)
+    assert DuckyConfig.from_environment().persist_cache is True
+    for falsey in ("0", "false", "no", "off", ""):
+        _set(monkeypatch, {"DUCKY_PERSIST_CACHE": falsey})
+        assert DuckyConfig.from_environment().persist_cache is False
+    _set(monkeypatch, {"DUCKY_PERSIST_CACHE": "1"})
+    assert DuckyConfig.from_environment().persist_cache is True
+
+
 def test_catalog_root_prefixes_are_exempt_roots():
     # the configured catalog roots are surfaced for cross-region exemption
     config = DuckyConfig(

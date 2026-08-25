@@ -34,7 +34,7 @@ from marin.execution.executor import (
     output_path_of,
 )
 from marin.execution.types import this_output_path
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_baseline_scaling_downstream_evals import (
     GENERATION_ENGINE_KWARGS,
@@ -680,8 +680,8 @@ def build_eval_steps(
     state_rows: list[EvalSpec], max_eval_instances: int | None
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build GSM8K/HumanEval eval steps for rows requiring launch."""
-    from experiments.evals.evals import evaluate_lm_evaluation_harness
-    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT
+    from experiments.evals.evals import evaluate_lm_evaluation_harness  # noqa: PLC0415
+    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT  # noqa: PLC0415
 
     eval_steps: list[ExecutorStep] = []
     results_by_eval_key: dict[str, InputName] = {}

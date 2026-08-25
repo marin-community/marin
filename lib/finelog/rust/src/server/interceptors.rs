@@ -14,7 +14,7 @@
 //!   set). Re-checks the deadline AFTER acquiring (the post-acquire shed): if
 //!   the client deadline has elapsed while queued, short-circuit with
 //!   `deadline_exceeded` rather than run a doomed handler. The caps are
-//!   `{FetchLogs: 4}` and `{Query: 4}`, both living in one interceptor keyed by
+//!   `{FetchLogs: 4}` and `{Query: 2}`, both living in one interceptor keyed by
 //!   method. Registered AFTER SlowRpc.
 //!
 //! Both read the dispatched method's short name from `ctx.spec().method()`. The
@@ -42,7 +42,7 @@ pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 /// scans across hundreds of MB; unbounded parallelism evicts the page cache and
 /// wedges the process.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 4;
-pub const MAX_CONCURRENT_QUERY: usize = 4;
+pub const MAX_CONCURRENT_QUERY: usize = 2;
 
 /// The dispatched method's short name (`"FetchLogs"`, `"Query"`, ...), or `None`
 /// when the spec is absent (manual `route_*` registration without `with_spec`).

@@ -1,0 +1,12 @@
+name: marin-cloudsql
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  # Pin the shared repo venv (which has the `iac` helper package and the Pulumi GCP provider
+  # via marin-iac[deploy]). Without this, Pulumi's Auto toolchain would build an isolated venv
+  # with no Pulumi SDK.
+  options:
+    virtualenv: ../../.venv
+description: Shared Cloud SQL (Postgres) metadata instance + eval-records bucket.
+# Pulumi.marin-cloudsql.yaml records the production stack's shared GCP KMS provider.

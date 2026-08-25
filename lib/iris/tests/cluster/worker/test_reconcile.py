@@ -15,8 +15,8 @@ from iris.cluster.types import JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
+from iris.testing.worker import create_mock_container_handle, create_run_task_request
 from rigging.timing import Duration
-from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -122,23 +122,17 @@ def test_second_reconcile_without_spec_is_cache_hit(worker, mock_runtime):
             status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
         )
     )
-    submit_spy = Mock(wraps=worker.submit_task)
-    worker.submit_task = submit_spy  # type: ignore[method-assign]
-
     # First call: spec inline, enqueues attempt.
     _reconcile(worker, [_run_desired(uid, run_request=run_req)])
-    call_count_after_first = submit_spy.call_count
 
     # Second call: no inline spec.
     response2 = _reconcile(worker, [_run_desired(uid, run_request=None)])
 
-    # No additional submit_task call.
-    assert submit_spy.call_count == call_count_after_first, "Unexpected re-enqueue on second reconcile"
-
-    # Observation still present and NOT MISSING.
+    # The public task list and observation prove the existing attempt was reused.
     obs = _observations_by_uid(response2)
     assert uid in obs
     assert obs[uid].state != job_pb2.TASK_STATE_MISSING
+    assert [task.attempt_uid for task in worker.list_tasks()] == [uid]
 
     worker.kill_task(task_id)
     task = worker.get_task(task_id)
@@ -502,16 +496,14 @@ def test_run_intent_routes_to_attempt_by_uid(worker, mock_runtime):
         )
     )
     worker.submit_task(run_req)
-    submit_spy = Mock(wraps=worker.submit_task)
-    worker.submit_task = submit_spy  # type: ignore[method-assign]
 
-    # Run intent with the same UID but no inline spec: must resolve by UID, no re-enqueue.
+    # Run intent with the same UID but no inline spec resolves the existing attempt.
     response = _reconcile(worker, [_run_desired("uid-route-1", run_request=None)])
 
-    assert submit_spy.call_count == 0, "Run intent matching by UID must not re-enqueue"
     obs = _observations_by_uid(response)
     assert "uid-route-1" in obs
     assert obs["uid-route-1"].state != job_pb2.TASK_STATE_MISSING
+    assert [task.attempt_uid for task in worker.list_tasks()] == ["uid-route-1"]
 
     worker.kill_task(task_id)
     task = worker.task_by_uid("uid-route-1")

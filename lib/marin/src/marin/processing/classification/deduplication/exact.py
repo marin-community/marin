@@ -9,17 +9,18 @@ import dupekit
 import humanfriendly
 import pyarrow as pa
 from fray.types import ResourceConfig
-from rigging.filesystem import rebase_file_path
+from rigging.filesystem.storage_path import rebase_file_path
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN
 from zephyr.writers import write_parquet_file
 
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
     DedupMode,
     _collect_input_files,
+    _DupTally,
     _find_base_path,
     _get_extension,
     _init_wandb,
@@ -96,13 +97,10 @@ def dedup_exact_paragraph(
         result = dupekit.transform(batch, pipeline)
         return result.append_column(DEFAULT_FILE_PATH_COLUMN, pa.array([source] * result.num_rows, type=pa.string()))
 
-    ctx_kwargs: dict = {
-        "name": "exact-para-dedup",
-        "resources": (resources := ResourceConfig(cpu=10, ram="100g", disk="20g")),
-        "map_task_resources": resources.scale(0.1),  # 1 cpu / 10g / 2g
-        "reduce_task_resources": resources.scale(cpu=0.1, ram=0.2, disk=0.1),  # 1 cpu / 20g / 2g
-    }
-    ctx = ZephyrContext(**ctx_kwargs)
+    resources = ResourceConfig(cpu=10, ram="100g", disk="20g")
+    map_task_resources = resources.scale(0.1)  # 1 cpu / 10g / 2g
+    reduce_task_resources = resources.scale(cpu=0.1, ram=0.2, disk=0.1)  # 1 cpu / 20g / 2g
+    ctx = ZephyrContext(name="exact-para-dedup", resources=resources)
 
     def aggregate_and_write_to_corresponding_files(file_idx: int, records: Iterator[dict]) -> dict:
         # NOTE: all records belong to the specific file and are sorted by doc_id
@@ -115,21 +113,7 @@ def dedup_exact_paragraph(
             new_extension=".parquet",
         )
 
-        total = 0
-        dups = 0
-
-        def counting_iter():
-            nonlocal total, dups
-            for record in records:
-                is_dup: bool = record["is_dup"]
-                total += 1
-                counters.pipeline.update_counter("dedup/exact/paragraph/total", 1)
-                if is_dup:
-                    dups += 1
-                    counters.pipeline.update_counter("dedup/exact/paragraph/dups", 1)
-                else:
-                    counters.pipeline.update_counter("dedup/exact/paragraph/unique", 1)
-                yield record
+        tally = _DupTally("dedup/exact/paragraph")
 
         def group_by_doc_id(records: Iterator[dict]) -> Iterator[dict]:
             doc_level_record: dict[str, Any] | None = None
@@ -138,24 +122,24 @@ def dedup_exact_paragraph(
                 if doc_level_record is None:
                     doc_level_record = {
                         "id": doc_id,
-                        "attributes": {"dup_spans": [record["span"]] if record["span"] else []},
+                        "dup_spans": [record["span"]] if record["span"] else [],
                     }
                 elif doc_level_record["id"] != doc_id:
-                    if doc_level_record["attributes"]["dup_spans"]:
+                    if doc_level_record["dup_spans"]:
                         yield doc_level_record
                     doc_level_record = {
                         "id": doc_id,
-                        "attributes": {"dup_spans": [record["span"]] if record["span"] else []},
+                        "dup_spans": [record["span"]] if record["span"] else [],
                     }
                 else:
                     assert doc_level_record["id"] == doc_id
                     if record["span"]:
-                        doc_level_record["attributes"]["dup_spans"].append(record["span"])
-            if doc_level_record and doc_level_record["attributes"]["dup_spans"]:
+                        doc_level_record["dup_spans"].append(record["span"])
+            if doc_level_record and doc_level_record["dup_spans"]:
                 yield doc_level_record
 
-        result = write_parquet_file(group_by_doc_id(counting_iter()), output_file)
-        return {**result, "total": total, "dups": dups, "unique": total - dups}
+        result = write_parquet_file(group_by_doc_id(tally.tally(records)), output_file)
+        return tally.as_result(result)
 
     def _flat_map_paragraph_hashes(batch: pa.RecordBatch) -> Iterator[dict]:
         hashes = compute_paragraph_hashes(batch).to_pylist()
@@ -183,6 +167,8 @@ def dedup_exact_paragraph(
             reducer=aggregate_and_write_to_corresponding_files,
         ),
         verbose=True,
+        map_task_resources=map_task_resources,
+        reduce_task_resources=reduce_task_resources,
     ).results
 
     return finalize_dedup(shard_results, DedupMode.EXACT_PARAGRAPH, method="exact", level="paragraph")

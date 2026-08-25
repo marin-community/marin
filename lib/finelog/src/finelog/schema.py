@@ -29,6 +29,12 @@ from finelog.rpc import finelog_stats_pb2 as stats_pb2
 # names in error messages.
 ColumnTypeValue = int
 
+# The Arrow type for ``COLUMN_TYPE_MAP``: a homogeneous string-keyed,
+# string-valued map. ``pa.map_(pa.string(), pa.string())`` is the exact wire
+# form the Rust server declares (entries/key/value field names, a non-null key
+# and a nullable value), so a batch built from it is accepted cast-free.
+MAP_STRING_STRING = pa.map_(pa.string(), pa.string())
+
 _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_STRING: pa.string(),
     stats_pb2.COLUMN_TYPE_INT64: pa.int64(),
@@ -37,6 +43,7 @@ _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_BOOL: pa.bool_(),
     stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: pa.timestamp("ms"),
     stats_pb2.COLUMN_TYPE_BYTES: pa.binary(),
+    stats_pb2.COLUMN_TYPE_MAP: MAP_STRING_STRING,
 }
 
 
@@ -62,6 +69,31 @@ class Column:
     # ``contains(col, …)`` / ``col LIKE '%…%'`` queries prune row groups instead
     # of full-scanning. Only meaningful for STRING columns; ignored otherwise.
     trigram_index: bool = False
+    # Exact string values covered by source-row postings for equality and
+    # IN-list queries. Named covering projections are configured separately.
+    exact_values: tuple[str, ...] = ()
+    # Persist exact per-value counts for GROUP BY + COUNT queries.
+    value_counts: bool = False
+
+
+@dataclass(frozen=True)
+class CoveringProjection:
+    """Named filtered projection used only when its predicate and columns cover a query."""
+
+    name: str
+    predicate_column: str
+    predicate_values: tuple[str, ...]
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GroupedExtrema:
+    """Bounded per-segment rollup over a filtered JSON-derived dimension."""
+
+    filter_column: str
+    group_json_column: str
+    group_json_key: str
+    extrema_column: str
 
 
 @dataclass(frozen=True)
@@ -72,12 +104,23 @@ class Schema:
         columns: Columns in registered order. Order is preserved on disk so
             COPY projections produce stable column ordering across additive
             evolutions.
-        key_column: Explicit ordering key column name. Empty means the server
-            falls back to ``timestamp_ms``.
+        key_column: Column used for segment min/max metadata and as the default
+            compaction order. Empty means the server uses ``timestamp_ms``.
+        sort_columns: Physical compaction order before the server-assigned
+            ``seq`` tie-breaker. Empty retains the registered policy or uses
+            key-column ordering on first registration.
+        max_row_group_rows: Parquet row-group row ceiling. Zero retains the
+            registered policy or uses the server default on first registration.
+            Explicit values must be 16,384 through 1,048,576; the encoded-byte
+            target may close a group earlier.
     """
 
     columns: tuple[Column, ...]
     key_column: str = ""
+    projections: tuple[CoveringProjection, ...] = ()
+    grouped_extrema: tuple[GroupedExtrema, ...] = ()
+    sort_columns: tuple[str, ...] = ()
+    max_row_group_rows: int = 0
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -93,10 +136,11 @@ class Schema:
 # the implicit ``seq`` column on top.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        # The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to the
+        # sort's min/max statistics and needs a trigram index of its own.
+        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        # The log message body is substring-searched via contains()/LIKE, so it
-        # carries the trigram index (matches the server's log schema).
+        # Substring-searched via contains()/LIKE.
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
@@ -126,8 +170,42 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
         if c.name == IMPLICIT_SEQ_COLUMN:
             raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
-        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable, trigram_index=c.index.trigram))
-    return Schema(columns=tuple(cols), key_column=msg.key_column)
+        cols.append(
+            Column(
+                name=c.name,
+                type=c.type,
+                nullable=c.nullable,
+                trigram_index=c.index.trigram,
+                exact_values=tuple(c.index.exact_values),
+                value_counts=c.index.value_counts,
+            )
+        )
+    projections = tuple(
+        CoveringProjection(
+            name=projection.name,
+            predicate_column=projection.predicate_column,
+            predicate_values=tuple(projection.predicate_values),
+            columns=tuple(projection.columns),
+        )
+        for projection in msg.projections
+    )
+    grouped_extrema = tuple(
+        GroupedExtrema(
+            filter_column=config.filter_column,
+            group_json_column=config.group_json_column,
+            group_json_key=config.group_json_key,
+            extrema_column=config.extrema_column,
+        )
+        for config in msg.grouped_extrema
+    )
+    return Schema(
+        columns=tuple(cols),
+        key_column=msg.key_column,
+        projections=projections,
+        grouped_extrema=grouped_extrema,
+        sort_columns=tuple(msg.sort_columns),
+        max_row_group_rows=msg.max_row_group_rows,
+    )
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
@@ -137,7 +215,11 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
     neither declare nor receive them, so they are not part of the wire
     contract.
     """
-    msg = stats_pb2.Schema(key_column=schema.key_column)
+    msg = stats_pb2.Schema(
+        key_column=schema.key_column,
+        sort_columns=schema.sort_columns,
+        max_row_group_rows=schema.max_row_group_rows,
+    )
     for c in schema.columns:
         if c.name == IMPLICIT_SEQ_COLUMN:
             continue
@@ -146,7 +228,29 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                 name=c.name,
                 type=c.type,
                 nullable=c.nullable,
-                index=stats_pb2.ColumnIndex(trigram=c.trigram_index),
+                index=stats_pb2.ColumnIndex(
+                    trigram=c.trigram_index,
+                    exact_values=c.exact_values,
+                    value_counts=c.value_counts,
+                ),
+            )
+        )
+    for projection in schema.projections:
+        msg.projections.append(
+            stats_pb2.CoveringProjection(
+                name=projection.name,
+                predicate_column=projection.predicate_column,
+                predicate_values=projection.predicate_values,
+                columns=projection.columns,
+            )
+        )
+    for config in schema.grouped_extrema:
+        msg.grouped_extrema.append(
+            stats_pb2.GroupedExtrema(
+                filter_column=config.filter_column,
+                group_json_column=config.group_json_column,
+                group_json_key=config.group_json_key,
+                extrema_column=config.extrema_column,
             )
         )
     return msg

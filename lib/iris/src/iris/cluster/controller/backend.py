@@ -143,10 +143,17 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
 @dataclass(frozen=True)
 class DeviceCapacity:
     """Free vs. total consumable capacity for one resource token, in the token's
-    natural unit (accelerator variant → chips)."""
+    natural unit (accelerator variant → chips).
+
+    ``held_by_band`` splits the non-free remainder by the ``PriorityBand`` holding
+    it, so a federation parent can tell capacity it could reclaim by preemption
+    (work it outranks) from capacity it cannot. Empty when the backend cannot
+    attribute held capacity to a band; the parent then reclaims nothing.
+    """
 
     free: int
     total: int
+    held_by_band: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -154,14 +161,17 @@ class TaskTarget:
     """Addresses one task attempt for on-demand RPCs (status / profile / exec).
 
     Worker-daemon backends route by :attr:`address`; direct backends route by
-    :attr:`task_id` / :attr:`attempt_id`. Each backend reads the fields it needs;
-    the controller fills them from the DB once at the RPC boundary.
+    :attr:`task_id` / :attr:`attempt_id` / :attr:`attempt_uid`. Each backend reads
+    the fields it needs; the controller fills them from the DB once at the RPC
+    boundary. ``attempt_uid`` is the incarnation key the K8s backend needs to
+    rebuild the pod name (which embeds it); empty for worker-daemon targets.
     """
 
     task_id: str
     attempt_id: int
     worker_id: WorkerId | None
     address: str | None
+    attempt_uid: str = ""
 
 
 @dataclass(frozen=True)
@@ -381,13 +391,19 @@ def run_scheduling_decision(
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
-    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
+    preemption_plan = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+
+    # Commit each preemptor onto the worker its victim frees in the same tick as
+    # the PREEMPT, so it is not re-competed for its own freed slot next tick. The
+    # freed worker is not physically empty until the victim's attempt finalizes;
+    # the reconcile dispatch gate holds the preemptor's run-intent until then.
+    assignments = all_assignments + preemption_plan.placements
+    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
-            for task_id, worker_id in all_assignments
+            for task_id, worker_id in assignments
         ],
         preemptions=[
             TerminalDecision(
@@ -395,7 +411,7 @@ def run_scheduling_decision(
                 task_id=victim_id,
                 reason=f"Preempted by {preemptor_name}",
             )
-            for preemptor_name, victim_id in preemptions
+            for preemptor_name, victim_id in preemption_plan.evictions
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
@@ -516,6 +532,15 @@ class TaskBackend(Protocol):
         controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
         it falls back to shape-only federation. An empty dict is an authoritative
         "nothing free"."""
+        ...
+
+    def runtime_image(self, requested_image: str) -> str:
+        """Resolve the container image used for a task request.
+
+        Direct container backends can supply their configured default when the
+        request leaves the image empty. Worker-daemon backends only know an
+        explicitly requested image; their workers report build details.
+        """
         ...
 
     def status(self) -> controller_pb2.Controller.BackendStatus:

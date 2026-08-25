@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status
-from iris.cluster.runtime.profile import ProfileTrigger
+from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler

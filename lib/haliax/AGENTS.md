@@ -23,7 +23,7 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 * **Python version**: the project targets Python >=3.12.
 * **Formatting and Linting**: We use `./infra/pre-commit.py` (ruff, black, license headers) to keep files consistent.
-* **Typing**: the code base uses `mypy` for static type checking. `mypy` is run by the same `infra/pre-commit.py` entrypoint and the
+* **Typing**: the code base uses `pyrefly` for static type checking. `pyrefly` is run by the same `infra/pre-commit.py` entrypoint and the
   configuration is found in `pyproject.toml`.
 * **Run `./infra/pre-commit.py --all-files`** before committing. The CI workflows run the same checks.
 * **Use `uv run` for commands.** When running tools like `pytest` or other scripts, invoke them via `uv run` so the development dependencies are active.
@@ -46,7 +46,7 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 ## Testing
 
-* Tests are executed with `pytest`. The default workflow runs ` XLA_FLAGS=--xla_force_host_platform_device_count=8 PYTHONPATH=tests:src:. uv run pytest tests`.
+* Run the full safe Haliax suite with `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax --group test pytest lib/haliax/tests`.
 * In general, never relax tolerances in floating point tests unless specifically discussed with the
   team. Use `assert_allclose` with appropriate tolerances for numerical comparisons. We typically use
   1e-4 for more complex modules, and 1e-5 for simpler ones.

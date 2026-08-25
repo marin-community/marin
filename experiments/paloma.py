@@ -70,7 +70,9 @@ def paloma_tokenized(
 
 def paloma_raw_validation_sets(*, paloma_raw: ArtifactStep = paloma):
     return {
-        os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
+        os.path.join("paloma", dataset): raw_text_dataset(
+            os.path.join(paloma_raw.path(), f"{path_part}/val/val*.jsonl.gz")
+        )
         for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()
     }
 

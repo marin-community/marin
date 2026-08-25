@@ -481,9 +481,7 @@ fn adopt_one_namespace_dir(
     // canonical key is "key" (a STRING column carrying no Int64 stats, so key
     // bounds stay None), which the heuristic schema also resolves to.
     let rows = adopt_namespace_from_disk(ns_dir, namespace, &schema);
-    for row in &rows {
-        catalog.upsert_segment(row)?;
-    }
+    catalog.upsert_segments(&rows)?;
 
     tracing::info!(
         namespace,

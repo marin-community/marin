@@ -10,6 +10,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
+    FileDownloadTask,
     _relative_path_in_source,
     download_hf,
     stream_file_to_fsspec,
@@ -51,6 +52,43 @@ def test_download_hf_basic(tmp_path):
     assert provenance["version"] == "abc1234"
     assert "access_time" in provenance
     assert len(provenance["links"]) == 3
+
+
+def test_download_hf_overlapping_globs_download_each_file_once(tmp_path):
+    """Patterns that select the same file must not schedule it for download twice."""
+    source_root = tmp_path / "src"
+    _write(source_root, "data/train-0.parquet", b"shard 0")
+    _write(source_root, "data/train-1.parquet", b"shard 1")
+
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+
+    cfg = DownloadConfig(
+        hf_dataset_id="test-org/test-dataset",
+        revision="abc1234",
+        gcs_output_path=str(output_path),
+        hf_urls_glob=["data/*.parquet", "data/train-*.parquet"],
+        source_url_override=str(source_root),
+    )
+
+    download_hf(cfg)
+
+    assert (output_path / "data" / "train-0.parquet").read_bytes() == b"shard 0"
+    assert (output_path / "data" / "train-1.parquet").read_bytes() == b"shard 1"
+
+    downloaded = [
+        json.loads(line)["file_path"]
+        for metrics_file in sorted((output_path / ".metrics").glob("*.jsonl"))
+        for line in metrics_file.read_text().splitlines()
+        if line.strip()
+    ]
+    assert sorted(downloaded) == [
+        str(source_root / "data" / "train-0.parquet"),
+        str(source_root / "data" / "train-1.parquet"),
+    ]
+
+    provenance = json.loads((output_path / ".provenance.json").read_text())
+    assert len(provenance["links"]) == 2
 
 
 def test_download_hf_appends_sha_when_configured(tmp_path):
@@ -102,6 +140,31 @@ def test_download_hf_bucket_requires_newer_huggingface_hub(tmp_path, monkeypatch
         download_hf(cfg)
 
 
+def test_download_hf_rejects_changed_xet_source(tmp_path, monkeypatch):
+    class FakeHfFileSystem:
+        def find(self, _source_root, **_kwargs):
+            return {
+                "buckets/demo-user/demo-bucket/data/file.jsonl.zst": {"size": 123, "xet_hash": "changed-content"},
+            }
+
+    monkeypatch.setattr(
+        hf_download,
+        "url_to_fs",
+        lambda _url: (FakeHfFileSystem(), "buckets/demo-user/demo-bucket"),
+    )
+
+    cfg = DownloadConfig(
+        hf_dataset_id="buckets/demo-user/demo-bucket",
+        revision="snapshot",
+        gcs_output_path=str(tmp_path),
+        hf_repo_type_prefix="",
+        expected_source_xet_fingerprint="expected-fingerprint",
+    )
+
+    with pytest.raises(ValueError):
+        download_hf(cfg)
+
+
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_stream_file_to_fsspec_aborts_on_hf_auth_error(tmp_path, monkeypatch, status_code):
     """401/403 from HF must short-circuit the retry loop and surface immediately."""
@@ -132,11 +195,12 @@ def test_stream_file_to_fsspec_aborts_on_hf_auth_error(tmp_path, monkeypatch, st
 
     with pytest.raises(RuntimeError, match=f"HTTP {status_code}"):
         stream_file_to_fsspec(
-            str(output_path),
-            "hf://datasets/private/gated/file.parquet",
-            str(destination),
-            read_timeout_seconds=1.0,
-            progress_log_interval_seconds=0.0,
+            FileDownloadTask(
+                source_url="hf://datasets/private/gated/file.parquet",
+                destination_path=str(destination),
+                read_timeout_seconds=1.0,
+                progress_log_interval_seconds=0.0,
+            )
         )
 
     assert call_count["hf"] == 1
@@ -154,12 +218,13 @@ def test_stream_file_to_fsspec_reads_local_source(tmp_path):
     destination = output_path / "data" / "file1.txt"
 
     result = stream_file_to_fsspec(
-        str(output_path),
-        str(source_file),
-        str(destination),
-        expected_size=len(content),
-        read_timeout_seconds=1.0,
-        progress_log_interval_seconds=0.0,
+        FileDownloadTask(
+            source_url=str(source_file),
+            destination_path=str(destination),
+            expected_size=len(content),
+            read_timeout_seconds=1.0,
+            progress_log_interval_seconds=0.0,
+        )
     )
 
     assert result["status"] == "success"

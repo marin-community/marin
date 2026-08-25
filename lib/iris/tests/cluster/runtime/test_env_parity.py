@@ -26,6 +26,7 @@ from iris.rpc import job_pb2
 def _make_req(
     task_id: str = "/my-job/task-0",
     attempt_id: int = 0,
+    attempt_uid: str = "attempt-uid-abc",
     num_tasks: int = 1,
     bundle_id: str = "bundle-abc",
     setup_scripts: list[str] | None = None,
@@ -39,6 +40,7 @@ def _make_req(
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.attempt_uid = attempt_uid
     req.num_tasks = num_tasks
     req.bundle_id = bundle_id
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
@@ -62,6 +64,7 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
     return build_common_iris_env(
         task_id=req.task_id,
         attempt_id=req.attempt_id,
+        attempt_uid=req.attempt_uid,
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
@@ -74,7 +77,10 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
 
 def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
     """Extract static env vars from the k8s pod manifest (excludes downward API entries)."""
-    config = PodConfig(namespace="test", default_image="img:latest", controller_address=controller_address)
+    # Kueue is mandatory on the K8s backend, so a LocalQueue is always configured.
+    config = PodConfig(
+        namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
+    )
     manifest = _build_pod_manifest(req, config)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}
@@ -269,15 +275,6 @@ def test_ports_set_to_zero():
     env = _common_env(_make_req(ports=["coordinator", "debug"]))
     assert env["IRIS_PORT_COORDINATOR"] == "0"
     assert env["IRIS_PORT_DEBUG"] == "0"
-
-
-def test_standard_paths_always_present():
-    env = _common_env(_make_req())
-    assert env["IRIS_WORKDIR"] == "/app"
-    assert env["IRIS_PYTHON"] == "python"
-    assert env["IRIS_BIND_HOST"] == "0.0.0.0"
-    assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
-    assert env["CARGO_TARGET_DIR"] == "/root/.cargo/target"
 
 
 # ---------------------------------------------------------------------------

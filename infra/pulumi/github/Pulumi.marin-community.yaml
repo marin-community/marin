@@ -1,0 +1,313 @@
+config:
+  github:owner: marin-community
+  marin-github:schemaVersion: "1"
+  marin-github:organization: marin-community
+  marin-github:repositories:
+    - marin-community/marin
+  marin-github:forkFerryRepository: marin-community/marin
+  marin-github:dependencyUpdater:
+    repository: marin-community/marin
+    appId: 4563866
+    clientId: Iv23liNdDvC85E67xNa6
+    appSlug: marin-external-runtime-updater
+    reviewRulesetId: 785435
+    actionsKeyId: "3380204578043523366"
+    encryptedPrivateKey: 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
+  marin-github:credentials:
+    - name: CLAUDE_CODE_OAUTH_TOKEN
+      scope: organization
+      presence: present
+      visibility: all
+      source_kind: manual
+      source_ref: owner-recovery:claude-code-oauth
+      disposition: keep
+    - name: CW_ACCESS_KEY_ID
+      scope: organization
+      presence: present
+      visibility: all
+      source_kind: current-file
+      source_ref: file:/tmp/github-ci#key-id
+      disposition: keep
+      note: One-time bootstrap source; distinct from the shell CW pair, Ducky key, R2 pair, and existing GCP cw-object-storage key.
+    - name: CW_SECRET_ACCESS_KEY
+      scope: organization
+      presence: present
+      visibility: all
+      source_kind: current-file
+      source_ref: file:/tmp/github-ci#key-secret
+      disposition: keep
+      note: One-time bootstrap source paired with CW_ACCESS_KEY_ID.
+    - name: GCP_PROJECT_ID
+      scope: organization
+      presence: present
+      visibility: all
+      source_kind: configuration
+      source_ref: config:lib/iris/config/marin.yaml#provisioning.gcp.project
+      disposition: move-to-variable
+    - name: LOOM_TRIGGER_GH_TOKEN
+      scope: organization
+      presence: present
+      visibility: selected
+      repositories:
+        - marin-community/MarinSkyRL
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/marin-style
+        - marin-community/tpu-inference
+        - marin-community/vllm
+      source_kind: manual
+      source_ref: owner-recovery:loom-trigger-token
+      disposition: keep
+      note: Consumed outside marin; MarinSkyRL has a default-branch workflow reference.
+    - name: SLACK_WEBHOOK_URL
+      scope: organization
+      presence: present
+      management: sealed
+      visibility: all
+      key_id: "3380204578043523366"
+      value_encrypted: Bn8tmYyhY6dqEM+JVYC6vOS6D0ZQEY5fhviyarZDViCnl/Rr82WxHfIk624aJJ02zZ3rawmDNDuUuPL37BzoDGj05e10DuLZkW78xcEqAdj3AFpa0PFAQ/01KDGKccpD/BTQD0Drts/DvGvBa7OlcPLvX0BtmhCsGTMGMCTwl04B
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
+      disposition: keep
+      note: Routes GitHub Actions alerts to #marin-alerts.
+    - name: CW_KUBECONFIG
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:coreweave-kubeconfig
+      disposition: keep
+    - name: DISCORD_WEBHOOK_CODE_REVIEW
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-code-review/versions/1
+      disposition: remove-candidate
+      note: No current workflow reference; the current shell value matches the GCP version.
+    - name: DISCORD_WEBHOOK_INTERNAL_DISCUSS
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-internal-discuss/versions/1
+      disposition: keep
+      note: The current shell value matches the GCP version.
+    - name: DUCKY_CW_ACCESS_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: configuration
+      source_ref: config:infra/ducky/Pulumi.ducky-marin.yaml#ducky.env.DUCKY_CW_ACCESS_KEY
+      disposition: remove-candidate
+      note: Runtime-required by Ducky and supplied by Pulumi without GitHub Actions; remove only the unused GitHub copy after confirming equality with the committed identifier.
+    - name: DUCKY_CW_SECRET_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:ducky-cw-secret-key
+      disposition: keep
+      note: Consumed by .github/workflows/ops-ducky.yaml.
+    - name: DUCKY_GCS_HMAC_KEY_ID
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:ducky-gcs-hmac-key-id
+      disposition: keep
+      note: Consumed by .github/workflows/ops-ducky.yaml.
+    - name: DUCKY_GCS_HMAC_SECRET
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:ducky-gcs-hmac-secret
+      disposition: keep
+      note: Consumed by .github/workflows/ops-ducky.yaml.
+    - name: GCP_ARTIFACT_REPOSITORY_SA_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:gcp-artifact-repository-service-account-key
+      disposition: remove-candidate
+    - name: GCP_PROJECT_ID
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: configuration
+      source_ref: config:lib/iris/config/marin.yaml#provisioning.gcp.project
+      disposition: move-to-variable
+      note: Overrides the organization secret of the same name.
+    - name: GCP_SA_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:gcp-service-account-key
+      disposition: remove-candidate
+    - name: GCP_SA_LOGGING_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:gcp-logging-service-account-key
+      disposition: remove-candidate
+    - name: GEMINI_API_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: current-environment
+      source_ref: env:GEMINI_API_KEY
+      disposition: remove-candidate
+    - name: GIST_PAT
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:gist-pat
+      disposition: keep
+    - name: HF_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/HF_TOKEN/versions/3
+      disposition: keep
+      note: Candidate canonical source; the current shell HF_TOKEN is a different value, and GitHub cannot reveal which one it stores.
+    - name: IRIS_CI_GCP_SA_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:iris-ci-gcp-service-account-key
+      disposition: replace-with-oidc
+    - name: IRIS_CI_GCP_SSH_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:iris-ci-gcp-ssh-private-key
+      disposition: replace-with-oidc
+    - name: IRIS_CI_GCP_SSH_KEY_PUB
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:iris-ci-gcp-ssh-public-key
+      disposition: move-to-variable
+    - name: MARIN_CD_CLOUD_RUN_SA_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:marin-cloud-run-service-account-key
+      disposition: replace-with-oidc
+    - name: MARIN_SSH_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:marin-ssh-key
+      disposition: remove-candidate
+    - name: NEW_GCP_JSON
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:new-gcp-json
+      disposition: remove-candidate
+    - name: NIGHTSHIFT_APP_ID
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: github-metadata
+      source_ref: github-app://marin-community/claude-nightshift#app-id
+      disposition: move-to-variable
+    - name: NIGHTSHIFT_APP_PRIVATE_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:claude-nightshift-private-key
+      disposition: keep
+    - name: DEPENDENCY_UPDATER_PRIVATE_KEY
+      scope: environment
+      repository: marin-community/marin
+      environment: external-runtime-updater
+      presence: present
+      management: pulumi
+      source_kind: configuration
+      source_ref: config:infra/pulumi/github/Pulumi.marin-community.yaml#dependencyUpdater.encryptedPrivateKey
+      disposition: keep
+      note: Dedicated app key sealed to its Actions environment public key; Pulumi stores ciphertext only.
+    - name: R2_ACCESS_KEY_ID
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: current-environment
+      source_ref: env:R2_ACCESS_KEY_ID
+      disposition: keep
+    - name: R2_SECRET_ACCESS_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: current-environment
+      source_ref: env:R2_SECRET_ACCESS_KEY
+      disposition: keep
+    - name: RAY_AUTH_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/RAY_AUTH_TOKEN/versions/1
+      disposition: remove-candidate
+    - name: SPEEDRUN_LEADERBOARD_PAT
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:speedrun-leaderboard-pat
+      disposition: remove-candidate
+    - name: WANDB_API_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: current-environment
+      source_ref: env:WANDB_API_KEY
+      disposition: keep
+    - name: ANTHROPIC_ADMIN_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: referenced-missing
+      source_kind: current-environment
+      source_ref: env:ANTHROPIC_ADMIN_KEY
+      disposition: review
+      note: Optional cost-report provider credential.
+    - name: CLAUDE_MAX_OAUTH_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: referenced-missing
+      source_kind: manual
+      source_ref: owner-recovery:claude-max-oauth-token
+      disposition: review
+      note: Fallback reference; CLAUDE_CODE_OAUTH_TOKEN is present at organization scope.
+    - name: COREWEAVE_API_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: referenced-missing
+      source_kind: current-environment
+      source_ref: env:COREWEAVE_API_TOKEN
+      disposition: review
+      note: Used by the hourly CoreWeave storage collector; requires Observability Viewer and differs from storage and Grafana read keys.
+    - name: OPENAI_ADMIN_KEY
+      scope: repository
+      repository: marin-community/marin
+      presence: referenced-missing
+      source_kind: current-environment
+      source_ref: env:OPENAI_ADMIN_KEY
+      disposition: review
+      note: Optional cost-report provider credential.
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6XZs8zGfSYvujFXIFZheWMPjbPdDOV7JJodZEXp2kRkSSQCdtF6ipwmQbLzrT+vTDynD/SCx5yrJeXJ4b2hDtiqNsXV8wjjzqePjSvwlLP4lQZ9EWt2ow0DiAiWCqkg6c4Md9mRI8TY0fPE=

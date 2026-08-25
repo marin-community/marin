@@ -8,6 +8,9 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
+pub mod exact;
+pub mod group_extrema;
+pub mod index_bundle;
 pub mod ipc;
 pub mod log_read;
 pub mod namespace;
@@ -18,6 +21,8 @@ pub mod reconcile;
 pub mod remote;
 pub mod schema;
 pub mod segment;
+pub mod segment_index;
+pub(crate) mod string_column;
 pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.
@@ -25,4 +30,4 @@ pub mod trigram;
 pub mod store;
 pub mod types;
 
-pub use store::Store;
+pub use store::{ServeMode, Store};

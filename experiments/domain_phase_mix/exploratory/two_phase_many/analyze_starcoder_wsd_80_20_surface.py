@@ -32,6 +32,7 @@ import wandb
 from plotly.colors import get_colorscale
 from plotly.subplots import make_subplots
 from scipy import stats
+from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -72,8 +73,10 @@ WANDB_PATH = "marin-community/marin"
 WSD80_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_surface64_20260711_retry2"
 WSD80_REFINEMENT_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_refinement44_20260714"
 WSD80_REPEAT_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_repeat3x4_20260711"
+WSD80_TAG = "wsd80_20"
 WSD80_TARGET = "eval/paloma/dolma_100_programing_languages-llama3/bpb"
 HISTORICAL_TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
+WSD80_METRIC_CACHE = "wsd80_all_bpb_metrics.csv"
 RUN_NAME_PATTERN = re.compile(r"surface64_r(?P<rank>\d+)_p0_.*")
 REPEAT_RUN_NAME_PATTERN = re.compile(r"wsd80_repeat_(?P<schedule>global|boundary|constant)_seed(?P<seed>\d+)")
 
@@ -102,8 +105,65 @@ GLOBAL_MIN_COLOR = "#E64B35"
 DIAGONAL_MIN_COLOR = "#F2B701"
 BOUNDARY_MIN_COLOR = "#2C7FB8"
 PROPORTIONAL_COLOR = "#FFD700"
+FIBER_COLORS = (
+    "#6A3D9A",
+    "#D55E00",
+    "#006837",
+    "#66BD63",
+    "#D9EF8B",
+    "#FEE08B",
+    "#F46D43",
+    "#A50026",
+)
+FIBER_COLOR = FIBER_COLORS[0]
+RAW_REPEAT_COLOR = "#7A8795"
 SERIF_FONT = "Times New Roman, Times, serif"
+VERTICAL_ASPECT_RATIO = 2.4
 EXPORT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
+RECOMMENDED_WSD80_METRICS = (
+    WSD80_TARGET,
+    "eval/uncheatable_eval/macro_bpb",
+    "eval/uncheatable_eval/github_python-llama3/bpb",
+    "eval/uncheatable_eval/github_cpp-llama3/bpb",
+    "eval/uncheatable_eval/arxiv_computer_science-llama3/bpb",
+    "eval/paloma/macro_bpb",
+    "eval/paloma/c4_en-llama3/bpb",
+    "eval/paloma/dolma-v1_5-llama3/bpb",
+    "eval/paloma/falcon-refinedweb-llama3/bpb",
+)
+AGGREGATE_METRIC_LABELS = {
+    "eval/bpb": "All eval datasets · micro BPB",
+    "eval/macro_bpb": "All eval datasets · macro BPB",
+    "eval/paloma/bpb": "Paloma · micro BPB",
+    "eval/paloma/macro_bpb": "Paloma · macro BPB",
+    "eval/uncheatable_eval/bpb": "Uncheatable · micro BPB",
+    "eval/uncheatable_eval/macro_bpb": "Uncheatable · macro BPB",
+}
+DATASET_LABELS = {
+    "4chan": "4chan",
+    "ao3_english": "AO3 English",
+    "arxiv_computer_science": "arXiv Computer Science",
+    "arxiv_physics": "arXiv Physics",
+    "bbc_news": "BBC News",
+    "c4_100_domains": "C4 100 Domains",
+    "c4_en": "C4 English",
+    "dolma-v1_5": "Dolma v1.5",
+    "dolma_100_programing_languages": "Dolma 100 Programming Languages",
+    "dolma_100_subreddits": "Dolma 100 Subreddits",
+    "falcon-refinedweb": "Falcon RefinedWeb",
+    "gab": "Gab",
+    "github_cpp": "GitHub C++",
+    "github_python": "GitHub Python",
+    "m2d2_s2orc_unsplit": "M2D2 S2ORC",
+    "m2d2_wikipedia_unsplit": "M2D2 Wikipedia",
+    "manosphere_meta_sep": "Manosphere",
+    "mc4": "mC4",
+    "ptb": "Penn Treebank",
+    "redpajama": "RedPajama",
+    "twitterAAE_HELM_fixed": "TwitterAAE",
+    "wikipedia_english": "Wikipedia English",
+    "wikitext_103": "WikiText-103",
+}
 
 
 @dataclass(frozen=True)
@@ -375,7 +435,110 @@ def _surface_frame(
         }
     )
     result["url"] = frame[url_column].astype(str) if url_column is not None else ""
+    if "wandb_run_id" in frame:
+        result["wandb_run_id"] = frame["wandb_run_id"].astype(str)
+    elif url_column is not None:
+        result["wandb_run_id"] = result["url"].str.rstrip("/").str.rsplit("/", n=1).str[-1]
     return result.dropna(subset=["p0", "p1", "bpb"]).drop_duplicates(["p0", "p1"]).reset_index(drop=True)
+
+
+def _wsd80_metric_label(metric: str) -> str:
+    aggregate_label = AGGREGATE_METRIC_LABELS.get(metric)
+    if aggregate_label is not None:
+        return aggregate_label
+    match = re.fullmatch(r"eval/(?P<suite>paloma|uncheatable_eval)/(?P<dataset>.+)-llama3/bpb", metric)
+    if match is None:
+        raise ValueError(f"Unsupported WSD 80/20 BPB metric: {metric!r}")
+    suite = "Paloma" if match.group("suite") == "paloma" else "Uncheatable"
+    dataset = DATASET_LABELS.get(match.group("dataset"), match.group("dataset").replace("_", " ").title())
+    return f"{suite} · {dataset} BPB"
+
+
+def _ordered_wsd80_metrics(metrics: tuple[str, ...]) -> tuple[str, ...]:
+    recommended = tuple(metric for metric in RECOMMENDED_WSD80_METRICS if metric in metrics)
+    remaining = tuple(sorted(set(metrics) - set(recommended), key=_wsd80_metric_label))
+    return (*recommended, *remaining)
+
+
+def _collect_wsd80_metric_cache(
+    output_dir: Path,
+    run_ids: set[str],
+) -> tuple[pd.DataFrame, tuple[str, ...]]:
+    cache_path = output_dir / WSD80_METRIC_CACHE
+    if cache_path.exists():
+        cached = pd.read_csv(cache_path)
+        cached_ids = set(cached["wandb_run_id"].astype(str))
+        metric_columns = tuple(
+            sorted(column for column in cached if column.startswith("eval/") and column.endswith("bpb"))
+        )
+        cached_subset = cached.loc[cached["wandb_run_id"].astype(str).isin(run_ids)].copy()
+        if (
+            run_ids <= cached_ids
+            and WSD80_TARGET in metric_columns
+            and len(cached_subset) == len(run_ids)
+            and not cached_subset[list(metric_columns)].isna().any(axis=None)
+        ):
+            return cached_subset, metric_columns
+
+    api = wandb.Api(timeout=90)
+    runs = {run.id: run for run in api.runs(WANDB_PATH, filters={"tags": WSD80_TAG}, per_page=500)}
+    missing = sorted(run_ids - set(runs))
+    if missing:
+        raise ValueError(f"W&B tag {WSD80_TAG!r} is missing {len(missing)} plotted runs: {missing[:5]}")
+
+    metrics_by_run: dict[str, dict[str, float]] = {}
+    common_metrics: set[str] | None = None
+    for run_id in sorted(run_ids):
+        summary = runs[run_id].summary
+        metrics = {
+            key: float(summary[key])
+            for key in summary.keys()
+            if key.startswith("eval/")
+            and key.endswith("bpb")
+            and isinstance(summary[key], (int, float))
+            and np.isfinite(summary[key])
+        }
+        metrics_by_run[run_id] = metrics
+        common_metrics = set(metrics) if common_metrics is None else common_metrics & set(metrics)
+    if common_metrics is None or WSD80_TARGET not in common_metrics:
+        raise ValueError("The plotted WSD 80/20 runs do not share the primary StarCoder BPB metric")
+
+    metric_columns = tuple(sorted(common_metrics))
+    cache = pd.DataFrame(
+        [
+            {"wandb_run_id": run_id, **{metric: metrics_by_run[run_id][metric] for metric in metric_columns}}
+            for run_id in sorted(run_ids)
+        ]
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache.to_csv(cache_path, index=False)
+    return cache, metric_columns
+
+
+def _surface_for_wsd80_metric(surface: Surface, metric_cache: pd.DataFrame, metric: str) -> Surface:
+    if "wandb_run_id" not in surface.frame:
+        raise ValueError("WSD 80/20 surface rows must retain their W&B run IDs")
+    values = metric_cache.set_index("wandb_run_id")[metric]
+    frame = surface.frame.copy()
+    frame["bpb"] = frame["wandb_run_id"].map(values)
+    if frame["bpb"].isna().any():
+        missing = frame.loc[frame["bpb"].isna(), "wandb_run_id"].tolist()
+        raise ValueError(f"Metric {metric!r} is missing for {len(missing)} surface runs: {missing[:5]}")
+    return Surface(surface.name, frame, surface.phase_0_fraction)
+
+
+def _fiber_observations_for_wsd80_metric(
+    observations: pd.DataFrame,
+    metric_cache: pd.DataFrame,
+    metric: str,
+) -> pd.DataFrame:
+    values = metric_cache.set_index("wandb_run_id")[metric]
+    result = observations.copy()
+    result["selected_bpb"] = result["wandb_run_id"].map(values)
+    if result["selected_bpb"].isna().any():
+        missing = result.loc[result["selected_bpb"].isna(), "wandb_run_id"].tolist()
+        raise ValueError(f"Metric {metric!r} is missing for {len(missing)} fiber runs: {missing[:5]}")
+    return result
 
 
 def _load_surfaces(wsd80: pd.DataFrame) -> list[Surface]:
@@ -403,7 +566,34 @@ def _triangle_indices(frame: pd.DataFrame) -> np.ndarray:
     return Delaunay(points).simplices
 
 
-def _hover_text(frame: pd.DataFrame, phase_0_fraction: float) -> list[str]:
+def _fixed_aggregate_fiber(
+    frame: pd.DataFrame,
+    aggregate: float,
+    phase_0_fraction: float,
+    samples: int = 240,
+) -> pd.DataFrame:
+    """Trace the constant-aggregate line through the surface.
+
+    Every two-phase policy sharing one token-weighted aggregate satisfies
+    ``phase_0_fraction * p0 + (1 - phase_0_fraction) * p1 = aggregate``, a line of slope
+    ``-phase_0_fraction / (1 - phase_0_fraction)``. At an 80/20 split that is -4: a token taken out of
+    the long phase has to be repaid four times over in the short one. This is the whole set a
+    fixed-aggregate phase-order experiment can reach from the given anchor, so drawing it shows how
+    little of the plane such an experiment visits.
+
+    Heights come from linear interpolation over the same Delaunay triangulation the surface mesh
+    uses, and are NaN outside its convex hull so the line breaks rather than extrapolating.
+    """
+    beta_1 = 1.0 - phase_0_fraction
+    p0_low = max(0.0, (aggregate - beta_1) / phase_0_fraction)
+    p0_high = min(1.0, aggregate / phase_0_fraction)
+    p0 = np.linspace(p0_low, p0_high, samples)
+    p1 = (aggregate - phase_0_fraction * p0) / beta_1
+    interpolate = LinearNDInterpolator(frame[["p0", "p1"]].to_numpy(dtype=float), frame["bpb"].to_numpy(dtype=float))
+    return pd.DataFrame({"p0": p0, "p1": p1, "bpb": interpolate(p0, p1)}).dropna(subset=["bpb"])
+
+
+def _hover_text(frame: pd.DataFrame, phase_0_fraction: float, metric_label: str = "BPB") -> list[str]:
     aggregate = phase_0_fraction * frame["p0"] + (1.0 - phase_0_fraction) * frame["p1"]
     return [
         "<br>".join(
@@ -411,7 +601,7 @@ def _hover_text(frame: pd.DataFrame, phase_0_fraction: float) -> list[str]:
                 f"Phase 0 StarCoder: {p0:.4f}",
                 f"Phase 1 StarCoder: {p1:.4f}",
                 f"Aggregate StarCoder: {agg:.4f}",
-                f"BPB: {bpb:.6f}",
+                f"{metric_label}: {bpb:.6f}",
             ]
         )
         for p0, p1, agg, bpb in zip(frame["p0"], frame["p1"], aggregate, frame["bpb"], strict=True)
@@ -427,6 +617,7 @@ def _add_surface(
     color_max: float,
     show_scale: bool,
     show_legend: bool,
+    metric_label: str = "BPB",
 ) -> None:
     frame = surface.frame
     triangles = _triangle_indices(frame)
@@ -466,7 +657,7 @@ def _add_surface(
                 "line": {"color": "white", "width": 0.8},
                 "showscale": False,
             },
-            text=_hover_text(frame, surface.phase_0_fraction),
+            text=_hover_text(frame, surface.phase_0_fraction, metric_label),
             hoverinfo="text",
             name="observed runs",
             showlegend=show_legend,
@@ -481,7 +672,9 @@ def _add_surface(
             z=[best["bpb"]],
             mode="markers",
             marker={"symbol": "diamond", "size": 7, "color": GLOBAL_MIN_COLOR, "line": {"color": "white", "width": 1.2}},
-            text=[f"best observed<br>p0={best['p0']:.4f}<br>p1={best['p1']:.4f}<br>BPB={best['bpb']:.6f}"],
+            text=[
+                f"best observed<br>p0={best['p0']:.4f}<br>p1={best['p1']:.4f}" f"<br>{metric_label}={best['bpb']:.6f}"
+            ],
             hoverinfo="text",
             name=f"best observed: p0={best['p0']:.3f}, p1={best['p1']:.3f}; BPB={best['bpb']:.3f}",
             showlegend=show_legend,
@@ -490,7 +683,11 @@ def _add_surface(
     )
 
 
-def _scene_layout(z_min: float, z_max: float) -> dict[str, object]:
+def _scene_layout(
+    z_min: float,
+    z_max: float,
+    z_title: str = "Dolma 100 Programming Languages BPB",
+) -> dict[str, object]:
     axis = {
         "range": [0, 1],
         "gridcolor": "white",
@@ -502,7 +699,7 @@ def _scene_layout(z_min: float, z_max: float) -> dict[str, object]:
         "xaxis": {**axis, "title": "Phase 0 StarCoder"},
         "yaxis": {**axis, "title": "Phase 1 StarCoder"},
         "zaxis": {
-            "title": "Dolma 100 Programming Languages BPB",
+            "title": z_title,
             "range": [z_min, z_max],
             "gridcolor": "white",
             "backgroundcolor": PANE_BACKGROUND,
@@ -510,8 +707,9 @@ def _scene_layout(z_min: float, z_max: float) -> dict[str, object]:
             "zeroline": False,
         },
         "camera": {"eye": {"x": -1.55, "y": -1.55, "z": 1.25}},
+        "uirevision": "wsd80-metric-surface",
         "aspectmode": "manual",
-        "aspectratio": {"x": 1.0, "y": 1.0, "z": 0.8},
+        "aspectratio": {"x": 1.0, "y": 1.0, "z": VERTICAL_ASPECT_RATIO},
     }
 
 
@@ -571,12 +769,98 @@ def _add_fact_sheet(fig: go.Figure, columns: tuple[tuple[tuple[str, str], ...], 
         )
 
 
-def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
+def _measured_fiber_plot_data(
+    observations: pd.DataFrame,
+    phase_0_fraction: float,
+    target: str = "wsd80_bpb",
+) -> tuple[pd.DataFrame, float, int]:
+    """Build the measured line and seed-paired repeat statistics for one aggregate fiber."""
+    reference_fiber = observations.loc[observations["data_seed"].eq(REFERENCE_DATA_SEED)].sort_values("fiber_index")
+    num_coordinates = reference_fiber["fiber_index"].nunique()
+    if len(reference_fiber) != num_coordinates:
+        raise ValueError("Expected exactly one reference-seed observation per fixed-aggregate coordinate")
+
+    realized_aggregate = (
+        phase_0_fraction * reference_fiber["phase_0_starcoder"]
+        + (1.0 - phase_0_fraction) * reference_fiber["phase_1_starcoder"]
+    )
+    aggregate = float(realized_aggregate.iloc[0])
+    if not np.allclose(realized_aggregate, aggregate, atol=1e-12):
+        raise ValueError("Measured fiber does not preserve one plotted aggregate")
+
+    repeat_stats = (
+        observations.groupby("fiber_index")[target].agg(count="count", raw_mean="mean", raw_std="std").reset_index()
+    )
+    repeated_indices = repeat_stats.loc[repeat_stats["count"].gt(1), "fiber_index"]
+    if repeated_indices.empty:
+        repeat_stats["paired_mean"] = np.nan
+        repeat_stats["paired_std"] = np.nan
+        repeat_stats["aligned_mean"] = np.nan
+        fiber = (
+            reference_fiber.merge(repeat_stats, on="fiber_index", how="left", validate="one_to_one")
+            .rename(
+                columns={
+                    "phase_0_starcoder": "p0",
+                    "phase_1_starcoder": "p1",
+                    target: "bpb",
+                }
+            )
+            .sort_values("fiber_index")
+        )
+        return fiber, aggregate, 1
+
+    repeated_observations = observations.loc[observations["fiber_index"].isin(repeated_indices)]
+    tied_indices = repeated_observations.loc[
+        np.isclose(
+            repeated_observations["phase_0_starcoder"],
+            repeated_observations["phase_1_starcoder"],
+            atol=1e-10,
+        ),
+        "fiber_index",
+    ].unique()
+    if len(tied_indices) != 1:
+        raise ValueError(f"Expected one repeated tied-control coordinate, found {tied_indices.tolist()}")
+    tied_index = int(tied_indices[0])
+    repeat_pivot = repeated_observations.pivot(
+        index="data_seed",
+        columns="fiber_index",
+        values=target,
+    )
+    if repeat_pivot.isna().any(axis=None):
+        raise ValueError("Repeated fiber coordinates do not share the same seed block")
+    paired_effects = repeat_pivot.sub(repeat_pivot[tied_index], axis="index")
+    paired_stats = (
+        paired_effects.agg(["mean", "std"]).T.rename(columns={"mean": "paired_mean", "std": "paired_std"}).reset_index()
+    )
+    reference_tied_bpb = float(repeat_pivot.loc[REFERENCE_DATA_SEED, tied_index])
+    paired_stats["aligned_mean"] = reference_tied_bpb + paired_stats["paired_mean"]
+    repeat_stats = repeat_stats.merge(paired_stats, on="fiber_index", how="left", validate="one_to_one")
+    fiber = (
+        reference_fiber.merge(repeat_stats, on="fiber_index", how="left", validate="one_to_one")
+        .rename(
+            columns={
+                "phase_0_starcoder": "p0",
+                "phase_1_starcoder": "p1",
+                target: "bpb",
+            }
+        )
+        .sort_values("fiber_index")
+    )
+    return fiber, aggregate, len(repeat_pivot)
+
+
+def _add_wsd80_metric_traces(
+    fig: go.Figure,
+    surface: Surface,
+    fixed_aggregate_observations: pd.DataFrame | None = None,
+    *,
+    metric_label: str,
+    visible: bool,
+) -> list[str]:
+    trace_start = len(fig.data)
     frame = surface.frame
     color_min = float(frame["bpb"].min())
     color_max = float(np.quantile(frame["bpb"], 0.96))
-    z_max = float(max(2.3, frame["bpb"].max() * 1.02))
-    fig = go.Figure()
     _add_surface(
         fig,
         surface,
@@ -585,6 +869,7 @@ def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
         color_max=color_max,
         show_scale=True,
         show_legend=True,
+        metric_label=metric_label,
     )
 
     diagonal = frame[np.isclose(frame["p0"], frame["p1"], atol=1e-10)]
@@ -606,12 +891,226 @@ def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
                 z=[row["bpb"]],
                 mode="markers",
                 marker={"symbol": symbol, "size": 7, "color": color, "line": {"color": "white", "width": 1.2}},
-                text=[f"{name}<br>p0={row['p0']:.4f}<br>p1={row['p1']:.4f}<br>BPB={row['bpb']:.6f}"],
+                text=[f"{name}<br>p0={row['p0']:.4f}<br>p1={row['p1']:.4f}" f"<br>{metric_label}={row['bpb']:.6f}"],
                 hoverinfo="text",
                 name=f"{name}: p0={row['p0']:.3f}, p1={row['p1']:.3f}; BPB={row['bpb']:.3f}",
             )
         )
-    best = frame.loc[frame["bpb"].idxmin()]
+    slope = -surface.phase_0_fraction / (1.0 - surface.phase_0_fraction)
+    if fixed_aggregate_observations is None:
+        aggregate = (
+            surface.phase_0_fraction * diagonal_best["p0"] + (1.0 - surface.phase_0_fraction) * diagonal_best["p1"]
+        )
+        fiber = _fixed_aggregate_fiber(frame, float(aggregate), surface.phase_0_fraction)
+        fiber_hover = [
+            f"interpolated fixed aggregate {aggregate:.4f}<br>p0={p0:.4f}<br>p1={p1:.4f}<br>BPB={bpb:.6f}"
+            for p0, p1, bpb in zip(fiber["p0"], fiber["p1"], fiber["bpb"], strict=True)
+        ]
+        fig.add_trace(
+            go.Scatter3d(
+                x=fiber["p0"],
+                y=fiber["p1"],
+                z=fiber["bpb"],
+                mode="lines",
+                line={"color": FIBER_COLOR, "width": 7},
+                hovertext=fiber_hover,
+                hoverinfo="text",
+                name=f"interpolated fixed-aggregate fiber at {aggregate:.3f} (slope {slope:.0f})",
+            )
+        )
+        fiber_summaries = [f"interpolated aggregate {aggregate:.3f}"]
+    else:
+        if "fiber_id" not in fixed_aggregate_observations:
+            fixed_aggregate_observations = fixed_aggregate_observations.assign(
+                fiber_id="fixed_aggregate",
+                fiber_label="Fixed aggregate",
+            )
+        fiber_summaries = []
+        grouped_fibers = list(fixed_aggregate_observations.groupby("fiber_id", sort=False))
+        if len(grouped_fibers) > len(FIBER_COLORS):
+            raise ValueError(f"Only {len(FIBER_COLORS)} measured-fiber colors are configured")
+        for fiber_number, (_fiber_id, observations) in enumerate(grouped_fibers):
+            fiber, aggregate, repeat_seed_count = _measured_fiber_plot_data(
+                observations,
+                surface.phase_0_fraction,
+                target="selected_bpb",
+            )
+            color = FIBER_COLORS[fiber_number]
+            label = (
+                str(observations["fiber_label"].iloc[0])
+                if "fiber_label" in observations
+                else f"Aggregate {aggregate:.3f}"
+            )
+            num_coordinates = fiber["fiber_index"].nunique()
+            fiber_summaries.append(f"{aggregate:.3f}/{num_coordinates}")
+            fiber_hover = [
+                (
+                    f"{label}<br>aggregate {aggregate:.4f}<br>fiber index {fiber_index}"
+                    f"<br>p0={p0:.4f}<br>p1={p1:.4f}<br>reference-seed BPB={bpb:.6f}"
+                    + (
+                        f"<br>{count} seeds: raw mean={raw_mean:.6f}, raw SD={raw_std:.6f}"
+                        f"<br>paired effect vs tied={paired_mean:+.6f} ± {paired_std:.6f} SD"
+                        if count > 1
+                        else "<br>reference seed only"
+                    )
+                )
+                for fiber_index, p0, p1, bpb, count, raw_mean, raw_std, paired_mean, paired_std in zip(
+                    fiber["fiber_index"],
+                    fiber["p0"],
+                    fiber["p1"],
+                    fiber["bpb"],
+                    fiber["count"],
+                    fiber["raw_mean"],
+                    fiber["raw_std"],
+                    fiber["paired_mean"],
+                    fiber["paired_std"],
+                    strict=True,
+                )
+            ]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=fiber["p0"],
+                    y=fiber["p1"],
+                    z=fiber["bpb"],
+                    mode="lines+markers",
+                    line={"color": color, "width": 7},
+                    marker={"color": color, "size": 3},
+                    hovertext=fiber_hover,
+                    hoverinfo="text",
+                    name=f"{label}: aggregate {aggregate:.3f} ({num_coordinates} points; slope {slope:.0f})",
+                )
+            )
+
+            repeated = fiber.loc[fiber["count"].gt(1)].copy()
+            if repeated.empty:
+                continue
+            fig.add_trace(
+                go.Scatter3d(
+                    x=repeated["p0"],
+                    y=repeated["p1"],
+                    z=repeated["raw_mean"],
+                    mode="markers",
+                    marker={
+                        "color": RAW_REPEAT_COLOR,
+                        "size": 5,
+                        "symbol": "circle-open",
+                        "line": {"color": color, "width": 1},
+                    },
+                    hovertext=[
+                        (
+                            f"{label}: raw repeat mean<br>index {fiber_index}<br>p0={p0:.4f}<br>p1={p1:.4f}"
+                            f"<br>mean BPB={raw_mean:.6f}<br>raw SD={raw_std:.6f}<br>n={count}"
+                        )
+                        for fiber_index, p0, p1, raw_mean, raw_std, count in zip(
+                            repeated["fiber_index"],
+                            repeated["p0"],
+                            repeated["p1"],
+                            repeated["raw_mean"],
+                            repeated["raw_std"],
+                            repeated["count"],
+                            strict=True,
+                        )
+                    ],
+                    hoverinfo="text",
+                    name=f"{label}: raw repeat means ({repeat_seed_count} seeds)",
+                )
+            )
+            fig.add_trace(
+                go.Scatter3d(
+                    x=repeated["p0"],
+                    y=repeated["p1"],
+                    z=repeated["aligned_mean"],
+                    mode="markers",
+                    marker={
+                        "color": color,
+                        "size": 7,
+                        "symbol": "diamond-open",
+                        "line": {"color": "white", "width": 1},
+                    },
+                    error_z={
+                        "type": "data",
+                        "array": repeated["paired_std"].fillna(0.0),
+                        "visible": True,
+                        "color": color,
+                        "thickness": 2,
+                        "width": 4,
+                    },
+                    hovertext=[
+                        (
+                            f"{label}: seed-paired effect<br>index {fiber_index}<br>p0={p0:.4f}<br>p1={p1:.4f}"
+                            f"<br>mean effect vs tied={paired_mean:+.6f}"
+                            f"<br>paired SD={paired_std:.6f}<br>aligned BPB={aligned_mean:.6f}"
+                            f"<br>raw mean BPB={raw_mean:.6f}<br>n={count}"
+                        )
+                        for fiber_index, p0, p1, paired_mean, paired_std, aligned_mean, raw_mean, count in zip(
+                            repeated["fiber_index"],
+                            repeated["p0"],
+                            repeated["p1"],
+                            repeated["paired_mean"],
+                            repeated["paired_std"],
+                            repeated["aligned_mean"],
+                            repeated["raw_mean"],
+                            repeated["count"],
+                            strict=True,
+                        )
+                    ],
+                    hoverinfo="text",
+                    name=f"{label}: paired effects ± 1 SD ({repeat_seed_count} seeds)",
+                )
+            )
+
+    for trace in fig.data[trace_start:]:
+        trace.visible = visible
+    return fiber_summaries
+
+
+def _wsd80_metric_range(frame: pd.DataFrame) -> tuple[float, float]:
+    minimum = float(frame["bpb"].min())
+    maximum = float(frame["bpb"].max())
+    span = max(maximum - minimum, 0.005)
+    return minimum - 0.04 * span, maximum + 0.04 * span
+
+
+def _render_wsd80_surface(
+    surface: Surface,
+    output_dir: Path,
+    fixed_aggregate_observations: pd.DataFrame | None = None,
+) -> None:
+    if "wandb_run_id" not in surface.frame:
+        raise ValueError("The WSD 80/20 surface must retain W&B run IDs to select alternate metrics")
+    run_ids = set(surface.frame["wandb_run_id"].astype(str))
+    if fixed_aggregate_observations is not None:
+        run_ids.update(fixed_aggregate_observations["wandb_run_id"].astype(str))
+    metric_cache, available_metrics = _collect_wsd80_metric_cache(output_dir, run_ids)
+    ordered_metrics = _ordered_wsd80_metrics(available_metrics)
+
+    fig = go.Figure()
+    trace_indices: dict[str, tuple[int, ...]] = {}
+    metric_ranges: dict[str, tuple[float, float]] = {}
+    first_fiber_summaries: list[str] = []
+    for metric_index, metric in enumerate(ordered_metrics):
+        metric_surface = _surface_for_wsd80_metric(surface, metric_cache, metric)
+        metric_observations = (
+            None
+            if fixed_aggregate_observations is None
+            else _fiber_observations_for_wsd80_metric(fixed_aggregate_observations, metric_cache, metric)
+        )
+        trace_start = len(fig.data)
+        fiber_summaries = _add_wsd80_metric_traces(
+            fig,
+            metric_surface,
+            metric_observations,
+            metric_label=_wsd80_metric_label(metric),
+            visible=metric_index == 0,
+        )
+        trace_indices[metric] = tuple(range(trace_start, len(fig.data)))
+        metric_ranges[metric] = _wsd80_metric_range(metric_surface.frame)
+        if metric_index == 0:
+            first_fiber_summaries = fiber_summaries
+
+    surface_description = f"{len(surface.frame)} coordinates; Delaunay"
+    if first_fiber_summaries:
+        surface_description += "; measured fibers aggregate/points " + ", ".join(first_fiber_summaries)
     _add_fact_sheet(
         fig,
         (
@@ -631,25 +1130,84 @@ def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
                 ("Simulated epoch target", "5.730T tokens; no fixed subset seed"),
             ),
             (
-                ("Objective", "Dolma 100 Programming Languages BPB; lower is better"),
-                ("Surface", f"{len(frame)} unique coordinates; linear Delaunay triangulation"),
                 (
-                    "Inference",
-                    f"shared data seed {REFERENCE_DATA_SEED}; best sampled p0={best['p0']:.3f}, p1={best['p1']:.3f}",
+                    "Metrics",
+                    f"{len(ordered_metrics)} BPB surfaces; recommended diagnostics first, then the full inventory",
                 ),
+                ("Surface", surface_description),
+                ("Rendering", "vertical geometry exaggerated 3x; BPB axis values unchanged"),
             ),
         ),
     )
+
+    num_traces = len(fig.data)
+    buttons = []
+    for metric in ordered_metrics:
+        visibility = [False] * num_traces
+        for trace_index in trace_indices[metric]:
+            visibility[trace_index] = True
+        label = _wsd80_metric_label(metric)
+        menu_label = f"Recommended · {label}" if metric in RECOMMENDED_WSD80_METRICS else f"All metrics · {label}"
+        buttons.append(
+            {
+                "label": menu_label,
+                "method": "update",
+                "args": [
+                    {"visible": visibility},
+                    {
+                        "scene.zaxis.title.text": label,
+                        "scene.zaxis.range": list(metric_ranges[metric]),
+                    },
+                ],
+            }
+        )
+
+    default_metric = ordered_metrics[0]
+    default_label = _wsd80_metric_label(default_metric)
     fig.update_layout(
         template="plotly_white",
         width=1100,
-        height=1040,
+        height=1090,
         paper_bgcolor=PAPER_BACKGROUND,
         font={"family": SERIF_FONT, "size": 17, "color": PAPER_TEXT},
-        title={"text": "StarCoder response under 80/20 WSD", "x": 0.5, "font": {"size": 26}},
-        legend={"x": 0.01, "y": 0.97, "bgcolor": "rgba(255,255,255,0.9)"},
-        scene=_scene_layout(max(0.88, color_min - 0.03), z_max),
-        margin={"l": 20, "r": 80, "t": 75, "b": 220},
+        title={
+            "text": "StarCoder response under 80/20 WSD",
+            "x": 0.5,
+            "y": 0.98,
+            "font": {"size": 26},
+        },
+        legend={"x": 0.01, "y": 0.91, "bgcolor": "rgba(255,255,255,0.9)"},
+        scene=_scene_layout(*metric_ranges[default_metric], z_title=default_label),
+        updatemenus=[
+            {
+                "active": 0,
+                "buttons": buttons,
+                "direction": "down",
+                "showactive": True,
+                "x": 0.22,
+                "xanchor": "left",
+                "y": 1.07,
+                "yanchor": "bottom",
+                "bgcolor": "#F5F1E8",
+                "bordercolor": "#8E99A5",
+                "borderwidth": 1,
+                "font": {"family": "Arial, sans-serif", "size": 12, "color": PAPER_TEXT},
+            }
+        ],
+        annotations=[
+            *fig.layout.annotations,
+            {
+                "text": "<b>SURFACE METRIC</b>",
+                "x": 0.02,
+                "xref": "paper",
+                "y": 1.095,
+                "yref": "paper",
+                "showarrow": False,
+                "xanchor": "left",
+                "font": {"family": "Arial, sans-serif", "size": 12, "color": "#C94F2D"},
+            },
+        ],
+        margin={"l": 20, "r": 80, "t": 125, "b": 220},
     )
     _write_figure(fig, output_dir / "starcoder_wsd80_surface")
 

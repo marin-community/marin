@@ -96,6 +96,15 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
+  // Bounded terminal cause, set only on a failed attempt.
+  terminalReason?: string
+}
+
+/** Why a failed attempt ended, empty when it did not fail. `terminalReason`
+ *  wins because an init-container failure sends `error` as an empty string,
+ *  which `??` would keep. */
+export function attemptFailureReason(attempt: TaskAttempt): string {
+  return attempt.terminalReason || attempt.error || ''
 }
 
 export interface TaskStatus {
@@ -116,6 +125,9 @@ export interface TaskStatus {
   currentAttemptId?: number
   attempts?: TaskAttempt[]
   pendingReason?: string
+  // Human-readable status for a task waiting to run (e.g. the Kueue admission
+  // detail explaining why a BUILDING/pending k8s task has not been placed).
+  statusMessage?: string
   canBeScheduled?: boolean
   containerId?: string
   // No per-task failure/preemption count fields — derive them from `attempts`;
@@ -478,6 +490,26 @@ export interface NodePoolStatus {
   quota: string
 }
 
+/**
+ * One physical Kubernetes node. Identity, liveness, and allocatable capacity
+ * come from the kubectl node sync. int64 fields serialize as strings.
+ */
+export interface NodeStatus {
+  name: string
+  ready?: boolean
+  schedulable?: boolean
+  statusSummary?: string
+  instanceType?: string
+  region?: string
+  gpuCount?: number
+  gpuModel?: string
+  cpuMillicores?: string
+  memoryBytes?: string
+  diskBytes?: string
+  runningPods?: number
+  created?: string
+}
+
 export interface GetKubernetesClusterStatusResponse {
   namespace?: string
   totalNodes?: number
@@ -487,6 +519,7 @@ export interface GetKubernetesClusterStatusResponse {
   podStatuses?: KubernetesPodStatus[]
   providerVersion?: string
   nodePools?: NodePoolStatus[]
+  nodes?: NodeStatus[]
 }
 
 // -- Users --
@@ -592,41 +625,6 @@ export interface GetSchedulerStateResponse {
   totalRunning: number
   pendingBuckets: PendingTaskBucket[]
   runningBuckets: RunningTaskBucket[]
-}
-
-// -- RPC Statistics (iris.stats.StatsService) --
-
-export interface RpcMethodStats {
-  method: string
-  count?: string
-  errorCount?: string
-  totalDurationMs?: number
-  maxDurationMs?: number
-  p50Ms?: number
-  p95Ms?: number
-  p99Ms?: number
-  bucketUpperBoundsMs?: string[]
-  bucketCounts?: string[]
-  lastCall?: ProtoTimestamp
-}
-
-export interface RpcCallSample {
-  method: string
-  timestamp?: ProtoTimestamp
-  durationMs?: number
-  peer?: string
-  userAgent?: string
-  caller?: string
-  errorCode?: string
-  errorMessage?: string
-  requestPreview?: string
-}
-
-export interface GetRpcStatsResponse {
-  methods?: RpcMethodStats[]
-  slowSamples?: RpcCallSample[]
-  discoverySamples?: RpcCallSample[]
-  collectorStartedAt?: ProtoTimestamp
 }
 
 // -- Multi-backend --

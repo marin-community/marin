@@ -64,7 +64,7 @@ You can also set `WANDB_ENTITY` and `WANDB_PROJECT`.
 For example, training checkpoints usually will be written to
 `${MARIN_PREFIX}/checkpoints/`. You can set this to an fsspec-recognizable path
 (e.g., a GCS bucket) or a directory on your machine. See [Understanding
-`MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md) for details.
+`MARIN_PREFIX`](../explanations/marin-prefix.md) for details.
 
 You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
 `MARIN_PREFIX` in an `.env` file, which you can load in one go with `source
@@ -119,9 +119,9 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
 ## Rust Crates (dupekit)
 
-Marin includes Rust crates (e.g., `dupekit`) that are installed as **pre-built
-wheels** by default — no Rust toolchain needed. `uv sync` fetches wheels from
-GitHub Releases automatically.
+Marin includes Rust-backed packages (`marin-dupekit-native`,
+`marin-finelog-server`) that are installed as **pre-built wheels** by default —
+no Rust toolchain needed. `uv sync` fetches the wheels from PyPI automatically.
 
 To switch to **source builds** (requires Cargo), use the Makefile targets:
 
@@ -137,8 +137,9 @@ make rust-user
 ```
 
 !!! warning
-    `make rust-dev` modifies `pyproject.toml` to add a local path source for dupekit.
-    **Do not commit `pyproject.toml` while in dev mode** — CI will reject it.
+    `make rust-dev` adds local path sources for the native packages to the root
+    `pyproject.toml` and to `lib/dupekit/pyproject.toml` / `lib/finelog/pyproject.toml`.
+    **Do not commit those files while in dev mode** — CI will reject them.
     Run `make rust-user` before committing.
 
 ## Trying it Out
@@ -148,8 +149,12 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-uv run python experiments/tutorials/train_tiny_model.py --device cpu --dataset tinystories
+uv run python experiments/tutorials/train_tiny_model.py \
+  --device cpu --dataset tinystories --version dev --run
 ```
+
+`--version` is required and `--run` builds the graph; without `--run` the script prints the
+plan and exits.
 
 This will:
 

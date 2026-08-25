@@ -59,6 +59,16 @@ function chartRows(options: MixtureChartOptions): DomainDatum[] {
         Math.abs(right.selected[2] - right.baseline[2]) -
         Math.abs(left.selected[2] - left.baseline[2]),
     );
+  } else if (options.sort === "phase_difference") {
+    rows.sort((left, right) => {
+      const leftContrastChange = Math.abs(
+        (left.selected[1] - left.selected[0]) - (left.baseline[1] - left.baseline[0]),
+      );
+      const rightContrastChange = Math.abs(
+        (right.selected[1] - right.selected[0]) - (right.baseline[1] - right.baseline[0]),
+      );
+      return rightContrastChange - leftContrastChange;
+    });
   } else if (options.sort === "exposure") {
     rows.sort((left, right) => right.selected[3] - left.selected[3]);
   } else {

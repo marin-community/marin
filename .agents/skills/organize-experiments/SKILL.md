@@ -1,6 +1,6 @@
 ---
 name: organize-experiments
-description: Curate the experiment report index at docs/reports/index.md.
+description: Harvest experiment issue reports and curate docs/reports/index.md only when explicitly requested.
 ---
 
 # Skill: Organize Experiment Reports
@@ -45,4 +45,4 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 
 ## See Also
 - `scripts/pm/itemize_experiment_issues.py` for source data generation.
-- `.agents/skills/archive-experiments/` for retiring legacy experiments.
+- `.agents/skills/archive-experiments/SKILL.md` for retiring legacy experiments.

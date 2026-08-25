@@ -13,16 +13,40 @@ export type ColumnType =
   | 'COLUMN_TYPE_TIMESTAMP_MS'
   | 'COLUMN_TYPE_BYTES'
   | 'COLUMN_TYPE_INT32'
+  | 'COLUMN_TYPE_MAP'
 
 export interface ProtoColumn {
   name: string
   type?: ColumnType
   nullable?: boolean
+  index?: ProtoColumnIndex
+}
+
+export interface ProtoColumnIndex {
+  trigram?: boolean
+  exactValues?: string[]
+  valueCounts?: boolean
+}
+
+export interface ProtoCoveringProjection {
+  name: string
+  predicateColumn: string
+  predicateValues?: string[]
+  columns?: string[]
+}
+
+export interface ProtoGroupedExtrema {
+  filterColumn: string
+  groupJsonColumn: string
+  groupJsonKey: string
+  extremaColumn: string
 }
 
 export interface ProtoSchema {
   columns?: ProtoColumn[]
   keyColumn?: string
+  projections?: ProtoCoveringProjection[]
+  groupedExtrema?: ProtoGroupedExtrema[]
 }
 
 export function shortColumnType(t: ColumnType | undefined): string {

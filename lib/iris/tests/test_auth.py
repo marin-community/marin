@@ -22,8 +22,6 @@ from rigging.server_auth import (
 )
 from rigging.testing import MockVerifier
 
-from tests.conftest import _make_controller_only_config
-
 
 def _quick():
     return 1
@@ -104,11 +102,11 @@ def test_resolve_auth_spoofed_loopback_rejected():
         )
 
 
-def test_loopback_resolves_as_admin():
+@pytest.mark.requires_cluster
+def test_loopback_resolves_as_admin(controller_only_config):
     """End-to-end: a tokenless loopback client is resolved as the anonymous admin."""
 
-    config = _make_controller_only_config()
-    controller = LocalCluster(config)
+    controller = LocalCluster(controller_only_config)
     url = controller.start()
 
     try:
@@ -121,13 +119,13 @@ def test_loopback_resolves_as_admin():
         controller.close()
 
 
-def test_loopback_admin_submits_as_named_user():
+@pytest.mark.requires_cluster
+def test_loopback_admin_submits_as_named_user(controller_only_config):
     """A tokenless loopback caller is admin, so the job name's owner segment is
     authoritative — jobs are attributed to the user the client names (the CLI
     fills this with $USER), matching the null-auth behaviour SSH users rely on."""
 
-    config = _make_controller_only_config()
-    controller = LocalCluster(config)
+    controller = LocalCluster(controller_only_config)
     url = controller.start()
 
     try:

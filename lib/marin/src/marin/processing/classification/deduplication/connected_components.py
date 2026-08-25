@@ -6,10 +6,11 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from rigging.filesystem import StoragePath
+from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,9 @@ def connected_components(
     max_iterations: int = 10,
     preserve_singletons: bool = True,
     resume: bool = False,
+    num_reduce_shards: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
 ) -> tuple[bool, Sequence[str]]:
     """
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
@@ -93,9 +97,9 @@ def connected_components(
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
-        resume: If True, skip iterations whose ``it_N/`` already contains a complete set of
-            parquet files (count == ``ctx.max_workers``). Starts from the first incomplete
-            iteration. If no complete prior state exists, runs from scratch.
+        resume: If True, skip complete prior iterations and start at the first
+            incomplete iteration. If no complete state exists, run from scratch.
+        num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
@@ -153,16 +157,25 @@ def connected_components(
 
     # Determine reduce shard count. Default to ctx max_workers to avoid
     # I/O amplification.
-    num_reduce_shards = ctx.max_workers
+    num_reduce_shards = num_reduce_shards or ctx.max_workers
 
     start_iteration = 1
     curr_it: Sequence[str]
     resumed = _find_last_complete_iteration(output_dir, max_iterations, num_reduce_shards) if resume else None
     if resumed is not None:
         last_it, last_paths = resumed
-        logger.info("CC resume: skipping through it_%d (%d parquets present)", last_it, len(last_paths))
         curr_it = last_paths
         start_iteration = last_it + 1
+        if start_iteration > max_iterations and last_it >= 1:
+            # The prior run stopped exactly at the iteration cap, so the loop
+            # below would not execute and convergence could not be observed --
+            # a resumed-at-cap run would always report converged=False even if
+            # it had actually converged. Replay the final iteration (a pure,
+            # idempotent function of it_{last_it-1}) so its num_changes is read
+            # and convergence reported accurately (see marin#6798).
+            curr_it = sorted(str(m) for m in StoragePath(f"{output_dir}/it_{last_it - 1}/*.parquet").glob())
+            start_iteration = last_it
+        logger.info("CC resume: through it_%d, starting at it_%d", last_it, start_iteration)
     else:
         curr_it = ctx.execute(
             ds
@@ -171,6 +184,14 @@ def connected_components(
                 lambda x: x["bucket"],
                 reducer=_reduce_bucket_to_links,
                 combiner=_dedup_combiner,
+                # Sort each bucket's nodes by id_norm so the reducer always anchors
+                # the star on the true minimum, independent of shuffle/arrival order.
+                # Without this the star-vs-chain topology depends on how many reduce
+                # shards (= executors) the run used, making a capped (unconverged) run
+                # produce different component labels on different machine counts
+                # (marin#6798). The converged result is unchanged; this only pins the
+                # intermediate topology (and speeds convergence).
+                sort_by=lambda x: _internal_orderable_id(x["id"]),
                 num_output_shards=num_reduce_shards,
             )
             # Construct Node state, init with:
@@ -182,6 +203,8 @@ def connected_components(
                 num_output_shards=num_reduce_shards,
             ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
             verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
         ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
@@ -218,6 +241,8 @@ def connected_components(
             .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
             .map_shard(_get_write_shard_and_count_fn(i)),
             verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
         ).results
 
         curr_it = [r["path"] for r in shard_results]

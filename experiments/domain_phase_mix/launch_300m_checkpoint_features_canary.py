@@ -32,7 +32,12 @@ from typing import Any
 import fsspec
 import pandas as pd
 from fray.cluster import ResourceConfig
-from marin.evaluation.perplexity_gap import GapFinderModelConfig, RawTextEvaluationDataset, model_perplexity_scores
+from marin.evaluation.perplexity_gap import (
+    GapFinderModelConfig,
+    RawTextEvaluationDataset,
+    model_perplexity_scores,
+    raw_text_dataset,
+)
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -43,6 +48,7 @@ from marin.execution.executor import (
 )
 from marin.execution.remote import remote
 
+from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS, uncheatable_raw
 from experiments.domain_phase_mix.agentic_coding_eval_dataset import DEFAULT_OUTPUT_URI as AGENTIC_CODING_BUNDLE_URI
 from experiments.domain_phase_mix.launch_300m_agentic_coding_bpb_evals import _agentic_datasets
 from experiments.domain_phase_mix.launch_300m_generative_smooth_proxy_evals import (
@@ -76,8 +82,6 @@ from experiments.domain_phase_mix.launch_300m_mcq_smooth_proxy_evals import (
     McqSmoothProxyScoreConfig,
     score_mcq_smooth_proxies,
 )
-from experiments.domain_phase_mix.launch_300m_raw_ppl_evals import PRIORITY_BUNDLE, build_raw_ppl_datasets
-from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_raw_validation_sets
 from experiments.marin_tokenizer import marin_tokenizer
 from experiments.paloma import paloma_raw_validation_sets
 
@@ -108,8 +112,8 @@ STATE_OUTPUT_CSV = "300m_checkpoint_features_canary_state.csv"
 TEXT_FEATURE_SURFACE = "raw_text_loss_features"
 TEACHER_FORCED_SURFACE = "teacher_forced_request_features"
 MCQ_SURFACE = "mcq_request_features"
-TEXT_BUNDLE_CHOICES = ("paloma", "uncheatable", "raw_ppl_priority", "agentic_coding")
-DEFAULT_TEXT_BUNDLES = ("paloma", "uncheatable", "raw_ppl_priority", "agentic_coding")
+TEXT_BUNDLE_CHOICES = ("paloma", "uncheatable", "agentic_coding")
+DEFAULT_TEXT_BUNDLES = TEXT_BUNDLE_CHOICES
 BOOL_STATE_FIELDS = {"has_exact_hf_checkpoint", "uses_east5_checkpoint", "eligible"}
 INT_STATE_FIELDS = {
     "expected_checkpoint_step",
@@ -208,6 +212,14 @@ def _launch_decision(*, checkpoint_root: str, has_exact_hf_checkpoint: bool, use
     return "launch"
 
 
+def _uncheatable_raw_validation_sets() -> dict[str, RawTextEvaluationDataset]:
+    raw_uncheatable = uncheatable_raw()
+    return {
+        os.path.join("uncheatable_eval", subset): raw_text_dataset(os.path.join(raw_uncheatable.path(), glob))
+        for subset, glob in UNCHEATABLE_SUBSETS.items()
+    }
+
+
 def build_text_feature_datasets(bundle_keys: tuple[str, ...]) -> dict[str, RawTextEvaluationDataset]:
     """Build deterministic raw-text surfaces for bounded checkpoint-feature scoring."""
     datasets: dict[str, RawTextEvaluationDataset] = {}
@@ -215,9 +227,7 @@ def build_text_feature_datasets(bundle_keys: tuple[str, ...]) -> dict[str, RawTe
         if bundle_key == "paloma":
             bundle_datasets = paloma_raw_validation_sets()
         elif bundle_key == "uncheatable":
-            bundle_datasets = uncheatable_eval_raw_validation_sets()
-        elif bundle_key == "raw_ppl_priority":
-            bundle_datasets = build_raw_ppl_datasets((PRIORITY_BUNDLE,))
+            bundle_datasets = _uncheatable_raw_validation_sets()
         elif bundle_key == "agentic_coding":
             bundle_datasets = _agentic_datasets(materializer_step=None, bundle_uri=AGENTIC_CODING_BUNDLE_URI)
         else:

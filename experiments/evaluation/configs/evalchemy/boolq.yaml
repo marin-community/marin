@@ -1,0 +1,6 @@
+tasks: [boolq]
+task_options:
+  boolq:
+    num_fewshot: 0
+    task_alias: boolq_0shot
+max_tokens: 256

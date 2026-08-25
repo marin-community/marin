@@ -3,9 +3,9 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, cast, get_args
+from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
 import jax.numpy as jnp
@@ -23,17 +23,27 @@ MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Ar
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
+    "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
+    "sonic_cute",  # Single-process QuACK SM100 (Blackwell/B200) grouped-GEMM backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "ragged_all_to_all",
+    "fixed_all_to_all",
+    "fixed_pooled_wave_all_to_all",
+    "deepep",
+)
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic",
+    "sonic_cute",
 )
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
@@ -51,6 +61,17 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class CapacityOverflow(NamedTuple):
+    """Expert assignments dropped before and after transport."""
+
+    sender: Int[Array, ""]
+    receiver: Int[Array, ""]
+
+    @property
+    def total(self) -> Int[Array, ""]:
+        return self.sender + self.receiver
 
 
 @dataclass(frozen=True)
@@ -155,3 +176,12 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
 def _zero_dropped_assignments() -> Int[Array, ""]:
     return jnp.array(0, dtype=jnp.int32)
+
+
+def _chunk_capacity_drops(cu: Int[Array, "E1"], bounds: Sequence[int], caps: Sequence[int]) -> Int[Array, ""]:
+    """Count assignments lost to per-chunk static capacity."""
+    total = jnp.zeros((), jnp.int32)
+    for chunk, cap in enumerate(caps):
+        count = cu[bounds[chunk + 1]] - cu[bounds[chunk]]
+        total = total + jnp.maximum(count - cap, 0).astype(jnp.int32)
+    return total

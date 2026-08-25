@@ -107,6 +107,19 @@ pub struct MemorySummary {
 // Segment filename grammar.
 // ---------------------------------------------------------------------------
 
+/// The filename part of `path`, or `path` itself when it has none.
+///
+/// Segments are identified by basename nearly everywhere outside the catalog —
+/// logs, the remote archive's object keys, the debug and introspection routes —
+/// because the directory is a property of the store, not of the segment.
+pub fn basename(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+        .to_string()
+}
+
 /// Filename for a segment at `level` whose smallest seq is `min_seq`.
 pub fn seg_filename(level: i32, min_seq: i64) -> String {
     format!("seg_L{level}_{min_seq:019}.parquet")

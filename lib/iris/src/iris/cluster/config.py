@@ -27,14 +27,16 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
+from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
+    DEFAULT_USER_BUDGET_LIMIT,
+    DEFAULT_USER_BUDGET_MAX_BAND,
     LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
@@ -42,13 +44,14 @@ from iris.cluster.types import (
     WellKnownAttribute,
     parse_memory_string,
 )
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
+DOCKER_WORKER_RUNTIME = "docker"
+KUBERNETES_WORKER_RUNTIME = "kubernetes"
 
 _COREWEAVE_TOPOLOGY_LABEL_PREFIXES = (
     "backend.coreweave.cloud/",
@@ -191,6 +194,19 @@ class _OneofConfig(_Config):
 class GcpPlatformConfig(_Config):
     project_id: str = ""
     zones: list[str] = Field(default_factory=list)  # all zones, for list_all_slices
+    # Pull-through cache routing: upstream registry → zone prefix (the zone's
+    # leading dash-separated segment) → mirror repo prefix the image path is
+    # appended to. Docker Hub references (bare names like ``ubuntu:24.04`` and
+    # ``docker.io/...``) match the ``docker.io`` key. Example:
+    #   registry_mirrors:
+    #     ghcr.io:
+    #       us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    #       europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    # Workers rewrite matching images so pulls stay on-continent and dodge
+    # upstream rate limits; unlisted registries and zone prefixes pull straight
+    # from upstream. Every named repo must exist and be enabled or pulls fail
+    # (provisioned by infra/pulumi from provisioning.gcp.registries).
+    registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class ManualPlatformConfig(_Config):
@@ -236,6 +252,7 @@ class GcpVmConfig(_Config):
     machine_type: str = ""  # default: "n2-standard-4"
     boot_disk_size_gb: int = 0  # default: 50
     service_account: str = ""
+    network_tags: tuple[str, ...] = ()
 
 
 class ManualVmConfig(_Config):
@@ -406,7 +423,9 @@ class WorkerConfig(_Config):
     docker_image: str = ""
     host: str = "0.0.0.0"
     port: int = 10001
-    port_range: str = "30000-40000"
+    # Task named-port allocation range (end exclusive); see
+    # DEFAULT_TASK_PORT_RANGE for why it sits below the ephemeral floor.
+    port_range: str = f"{DEFAULT_TASK_PORT_RANGE[0]}-{DEFAULT_TASK_PORT_RANGE[1]}"
     worker_id: str = ""  # auto-generated if empty
     controller_address: str = ""
     cache_dir: str = "/dev/shm/iris"
@@ -593,12 +612,12 @@ class WorkerProviderConfig(_Config):
 
 class KueueTopology(_Config):
     node_label: str = ""
-    required: bool = False  # True => required-topology (hard); False => preferred
+    mode: TopologyMode = TopologyMode.PREFERRED  # preferred (soft) / required (hard) / slice
+    coarse_preferred_label: str = ""  # optional soft coarse pairing for a sliced binding
 
 
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
-    priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> class
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 
@@ -606,14 +625,21 @@ class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
-    default_image: str = ""
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
+    cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("cache_max_age")
+    @classmethod
+    def _positive_cache_max_age(cls, value: Duration | None) -> Duration | None:
+        if value is not None and value.to_ms() <= 0:
+            raise ValueError("cache_max_age must be positive")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +651,11 @@ class UserBudgetTier(_Config):
     user_ids: list[str] = Field(default_factory=list)
     budget_limit: int = 0  # resource-value spend before downgrade to BATCH (0 = unlimited)
     max_band: PriorityBandField = 0  # highest band these users may submit to
+
+
+class UserBudgetDefaultsConfig(_Config):
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: PriorityBandField = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class EndpointSpec(_Config):
@@ -745,6 +776,7 @@ class IrisClusterConfig(_OneofConfig):
     # synthesized from the top-level platform/scale_groups/provider fields by
     # resolve_backends. Mixing the two is rejected by validate_config.
     backends: dict[str, BackendConfig] | None = None
+    user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
     # Federation peers (peer id -> declaration): remote Iris controllers this
@@ -756,6 +788,16 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Public origin of the federation parent that fronts this cluster (e.g.
+    # "https://iris.oa.dev"). Set on a child whose own origin is not world-visible:
+    # a minted capability URL is then tagged with this cluster's name and routed
+    # through the parent, which relays it here. Empty keeps minted URLs on the local
+    # origin. The parent recognizes the tag from its own ``peers`` map.
+    federation_public_parent: str = ""
+    # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
+    # opaque dict so `provisioning:` can live in the cluster config file without
+    # Iris depending on the IaC schema; iac.config owns the typed validation.
+    provisioning: dict[str, Any] | None = None
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -814,8 +856,7 @@ def validate_scale_group_resources(scale_groups: dict[str, ScaleGroupConfig]) ->
             raise ValueError(f"Scale group '{name}' has invalid device_count={res.device_count}.")
         if res.capacity_type is None:
             raise ValueError(
-                f"Scale group '{name}': resources.capacity_type is required "
-                "(one of: preemptible, on-demand, reserved)."
+                f"Scale group '{name}': resources.capacity_type is required (one of: preemptible, on-demand, reserved)."
             )
 
 
@@ -927,8 +968,11 @@ def _validate_worker_defaults(config: IrisClusterConfig) -> None:
         raise ValueError("defaults.worker.docker_image is required for non-local platforms (gcp/manual/coreweave).")
 
     runtime = config.defaults.worker.runtime.strip()
-    if runtime and runtime not in ("docker", "kubernetes"):
-        raise ValueError(f"defaults.worker.runtime must be 'docker' or 'kubernetes', got {runtime!r}.")
+    if runtime and runtime not in (DOCKER_WORKER_RUNTIME, KUBERNETES_WORKER_RUNTIME):
+        raise ValueError(
+            f"defaults.worker.runtime must be {DOCKER_WORKER_RUNTIME!r} or {KUBERNETES_WORKER_RUNTIME!r}, "
+            f"got {runtime!r}."
+        )
 
 
 def _validate_gcp_service_accounts(config: IrisClusterConfig) -> None:
@@ -1155,6 +1199,52 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
+def slice_template_region(template: SliceConfig) -> str | None:
+    """Region a slice template occupies: a GCP zone's region prefix or the CoreWeave region.
+
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
+    """
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def slice_template_zone(template: SliceConfig) -> str | None:
+    """Zone a slice template occupies: the GCP zone, or the CoreWeave region.
+
+    CoreWeave exposes no sub-region placement, so its region doubles as the zone.
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
+    """
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``region`` a backend's scale groups occupy, from their slice templates.
+
+    Shares :func:`slice_template_region` with ``ScalingGroup.region`` so a backend
+    advertises the same region a worker self-reports, letting ``--region`` route
+    across a federation instead of only within one cluster (#7286). Scale groups in
+    different regions union into one set.
+    """
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        template = sg.slice_template
+        if template is None:
+            continue
+        region = slice_template_region(template)
+        if region:
+            derived.setdefault(WellKnownAttribute.REGION.value, set()).add(region)
+    return derived
+
+
 def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
     """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
 
@@ -1189,13 +1279,19 @@ def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
     whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
     additionally derived from ``scale_groups[*].resources`` and unioned in, so a
     backend advertises the devices its scale groups offer without the operator
-    restating them in ``attributes``.
+    restating them in ``attributes``. ``region`` is derived the same way from each
+    scale group's slice template so the backend exports its location through the
+    federation protocol (#7286).
     """
     attributes = {
         key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
     }
-    for key, values in _scale_group_device_attributes(backend.scale_groups).items():
-        attributes.setdefault(key, set()).update(values)
+    for derived in (
+        _scale_group_device_attributes(backend.scale_groups),
+        _scale_group_region_attributes(backend.scale_groups),
+    ):
+        for key, values in derived.items():
+            attributes.setdefault(key, set()).update(values)
     return attributes
 
 
@@ -1491,37 +1587,3 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
         scale_down_delay=Duration.from_seconds(1),
     )
     return config
-
-
-def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None = None) -> SshConfig:
-    """Resolve SSH config: cluster defaults merged with per-group manual overrides."""
-    ssh = config.defaults.ssh
-    user = ssh.user or "root"
-    key_file = ssh.key_file or ""
-    port = ssh.port if ssh.port and ssh.port > 0 else DEFAULT_SSH_PORT
-    impersonate = ssh.impersonate_service_account or ""
-    connect_timeout = ssh.connect_timeout if ssh.connect_timeout is not None else DEFAULT_SSH_CONNECT_TIMEOUT
-
-    if group_name and group_name in config.scale_groups:
-        group = config.scale_groups[group_name]
-        if group.slice_template is not None and group.slice_template.manual is not None:
-            manual = group.slice_template.manual
-            if manual.ssh_user:
-                user = manual.ssh_user
-            if manual.ssh_key_file:
-                key_file = manual.ssh_key_file
-
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=port,
-        impersonate_service_account=impersonate,
-        connect_timeout=connect_timeout,
-    )
-
-
-def clear_remote_state(remote_state_dir: str) -> None:
-    """Remove all files under the remote state dir so the controller starts fresh."""
-    path = StoragePath(remote_state_dir)
-    if path.exists():
-        path.rmtree()

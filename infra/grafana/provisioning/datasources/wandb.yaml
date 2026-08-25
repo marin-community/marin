@@ -1,0 +1,17 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Public W&B report data is queried by the bridge. The dashboard never talks to
+# W&B directly, and the bridge derives the runset from the report spec.
+apiVersion: 1
+
+datasources:
+  - name: wandb
+    uid: wandb
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/wandb

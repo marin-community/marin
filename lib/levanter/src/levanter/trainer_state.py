@@ -59,13 +59,6 @@ class TrainerState(eqx.Module, Generic[M]):
     model_averaging: ModelAveraging[M]
 
     @property
-    def int_step(self) -> int:
-        """
-        Returns the step as an int. On multinode, doing
-        """
-        return int(self.step)
-
-    @property
     def trainable_model(self) -> M:
         return trainables_only(self.model, self.is_trainable)
 
@@ -138,7 +131,7 @@ class TrainerState(eqx.Module, Generic[M]):
         loss: float | None = None,
         key: PRNGKeyArray,
     ) -> tuple[S, M]:
-        assert isinstance(self, TrainerState)  # make mypy happy
+        assert isinstance(self, TrainerState)  # make pyrefly happy
         model, opt_state, updates = take_train_step(
             self.optimizer,
             self.model,

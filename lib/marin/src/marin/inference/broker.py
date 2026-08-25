@@ -13,6 +13,7 @@ from typing import Generic, TypeVar
 from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
+    InferenceWorkerMetadata,
     LeasedInferenceRequest,
     LeasedInferenceResponse,
     format_request_ids,
@@ -88,6 +89,15 @@ class InferenceBroker:
         self._request_leases: dict[str, Lease[InferenceRequest]] = {}
         # Insertion-ordered set of request ids for diagnostics.
         self._pending: dict[str, None] = {}
+        self._worker_metadata: dict[str, InferenceWorkerMetadata] = {}
+
+    def register_worker(self, worker_id: str, metadata: InferenceWorkerMetadata) -> None:
+        with self._lock:
+            self._worker_metadata[worker_id] = metadata
+
+    def worker_metadata(self) -> dict[str, InferenceWorkerMetadata]:
+        with self._lock:
+            return dict(self._worker_metadata)
 
     def submit_request(self, request: InferenceRequest) -> None:
         with self._lock:

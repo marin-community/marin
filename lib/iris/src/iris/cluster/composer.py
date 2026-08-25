@@ -19,7 +19,12 @@ import logging
 from finelog.client.log_client import Table
 from rigging.timing import Duration
 
-from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import (
+    _CW_DEFAULT_TOPOLOGIES,
+    _DEFAULT_PRIORITY_CLASS_NAMES,
+    K8sTaskProvider,
+    PodConfig,
+)
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
     BackendConfig,
@@ -38,26 +43,23 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
+from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
 logger = logging.getLogger(__name__)
 
-# Maps the band names used as keys in KueueConfig.priority_classes (and
-# kubernetes_provider.priority_classes) to the PriorityBand enum stamped on pods.
-_KUEUE_PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
-}
+# Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
+_PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALUES}
 
 
 def make_task_backend(
     config: IrisClusterConfig,
     *,
     unreachable_grace: Duration,
-    task_stats_table: Table | None = None,
+    task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
     transition_reader: TransitionReader | None = None,
@@ -65,10 +67,10 @@ def make_task_backend(
     """Create a TaskBackend from cluster configuration.
 
     Returns a ``K8sTaskProvider`` when ``kubernetes_provider`` is configured,
-    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. The finelog
-    tables are passed to the K8s backend (which writes per-pod resource/profile
-    samples directly); the RPC backend ignores them — its worker daemons write
-    their own rows. ``unreachable_grace`` sizes the liveness tracker the
+    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
+    profile tables are passed to the K8s backend; node agents write per-pod
+    resource samples, while RPC worker daemons write their own rows.
+    ``unreachable_grace`` sizes the liveness tracker the
     worker-daemon backend constructs and owns. ``transition_reader`` is the K8s
     backend's controller-DB read surface; ``autoscaler`` provisions capacity for
     the worker-daemon backend (None for clusters with no scale groups).
@@ -76,36 +78,38 @@ def make_task_backend(
     which = config.provider_kind()
     if which == "kubernetes_provider":
         kp = config.kubernetes_provider
+        # Kueue is mandatory on the K8s backend: every pod is admitted through it, so
+        # its accounting and preemption arbitrate all capacity. A cluster with no
+        # ClusterQueue has no flavor to admit pods against — they would hang gated.
+        if not kp.kueue.cluster_queue:
+            raise ValueError(
+                "kubernetes_provider requires kueue.cluster_queue: the K8s backend admits every pod "
+                "through Kueue. Provision it (lib/iris/scripts/install_kueue.py --with-queues) and set "
+                "kubernetes_provider.kueue.cluster_queue."
+            )
         namespace = kp.namespace or "iris"
         label_prefix = config.platform.label_prefix or "iris"
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
 
-        priority_classes: dict[int, str] = {}
-        for band_name, wpc in kp.kueue.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
-            if band is None:
-                raise ValueError(
-                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
-                )
-            priority_classes[band] = wpc
-
         # Start from the iris-{band} defaults; override with any explicit config.
         pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
         for band_name, pc_name in kp.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            band = _PRIORITY_BANDS.get(band_name)
             if band is None:
                 raise ValueError(
                     f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                    f"valid bands: {sorted(_PRIORITY_BANDS)}"
                 )
             pod_priority_classes[band] = pc_name
 
         # Empty topologies falls back to the CoreWeave-convention defaults.
-        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
-        # Kueue is enabled by a configured cluster_queue; the LocalQueue name is
-        # derived from label_prefix, not configured.
-        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
+        topologies = {
+            group_by: KueueTopologyBinding(topo.node_label, topo.mode, topo.coarse_preferred_label or None)
+            for group_by, topo in kp.kueue.topologies.items()
+        }
+        # The LocalQueue name is derived from label_prefix, not configured; Kueue is
+        # mandatory (checked above), so it is always set.
+        local_queue = local_queue_name(label_prefix)
         env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(
@@ -113,22 +117,23 @@ def make_task_backend(
                 kubeconfig_path=kp.kubeconfig or None,
                 context=kp.kube_context or None,
             ),
-            namespace=namespace,
-            default_image=kp.default_image,
-            logship_image=config.controller.image,
-            service_account=kp.service_account or "",
-            host_network=kp.host_network,
-            cache_dir=kp.cache_dir or "/cache",
-            controller_address=kp.controller_address or None,
-            managed_label=managed_label,
-            task_env=dict(config.defaults.task_env),
-            env_secret_name=env_secret_name,
-            local_queue=local_queue,
-            kueue_priority_classes=priority_classes,
-            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+            pods=PodConfig(
+                namespace=namespace,
+                default_image=config.defaults.worker.default_task_image,
+                logship_image=config.controller.image,
+                service_account=kp.service_account or "",
+                host_network=kp.host_network,
+                cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
+                controller_address=kp.controller_address or None,
+                managed_label=managed_label,
+                task_env=dict(config.defaults.task_env),
+                env_secret_name=env_secret_name,
+                local_queue=local_queue,
+                kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+                priority_class_names=pod_priority_classes,
+            ),
             preempt_namespaces=list(kp.preempt_namespaces),
-            priority_class_names=pod_priority_classes,
-            task_stats_table=task_stats_table,
+            task_event_table=task_event_table,
             profile_table=profile_table,
             transition_reader=transition_reader,
         )
@@ -144,7 +149,6 @@ def make_task_backend(
         "or:\n"
         "  kubernetes_provider:\n"
         "    namespace: iris\n"
-        "    default_image: ...\n"
         "to your cluster config."
     )
 
@@ -206,7 +210,7 @@ def make_backend(
         provider = make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
             transition_reader=DbTransitionReader(db),
         )
@@ -218,7 +222,7 @@ def make_backend(
         return make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
 
@@ -258,7 +262,7 @@ def make_backend(
     provider = make_task_backend(
         config,
         unreachable_grace=unreachable_grace,
-        task_stats_table=log_stack.task_stats_table,
+        task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,
     )

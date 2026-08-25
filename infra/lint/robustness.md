@@ -147,7 +147,7 @@ except AttributeError:
 `gs://b/x/y` are *different keys*, so a writer and reader that join differently
 silently split the namespace (#6904, #6838). `os.path.join` on a URL,
 `f"{prefix}/{path}"`, and `path.rstrip("/")`-before-join each re-solve the same
-problem locally and drift. Join through `rigging.filesystem.prefix_join` (one
+problem locally and drift. Join through `rigging.filesystem.storage_path.prefix_join` (one
 join) or `StoragePath` (parse once, `/` to join, `relative_to` for containment).
 
 **When allowed:** Purely local filesystem paths that can never carry a URL
@@ -168,8 +168,9 @@ shard = path[len(output_path.rstrip("/")) + 1 :]           # string-prefix conta
 bypass the guarded factory in `rigging.filesystem`, so the read never charges the
 cross-region transfer budget, `mirror://` is not resolved, and S3/R2 filesystems
 build without the finite timeouts that stop a dead socket from wedging a shard
-(#6487). Each `fs, path = url_to_fs(url); fs.<op>(path)` also re-derives the
-protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
+(#6487). Code that never imports the guarded factory also misses Marin's zero-expiry
+GCS/S3 listing-cache default. Each `fs, path = url_to_fs(url); fs.<op>(path)` also
+re-derives the protocol split by hand and drifts. `StoragePath` carries the guarded verbs — `exists`,
 `isfile`, `isdir`, `size`, `mtime`, `ls`, `walk`, `glob`, `expand_glob`, `mkdirs`, `rm`,
 `rmtree`, `rename`, `open`, `read_text`/`write_text`/`read_bytes`/`write_bytes`, and
 `download_to`/`upload_from` — so a path opens, lists, and stats through one type.
@@ -183,7 +184,8 @@ for a polled read that must defeat the listing cache, `block_size`/`cache_type` 
 must reach the file opener rather than the S3 constructor, or a passthrough like
 `revision=`/`recursive=` on `glob`/`find`/`info`; handing a live `fs` to a library that
 needs the handle (pyarrow, a streaming writer); and the guarded
-`rigging.filesystem.url_to_fs`/`open_url`/`filesystem` and `atomic_rename` themselves,
+`rigging.filesystem.factory.url_to_fs`/`open_url`/`filesystem` and
+`rigging.filesystem.atomic.atomic_rename` themselves,
 which are the intended low-level seam.
 
 **Bad example:**

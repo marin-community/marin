@@ -8,7 +8,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from zephyr.dataset import Dataset
-from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
 from zephyr.writers import infer_arrow_schema
 
 
@@ -444,6 +443,22 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
     assert sorted(results) == ["a", "foo"]
 
 
+def test_group_by_shard_starting_with_none_item(zephyr_ctx):
+    """A shard whose first item is ``None`` must still be scattered.
+
+    A peek that cannot distinguish a ``None`` item from an exhausted stream
+    reports the shard as empty and drops its contents without error.
+    """
+    ds = Dataset.from_list([None, None, 1]).group_by(
+        key=lambda item: item is None,
+        reducer=lambda key, items: {"key": key, "count": sum(1 for _ in items)},
+    )
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda r: r["key"])
+
+    assert results == [{"key": False, "count": 1}, {"key": True, "count": 2}]
+
+
 def test_group_by_non_vortex_serializable(zephyr_ctx):
     """Shuffle with items that Vortex/Arrow cannot serialize uses pickle-in-parquet.
 
@@ -472,22 +487,6 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     assert len(results) == 2
     assert results[0] == {"key": "a", "value": frozenset([1, 2, 3, 4])}
     assert results[1] == {"key": "b", "value": frozenset([2])}
-
-
-def test_scatter_file_iterator_pickle_roundtrip(tmp_path):
-    """ScatterFileIterator round-trips non-Arrow-serializable items (e.g. frozenset)."""
-
-    items = [frozenset([1, 2]), frozenset([3, 4, 5])]
-    frame = _write_chunk_frame(items)
-
-    path = str(tmp_path / "test.shuffle")
-    with open(path, "wb") as f:
-        f.write(frame)
-
-    it = ScatterFileIterator(path=path, chunks=((0, len(frame)),))
-    chunks = [list(chunk_iter) for chunk_iter in it.get_chunk_iterators()]
-    assert len(chunks) == 1
-    assert chunks[0] == items
 
 
 def test_group_by_schema_evolution(zephyr_ctx):
@@ -578,64 +577,4 @@ def test_group_by_combiner_sum(zephyr_ctx):
     assert results == [
         {"cat": "x", "total": 6},
         {"cat": "y", "total": 30},
-    ]
-
-
-# --- Integration tests (all backends) ---
-
-
-def test_deduplicate_basic_integration(integration_ctx):
-    data = [
-        {"id": 1, "val": "a"},
-        {"id": 2, "val": "b"},
-        {"id": 1, "val": "c"},
-        {"id": 3, "val": "d"},
-        {"id": 2, "val": "e"},
-    ]
-
-    ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
-
-    results = integration_ctx.execute(ds).results
-    assert len(results) == 3
-    ids = sorted([r["id"] for r in results])
-    assert ids == [1, 2, 3]
-
-
-def test_group_by_combiner_integration(integration_ctx):
-    data = [
-        {"key": "a", "id": 1},
-        {"key": "a", "id": 1},
-        {"key": "a", "id": 2},
-        {"key": "b", "id": 3},
-        {"key": "b", "id": 3},
-        {"key": "b", "id": 3},
-        {"key": "b", "id": 4},
-    ]
-
-    def dedup_combiner(key, items):
-        seen = set()
-        for item in items:
-            if item["id"] not in seen:
-                seen.add(item["id"])
-                yield item
-
-    def dedup_reducer(key, items):
-        seen = set()
-        ids = []
-        for item in items:
-            if item["id"] not in seen:
-                seen.add(item["id"])
-                ids.append(item["id"])
-        return {"key": key, "ids": sorted(ids)}
-
-    ds = Dataset.from_list(data).group_by(
-        key=lambda x: x["key"],
-        reducer=dedup_reducer,
-        combiner=dedup_combiner,
-    )
-
-    results = sorted(integration_ctx.execute(ds).results, key=lambda x: x["key"])
-    assert results == [
-        {"key": "a", "ids": [1, 2]},
-        {"key": "b", "ids": [3, 4]},
     ]

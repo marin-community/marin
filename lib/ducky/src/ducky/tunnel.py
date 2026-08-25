@@ -3,10 +3,9 @@
 
 """Open a controller tunnel via the iris CLI and yield its local URL.
 
-Shared by ``ducky query`` (which appends ``/proxy/<endpoint>`` to reach the service)
-and ``ducky deploy`` (which submits against the raw controller URL). Driving the iris
-CLI as a subprocess keeps ducky free of iris Python imports and robust to iris internal
-API changes.
+Used by ``ducky query``, which appends ``/proxy/<endpoint>`` to reach the service.
+Driving the iris CLI as a subprocess keeps ducky free of iris Python imports and robust
+to iris internal API changes.
 """
 
 from __future__ import annotations

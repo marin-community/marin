@@ -54,3 +54,8 @@ def provenance_from_proto(msg: job_pb2.Provenance) -> Provenance:
         branch=msg.branch or None,
         built_by=msg.built_by or None,
     )
+
+
+def is_same_image_provenance(left: Provenance, right: Provenance) -> bool:
+    """Return true when two provenance values identify the same image tag."""
+    return left.tree_hash == right.tree_hash and left.dirty == right.dirty

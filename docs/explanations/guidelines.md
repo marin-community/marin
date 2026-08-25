@@ -34,8 +34,7 @@ guidelines.
 # GitHub pull requests
 
 Agents can use the `commit` skill for PR
-description style, testing requirements, self-review, and specification
-guidelines.
+description style, testing requirements, and self-review.
 
 ## General code style
 
@@ -91,9 +90,6 @@ GitHub experiment issue should include the following:
   * wandb report: a link to a wandb report that has all the training runs
     corresponding to this experiment as well as more detailed analysis of the
     results.
-  * data browser: a link to the experiment page(s) on the marin data browser,
-    which shows the entire dependency structure of all the assets produced
-    (datasets, models, predictions) with associated links.
 
 As the experiment progresses, bugs are fixed, and analyses are conducted:
 - Make sure issue comments are added to capture the updated thinking.
@@ -130,6 +126,6 @@ Notes:
 - After the full experiment runs, use `ArtifactStep.adopt(name, version, source=...)`
   to reference heavy completed artifacts as pre-existing data. This keeps them
   visible in the dependency graph while preventing accidental re-execution.
-- When possible, use the standard helpers (e.g., `train_lm`, `default_eval`) if
+- When possible, use the standard helpers (e.g., `train_lm`, `eval_steps`) if
   the configuration details are orthogonal to the aspect being varied in the
   experiment.

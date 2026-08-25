@@ -6,7 +6,6 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal
 
 import numpy as np
 from levanter.data.text.datasets import (
@@ -142,8 +141,12 @@ def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
     )
 
 
-def with_pack(data: LmDataConfig, pack: bool | int | Literal["pad"]) -> LmDataConfig:
-    """Override the packing strategy on every cache-backed component of a mixture."""
+def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
+    """Override the packing strategy on every cache-backed component of a mixture.
+
+    Packing is a load-time view over the tokenized cache, so this re-tokenizes nothing.
+    Components without a ``pack`` field (concat/direct) are returned unchanged.
+    """
     return dataclasses.replace(
         data,
         components={

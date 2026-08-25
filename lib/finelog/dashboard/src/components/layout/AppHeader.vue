@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { timeZoneMode, type TimeZoneMode } from '@/composables/useDisplayPrefs'
+import { timeZoneLabel } from '@/utils/formatting'
+
+const MODES: TimeZoneMode[] = ['utc', 'local', 'raw']
 
 const dark = ref(false)
 
@@ -22,11 +26,23 @@ function toggleDark() {
       <h1 class="text-base font-semibold tracking-tight">Finelog</h1>
       <span class="text-xs text-text-muted font-mono">stats &amp; logs</span>
     </div>
-    <button
-      class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
-      @click="toggleDark"
-    >
-      {{ dark ? '☀ light' : '☾ dark' }}
-    </button>
+    <div class="flex items-center gap-2">
+      <div class="inline-flex rounded border border-surface-border overflow-hidden" role="group" aria-label="Timestamp display">
+        <button
+          v-for="mode in MODES"
+          :key="mode"
+          class="text-xs px-2 py-1"
+          :class="timeZoneMode === mode ? 'bg-accent text-white' : 'hover:bg-surface-raised'"
+          :title="`Show timestamps as ${timeZoneLabel(mode)}`"
+          @click="timeZoneMode = mode"
+        >{{ mode === 'raw' ? 'epoch' : mode }}</button>
+      </div>
+      <button
+        class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+        @click="toggleDark"
+      >
+        {{ dark ? '☀ light' : '☾ dark' }}
+      </button>
+    </div>
   </header>
 </template>

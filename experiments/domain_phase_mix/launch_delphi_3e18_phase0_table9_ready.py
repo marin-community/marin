@@ -30,7 +30,7 @@ from marin.execution.executor import Executor, ExecutorMainConfig, executor_main
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix import launch_delphi_3e18_phase0_prefix_replay as replay
 from experiments.llama import llama3_tokenizer

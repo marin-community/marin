@@ -35,6 +35,7 @@ from rigging.timing import ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS, IRIS_RPC_ZSTD
 from iris.rpc.errors import call_with_retry
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,12 @@ def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
     if resp.HasField("error"):
         if resp.error.serialized_exception:
             raise cloudpickle.loads(resp.error.serialized_exception)
+        try:
+            code = Code(resp.error.error_type)
+        except ValueError:
+            pass
+        else:
+            raise ConnectError(code, resp.error.message)
         raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
     return cloudpickle.loads(resp.serialized_value)
 
@@ -127,7 +134,8 @@ class ActorClient:
             self._rpc_client = ActorServiceClientSync(
                 address=endpoint.url,
                 timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
-                accept_compression=[],
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=IRIS_RPC_ZSTD,
             )
             return self._rpc_client
 

@@ -1,0 +1,61 @@
+{
+  "type": "table",
+  "title": "Kueue admission backlog",
+  "description": "Unadmitted, unfinished Kueue Workloads per local queue, with the age of the oldest. A backlog is normal under capacity pressure; it is a dashboard signal, not an alert.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "oldest_age_seconds"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "s"
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/kueue",
+      "url_options": {
+        "method": "GET"
+      },
+      "columns": [
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "queue",
+          "text": "queue",
+          "type": "string"
+        },
+        {
+          "selector": "unadmitted",
+          "text": "unadmitted",
+          "type": "number"
+        },
+        {
+          "selector": "oldest_age_seconds",
+          "text": "oldest_age_seconds",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

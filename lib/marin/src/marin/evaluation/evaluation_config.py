@@ -1,16 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Task configuration shared by Evalchemy and Levanter evaluation."""
+
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from fray.cluster import ResourceConfig
-from levanter.eval_harness import TaskConfig
+from levanter.eval_harness_config import TaskConfig
 
 from marin.execution.executor import InputName
 
-# Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 _LEVANTER_TASK_KWARG_ALIASES = {
     "doct_to_target": "doc_to_target",
@@ -24,21 +25,24 @@ _SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {
 
 @dataclass(frozen=True)
 class EvalTaskConfig:
+    """One lm-eval task and its prompt/scoring behavior."""
+
     name: str
-    """Name of the evaluation task."""
-
-    num_fewshot: int
-    """Number of few-shot examples to evaluate on."""
-
+    num_fewshot: int | None
     task_alias: str | None = None
-    """Alias for the task name."""
-
     task_kwargs: dict | None = None
-    """Additional keyword arguments specifically for this task."""
+    generation: bool = False
+    """Whether the task scores generated text rather than prompt loglikelihoods."""
+    unsafe_code: bool = False
+    """Whether scoring executes model-generated code."""
+    completion_only: bool = False
+    """Whether generation must use the completions API even for chat-template models."""
 
 
 @dataclass(frozen=True)
 class EvaluationConfig:
+    """Legacy checkpoint-native evaluation configuration."""
+
     evaluator: str
     """Name of the evaluator to run."""
 

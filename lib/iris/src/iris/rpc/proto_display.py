@@ -5,7 +5,6 @@
 
 import signal
 
-import humanfriendly
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
 from iris.rpc import job_pb2, vm_pb2
@@ -57,33 +56,6 @@ def task_state_friendly(state: int) -> str:
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
 
 
-def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    """Format a ResourceSpec proto as a compact comma-separated summary.
-
-    Examples:
-        format_resources(...) -> "0.5 cpu, 8 GiB, 5 GiB disk, v5litepod-16"
-        format_resources(...) -> "8 cpu, 32 GiB, 8xH100"
-        format_resources(None) -> "-"
-    """
-    if not resources:
-        return "-"
-    parts: list[str] = []
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g} cpu")
-    if resources.memory_bytes:
-        parts.append(humanfriendly.format_size(resources.memory_bytes, binary=True))
-    if resources.disk_bytes:
-        parts.append(f"{humanfriendly.format_size(resources.disk_bytes, binary=True)} disk")
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            parts.append(f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu")
-    return ", ".join(parts) if parts else "-"
-
-
 def format_accelerator_display(device_type: str, variant: str = "") -> str:
     """Format an accelerator device type and variant for display.
 
@@ -113,13 +85,23 @@ def priority_band_value(name: str) -> int:
     return job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{name.upper()}")
 
 
-PRIORITY_BAND_VALUES: list[int] = [
+PRIORITY_BAND_VALUES: tuple[int, ...] = (
+    job_pb2.PRIORITY_BAND_SYSTEM,
     job_pb2.PRIORITY_BAND_PRODUCTION,
     job_pb2.PRIORITY_BAND_INTERACTIVE,
     job_pb2.PRIORITY_BAND_BATCH,
-]
+)
 
-PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
+PRIORITY_BAND_NAMES: tuple[str, ...] = tuple(priority_band_name(b) for b in PRIORITY_BAND_VALUES)
+ADMIN_PRIORITY_BAND_VALUES = frozenset((job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION))
+
+
+def priority_band_rank(band: int) -> int:
+    """Scheduling rank for a real PriorityBand; lower ranks run first."""
+    try:
+        return PRIORITY_BAND_VALUES.index(band)
+    except ValueError as err:
+        raise ValueError(f"Unknown priority band {band}") from err
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +115,7 @@ CONTAINER_PROFILE_VALUES: list[int] = [
     job_pb2.CONTAINER_PROFILE_DEFAULT,
     job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
     job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    job_pb2.CONTAINER_PROFILE_GVISOR,
 ]
 
 CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]

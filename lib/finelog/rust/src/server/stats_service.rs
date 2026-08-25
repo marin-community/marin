@@ -5,7 +5,8 @@
 //! result is decoded into proto messages back on the async side. The wire
 //! `effective_schema` strips the implicit `seq` column.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use buffa::MessageField;
 use connectrpc::{ConnectError, RequestContext, ServiceResult};
@@ -18,22 +19,51 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
-use crate::query::{make_ctx, run_query_over};
+use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::server::auth::{request_identity, AuthIdentity};
+use crate::server::telemetry::TELEMETRY_NAMESPACE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
-use crate::store::schema::{schema_from_proto_view, schema_to_proto_owned, Schema};
+use crate::store::schema::{
+    ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
+};
+use crate::store::store::ForwardedWrite;
 use crate::store::Store;
 
 pub struct StatsServiceImpl {
     store: Arc<Store>,
+    ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
 }
 
 impl StatsServiceImpl {
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self {
+            store,
+            ignored_forwarded_telemetry_columns: Mutex::new(HashSet::new()),
+        }
     }
+
+    fn report_ignored_forwarded_telemetry_columns(&self, columns: Vec<String>) {
+        let mut seen = self.ignored_forwarded_telemetry_columns.lock().unwrap();
+        let new_columns: Vec<String> = columns
+            .into_iter()
+            .filter(|column| seen.insert(column.clone()))
+            .collect();
+        if !new_columns.is_empty() {
+            tracing::warn!(
+                namespace = TELEMETRY_NAMESPACE,
+                columns = ?new_columns,
+                "finelog hub: ignoring candidate-only nullable telemetry columns",
+            );
+        }
+    }
+}
+
+fn is_forwarded_telemetry(ctx: &RequestContext, namespace: &str) -> bool {
+    namespace == TELEMETRY_NAMESPACE
+        && matches!(request_identity(ctx), Some(AuthIdentity::Jwt { .. }))
 }
 
 /// Run a blocking store closure on the blocking pool, mapping a JoinError to
@@ -49,6 +79,25 @@ where
         Err(join) => Err(ConnectError::internal(format!(
             "store task panicked: {join}"
         ))),
+    }
+}
+
+/// The origin cluster to stamp on a WriteRows batch, bound to the credential
+/// that carried it — the stats-plane analogue of the log plane's
+/// `authorized_cluster`. A forwarding JWT names exactly one cluster, so its rows
+/// are attributed to it regardless of what the batch carried; this is what makes
+/// cross-cluster attribution independent of whether the sender's local schema
+/// held the implicit origin column (the federation gap where forwarded `iris.*`
+/// stats from a finelog whose namespace predates that column arrive unstamped).
+/// A trusted-network writer carries no per-writer identity and names its own
+/// origin (empty for a local write), so its batch is left as supplied.
+fn write_origin_cluster(ctx: &RequestContext) -> Result<Option<String>, ConnectError> {
+    match request_identity(ctx) {
+        Some(AuthIdentity::Jwt { cluster }) => Ok(Some(cluster.clone())),
+        Some(AuthIdentity::Network) => Ok(None),
+        None => Err(ConnectError::internal(
+            "finelog: request reached a handler with no auth identity",
+        )),
     }
 }
 
@@ -78,7 +127,7 @@ fn map_query_error(e: DataFusionError) -> ConnectError {
 impl StatsService for StatsServiceImpl {
     async fn register_table(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         request: OwnedRegisterTableRequestView,
     ) -> ServiceResult<RegisterTableResponse> {
         let namespace = request
@@ -91,15 +140,28 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
         let policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (effective, effective_policy) = run_blocking(move || {
+        let (effective, effective_policy, ignored_columns) = run_blocking(move || {
+            if forwarded_telemetry {
+                match store.get_table_schema(&ns) {
+                    Ok(effective) => {
+                        let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
+                        let effective_policy = store.get_policy(&ns)?;
+                        return Ok((effective, effective_policy, ignored));
+                    }
+                    Err(StatsError::NamespaceNotFound(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
-            Ok((effective, effective_policy))
+            Ok((effective, effective_policy, Vec::new()))
         })
         .await?;
+        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
 
         connectrpc::Response::ok(RegisterTableResponse {
             effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
@@ -120,13 +182,40 @@ impl StatsService for StatsServiceImpl {
         // Copy the IPC bytes out of the borrowed request so the blocking decode
         // owns them across the spawn_blocking boundary.
         let arrow_ipc: Vec<u8> = request.arrow_ipc.unwrap_or(&[]).to_vec();
+        // Resolve the origin cluster from the credential before the blocking
+        // hop so a forwarding writer's rows are stamped with its cluster.
+        let origin_cluster = write_origin_cluster(&ctx)?;
+        let forwarded_telemetry = origin_cluster.is_some() && namespace == TELEMETRY_NAMESPACE;
 
         // Decode + validate + align + append on the blocking pool; the size/row
         // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
-        let (rows_written, last_seq) =
-            run_blocking(move || store.write_rows(&ns, &arrow_ipc)).await?;
+        let outcome = run_blocking(move || {
+            if forwarded_telemetry {
+                return store.write_forwarded_telemetry_rows(
+                    &ns,
+                    &arrow_ipc,
+                    origin_cluster
+                        .as_deref()
+                        .expect("forwarded telemetry has an origin cluster"),
+                );
+            }
+            let (rows_written, last_seq) =
+                store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
+            Ok(ForwardedWrite {
+                rows_written,
+                last_seq,
+                ignored_columns: Vec::new(),
+            })
+        })
+        .await?;
+        let ForwardedWrite {
+            rows_written,
+            last_seq,
+            ignored_columns,
+        } = outcome;
+        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
 
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
@@ -141,7 +230,7 @@ impl StatsService for StatsServiceImpl {
 
     async fn query(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         request: OwnedQueryRequestView,
     ) -> ServiceResult<QueryResponse> {
         let sql = request.sql.unwrap_or("").to_string();
@@ -160,10 +249,29 @@ impl StatsService for StatsServiceImpl {
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
         // faults are client errors, IO/execution faults are server errors.
-        let ctx = make_ctx();
-        let result = run_query_over(&ctx, providers, &sql)
-            .await
-            .map_err(map_query_error)?;
+        //
+        // Bound execution by the earlier of the server ceiling and the caller's
+        // remaining budget. On elapse the query future is dropped (aborting the
+        // scan), so a timed-out caller cannot leave CPU work behind.
+        let query_ctx = make_ctx();
+        let query = run_query_over(&query_ctx, providers, &sql);
+        let result = match query_timeout(ctx.time_remaining()) {
+            Some(deadline) => match tokio::time::timeout(deadline, query).await {
+                Ok(r) => r.map_err(map_query_error)?,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        deadline_ms = deadline.as_millis() as u64,
+                        sql = %truncate_sql_for_log(&sql),
+                        "query aborted: exceeded deadline",
+                    );
+                    return Err(ConnectError::deadline_exceeded(format!(
+                        "query exceeded deadline of {} ms",
+                        deadline.as_millis()
+                    )));
+                }
+            },
+            None => query.await.map_err(map_query_error)?,
+        };
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result
@@ -248,5 +356,58 @@ impl StatsService for StatsServiceImpl {
             schema: MessageField::some(schema_to_proto_owned(&schema)),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Extensions, HeaderMap};
+
+    use super::*;
+
+    fn ctx_with(identity: Option<AuthIdentity>) -> RequestContext {
+        let mut extensions = Extensions::new();
+        if let Some(identity) = identity {
+            extensions.insert(identity);
+        }
+        RequestContext::new(HeaderMap::new()).with_extensions(extensions)
+    }
+
+    fn jwt(cluster: &str) -> RequestContext {
+        ctx_with(Some(AuthIdentity::Jwt {
+            cluster: cluster.to_string(),
+        }))
+    }
+
+    #[test]
+    fn a_forwarding_jwt_stamps_the_cluster_its_key_authenticates() {
+        // The stats-plane twin of the log path's `authorized_cluster`: a WriteRows
+        // batch's origin is bound to the credential that carried it. The function reads
+        // no caller-supplied cluster at all, so a spoofed origin in the batch cannot
+        // influence the stamp — `stamp_cluster_column` then overwrites the batch column
+        // with this value. That is what makes attribution independent of whether the
+        // sender's local schema even held the origin column (the cross-cluster
+        // forwarding gap, where a forwarded batch arrives without the column).
+        assert_eq!(
+            write_origin_cluster(&jwt("cw-rno2a")).unwrap(),
+            Some("cw-rno2a".to_string())
+        );
+    }
+
+    #[test]
+    fn a_trusted_network_writer_stamps_nothing() {
+        // A local write (admitted by the loopback/VPC cidr rule) carries no per-writer
+        // identity, so its batch is left as supplied — empty for a store writing its own
+        // rows. Nothing is stamped, so an empty/NULL origin denotes the local cluster.
+        let network = ctx_with(Some(AuthIdentity::Network));
+        assert_eq!(write_origin_cluster(&network).unwrap(), None);
+    }
+
+    #[test]
+    fn a_write_with_no_auth_identity_is_refused() {
+        // Unreachable through the interceptor, which admits nothing without recording an
+        // identity. Refusing rather than defaulting fails closed: an unauthenticated
+        // write can never silently become a hub-local row.
+        assert!(write_origin_cluster(&ctx_with(None)).is_err());
     }
 }

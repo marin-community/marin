@@ -65,6 +65,10 @@ HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
 
 
+def controller_vm_name(label_prefix: str) -> str:
+    return f"iris-controller-{label_prefix}"
+
+
 @dataclass
 class ControllerStatus:
     """Status of the controller."""
@@ -294,7 +298,7 @@ def _build_controller_vm_config(
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
     vm_config = VmConfig()
-    vm_config.name = f"iris-controller-{label_prefix}"
+    vm_config.name = controller_vm_name(label_prefix)
     vm_config.labels[labels.iris_controller] = "true"
 
     which = config.controller.controller_kind()
@@ -310,6 +314,7 @@ def _build_controller_vm_config(
             machine_type=gcp_ctrl.machine_type or "n2-standard-4",
             boot_disk_size_gb=gcp_ctrl.boot_disk_size_gb or DEFAULT_CONTROLLER_BOOT_DISK_SIZE_GB,
             service_account=gcp_ctrl.service_account,
+            network_tags=(labels.iris_controller,),
         )
         for key, value in OS_LOGIN_METADATA.items():
             vm_config.metadata[key] = value

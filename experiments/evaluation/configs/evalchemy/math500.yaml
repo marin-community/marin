@@ -1,0 +1,8 @@
+tasks: [MATH500]
+task_options:
+  MATH500:
+    num_fewshot: 0
+    task_alias: math500
+    generation: true
+max_tokens: 8192
+runtime_extras: [math500]

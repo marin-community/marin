@@ -46,6 +46,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import fsspec
@@ -94,16 +95,16 @@ def _temporary_hf_cache_root(cache_root: str):
         os.environ.update(env_updates)
         if "datasets" in sys.modules:
             try:
-                import datasets.config as datasets_config
+                import datasets.config as datasets_config  # noqa: PLC0415
 
                 datasets_config.HF_HOME = paths["root"]
-                datasets_config.HF_DATASETS_CACHE = paths["datasets"]
+                datasets_config.HF_DATASETS_CACHE = Path(paths["datasets"])
                 datasets_config.HF_HUB_CACHE = paths["hub"]
             except Exception:
                 logger.debug("datasets.config unavailable while rebasing HF cache root", exc_info=True)
         if "huggingface_hub.constants" in sys.modules:
             try:
-                import huggingface_hub.constants as hub_constants
+                import huggingface_hub.constants as hub_constants  # noqa: PLC0415
 
                 hub_constants.HF_HOME = paths["root"]
                 hub_constants.HF_HUB_CACHE = paths["hub"]
@@ -139,7 +140,7 @@ def extract_datasets_from_tasks(
         A set of (dataset_path, dataset_name) tuples that can be passed to
         datasets.load_dataset().
     """
-    import lm_eval.tasks as tasks
+    import lm_eval.tasks as tasks  # noqa: PLC0415
 
     log_obj = log or logger
 
@@ -242,7 +243,7 @@ def warm_task_metadata_cache(
     log: logging.Logger | None = None,
 ) -> None:
     """Warm lm-eval task metadata once so workers can resolve tasks offline later."""
-    import lm_eval.tasks as tasks
+    import lm_eval.tasks as tasks  # noqa: PLC0415
 
     log_obj = log or logger
     task_manager = tasks.TaskManager()
@@ -321,7 +322,7 @@ def save_eval_datasets_to_gcs(
 
     try:
         with _temporary_hf_cache_root(cache_root) as cache_paths:
-            import datasets
+            import datasets  # noqa: PLC0415
 
             datasets_cache_dir = cache_paths["datasets"]
             log_obj.info(f"Downloading {len(datasets_needed)} datasets to {datasets_cache_dir}")

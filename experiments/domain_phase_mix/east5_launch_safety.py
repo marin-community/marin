@@ -24,7 +24,7 @@ EAST5_REGION = "us-east5"
 EAST5_ZONE = "us-east5-a"
 EAST5_BUCKET_PREFIX = "gs://marin-us-east5"
 
-_MARIN_BUCKET_RE = re.compile(r"gs://marin-us-[a-z0-9-]+[^\s\"']*")
+_GCS_PATH_RE = re.compile(r"gs://[^\s,\"']+")
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,34 @@ def _find_job_run_index(tokens: Sequence[str]) -> int:
     raise ValueError("Expected an Iris job run command containing 'job run'.")
 
 
+def _normalize_iris_job_run_tokens(tokens: Sequence[str]) -> list[str]:
+    """Expose forwarded ``iris job run`` arguments from the workspace wrapper."""
+    try:
+        _find_job_run_index(tokens)
+        return list(tokens)
+    except ValueError:
+        pass
+
+    wrapper_index = next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if token == "marin.run.iris_run" and index > 0 and tokens[index - 1] == "-m"
+        ),
+        None,
+    )
+    if wrapper_index is None:
+        raise ValueError("Expected an Iris job run command containing 'job run'.")
+    try:
+        separator = list(tokens).index("--", wrapper_index + 1)
+    except ValueError as exc:
+        raise ValueError("Expected filtered Iris wrapper arguments after '--'.") from exc
+    forwarded = list(tokens[separator + 1 :])
+    if not forwarded:
+        raise ValueError("Expected filtered Iris wrapper arguments after '--'.")
+    return ["iris", "job", "run", *forwarded]
+
+
 def _split_parent_and_child_tokens(tokens: Sequence[str], job_index: int) -> tuple[list[str], list[str]]:
     parent_tokens = list(tokens[job_index + 2 :])
     if "--" not in parent_tokens:
@@ -90,10 +118,8 @@ def _split_parent_and_child_tokens(tokens: Sequence[str], job_index: int) -> tup
 
 def _marin_gcs_paths(command: str) -> list[str]:
     paths: set[str] = set()
-    for match in _MARIN_BUCKET_RE.findall(command):
-        for path in match.split(","):
-            if path.startswith("gs://marin-us-"):
-                paths.add(path)
+    for path in _GCS_PATH_RE.findall(command):
+        paths.add(path)
     return sorted(paths)
 
 
@@ -131,7 +157,7 @@ def validate_regional_iris_command(
     ``allow_region_only_parent=True``.
     """
 
-    tokens = shlex.split(command)
+    tokens = _normalize_iris_job_run_tokens(shlex.split(command))
     job_index = _find_job_run_index(tokens)
     parent_tokens, child_tokens = _split_parent_and_child_tokens(tokens, job_index)
 
@@ -175,8 +201,7 @@ def validate_regional_iris_command(
     ]
     if bad_gcs_paths:
         errors.append(
-            "All Marin GCS paths in region-local launch commands must use "
-            f"{expected_bucket_prefix}: got {bad_gcs_paths}."
+            "All GCS paths in region-local launch commands must use " f"{expected_bucket_prefix}: got {bad_gcs_paths}."
         )
 
     return LaunchSafetyResult(

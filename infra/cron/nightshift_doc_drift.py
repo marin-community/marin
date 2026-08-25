@@ -4,7 +4,8 @@
 """Nightshift doc drift detector: finds documentation that has drifted from the code."""
 
 import argparse
-import subprocess
+
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 # Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
 # Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
@@ -106,21 +107,21 @@ def main() -> None:
         run_attempt=args.run_attempt,
     )
 
-    subprocess.run(
+    result = run_claude(
+        prompt,
         [
-            "claude",
             "--model=opus",
-            "--print",
             "--dangerously-skip-permissions",
             *NO_SELF_CREDIT_SETTINGS,
             "--tools=Read,Write,Edit,Glob,Grep,Bash",
             "--max-turns",
             "600",
-            "--",
-            prompt,
         ],
-        check=True,
     )
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
+        return
+    print(result.output)
 
 
 if __name__ == "__main__":

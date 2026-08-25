@@ -16,7 +16,7 @@ from levanter.data.dataset import AsyncDataset, ListAsyncDataset
 from levanter.data.loader import DataLoader, DataLoaderIterator, check_sharded_consistency
 from levanter.schedule import ScheduleStep
 
-from test_utils import skip_if_not_enough_devices, use_test_mesh
+from levanter.testing.helpers import skip_if_not_enough_devices, use_test_mesh
 
 
 def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]]:
@@ -81,7 +81,7 @@ def test_loader_prefetches_single_batch_initially(monkeypatch):
             max_buffered_batches=0,
             mesh=mesh,
             axis_resources=None,
-            prefetch_size=4,
+            fetch_batch_size=4,
         )
 
         iterator = iter(loader)

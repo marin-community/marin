@@ -1,23 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for k8s manifest rendering in `finelog.deploy._k8s`."""
+"""Tests for Kubernetes secrets, verification, and rollback."""
 
 import base64
 import json
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import click
 import pytest
+from finelog.deploy import _k8s
 from finelog.deploy._k8s import (
-    _K8S_MANIFEST_DIR,
-    _MANIFESTS,
+    K8sRevision,
+    K8sRevisionConflict,
+    K8sRevisionHistory,
     _build_env_secret_manifest,
-    _env_secret_name,
-    _render_manifest,
-    k8s_down,
+    k8s_pulumi_rollout,
+    k8s_rollback,
+    k8s_verify_ingest_ready,
+    select_rollback_revision,
 )
+from finelog.deploy.bootstrap import HEALTH_OK
 from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
@@ -27,7 +32,7 @@ from finelog.deploy.config import (
 from rigging.secrets import SecretResolutionError
 
 
-def _s3_cfg(**k8s_overrides) -> FinelogConfig:
+def _s3_config(**k8s_overrides) -> FinelogConfig:
     k8s = {
         "namespace": "iris",
         "object_storage_endpoint": "https://acct.r2.cloudflarestorage.com",
@@ -38,26 +43,22 @@ def _s3_cfg(**k8s_overrides) -> FinelogConfig:
         port=10001,
         image="img",
         remote_log_dir="s3://bucket/finelog/cw",
-        deployment=Deployment(gcp=None, k8s=K8sDeployment(**k8s)),
+        deployment=Deployment(k8s=K8sDeployment(**k8s)),
     )
 
 
-def test_k8s_deployment_rejects_priority_class_name_without_value() -> None:
-    """Name and value are meaningless apart — deploy up needs the value to create
-    the class, so half a config must fail at construction, not at apply time."""
-    with pytest.raises(ValueError, match="must be set together"):
-        K8sDeployment(namespace="iris", priority_class_name="iris-system")
+def _secret_data(config: FinelogConfig) -> dict[str, str]:
+    manifest = _build_env_secret_manifest(config)
+    assert manifest is not None
+    encoded = json.loads(manifest)["data"]
+    return {key: base64.b64decode(value).decode() for key, value in encoded.items()}
 
 
 def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
-    cfg = _s3_cfg()
-    manifest = json.loads(_build_env_secret_manifest(cfg))
-    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
-    # The R2->AWS name mapping + injected region are the actual logic the Rust
-    # server's from_env() depends on; the rest of the manifest is boilerplate.
-    assert data == {
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
+
+    assert _secret_data(_s3_config()) == {
         "AWS_ACCESS_KEY_ID": "AKID",
         "AWS_SECRET_ACCESS_KEY": "SEKRIT",
         "AWS_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com",
@@ -67,116 +68,261 @@ def test_env_secret_minted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_no_secret_for_non_s3_archive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
-    cfg = FinelogConfig(
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
+    config = FinelogConfig(
         name="finelog",
         port=10001,
         image="img",
         remote_log_dir="gs://bucket/logs",
-        deployment=Deployment(gcp=None, k8s=K8sDeployment(namespace="iris")),
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
     )
-    assert _build_env_secret_manifest(cfg) is None
+
+    assert _build_env_secret_manifest(config) is None
 
 
 def test_env_secret_requires_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SEKRIT")
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "SEKRIT")
+
     with pytest.raises(click.ClickException, match="object_storage_endpoint"):
-        _build_env_secret_manifest(_s3_cfg(object_storage_endpoint=None))
+        _build_env_secret_manifest(_s3_config(object_storage_endpoint=None))
 
 
 def test_env_secret_requires_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("R2_ACCESS_KEY_ID", raising=False)
-    monkeypatch.delenv("R2_SECRET_ACCESS_KEY", raising=False)
-    with pytest.raises(click.ClickException, match="R2_ACCESS_KEY_ID"):
-        _build_env_secret_manifest(_s3_cfg())
+    monkeypatch.delenv("R2_KEY_ID", raising=False)
+    monkeypatch.delenv("R2_KEY_SECRET", raising=False)
+
+    with pytest.raises(click.ClickException, match="R2_KEY_ID"):
+        _build_env_secret_manifest(_s3_config())
 
 
-_FORWARDING = ForwardingConfig(
+FORWARDING = ForwardingConfig(
     target="https://finelog.oa.dev",
     cluster="cw-rno2a",
     signing_key=("env:TEST_FINELOG_SIGNING_KEY",),
 )
 
 
-def _forwarding_cfg() -> FinelogConfig:
+def _forwarding_config() -> FinelogConfig:
     return FinelogConfig(
         name="finelog-cw",
         port=10001,
         image="img",
         remote_log_dir="gs://bucket/logs",
         deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
-        forwarding=_FORWARDING,
+        forwarding=FORWARDING,
     )
 
 
-def test_forwarding_signing_key_never_leaves_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The private key reaches the pod through the Secret and through nothing else.
-
-    A rendered manifest is plaintext — `kubectl get deployment -o yaml` echoes it back to
-    anyone with read access on the namespace — so a key that lands there is a key that
-    leaks.
-    """
+def test_forwarding_signing_key_is_written_to_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     key_pem = "-----BEGIN PRIVATE KEY-----\nSEKRIT\n-----END PRIVATE KEY-----"
     monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", key_pem)
-    cfg = _forwarding_cfg()
 
-    manifest = json.loads(_build_env_secret_manifest(cfg))
-    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
-    assert data == {"FINELOG_SIGNING_KEY": key_pem}
-
-    for manifest_name in _MANIFESTS:
-        assert "SEKRIT" not in _render_manifest(_K8S_MANIFEST_DIR / manifest_name, cfg)
+    assert _secret_data(_forwarding_config()) == {"FINELOG_SIGNING_KEY": key_pem}
 
 
-def test_env_secret_carries_both_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A forwarding server with an s3:// archive needs both, in the one Secret."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKID")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "R2SEKRIT")
+def test_env_secret_carries_s3_credentials_and_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("R2_KEY_ID", "AKID")
+    monkeypatch.setenv("R2_KEY_SECRET", "R2SEKRIT")
     monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", "PRIVKEY")
-    cfg = replace(_s3_cfg(), forwarding=_FORWARDING)
-    manifest = json.loads(_build_env_secret_manifest(cfg))
-    data = {k: base64.b64decode(v).decode() for k, v in manifest["data"].items()}
+    config = replace(_s3_config(), forwarding=FORWARDING)
+
+    data = _secret_data(config)
+
     assert data["AWS_ACCESS_KEY_ID"] == "AKID"
     assert data["FINELOG_SIGNING_KEY"] == "PRIVKEY"
 
 
-def test_env_secret_fails_when_the_signing_key_source_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unresolvable key fails the deploy. Starting a server that can never
-    authenticate to its hub looks exactly like a quiet cluster."""
+def test_env_secret_fails_when_signing_key_source_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TEST_FINELOG_SIGNING_KEY", raising=False)
+
     with pytest.raises(SecretResolutionError):
-        _build_env_secret_manifest(_forwarding_cfg())
+        _build_env_secret_manifest(_forwarding_config())
 
 
-def _kubectl_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Capture the argv of every kubectl invocation instead of running it."""
-    calls: list[list[str]] = []
+def _health_bodies(monkeypatch: pytest.MonkeyPatch, bodies: list[str]) -> list[str]:
+    monkeypatch.setattr(_k8s.time, "sleep", lambda _: None)
+    remaining = list(bodies)
+    observed = []
 
-    def fake_run(argv, **kwargs):
-        calls.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0)
+    def run(argv, **_kwargs):
+        body = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        observed.append(body)
+        return subprocess.CompletedProcess(argv, 0, stdout=body, stderr="")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    return calls
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        run,
+    )
+    return observed
 
 
-def _deleted_resources(calls: list[list[str]]) -> set[str]:
-    """The `kind/name` resources named across every `kubectl delete` in `calls`."""
-    return {arg for argv in calls if "delete" in argv for arg in argv if "/" in arg}
+def test_ingest_verification_rejects_registration_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_bodies(monkeypatch, ["degraded: telemetry_v1: registration failed: column type mismatch"])
+
+    with pytest.raises(click.ClickException, match="serving but not ingesting"):
+        k8s_verify_ingest_ready(_forwarding_config())
 
 
-def test_teardown_deletes_the_secret_and_retains_only_the_cache_pvc(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The env Secret carries the forwarding private key. Leaving it behind after a
-    # teardown strands key material in a namespace with nothing left to use it.
-    calls = _kubectl_argv(monkeypatch)
-    cfg = _forwarding_cfg()
+def test_ingest_verification_waits_for_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = ["degraded: telemetry_v1: registration pending", HEALTH_OK]
+    observed = _health_bodies(monkeypatch, responses)
 
-    k8s_down(cfg, yes=False)
+    k8s_verify_ingest_ready(_forwarding_config())
 
-    assert _deleted_resources(calls) == {
-        f"deployment/{cfg.name}",
-        f"service/{cfg.name}",
-        f"secret/{_env_secret_name(cfg)}",
-    }
+    assert observed == responses
+
+
+def test_ingest_verification_rejects_registration_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    _health_bodies(monkeypatch, ["degraded: telemetry_v1: registration pending"])
+
+    with pytest.raises(click.ClickException, match="registration pending"):
+        k8s_verify_ingest_ready(_forwarding_config(), max_attempts=3)
+
+
+def _revision(name: str, revision: int, age: int) -> K8sRevision:
+    return K8sRevision(
+        replica_set=name,
+        revision=revision,
+        created_at=datetime(2026, 8, 12, tzinfo=UTC) - timedelta(days=age),
+        image=f"image@sha256:{name}",
+        source_revision=name,
+    )
+
+
+def test_rollback_selection_walks_back_from_active_replica_set() -> None:
+    failed_newer = _revision("failed-newer", 5, 0)
+    current = _revision("current", 6, 2)
+    previous = _revision("previous", 2, 3)
+    history = K8sRevisionHistory(
+        deployment_uid="deployment-uid",
+        current=current,
+        revisions=(failed_newer, current, previous),
+    )
+
+    assert select_rollback_revision(history) == previous
+
+
+class FakeK8sDeploy:
+    def __init__(self, *, current: K8sRevision, revisions: tuple[K8sRevision, ...]) -> None:
+        self.current = current
+        self.revisions = {revision.replica_set: revision for revision in revisions}
+        self.pulumi_failure_target: str | None = None
+        self.unhealthy: set[str] = set()
+        self.refreshed = False
+        self.change_on_second_deployment_read: str | None = None
+        self.deployment_reads = 0
+
+    def _deployment(self) -> dict:
+        return {
+            "metadata": {
+                "uid": "deployment-uid",
+                "annotations": {"deployment.kubernetes.io/revision": str(self.current.revision)},
+            }
+        }
+
+    def _replica_sets(self) -> dict:
+        return {
+            "items": [
+                {
+                    "metadata": {
+                        "name": revision.replica_set,
+                        "creationTimestamp": revision.created_at.isoformat().replace("+00:00", "Z"),
+                        "annotations": {"deployment.kubernetes.io/revision": str(revision.revision)},
+                        "ownerReferences": [{"uid": "deployment-uid", "kind": "Deployment", "controller": True}],
+                    },
+                    "spec": {
+                        "template": {
+                            "metadata": {"annotations": {"finelog.marin/source-revision": revision.source_revision}},
+                            "spec": {"containers": [{"name": "finelog", "image": revision.image}]},
+                        }
+                    },
+                }
+                for revision in self.revisions.values()
+            ]
+        }
+
+    def _activate(self, revision_number: int) -> None:
+        target = next(revision for revision in self.revisions.values() if revision.revision == revision_number)
+        next_revision = max(revision.revision for revision in self.revisions.values()) + 1
+        activated = replace(target, revision=next_revision)
+        self.revisions[target.replica_set] = activated
+        self.current = activated
+
+    def run(self, argv, **_kwargs):
+        if argv[0] == "pulumi":
+            if argv[1] == "refresh":
+                self.refreshed = True
+                return subprocess.CompletedProcess(argv, 0)
+            if self.pulumi_failure_target is not None:
+                target = self.revisions[self.pulumi_failure_target]
+                self._activate(target.revision)
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0)
+
+        command = argv[1:]
+        if command[0:2] == ["get", "deployment/finelog-cw"]:
+            self.deployment_reads += 1
+            if self.deployment_reads == 2 and self.change_on_second_deployment_read is not None:
+                target = self.revisions[self.change_on_second_deployment_read]
+                self._activate(target.revision)
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self._deployment()), stderr="")
+        if command[0:2] == ["get", "replicasets"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self._replica_sets()), stderr="")
+        if command[0:3] == ["rollout", "undo", "deployment/finelog-cw"]:
+            revision_number = int(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--to-revision=")))
+            self._activate(revision_number)
+            return subprocess.CompletedProcess(argv, 0)
+        if command[0:3] == ["rollout", "status", "deployment/finelog-cw"]:
+            expected = int(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--revision=")))
+            assert expected == self.current.revision
+            return subprocess.CompletedProcess(argv, 0)
+        if command[0] == "exec":
+            body = "degraded: registration failed" if self.current.replica_set in self.unhealthy else HEALTH_OK
+            return subprocess.CompletedProcess(argv, 0, stdout=body, stderr="")
+        raise AssertionError(argv)
+
+
+def test_failed_pulumi_update_restores_captured_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    previous = _revision("finelog-good", 4, 1)
+    attempted = _revision("finelog-bad", 5, 0)
+    deploy = FakeK8sDeploy(current=previous, revisions=(previous, attempted))
+    deploy.pulumi_failure_target = attempted.replica_set
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(click.ClickException):
+        k8s_pulumi_rollout(_s3_config(), stack="cw", yes=True)
+
+    assert deploy.current.replica_set == previous.replica_set
+    assert deploy.refreshed
+
+
+def test_failed_manual_rollback_restores_source_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = _revision("finelog-current", 5, 0)
+    target = _revision("finelog-unhealthy", 4, 1)
+    deploy = FakeK8sDeploy(current=current, revisions=(current, target))
+    deploy.unhealthy.add(target.replica_set)
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(click.ClickException):
+        k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
+
+    assert deploy.current.replica_set == current.replica_set
+    assert deploy.refreshed
+
+
+def test_manual_rollback_does_not_override_concurrent_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = _revision("finelog-current", 5, 0)
+    target = _revision("finelog-target", 4, 1)
+    concurrent = _revision("finelog-concurrent", 6, 0)
+    deploy = FakeK8sDeploy(current=current, revisions=(current, target, concurrent))
+    deploy.change_on_second_deployment_read = concurrent.replica_set
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(K8sRevisionConflict):
+        k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
+
+    assert deploy.current.replica_set == concurrent.replica_set
+    assert not deploy.refreshed

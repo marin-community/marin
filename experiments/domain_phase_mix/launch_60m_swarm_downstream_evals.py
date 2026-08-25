@@ -19,6 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import fsspec
 import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import (
@@ -29,7 +30,7 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
 )
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_baseline_scaling_downstream_evals import (
     GENERATION_ENGINE_KWARGS,
@@ -427,8 +428,6 @@ def _metric_rows_from_result_paths(
 
 def collect_eval_results(config: Collect60MSwarmDownstreamEvalResultsConfig) -> None:
     """Collect downstream eval outputs into one normalized CSV."""
-    import fsspec
-
     state_rows = [SwarmEvalSpec(**row) for row in json.loads(config.state_rows_json)]
     output_path = config.output_path.rstrip("/")
     fs, _, _ = fsspec.get_fs_token_paths(output_path)
@@ -444,8 +443,8 @@ def build_eval_steps(
     state_rows: list[SwarmEvalSpec], max_eval_instances: int | None
 ) -> tuple[list[ExecutorStep], dict[str, InputName]]:
     """Build GSM8K/HumanEval eval steps for rows requiring launch."""
-    from experiments.evals.evals import evaluate_lm_evaluation_harness
-    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT
+    from experiments.evals.evals import evaluate_lm_evaluation_harness  # noqa: PLC0415
+    from experiments.evals.task_configs import GSM8K_5_SHOT, HUMANEVAL_10_SHOT  # noqa: PLC0415
 
     eval_steps: list[ExecutorStep] = []
     results_by_eval_key: dict[str, InputName] = {}
@@ -509,7 +508,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 def _has_iris_context() -> bool:
     try:
-        from iris.client.client import get_iris_ctx
+        from iris.client.client import get_iris_ctx  # noqa: PLC0415
     except ImportError:
         return False
     return get_iris_ctx() is not None

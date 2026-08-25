@@ -1,5 +1,7 @@
 /** Formatters for finelog dashboard cells. */
 
+import type { TimeZoneMode } from '@/composables/useDisplayPrefs'
+
 export function formatRelativeTime(ms: number): string {
   if (!ms) return '—'
   const delta = Date.now() - ms
@@ -12,12 +14,6 @@ export function formatRelativeTime(ms: number): string {
   if (hr < 24) return `${hr}h ago`
   const day = Math.floor(hr / 24)
   return `${day}d ago`
-}
-
-export function formatTimestampMs(ms: number): string {
-  if (!ms) return '—'
-  const d = new Date(ms)
-  return d.toISOString().replace('T', ' ').replace(/\..+/, '')
 }
 
 export function formatNumber(n: number | undefined | null): string {
@@ -35,4 +31,77 @@ export function formatBytes(bytes: number): string {
     i++
   }
   return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
+}
+
+/** Local-time parts of `ms`, in `zone` — ICU handles the offset and DST. */
+function zonedParts(ms: number, zone: string): Record<string, string> {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(ms))
+  return Object.fromEntries(parts.map((p) => [p.type, p.value]))
+}
+
+/**
+ * Render epoch milliseconds as `YYYY-MM-DD HH:MM:SS.mmm`, in the viewer's zone
+ * or UTC. `raw` returns the integer unchanged, which is what you paste back into
+ * a SQL predicate.
+ *
+ * Millisecond precision is kept because finelog's own timestamps are
+ * millisecond-resolution and log ordering within a second is often the question
+ * being asked.
+ */
+export function formatTimestampMs(ms: number | null | undefined, mode: TimeZoneMode = 'utc'): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—'
+  if (mode === 'raw') return String(ms)
+  const zone = mode === 'utc' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone
+  const p = zonedParts(ms, zone)
+  const millis = String(Math.abs(Math.trunc(ms)) % 1000).padStart(3, '0')
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${millis}`
+}
+
+/**
+ * Short axis label for `ms`, at the finest resolution the span needs.
+ *
+ * The unit has to follow the span or every tick prints the same text: a
+ * one-minute window labelled to the minute reads `22:02` five times over, which
+ * tells the reader nothing about where they are.
+ */
+export function formatAxisTime(ms: number, spanMs: number, mode: TimeZoneMode): string {
+  // Raw means the reader asked for the underlying count, on the axis as much as
+  // in the table; formatting it as a time of day would answer a question they
+  // turned off.
+  if (mode === 'raw') return String(Math.round(ms))
+  const zone = mode === 'utc' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone
+  const p = zonedParts(ms, zone)
+  if (spanMs > 24 * 60 * 60 * 1000) return `${p.month}-${p.day} ${p.hour}:${p.minute}`
+  if (spanMs > 10 * 60 * 1000) return `${p.hour}:${p.minute}`
+  if (spanMs > 10 * 1000) return `${p.hour}:${p.minute}:${p.second}`
+  const millis = String(Math.abs(Math.trunc(ms)) % 1000).padStart(3, '0')
+  return `${p.hour}:${p.minute}:${p.second}.${millis}`
+}
+
+/** The zone abbreviation shown next to a timestamp control. */
+export function timeZoneLabel(mode: TimeZoneMode): string {
+  if (mode === 'utc') return 'UTC'
+  if (mode === 'raw') return 'epoch ms'
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
+/**
+ * Render a measurement compactly: thousands separators for integers, and at most
+ * four significant decimals so a float64 metric does not print 17 digits.
+ */
+export function formatMetric(value: number): string {
+  if (!Number.isFinite(value)) return String(value)
+  if (Number.isInteger(value)) return value.toLocaleString()
+  const magnitude = Math.abs(value)
+  if (magnitude !== 0 && (magnitude >= 1e9 || magnitude < 1e-4)) return value.toExponential(3)
+  return value.toLocaleString(undefined, { maximumFractionDigits: 4 })
 }

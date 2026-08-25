@@ -24,8 +24,8 @@ import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.types import ExecutorStep, this_output_path
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -366,7 +366,7 @@ def build_launch_artifacts(
 
 def _has_iris_context() -> bool:
     try:
-        from iris.client.client import get_iris_ctx
+        from iris.client.client import get_iris_ctx  # noqa: PLC0415
     except ImportError:
         return False
     return get_iris_ctx() is not None

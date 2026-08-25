@@ -11,7 +11,6 @@ from fray.current_client import current_client
 from fray.types import (
     CpuConfig,
     Entrypoint,
-    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
@@ -24,7 +23,7 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.training.run_environment import add_run_env_variables
+from marin.training.run_environment import add_run_env_variables, extras_for_resources
 from marin.training.training import _add_default_env_variables
 
 logger = logging.getLogger(__name__)
@@ -102,11 +101,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
-    extras: list[str] = []
-    if isinstance(config.resources.device, TpuConfig):
-        extras.append("tpu")
-    elif isinstance(config.resources.device, GpuConfig):
-        extras.append("gpu")
+    extras = extras_for_resources(config.resources)
 
     client = current_client()
     job_request = JobRequest(

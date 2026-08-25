@@ -28,8 +28,8 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.remote import RemoteCallable, remote
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
@@ -787,7 +787,7 @@ def write_local_manifests(artifacts: LaunchArtifacts, output_dir: Path) -> None:
 
 def _has_iris_context() -> bool:
     try:
-        from iris.client.client import get_iris_ctx
+        from iris.client.client import get_iris_ctx  # noqa: PLC0415
     except ImportError:
         return False
     return get_iris_ctx() is not None

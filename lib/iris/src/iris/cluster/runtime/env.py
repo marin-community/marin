@@ -16,6 +16,7 @@ from pathlib import Path
 from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
+from iris.cluster.runtime.types import MountKind, MountSpec
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -23,11 +24,55 @@ logger = logging.getLogger(__name__)
 
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
+IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
+IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
+IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
+IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).
 WORKDIR_PATH = "/app"
 VENV_PATH = f"{WORKDIR_PATH}/.venv"
+
+# Download caches, bound to node-local storage that outlives the container
+# (hostPath on K8s, cache_dir on Docker) so a wheel or a model is fetched once
+# per node instead of once per task. Paths sit outside $HOME because a task may
+# bring its own image: build_common_iris_env points each tool here explicitly, so
+# nothing depends on that image's HOME.
+UV_CACHE_PATH = "/uv/cache"
+HF_HUB_CACHE_PATH = "/hf/cache"
+CARGO_HOME_PATH = "/cargo"
+# Unclaimed node-local scratch, for anything that needs a real directory on the
+# node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
+# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
+# which has no object-store filesystem.
+SCRATCH_CACHE_PATH = "/cache"
+
+# The task container filesystem, as mounted by every runtime. Each runtime binds
+# a CACHE entry to cache_host_dirname(path) under its own cache_dir, so one node
+# directory backs a task whether it lands as a K8s pod or a Docker container.
+#
+# This list and the cache env in build_common_iris_env are one contract: the env
+# names these exact paths, so both must be defined together. A cache whose env
+# var and mount disagree still runs -- it just writes to the container's own
+# writable layer and re-downloads on every task, with nothing to see in a log.
+WORKDIR_MOUNT = MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR)
+
+STANDARD_MOUNTS: tuple[MountSpec, ...] = (
+    WORKDIR_MOUNT,
+    MountSpec("tmpfs", "/tmp", kind=MountKind.TMPFS),
+    MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
+    MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
+    MountSpec("cargo", CARGO_HOME_PATH, kind=MountKind.CACHE),
+    MountSpec("scratch-cache", SCRATCH_CACHE_PATH, kind=MountKind.CACHE),
+)
+
+
+def cache_host_dirname(container_path: str) -> str:
+    """Host directory name for a CACHE mount, relative to a runtime's cache_dir."""
+    return container_path.strip("/").replace("/", "-")
+
 
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
@@ -121,6 +166,7 @@ def build_common_iris_env(
     *,
     task_id: str,
     attempt_id: int,
+    attempt_uid: str,
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
@@ -146,6 +192,8 @@ def build_common_iris_env(
     # backend.
     wire_task_id = f"{task_id}:{attempt_id}"
     env["IRIS_TASK_ID"] = wire_task_id
+    if attempt_uid:
+        env[IRIS_ATTEMPT_UID_ENV] = attempt_uid
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
 
@@ -163,8 +211,18 @@ def build_common_iris_env(
     # custom setup script does not have to depend on uv's cwd-relative default.
     env["IRIS_VENV"] = VENV_PATH
     env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
-    env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
-    env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
+    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
+    # task image so a task running its own image still hits the shared caches.
+    # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
+    # must not land on a node directory every other task can read. HF_HUB_CACHE
+    # covers the part worth sharing -- the content-addressed model/dataset blobs.
+    env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
+    env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
+    # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
+    # installed elsewhere still resolves, since PATH finds the binary.
+    env["CARGO_HOME"] = CARGO_HOME_PATH
+    env["CARGO_TARGET_DIR"] = f"{CARGO_HOME_PATH}/target"
 
     # Propagate the resolved setup scripts so child jobs reproduce the parent's
     # environment. Always set (even when empty) so a child can tell a no-setup

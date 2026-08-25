@@ -3,9 +3,10 @@
 
 """ManagedThread and ThreadContainer for structured thread lifecycle management.
 
-ManagedThread wraps threading.Thread with an integrated stop event, ensuring
-threads are non-daemon and can be cleanly shut down. ThreadContainer provides
-component-scoped thread groups with hierarchical composition.
+ManagedThread wraps threading.Thread with an integrated stop event so threads
+can be cleanly shut down. Threads are non-daemon by default; pass daemon=True for
+a fire-and-forget helper that must never block process exit. ThreadContainer
+provides component-scoped thread groups with hierarchical composition.
 
 A contextvar-based default container is available via get_thread_container()
 for components that don't want to pass containers explicitly. Use
@@ -44,6 +45,7 @@ NEVER write loops that ignore stop_event:
 
 import contextlib
 import logging
+import socket
 import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -56,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 
 class ManagedThread:
-    """Non-daemon thread with integrated shutdown event.
+    """Thread with an integrated shutdown event; non-daemon by default.
 
     Target callable must accept threading.Event as its first argument.
     The event is set when stop() is called, signaling the thread to exit.
@@ -67,6 +69,9 @@ class ManagedThread:
 
     Threads automatically remove themselves from their owning container on
     completion to prevent accumulation of completed threads.
+
+    Pass ``daemon=True`` for a fire-and-forget helper whose container may never
+    be stop()ed, so it does not block process exit via ``threading._shutdown()``.
     """
 
     def __init__(
@@ -76,6 +81,7 @@ class ManagedThread:
         name: str | None = None,
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
+        daemon: bool = False,
         _container: "ThreadContainer | None" = None,
     ):
         self._stop_event = threading.Event()
@@ -128,7 +134,7 @@ class ManagedThread:
         self._thread = threading.Thread(
             target=_safe_target,
             args=(self._stop_event, *args),
-            daemon=False,
+            daemon=daemon,
             name=name,
         )
 
@@ -178,14 +184,22 @@ class ThreadContainer:
         name: str | None = None,
         args: tuple = (),
         on_stop: Callable[[], None] | None = None,
+        daemon: bool = False,
     ) -> ManagedThread:
-        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, _container=self)
+        thread = ManagedThread(target=target, name=name, args=args, on_stop=on_stop, daemon=daemon, _container=self)
         with self._lock:
             self._threads.append(thread)
         thread.start()
         return thread
 
-    def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
+    def spawn_server(
+        self,
+        server: Any,
+        *,
+        name: str,
+        daemon: bool = False,
+        sockets: list[socket.socket] | None = None,
+    ) -> ManagedThread:
         """Spawn a server (like uvicorn.Server) with automatic stop_event bridging.
 
         When stop() is called, server.should_exit is set to True, causing server.run()
@@ -194,18 +208,25 @@ class ThreadContainer:
         Args:
             server: Server instance with should_exit attribute and run() method
             name: Name for the managed thread
+            daemon: Run on a daemon thread so it never blocks process exit. Use for a
+                fire-and-forget server whose container may never be stop()ed.
+            sockets: Bound sockets to transfer to the server. When omitted, the
+                server binds from its own configuration.
         """
 
         def _run(stop_event: threading.Event) -> None:
             logger.debug("Running server %s (%s)", name, server)
-            server.run()
+            if sockets is None:
+                server.run()
+            else:
+                server.run(sockets=sockets)
             logger.debug("Server %s exited", name)
 
         def _stop_server() -> None:
             logger.debug("Signaling server %s to exit", name)
             server.should_exit = True
 
-        return self.spawn(target=_run, name=name, on_stop=_stop_server)
+        return self.spawn(target=_run, name=name, on_stop=_stop_server, daemon=daemon)
 
     def spawn_executor(self, max_workers: int, prefix: str) -> ThreadPoolExecutor:
         """Create a ThreadPoolExecutor that will be shut down when this container stops."""

@@ -17,7 +17,6 @@ from marin.profiling.schema import (
     StepClassSummary,
     hierarchical_root_totals,
 )
-from marin.profiling.semantics import classify_semantic_family, estimate_flop_proxy
 
 
 @dataclass(frozen=True)
@@ -164,10 +163,7 @@ def compare_profile_summaries(before: ProfileSummary, after: ProfileSummary, *, 
     before_step_classes = _step_class_rows(before.step_time.classes)
     after_step_classes = _step_class_rows(after.step_time.classes)
     step_class_delta = _compare_step_classes(before.step_time.classes, after.step_time.classes)
-    semantic_family_delta = _compare_semantic_families(
-        _semantic_families_for_summary(before),
-        _semantic_families_for_summary(after),
-    )
+    semantic_family_delta = _compare_semantic_families(before.semantic_families, after.semantic_families)
     provenance_checks = _compare_provenance(before, after)
 
     return {
@@ -261,60 +257,6 @@ def _compare_step_classes(before: list[StepClassSummary], after: list[StepClassS
                 "median_delta": _delta(before_median, after_median),
                 "median_regression_pct": pct_delta(before_median, after_median),
             }
-        )
-    return rows
-
-
-def _semantic_families_for_summary(summary: ProfileSummary) -> list[SemanticFamilyAggregate]:
-    if summary.semantic_families:
-        return summary.semantic_families
-
-    # Backward-compatible fallback for older summaries.
-    aggregate: dict[str, dict[str, float | int | str | None]] = {}
-    total_duration = summary.time_breakdown.total_duration
-    for op in summary.hot_ops:
-        family = classify_semantic_family(op.name)
-        bucket = aggregate.setdefault(
-            family,
-            {
-                "count": 0,
-                "total_duration": 0.0,
-                "exclusive_duration": 0.0,
-                "example_op": op.name,
-                "flop_proxy_total": 0.0,
-                "flop_proxy_count": 0,
-            },
-        )
-        bucket["count"] = int(bucket["count"]) + op.count
-        bucket["total_duration"] = float(bucket["total_duration"]) + op.total_duration
-        bucket["exclusive_duration"] = float(bucket["exclusive_duration"]) + op.exclusive_duration
-        flop_proxy = op.flop_proxy_per_invocation
-        if flop_proxy is None and op.shape_signature:
-            flop_proxy = estimate_flop_proxy(family, op.shape_signature)
-        if flop_proxy is not None and op.count > 0:
-            bucket["flop_proxy_total"] = float(bucket["flop_proxy_total"]) + (flop_proxy * op.count)
-            bucket["flop_proxy_count"] = int(bucket["flop_proxy_count"]) + op.count
-
-    rows: list[SemanticFamilyAggregate] = []
-    for family, stats in sorted(aggregate.items(), key=lambda item: (-float(item[1]["exclusive_duration"]), item[0])):
-        count = int(stats["count"])
-        total = float(stats["total_duration"])
-        exclusive = float(stats["exclusive_duration"])
-        flop_proxy_total = float(stats["flop_proxy_total"])
-        rows.append(
-            SemanticFamilyAggregate(
-                family=family,
-                count=count,
-                total_duration=total,
-                exclusive_duration=exclusive,
-                share_of_total=(exclusive / total_duration) if total_duration > 0 else 0.0,
-                avg_duration=(total / count) if count else 0.0,
-                avg_exclusive_duration=(exclusive / count) if count else 0.0,
-                example_op=str(stats["example_op"]),
-                dominant_shape_signature=None,
-                flop_proxy_total=flop_proxy_total if flop_proxy_total > 0 else None,
-                time_per_flop_proxy=(exclusive / flop_proxy_total) if flop_proxy_total > 0 else None,
-            )
         )
     return rows
 

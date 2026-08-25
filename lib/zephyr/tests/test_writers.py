@@ -18,9 +18,13 @@ from zephyr.writers import (
     _pyarrow_filesystem,
     _s3_filesystem_kwargs,
     infer_arrow_schema,
+    write_jsonl_file,
     write_parquet_file,
     write_vortex_file,
 )
+
+# zstandard frame magic number: the first four bytes of any zstd-compressed stream.
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def test_write_vortex_file_basic():
@@ -85,6 +89,23 @@ def test_write_vortex_file_single_record():
         assert table.column("name").to_pylist() == ["Alice"]
 
 
+@pytest.mark.parametrize("ext", [".jsonl.zst", ".jsonl.zstd"])
+def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
+    """Both ``.zst`` and ``.zstd`` must produce a genuinely zstd-compressed file.
+
+    Asserting the on-disk magic bytes (rather than only a round-trip) catches the
+    silent case where the extension is unrecognized and records are written raw.
+    """
+    output_path = str(Path(tmp_path) / f"data{ext}")
+    records = [{"id": i, "name": f"row{i}"} for i in range(5)]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result["count"] == 5
+    with open(output_path, "rb") as f:
+        assert f.read(4) == _ZSTD_MAGIC
+
+
 def test_write_parquet_file_basic():
     """Test basic parquet file writing."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -103,6 +124,56 @@ def test_write_parquet_file_basic():
         # Verify we can read it back
         table = pq.read_table(output_path)
         assert len(table) == 2
+
+
+def test_write_parquet_file_accepts_record_batches(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    batches = [
+        pa.RecordBatch.from_pylist([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], schema=schema),
+        pa.RecordBatch.from_pylist([{"id": 3, "name": "Charlie"}], schema=schema),
+    ]
+    output_path = str(tmp_path / "batches.parquet")
+
+    result = write_parquet_file(batches, output_path, target_buffer_bytes=1)
+
+    assert result == {"path": output_path, "count": 3}
+    assert pq.read_table(output_path).equals(pa.Table.from_batches(batches))
+
+
+def test_write_parquet_file_preserves_typed_empty_record_batch(tmp_path):
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("name", pa.string())])
+    empty_batch = pa.RecordBatch.from_arrays(
+        [pa.array([], type=pa.int64()), pa.array([], type=pa.string())],
+        schema=schema,
+    )
+    output_path = str(tmp_path / "empty-batch.parquet")
+
+    result = write_parquet_file([empty_batch], output_path)
+
+    table = pq.read_table(output_path)
+    assert result == {"path": output_path, "count": 0}
+    assert table.schema.equals(schema, check_metadata=True)
+    assert len(table) == 0
+
+
+def test_write_parquet_file_rejects_record_batch_schema_drift(tmp_path):
+    integer_batch = pa.RecordBatch.from_pylist([{"value": 1}])
+    string_batch = pa.RecordBatch.from_pylist([{"value": "one"}])
+
+    with pytest.raises(pa.ArrowInvalid, match="RecordBatch schema mismatch"):
+        write_parquet_file([integer_batch, string_batch], str(tmp_path / "schema-drift.parquet"))
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [pa.RecordBatch.from_pylist([{"value": 1}]), {"value": 2}],
+        [{"value": 1}, pa.RecordBatch.from_pylist([{"value": 2}])],
+    ],
+)
+def test_write_parquet_file_rejects_mixed_rows_and_record_batches(tmp_path, records):
+    with pytest.raises(TypeError, match="cannot mix"):
+        write_parquet_file(records, str(tmp_path / "mixed.parquet"))
 
 
 def test_write_parquet_file_widens_null_to_concrete_type():
@@ -194,6 +265,31 @@ def test_pyarrow_filesystem_selection():
     assert path == "/tmp/out.parquet"
 
     assert _pyarrow_filesystem("memory://bucket/out.parquet") is None
+
+
+def test_pyarrow_filesystem_cached_per_config(monkeypatch):
+    """One S3 filesystem per process, not one per file (#8402).
+
+    Each filesystem owns a connection pool that dies with the object, so a
+    per-file client parks a local port in TIME_WAIT for every file a task
+    writes. A changed endpoint must still build a new filesystem.
+    """
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://object.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    first, path = _pyarrow_filesystem("s3://bucket/a.parquet")
+    second, _ = _pyarrow_filesystem("s3://bucket/b.parquet")
+    assert path == "bucket/a.parquet"
+    assert first is second
+
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {"endpoint_url": "https://other.example.com", "client_kwargs": {"region_name": "auto"}},
+    )
+    assert _pyarrow_filesystem("s3://bucket/a.parquet")[0] is not first
 
 
 def test_s3_filesystem_kwargs_from_fsspec_conf(monkeypatch):

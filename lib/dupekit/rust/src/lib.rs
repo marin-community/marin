@@ -11,7 +11,7 @@ use bloom::Bloom;
 use hashing::HashAlgorithm;
 
 #[pymodule]
-fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn dupekit_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     m.add_class::<HashAlgorithm>()?;
     m.add("DEFAULT_HASH_ALGORITHM", hashing::DEFAULT_HASH_ALGO)?;

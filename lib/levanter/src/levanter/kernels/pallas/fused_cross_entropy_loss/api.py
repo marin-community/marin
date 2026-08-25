@@ -2,20 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable, Sequence
-from functools import lru_cache
+from functools import lru_cache, partial
 import hashlib
+import json
 import logging
-import threading
+import pathlib
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
 
 import jax
 import jax.numpy as jnp
+import jaxlib
 from jaxtyping import Array, Float, Int
-from rigging.filesystem import marin_prefix
+from finestore.cache import PersistentKvCache
+from rigging.cache import (
+    combined_content_hash,
+    directory_content_hash,
+    file_content_hash,
+    workspace_lock_hash,
+)
 
-from levanter.kernels.pallas import autotune_cache_utils, autotune_utils
+from levanter.kernels.pallas import autotune_utils
 
 from .config import BlockSizes
 from .tuned_block_sizes import (
@@ -36,6 +44,7 @@ Implementation: TypeAlias = Literal[
     "pallas_tpu",
     "batched_xla",
     "xla",
+    "xla_fast_bwd",
     "reference",
 ]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
@@ -48,14 +57,25 @@ ArrayImpl = Callable[..., KernelOutput]
 IMPLEMENTATIONS: dict[str, ArrayImpl] = {
     "reference": linear_softmax_cross_entropy_loss_reference,
     "xla": linear_softmax_cross_entropy_loss_xla,
+    # Same forward as "xla" (loss and lse are bitwise identical), but the backward
+    # is the scan/one-hot/tensor-core rewrite: no scatter, one GEMM per vocab block
+    # over the whole batch, and dlogits cast to the activation dtype so both
+    # backward GEMMs stay on bf16 tensor cores instead of being upcast to
+    # float32/TF32. Measured on GB200 at the grug EP hero CE shape
+    # (B=65,536 H=6,144 V=128,256): 723.4 ms -> 310.0 ms end-to-end for the kernel,
+    # 428 -> 1,000 TFLOP/s on the 3-GEMM convention (571 -> 1,333 counting all four
+    # GEMMs the kernel issues), at +0.04 GiB peak HBM. Gradients change: they are
+    # ~30% CLOSER to a float32 reference than the "xla" path. Opt in explicitly;
+    # "xla" is unchanged for every other caller.
+    "xla_fast_bwd": partial(linear_softmax_cross_entropy_loss_xla, fast_backward=True),
 }
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-_AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
-_AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
-_AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
+# Bump the trailing version when the entry encoding changes so stale entries are ignored.
+_AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
+_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v3"
 
 
 class _NoViableCandidate:
@@ -91,58 +111,32 @@ def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
     return None
 
 
-def _autotune_cache_url() -> str:
-    """Region-local JSON file holding this kernel's tuned block sizes."""
-    root = marin_prefix().rstrip("/")
-    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_FILENAME}"
+def _autotune_entry_name(key: str) -> str:
+    """A path-safe object name for an opaque autotune key."""
+    return hashlib.sha256(key.encode()).hexdigest()
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, persisted to a JSON file."""
+    """Tuned block sizes keyed by an opaque string and stored as named values.
 
-    def __init__(self, url_fn: Callable[[], str | None] = _autotune_cache_url) -> None:
-        self._url_fn = url_fn
-        self._lock = threading.Lock()
-        self._entries: dict[str, _AutotuneCacheEntry] | None = None
+    The tiering and the per-process memo live in :class:`PersistentKvCache`; this
+    wrapper only translates a block-size entry to and from its JSON object. Backed
+    by a memory-only cache, the results stay off shared storage.
+    """
+
+    def __init__(self, cache: PersistentKvCache) -> None:
+        self._cache = cache
 
     def get(self, key: str) -> _AutotuneCacheEntry | None:
-        with self._lock:
-            return self._loaded_entries().get(key)
+        raw = self._cache.load(_autotune_entry_name(key))
+        if raw is None:
+            return None
+        payload = json.loads(raw)
+        return _decode_autotune_entry(payload) if isinstance(payload, dict) else None
 
     def put(self, key: str, value: _AutotuneCacheEntry) -> None:
-        with self._lock:
-            entries = self._loaded_entries()
-            entries[key] = value
-            self._write(entries)
-
-    def _loaded_entries(self) -> dict[str, _AutotuneCacheEntry]:
-        if self._entries is not None:
-            return self._entries
-        self._entries = {}
-        url = self._url_fn()
-        if url is None:
-            return self._entries
-        try:
-            payload = autotune_cache_utils.load_json(url)
-        except Exception as exc:
-            logger.warning("Unable to load fused CE autotune cache from %s: %s", url, exc)
-            return self._entries
-        for key, raw in payload.items():
-            if isinstance(key, str) and isinstance(raw, dict):
-                entry = _decode_autotune_entry(raw)
-                if entry is not None:
-                    self._entries[key] = entry
-        return self._entries
-
-    def _write(self, entries: dict[str, _AutotuneCacheEntry]) -> None:
-        url = self._url_fn()
-        if url is None:
-            return
-        payload = {key: _encode_autotune_entry(value) for key, value in entries.items()}
-        try:
-            autotune_cache_utils.write_json(url, payload)
-        except Exception as exc:
-            logger.warning("Unable to persist fused CE autotune cache to %s: %s", url, exc)
+        payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
+        self._cache.store(_autotune_entry_name(key), payload)
 
 
 _CANONICAL_BACKEND_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -229,10 +223,12 @@ def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | N
 
 
 def _autotune_enabled() -> bool:
-    return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
+    return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-_AUTOTUNE_CACHE = AutotuneBlockSizeCache()
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache(
+    PersistentKvCache.for_prefix(_AUTOTUNE_BLOCK_SIZE_PREFIX, is_writer=lambda: jax.process_index() == 0)
+)
 
 
 def _autotune_jaxpr_hash(
@@ -263,8 +259,26 @@ def _autotune_jaxpr_hash(
 
         traced = jax.make_jaxpr(_loss_only)(x, labels, w)
         return hashlib.sha256(str(traced.jaxpr).encode("utf-8")).hexdigest()[:16]
-    except Exception:
+    except Exception as exc:
+        logger.warning("Fused CE autotune result will not be shared because the kernel jaxpr is unavailable: %s", exc)
         return None
+
+
+@lru_cache(maxsize=None)
+def _autotune_revision(impl_name: str) -> str:
+    source_root = pathlib.Path(__file__).resolve().parent
+    autotune_helpers = source_root.parent / "autotune_utils.py"
+    return combined_content_hash(
+        [
+            _AUTOTUNE_SOURCE_SCHEMA,
+            f"implementation={impl_name}",
+            f"source={directory_content_hash(source_root)}",
+            f"autotune_helpers={file_content_hash(autotune_helpers)}",
+            f"dependencies={workspace_lock_hash(pathlib.Path(__file__))}",
+            f"jax={jax.__version__}",
+            f"jaxlib={jaxlib.__version__}",
+        ]
+    )
 
 
 def _autotune_cache_key(
@@ -279,7 +293,12 @@ def _autotune_cache_key(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
-) -> str:
+) -> str | None:
+    """Return a shared autotune identity, or ``None`` when safe identity is unavailable.
+
+    A missing jaxpr or source/compiler revision disables both cache reads and
+    writes, including negative entries, while still allowing the sweep to run.
+    """
     devices = jax.devices()
     device_kind = devices[0].device_kind.lower() if devices else ""
     compute_dtype = jnp.dtype(dtype).name if dtype is not None else "none"
@@ -294,8 +313,17 @@ def _autotune_cache_key(
         precision=precision,
         return_argmax=return_argmax,
     )
+    if jaxpr_hash is None:
+        return None
+    try:
+        revision = _autotune_revision(impl_name)
+    except (OSError, ValueError) as exc:
+        logger.warning("Fused CE autotune result will not be shared because source identity is unavailable: %s", exc)
+        return None
     return "|".join(
         (
+            _AUTOTUNE_SOURCE_SCHEMA,
+            revision,
             impl_name,
             jax.default_backend(),
             device_kind,
@@ -308,7 +336,7 @@ def _autotune_cache_key(
             str(logit_soft_cap),
             str(precision),
             str(return_argmax),
-            f"jaxpr={jaxpr_hash}" if jaxpr_hash is not None else "jaxpr=unavailable",
+            f"jaxpr={jaxpr_hash}",
         )
     )
 
@@ -450,7 +478,7 @@ def _autotune_block_sizes_on_miss(
         precision=precision,
         return_argmax=return_argmax,
     )
-    cached = _AUTOTUNE_CACHE.get(cache_key)
+    cached = _AUTOTUNE_CACHE.get(cache_key) if cache_key is not None else None
     if cached is not None:
         if isinstance(cached, _NoViableCandidate):
             logger.info(
@@ -495,14 +523,15 @@ def _autotune_block_sizes_on_miss(
             best = candidate
 
     if best is None:
-        # The jaxpr-derived cache key invalidates this entry if the kernel changes.
-        _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
+        if cache_key is not None:
+            _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
             errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
         )
 
-    _AUTOTUNE_CACHE.put(cache_key, best)
+    if cache_key is not None:
+        _AUTOTUNE_CACHE.put(cache_key, best)
     logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
 
@@ -659,7 +688,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         impl_for_call = impl
         if explicit_block_sizes:
             block_sizes_for_impl = resolved_block_sizes
-        elif impl_for_call in ("xla", "reference"):
+        elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
             inferred, has_tuned_match = infer_block_sizes_with_tuned_match(

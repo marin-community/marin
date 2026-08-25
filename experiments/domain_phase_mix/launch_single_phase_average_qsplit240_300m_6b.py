@@ -24,8 +24,8 @@ import pandas as pd
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import Executor, ExecutorMainConfig, executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (

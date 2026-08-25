@@ -4,8 +4,10 @@ Marin provides a set of standard builders for the common stages of an LM experim
 data download, tokenization, mixture assembly, training, and evaluation. Reach for these
 before writing custom step code.
 
-All builders return lazy `ArtifactStep[T]` handles (e.g. `ArtifactStep[TokenizedCache]` or
-`ArtifactStep[LevanterCheckpoint]`) that `StepRunner` materializes on demand.
+The download, tokenization, training, and evaluation builders return lazy `ArtifactStep[T]`
+handles (e.g. `ArtifactStep[TokenizedCache]` or `ArtifactStep[LevanterCheckpoint]`) that
+`StepRunner` materializes on demand. `mixture` is the exception: it runs inside a step, taking
+that step's `StepContext` and returning a Levanter `LmDataConfig`.
 
 ## Download
 
@@ -29,6 +31,10 @@ All builders return lazy `ArtifactStep[T]` handles (e.g. `ArtifactStep[Tokenized
 
 ## Evaluation
 
-::: experiments.evals.evals.default_eval
+::: marin.experiment.evaluation.EvalGroup
 
-::: experiments.evals.evals.default_key_evals
+::: marin.experiment.evaluation.eval_step
+
+::: marin.experiment.evaluation.eval_steps
+
+::: marin.experiment.evaluation.eval_report

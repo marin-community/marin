@@ -19,7 +19,6 @@ from fray.cluster import ResourceConfig
 from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.utils import create_cache_tokenizer_step
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
@@ -394,17 +393,10 @@ def build_executor_steps(
         lr_schedule="cosine",
     )
 
-    tokenizer_cache_base = f"{marin_prefix.rstrip('/')}/raw/tokenizers"
     eval_datasets_cache_path = f"{marin_prefix.rstrip('/')}/raw/eval-datasets/code-tasks"
 
-    os.environ["MARIN_TOKENIZER_CACHE_PATH"] = tokenizer_cache_base
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
-    cache_tokenizer_step = create_cache_tokenizer_step(
-        tokenizer_name=TOKENIZER_NAME,
-        gcs_path=os.path.join(tokenizer_cache_base, TOKENIZER_NAME.replace("/", "--")),
-        name_prefix=sweep_config.name,
-    )
     cache_eval_datasets_step = create_cache_eval_datasets_step(
         eval_tasks=CORE_TASKS + CODE_TASKS,
         gcs_path=eval_datasets_cache_path,
@@ -473,7 +465,6 @@ def build_executor_steps(
     )
 
     all_steps = [
-        cache_tokenizer_step,
         cache_eval_datasets_step,
         run_manifest_step,
         weight_configs_step,

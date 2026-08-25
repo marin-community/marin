@@ -12,6 +12,8 @@ import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float
 
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
+
 from .config import (
     BlockSizes,
     HybridModeConfig,
@@ -54,27 +56,6 @@ IMPLEMENTATIONS = {
 _DEFAULT_IMPLEMENTATIONS: tuple[Implementation, ...] = ("xla",)
 
 
-def _sharding_of(value: jax.Array):
-    try:
-        sharding = value.sharding  # type: ignore[attr-defined]
-    except Exception:
-        sharding = None
-    if sharding is not None:
-        return sharding
-
-    aval = getattr(value, "aval", None)
-    if aval is None:
-        return None
-    return getattr(aval, "sharding", None)
-
-
-def _named_sharding_of(value: jax.Array) -> NamedSharding | None:
-    sharding = _sharding_of(value)
-    if isinstance(sharding, NamedSharding):
-        return sharding
-    return None
-
-
 def _partition_axes(entry: object) -> tuple[str, ...]:
     if entry is None:
         return ()
@@ -101,7 +82,7 @@ def _merged_partition_entry(entries: Sequence[object]) -> str | tuple[str, ...] 
 def _reshape_merge_leading_axes(value: jax.Array, num_axes: int) -> jax.Array:
     merged = math.prod(value.shape[:num_axes]) if num_axes else 1
     out_sharding = None
-    sharding = _named_sharding_of(value)
+    sharding = named_sharding_of(value)
     if sharding is not None:
         merged_entry = _merged_partition_entry(sharding.spec[:num_axes])
         out_sharding = NamedSharding(sharding.mesh, P(merged_entry, *sharding.spec[num_axes:]))
@@ -115,8 +96,8 @@ def _reshape_restore_leading_axes(
     leading_source: jax.Array,
 ) -> jax.Array:
     out_sharding = None
-    source_sharding = _named_sharding_of(leading_source)
-    value_sharding = _named_sharding_of(value)
+    source_sharding = named_sharding_of(leading_source)
+    value_sharding = named_sharding_of(value)
     if source_sharding is not None:
         tail_spec = value_sharding.spec[1:] if value_sharding is not None else (None,) * (value.ndim - 1)
         out_sharding = NamedSharding(

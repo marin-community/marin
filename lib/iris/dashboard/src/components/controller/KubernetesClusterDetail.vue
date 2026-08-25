@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { timestampMs, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatRelativeTime, formatBytes } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
-import type { GetKubernetesClusterStatusResponse, NodePoolStatus } from '@/types/rpc'
+import type { GetKubernetesClusterStatusResponse, NodePoolStatus, NodeStatus } from '@/types/rpc'
 
 // Presentational cluster-status view rendered inside a backend's detail panel on
 // the Backends tab. The parent supplies the BackendStatus.kubernetes snapshot;
@@ -82,8 +82,51 @@ function poolProgressBarClass(pool: NodePoolStatus): string {
   }
 }
 
+// -- Node helpers --
+// int64 proto fields arrive as JSON strings; coerce before arithmetic/formatting.
+
+function num(v?: string): number {
+  return v ? Number(v) : 0
+}
+
+function nodeHealthLabel(node: NodeStatus): string {
+  if (!node.ready) return node.statusSummary || 'NotReady'
+  if (!node.schedulable) return 'Cordoned'
+  return 'Ready'
+}
+
+function nodeHealthClasses(node: NodeStatus): string {
+  if (!node.ready) return 'bg-status-danger-bg text-status-danger border-status-danger-border'
+  if (!node.schedulable) return 'bg-status-warning-bg text-status-warning border-status-warning-border'
+  return 'bg-status-success-bg text-status-success border-status-success-border'
+}
+
+function nodeHealthDotClass(node: NodeStatus): string {
+  if (!node.ready) return 'bg-status-danger'
+  if (!node.schedulable) return 'bg-status-warning'
+  return 'bg-status-success'
+}
+
+function shortGpuModel(model?: string): string {
+  if (!model) return ''
+  // "NVIDIA H100 80GB HBM3" -> "H100"; a bare "H100" label passes through.
+  return model.replace(/^NVIDIA\s+/i, '').split(/\s+/)[0]
+}
+
+function acceleratorLabel(node: NodeStatus): string {
+  const count = node.gpuCount ?? 0
+  if (count <= 0) return 'CPU'
+  const model = shortGpuModel(node.gpuModel)
+  return model ? `${count}× ${model}` : `${count}× GPU`
+}
+
+function isGpuNode(node: NodeStatus): boolean {
+  return (node.gpuCount ?? 0) > 0
+}
+
 // -- Computed --
 
+const nodes = computed(() => props.status.nodes ?? [])
 const pools = computed(() => props.status.nodePools ?? [])
 const pods = computed(() => props.status.podStatuses ?? [])
 
@@ -187,6 +230,74 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
         </span>
       </div>
     </div>
+
+    <!-- ===== Nodes ===== -->
+    <section v-if="nodes.length > 0">
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
+        Nodes
+      </h3>
+
+      <div class="overflow-x-auto rounded-lg border border-surface-border">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr class="border-b border-surface-border bg-surface">
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Node</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Health</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Accelerator</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-40">CPU</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-44">Memory</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-right w-16">Pods</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="node in nodes"
+              :key="node.name"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+            >
+              <!-- Node identity -->
+              <td class="px-3 py-2">
+                <div class="text-[13px] font-mono font-semibold">{{ node.name }}</div>
+                <div v-if="node.region || node.instanceType" class="text-xs text-text-muted truncate" :title="node.instanceType">
+                  {{ [node.region, node.instanceType].filter(Boolean).join(' · ') }}
+                </div>
+              </td>
+
+              <!-- Health -->
+              <td class="px-3 py-2">
+                <span
+                  :class="['inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border', nodeHealthClasses(node)]"
+                  :title="node.statusSummary"
+                >
+                  <span :class="['w-1.5 h-1.5 rounded-full', nodeHealthDotClass(node)]" />
+                  {{ nodeHealthLabel(node) }}
+                </span>
+              </td>
+
+              <!-- Accelerator -->
+              <td class="px-3 py-2 text-[13px] font-mono" :class="isGpuNode(node) ? 'text-text' : 'text-text-muted'">
+                {{ acceleratorLabel(node) }}
+              </td>
+
+              <!-- CPU allocatable capacity -->
+              <td class="px-3 py-2 text-xs font-mono text-text-muted">
+                {{ Math.round(num(node.cpuMillicores) / 1000) }} cores
+              </td>
+
+              <!-- Memory allocatable capacity -->
+              <td class="px-3 py-2 text-xs font-mono text-text-muted">
+                {{ formatBytes(num(node.memoryBytes)) }}
+              </td>
+
+              <!-- Pods -->
+              <td class="px-3 py-2 text-[13px] font-mono text-right">
+                <span :class="(node.runningPods ?? 0) > 0 ? 'text-text' : 'text-text-muted'">{{ node.runningPods ?? 0 }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <!-- ===== Node Pools ===== -->
     <section v-if="pools.length > 0">

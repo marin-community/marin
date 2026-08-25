@@ -39,9 +39,9 @@ To achieve that one goal it carries a large, brittle apparatus:
 
 ### And it actively hurts
 
-`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`: the daily TPU
-canary was **red for 8 consecutive runs**. Two failure modes, both reservation
-apparatus:
+[The 2026-06-08 canary ferry incident](https://echo.oa.dev/wiki/14): the daily
+TPU canary was **red for 8 consecutive runs**. Two failure modes, both
+reservation apparatus:
 
 1. The `:reservation:` holder inherited the parent's `preemptible=false` and hunted
    for a non-existent non-preemptible v5p-8 group → stuck PENDING for 3.5h.
@@ -102,7 +102,7 @@ Caller audit confirms nothing depends on the hold:
 - The only `--reserve` users are **CPU orchestrators** that co-locate accelerator
   work: the canary ferry and `experiments/grug/moe/agent.md`. Both want the *hint*,
   not the hold — the hold is exactly what broke the canary for 8 days.
-- `dev_tpu.py` (the `reserve-tpu` skill) does **not** use `--reserve`; it submits a
+- `dev_tpu.py` (covered by the `use-iris` skill) does **not** use `--reserve`; it submits a
   normal job with a `zone_constraint` and an accelerator resource spec
   (`scripts/iris/dev_tpu.py:747`). Unaffected.
 

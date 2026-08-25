@@ -39,11 +39,11 @@ def test_exact_paragraph_deduplication(fox_corpus):
     # test_gray_dup_2 and test_gray_dup_3 are non-canonical, each has 2 duplicate paragraphs
     for dup_id in ["test_gray_dup_2", "test_gray_dup_3"]:
         assert dup_id in by_doc
-        assert len(by_doc[dup_id]["attributes"]["dup_spans"]) == 2
+        assert len(by_doc[dup_id]["dup_spans"]) == 2
 
     # test_gray_partial shares first paragraph with dup_1/2/3 (non-canonical)
     assert "test_gray_partial" in by_doc
-    assert len(by_doc["test_gray_partial"]["attributes"]["dup_spans"]) == 1
+    assert len(by_doc["test_gray_partial"]["dup_spans"]) == 1
 
     # Unique docs should not appear in output
     assert "test_unique_1" not in by_doc
@@ -80,8 +80,8 @@ def test_exact_document_deduplication(fox_corpus):
     assert "test_gray_dup_1" not in by_doc
 
     # test_gray_dup_2 and test_gray_dup_3 are non-canonical dups
-    assert by_doc["test_gray_dup_2"]["attributes"]["dup_doc"] is True
-    assert by_doc["test_gray_dup_3"]["attributes"]["dup_doc"] is True
+    assert by_doc["test_gray_dup_2"]["dup_doc"] is True
+    assert by_doc["test_gray_dup_3"]["dup_doc"] is True
 
     # Unique docs should not appear in output
     assert "test_unique_1" not in by_doc

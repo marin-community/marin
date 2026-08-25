@@ -1,0 +1,117 @@
+{
+  "type": "table",
+  "title": "Control-plane components",
+  "description": "Ready vs desired replicas, cumulative container restarts, and any waiting reason for each watched component. Missing means the Deployment does not exist.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "waiting_reason"
+        },
+        "properties": [
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-text"
+            }
+          },
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "": {
+                    "color": "green",
+                    "index": 0
+                  },
+                  "CrashLoopBackOff": {
+                    "color": "red",
+                    "index": 1
+                  },
+                  "ImagePullBackOff": {
+                    "color": "red",
+                    "index": 2
+                  },
+                  "Missing": {
+                    "color": "red",
+                    "index": 3
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "kind"
+        },
+        "properties": [
+          {
+            "id": "custom.hidden",
+            "value": true
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/control_plane",
+      "url_options": {
+        "method": "GET"
+      },
+      "filterExpression": "kind == 'component'",
+      "columns": [
+        {
+          "selector": "kind",
+          "text": "kind",
+          "type": "string"
+        },
+        {
+          "selector": "cluster",
+          "text": "cluster",
+          "type": "string"
+        },
+        {
+          "selector": "component",
+          "text": "component",
+          "type": "string"
+        },
+        {
+          "selector": "ready",
+          "text": "ready",
+          "type": "number"
+        },
+        {
+          "selector": "desired",
+          "text": "desired",
+          "type": "number"
+        },
+        {
+          "selector": "restarts",
+          "text": "restarts",
+          "type": "number"
+        },
+        {
+          "selector": "waiting_reason",
+          "text": "waiting_reason",
+          "type": "string"
+        }
+      ]
+    }
+  ]
+}

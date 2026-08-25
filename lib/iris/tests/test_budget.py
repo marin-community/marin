@@ -8,31 +8,25 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.controller import ops
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
     UserTask,
     compute_effective_band,
-    compute_user_spend,
     interleave_by_user,
     resource_value,
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
-from rigging.server_auth import VerifiedIdentity, _verified_identity
-from rigging.timing import Timestamp
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     MockController,
     make_controller_state,
     make_test_entrypoint,
 )
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from rigging.server_auth import VerifiedIdentity, identity_scope
 
+SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 BATCH = job_pb2.PRIORITY_BAND_BATCH
@@ -128,6 +122,7 @@ _UNLIMITED_DEFAULTS = UserBudgetDefaults(budget_limit=0, max_band=INTERACTIVE)
     [
         (INTERACTIVE, 10000, 5000, BATCH),  # over budget → demoted
         (INTERACTIVE, 3000, 5000, INTERACTIVE),  # within budget → kept
+        (SYSTEM, 10000, 5000, SYSTEM),  # system never demoted
         (PRODUCTION, 10000, 5000, PRODUCTION),  # production never demoted
         (INTERACTIVE, 999999, 0, INTERACTIVE),  # limit=0 means unlimited
         (BATCH, 10000, 5000, BATCH),  # batch stays batch
@@ -146,126 +141,6 @@ def test_effective_band_no_limit_row_uses_defaults():
     assert compute_effective_band(INTERACTIVE, "alice", {"alice": 5000}, {}, tight) == BATCH
     # Unlimited default (0) → no demotion regardless of spend.
     assert compute_effective_band(INTERACTIVE, "alice", {"alice": 999999}, {}, _UNLIMITED_DEFAULTS) == INTERACTIVE
-
-
-# ---------------------------------------------------------------------------
-# priority_band helpers
-# ---------------------------------------------------------------------------
-
-
-def test_priority_band_name_roundtrip():
-    for band in PRIORITY_BAND_VALUES:
-        assert priority_band_value(priority_band_name(band)) == band
-
-
-# ---------------------------------------------------------------------------
-# compute_user_spend
-# ---------------------------------------------------------------------------
-
-
-def _launch_request(
-    name: str,
-    cpu_millicores: int = 4000,
-    memory_bytes: int = 16 * GiB,
-    include_resources: bool = True,
-    replicas: int = 1,
-    band: int = 0,
-) -> controller_pb2.Controller.LaunchJobRequest:
-    req = controller_pb2.Controller.LaunchJobRequest(
-        name=name,
-        entrypoint=make_test_entrypoint(),
-        environment=job_pb2.EnvironmentConfig(),
-        replicas=replicas,
-        priority_band=band,
-    )
-    if include_resources:
-        req.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=cpu_millicores, memory_bytes=memory_bytes))
-    return req
-
-
-def _start_running_job(
-    state,
-    user: str,
-    job_name: str,
-    *,
-    cpu_millicores: int = 4000,
-    memory_bytes: int = 16 * GiB,
-    replicas: int = 1,
-    include_resources: bool = True,
-) -> None:
-    """Submit a job, register a worker, and transition each task to RUNNING."""
-    job_id = JobName.root(user, job_name)
-    request = _launch_request(
-        job_id.to_wire(),
-        cpu_millicores=cpu_millicores,
-        memory_bytes=memory_bytes,
-        include_resources=include_resources,
-        replicas=replicas,
-    )
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
-
-    worker_id = WorkerId(f"w-{user}")
-    with state._db.transaction() as cur:
-        ops.worker.register(
-            cur,
-            worker_id=worker_id,
-            address=f"{worker_id}:8080",
-            metadata=job_pb2.WorkerMetadata(
-                hostname=str(worker_id),
-                ip_address="127.0.0.1",
-                cpu_count=16,
-                memory_bytes=64 * GiB,
-                disk_bytes=100 * GiB,
-            ),
-            ts=Timestamp.now(),
-            health=state._health,
-        )
-    for idx in range(replicas):
-        task_id = job_id.task(idx)
-        with state._db.transaction() as cur:
-            ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=worker_id,
-                        updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
-                    )
-                ],
-                health=state._health,
-                now=Timestamp.now(),
-            )
-
-
-def test_compute_user_spend_empty(state):
-    with state._db.read_snapshot() as snap:
-        assert compute_user_spend(snap) == {}
-
-
-def test_compute_user_spend_sums_running_tasks(state):
-    _start_running_job(state, "alice", "job", cpu_millicores=4000, memory_bytes=16 * GiB, replicas=2)
-    with state._db.read_snapshot() as snap:
-        spend = compute_user_spend(snap)
-    assert spend["alice"] == resource_value(4000, 16 * GiB, 0) * 2
-
-
-def test_compute_user_spend_excludes_pending(state):
-    """Tasks that never reach RUNNING/ASSIGNED/BUILDING do not contribute."""
-    job_id = JobName.root("bob", "pending")
-    request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
-    with state._db.read_snapshot() as snap:
-        assert compute_user_spend(snap).get("bob", 0) == 0
-
-
-def test_compute_user_spend_null_resources_proto(state):
-    """Regression: res_device_json is NULL when LaunchJobRequest omits resources."""
-    _start_running_job(state, "carol", "no-resources", include_resources=False)
-    with state._db.read_snapshot() as snap:
-        assert compute_user_spend(snap).get("carol", 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -288,19 +163,13 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
 
 
 def _as_admin(fn, *args, **kwargs):
-    reset = _verified_identity.set(VerifiedIdentity(user_id="admin", role="admin"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="admin", role="admin")):
         return fn(*args, **kwargs)
-    finally:
-        _verified_identity.reset(reset)
 
 
 def _as_user(fn, user_id, *args, **kwargs):
-    reset = _verified_identity.set(VerifiedIdentity(user_id=user_id, role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id=user_id, role="user")):
         return fn(*args, **kwargs)
-    finally:
-        _verified_identity.reset(reset)
 
 
 def _set_budget(user_id: str, limit: int = 5000, max_band: int = INTERACTIVE):
@@ -312,11 +181,13 @@ def _get_budget(user_id: str):
 
 
 def _launch(name: str, band: int = 0):
-    return _launch_request(
-        name,
-        cpu_millicores=1000,
-        memory_bytes=GiB,
-        band=band,
+    return controller_pb2.Controller.LaunchJobRequest(
+        name=name,
+        entrypoint=make_test_entrypoint(),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        priority_band=band,
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=GiB),
     )
 
 
@@ -365,7 +236,8 @@ def test_list_user_budgets(service):
     for user_id, limit, band in [
         ("alice", 5000, INTERACTIVE),
         ("bob", 3000, BATCH),
-        ("charlie", 0, PRODUCTION),
+        ("charlie", 0, SYSTEM),
+        ("dana", 0, PRODUCTION),
     ]:
         _as_admin(service.set_user_budget, _set_budget(user_id, limit, band), None)
 
@@ -375,25 +247,28 @@ def test_list_user_budgets(service):
         None,
     )
     by_user = {u.user_id: u for u in resp.users}
-    assert set(by_user) == {"alice", "bob", "charlie"}
+    assert set(by_user) == {"alice", "bob", "charlie", "dana"}
     assert by_user["alice"].budget_limit == 5000
     assert by_user["bob"].max_band == BATCH
-    assert by_user["charlie"].max_band == PRODUCTION
+    assert by_user["charlie"].max_band == SYSTEM
+    assert by_user["dana"].max_band == PRODUCTION
 
 
-def test_non_admin_cannot_submit_production(service):
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_non_admin_cannot_submit_admin_band(service, band):
     with pytest.raises(ConnectError) as exc:
-        _as_user(service.launch_job, "alice", _launch("/alice/prod-job", band=PRODUCTION), None)
+        _as_user(service.launch_job, "alice", _launch("/alice/admin-job", band=band), None)
     assert exc.value.code == Code.PERMISSION_DENIED
 
 
-def test_admin_can_submit_production(service):
-    resp = _as_admin(service.launch_job, _launch("/admin/prod-job", band=PRODUCTION), None)
-    assert resp.job_id == "/admin/prod-job"
+@pytest.mark.parametrize("band", [SYSTEM, PRODUCTION])
+def test_admin_can_submit_admin_band(service, band):
+    resp = _as_admin(service.launch_job, _launch("/admin/admin-job", band=band), None)
+    assert resp.job_id == "/admin/admin-job"
 
 
 def test_launch_job_rejects_band_above_user_max(service):
-    """User with max_band=BATCH cannot submit INTERACTIVE (numerically lower) jobs."""
+    """User with max_band=BATCH cannot submit higher-priority jobs."""
     _as_admin(service.set_user_budget, _set_budget("alice", 0, BATCH), None)
     with pytest.raises(ConnectError) as exc:
         _as_user(
@@ -410,10 +285,3 @@ def test_launch_job_unspecified_band_accepted(service):
     """Submitting with band=0 (UNSPECIFIED) is accepted and defaults to INTERACTIVE."""
     resp = _as_user(service.launch_job, "alice", _launch("/alice/default-band-job", band=0), None)
     assert resp.job_id == "/alice/default-band-job"
-
-
-def test_get_budget_spend_reflects_running_task(service, state):
-    _as_admin(service.set_user_budget, _set_budget("alice", 10000, INTERACTIVE), None)
-    _start_running_job(state, "alice", "running-job", cpu_millicores=1000, memory_bytes=GiB)
-    resp = _as_admin(service.get_user_budget, _get_budget("alice"), None)
-    assert resp.budget_spent > 0

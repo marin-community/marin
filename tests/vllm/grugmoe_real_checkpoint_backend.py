@@ -28,7 +28,8 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REGION = "europe-west4"
@@ -80,9 +81,7 @@ def _join_path(base: str, *parts: str) -> str:
 
 
 def _fs_path(path: str):
-    import fsspec  # noqa: PLC0415
-
-    return fsspec.core.url_to_fs(path)
+    return url_to_fs(path)
 
 
 def _exists(path: str) -> bool:
@@ -534,11 +533,12 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     os.environ.setdefault("VLLM_XLA_CACHE_PATH", args.cache_dir)
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
-    from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
+    from marin.inference.config import InferenceModelConfig, VllmEngineConfig, VllmLauncherType  # noqa: PLC0415
+    from marin.inference.vllm_backend import vllm_launcher  # noqa: PLC0415
     from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
 
     staged_artifact = _stage_artifact_for_vllm(args.artifact_dir)
-    model = ModelConfig(
+    model = InferenceModelConfig(
         name=SERVED_MODEL_NAME,
         path=staged_artifact.vllm_model_path,
         engine_kwargs={
@@ -560,7 +560,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "1",
     ]
     started = time.time()
-    with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
+    launcher = vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU))
+    with VllmEnvironment(
+        model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args, launcher=launcher
+    ) as env:
         print("vllm_server_initialized=True", flush=True)
         print("vllm_server_url=" + env.server_url, flush=True)
         print("vllm_model_path=" + staged_artifact.vllm_model_path, flush=True)

@@ -71,7 +71,6 @@ Usage:
     uv run lib/iris/scripts/install_cw_network.py --cluster cw-rno2a uninstall --apply
 """
 
-import ipaddress
 import os
 import subprocess
 import time
@@ -81,23 +80,29 @@ import click
 import yaml
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
+from iris.cluster.platforms.k8s.network_manifests import (
+    CERT_MANAGER_CHART,
+    CLUSTERISSUER_CRD,
+    CONTROLLER_PROXY_INGRESS_NAME,
+    CW_REPO_NAME,
+    CW_REPO_URL,
+    DEFAULT_CLUSTER_ISSUER,
+    DEFAULT_TLS_SECRET,
+    INGRESS_NAME,
+    ISSUER_NAMES,
+    MIDDLEWARE_CRD,
+    MIDDLEWARE_NAME,
+    TRAEFIK_CHART,
+    default_federation_host,
+    federation_ingress,
+    http01_issuer,
+    ipallowlist_middleware,
+    normalize_source,
+)
 from rigging.config_discovery import resolve_cluster_config
 
 DEFAULT_INGRESS_CLASS = "traefik"
 
-CW_REPO_NAME = "coreweave"
-CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
-TRAEFIK_CHART = f"{CW_REPO_NAME}/traefik"
-CERT_MANAGER_CHART = f"{CW_REPO_NAME}/cert-manager"
-
-LE_ACME = {
-    "prod": "https://acme-v02.api.letsencrypt.org/directory",
-    "staging": "https://acme-staging-v02.api.letsencrypt.org/directory",
-}
-# ClusterIssuer names this script creates; use as controller.coreweave.cluster_issuer.
-ISSUER_NAMES = {"prod": "letsencrypt-http01-prod", "staging": "letsencrypt-http01-staging"}
-
-CLUSTERISSUER_CRD = "clusterissuers.cert-manager.io"
 _CRD_WAIT_SECONDS = 120.0
 
 # API groups whose CRDs the charts register; a namespace delete orphans these.
@@ -118,28 +123,11 @@ _FQDN_JSONPATH = '{.status.conditions[?(@.type=="ExternalRecords")].message}'
 _FQDN_WAIT_SECONDS = 90.0
 _COREWEAVE_APP = ".coreweave.app"
 
-# Federation route: an IP-locked Ingress + ipAllowList Middleware covering the
-# WHOLE controller host. It is the only off-cluster ingress for a CoreWeave
-# controller — there is no world-open surface (users reach Iris via iris.oa.dev,
-# marin federates outward, so marin's egress is the only external caller).
-_INGRESS_NAME = "iris-federation"
-_MIDDLEWARE_NAME = "iris-federation-ipallowlist"
-_MIDDLEWARE_CRD = "middlewares.traefik.io"
-
 # Egress addresses of the marin-side controllers that federate into a CoreWeave cluster,
 # reserved as iris-marin-fed-egress and iris-marin-dev-fed-egress in hai-gcp-models. The
 # Middleware's sourceRange is replaced wholesale on every install, never merged, so an
 # install that names a subset silently strands the omitted cluster at a 403.
 FEDERATION_ALLOW_SOURCES = ("34.27.183.11", "35.254.13.19")
-# The controller's legacy world-open /proxy Ingress. The IP-locked route here
-# supersedes it, so install removes it (leaving it would keep /proxy world-open,
-# since Traefik prefers its longer path prefix).
-_CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
-# TLS secret cert-manager issues for the federation route.
-DEFAULT_TLS_SECRET = "iris-controller-fed-tls"
-# Staging first to avoid Let's Encrypt rate limits while DNS/allowlist are shaken
-# out; flip to the prod issuer once the staging cert validates.
-DEFAULT_CLUSTER_ISSUER = ISSUER_NAMES["staging"]
 # _auth_mode's value for a permissive controller (no login arm, no trusted_cidrs).
 _NULL_AUTH = "null-auth"
 
@@ -295,117 +283,12 @@ def _derive_from_cluster(name: str) -> _DerivedConfig:
     )
 
 
-def _default_host(settings: NetworkSettings) -> str:
-    """The controller's public host, ``iris-cw-<cluster>.oa.dev`` (override with ``--host``)."""
-    short = settings.cluster[len("cw-") :] if settings.cluster.startswith("cw-") else settings.cluster
-    return f"iris-cw-{short}.oa.dev"
-
-
 def _normalize_source(value: str) -> str:
-    """Validate one allowlist entry and return it in CIDR form (bare IP -> /32,/128)."""
+    """CLI-friendly wrapper around ``normalize_source``: bad input -> ``click.BadParameter``."""
     try:
-        if "/" in value:
-            ipaddress.ip_network(value, strict=False)
-            return value
-        ip = ipaddress.ip_address(value)
+        return normalize_source(value)
     except ValueError as exc:
         raise click.BadParameter(f"{value!r} is not a valid IP or CIDR: {exc}", param_hint="--allow-source") from exc
-    return f"{value}/{32 if ip.version == 4 else 128}"
-
-
-# --------------------------------------------------------------------------
-# Manifests
-# --------------------------------------------------------------------------
-def _http01_issuer(env: str, email: str, ingress_class: str) -> dict:
-    """A Let's Encrypt HTTP-01 ClusterIssuer validated through ``ingress_class``.
-
-    HTTP-01 (not CoreWeave's bundled DNS-01) so it can issue for a custom host,
-    which the coreweave.app DNS-01 webhook cannot. Requires the host to already
-    resolve to the Traefik LoadBalancer before issuance.
-    """
-    return {
-        "apiVersion": "cert-manager.io/v1",
-        "kind": "ClusterIssuer",
-        "metadata": {"name": ISSUER_NAMES[env]},
-        "spec": {
-            "acme": {
-                "server": LE_ACME[env],
-                "email": email,
-                "privateKeySecretRef": {"name": f"{ISSUER_NAMES[env]}-account-key"},
-                "solvers": [{"http01": {"ingress": {"ingressClassName": ingress_class}}}],
-            }
-        },
-    }
-
-
-def _build_ipallowlist_middleware(*, namespace: str, source_ranges: list[str], xff_depth: int) -> dict:
-    """A Traefik ``ipAllowList`` Middleware admitting only ``source_ranges``.
-
-    By default Traefik matches the client's direct transport peer (``RemoteAddr``).
-    If the CoreWeave LoadBalancer SNATs (so Traefik sees the LB, not the real
-    client), set ``xff_depth`` to the number of trusted proxy hops and Traefik
-    reads the client IP from ``X-Forwarded-For`` instead. Verify which applies by
-    testing a refused request from a non-allowlisted host.
-    """
-    ip_allow_list: dict = {"sourceRange": source_ranges}
-    if xff_depth > 0:
-        ip_allow_list["ipStrategy"] = {"depth": xff_depth}
-    return {
-        "apiVersion": "traefik.io/v1alpha1",
-        "kind": "Middleware",
-        "metadata": {"name": _MIDDLEWARE_NAME, "namespace": namespace},
-        "spec": {"ipAllowList": ip_allow_list},
-    }
-
-
-def _build_federation_ingress(
-    *,
-    namespace: str,
-    service_name: str,
-    port: int,
-    host: str,
-    ingress_class: str,
-    tls_secret: str,
-    cluster_issuer: str,
-) -> dict:
-    """Single catch-all Ingress routing the whole controller host, IP-locked by the Middleware.
-
-    One ``/`` path attaches the ``ipAllowList`` Middleware via the router-middlewares
-    annotation (``<ns>-<name>@kubernetescrd``), so the entire controller surface is
-    reachable only from the allowlisted source. cert-manager issues the cert via
-    ``cluster_issuer``; its HTTP-01 solver runs on its own unrestricted Ingress, so
-    the allowlist does not block ACME validation.
-    """
-    annotations = {
-        "traefik.ingress.kubernetes.io/router.middlewares": f"{namespace}-{_MIDDLEWARE_NAME}@kubernetescrd",
-    }
-    if cluster_issuer:
-        annotations["cert-manager.io/cluster-issuer"] = cluster_issuer
-    spec: dict = {
-        "ingressClassName": ingress_class,
-        "rules": [
-            {
-                "host": host,
-                "http": {
-                    "paths": [
-                        {
-                            "path": "/",
-                            "pathType": "Prefix",
-                            "backend": {"service": {"name": service_name, "port": {"number": port}}},
-                        }
-                    ]
-                },
-            }
-        ],
-    }
-    if tls_secret:
-        spec["tls"] = [{"hosts": [host], "secretName": tls_secret}]
-    return {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "Ingress",
-        "metadata": {"name": _INGRESS_NAME, "namespace": namespace, "annotations": annotations},
-        "spec": spec,
-    }
 
 
 # --------------------------------------------------------------------------
@@ -460,14 +343,12 @@ def install(
         )
 
     issuer_docs = (
-        [_http01_issuer(env, acme_email, settings.ingress_class) for env in ("staging", "prod")]
+        [http01_issuer(env, acme_email, settings.ingress_class) for env in ("staging", "prod")]
         if not skip_issuers and acme_email
         else []
     )
-    middleware = _build_ipallowlist_middleware(
-        namespace=settings.namespace, source_ranges=source_ranges, xff_depth=xff_depth
-    )
-    ingress = _build_federation_ingress(
+    middleware = ipallowlist_middleware(namespace=settings.namespace, source_ranges=source_ranges, xff_depth=xff_depth)
+    ingress = federation_ingress(
         namespace=settings.namespace,
         service_name=settings.service_name,
         port=settings.port,
@@ -496,7 +377,7 @@ def install(
     click.echo(f"  allowlist:    {', '.join(source_ranges)}")
     click.echo(f"  backend:      {settings.service_name}:{settings.port} (namespace {settings.namespace})")
     click.echo(f"  tls secret:   {tls_secret}  (cert-manager issues via {cluster_issuer})")
-    click.echo(f"  removes:      the controller's world-open {_CONTROLLER_PROXY_INGRESS_NAME} Ingress, if present")
+    click.echo(f"  removes:      the controller's world-open {CONTROLLER_PROXY_INGRESS_NAME} Ingress, if present")
     click.echo(yaml.safe_dump_all([middleware, ingress], default_flow_style=False, sort_keys=False))
 
     _warn_if_permissive(settings)
@@ -535,9 +416,9 @@ def install(
         kubectl_apply_docs(issuer_docs, kflags, "ClusterIssuers")
 
     click.secho("==> Applying the federation ingress", fg="blue", bold=True)
-    if not resource_present("crd", _MIDDLEWARE_CRD, kflags):
+    if not resource_present("crd", MIDDLEWARE_CRD, kflags):
         raise click.ClickException(
-            f"Traefik Middleware CRD {_MIDDLEWARE_CRD} not found — the ipAllowList cannot be applied.\n"
+            f"Traefik Middleware CRD {MIDDLEWARE_CRD} not found — the ipAllowList cannot be applied.\n"
             "Install Traefik (drop --skip-traefik) before the federation route."
         )
     kubectl_apply_docs([middleware, ingress], kflags, "the federation ingress")
@@ -590,7 +471,15 @@ def _print_next_steps(settings: NetworkSettings, *, host: str, cluster_issuer: s
             "off-cluster request must present a bearer; the IP allowlist alone is not an identity gate.",
             fg="yellow",
         )
-    click.echo(f"  (inspect: kubectl get ingress {_INGRESS_NAME} -n {settings.namespace} {' '.join(kflags)} -o wide)")
+    if cluster_issuer != DEFAULT_CLUSTER_ISSUER:
+        click.secho(
+            f"  NOTE: cluster-issuer is {cluster_issuer!r}, not the default {DEFAULT_CLUSTER_ISSUER!r}. If this "
+            f"cluster is IaC-managed (has a provisioning.coreweave.ingress block), that annotation is also set "
+            f"declaratively via active_cluster_issuer in lib/iris/config/{settings.cluster}.yaml — update it to "
+            f"match, or the next `pulumi up` will silently revert this flip.",
+            fg="yellow",
+        )
+    click.echo(f"  (inspect: kubectl get ingress {INGRESS_NAME} -n {settings.namespace} {' '.join(kflags)} -o wide)")
 
 
 # --------------------------------------------------------------------------
@@ -657,17 +546,17 @@ def _helm_release_installed(release: str, namespace: str, hflags: list[str]) -> 
 def _delete_federation_ingress(settings: NetworkSettings, kflags: list[str]) -> None:
     """Delete the federation Ingress and its ipAllowList Middleware from the controller namespace."""
     run(
-        ["kubectl", *kflags, "delete", "ingress", _INGRESS_NAME, "-n", settings.namespace, "--ignore-not-found"],
+        ["kubectl", *kflags, "delete", "ingress", INGRESS_NAME, "-n", settings.namespace, "--ignore-not-found"],
         check=True,
     )
-    if resource_present("crd", _MIDDLEWARE_CRD, kflags):
+    if resource_present("crd", MIDDLEWARE_CRD, kflags):
         run(
             [
                 "kubectl",
                 *kflags,
                 "delete",
-                _MIDDLEWARE_CRD,
-                _MIDDLEWARE_NAME,
+                MIDDLEWARE_CRD,
+                MIDDLEWARE_NAME,
                 "-n",
                 settings.namespace,
                 "--ignore-not-found",
@@ -689,7 +578,7 @@ def _delete_controller_proxy_ingress(settings: NetworkSettings, kflags: list[str
             *kflags,
             "delete",
             "ingress",
-            _CONTROLLER_PROXY_INGRESS_NAME,
+            CONTROLLER_PROXY_INGRESS_NAME,
             "-n",
             settings.namespace,
             "--ignore-not-found",
@@ -715,12 +604,12 @@ def _scan_leftovers(
     """
     leftovers: list[str] = []
     fed_ingress = subprocess.run(
-        ["kubectl", *kflags, "get", "ingress", _INGRESS_NAME, "-n", settings.namespace],
+        ["kubectl", *kflags, "get", "ingress", INGRESS_NAME, "-n", settings.namespace],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     if fed_ingress.returncode == 0:
-        leftovers.append(f"ingress/{_INGRESS_NAME} (namespace {settings.namespace})")
+        leftovers.append(f"ingress/{INGRESS_NAME} (namespace {settings.namespace})")
     for release, namespace in release_pairs:
         if _helm_release_installed(release, namespace, hflags):
             leftovers.append(f"helm release {release} (namespace {namespace})")
@@ -750,9 +639,9 @@ def uninstall(settings: NetworkSettings, *, apply: bool) -> None:
     namespaces = list(dict.fromkeys([settings.traefik_namespace, settings.cert_manager_namespace]))
 
     click.secho("==> Plan (teardown of the CoreWeave network stack):", fg="blue", bold=True)
-    click.echo(f"  kubectl delete ingress {_INGRESS_NAME} + middleware {_MIDDLEWARE_NAME} -n {settings.namespace}")
+    click.echo(f"  kubectl delete ingress {INGRESS_NAME} + middleware {MIDDLEWARE_NAME} -n {settings.namespace}")
     click.echo(
-        f"  kubectl delete ingress {_CONTROLLER_PROXY_INGRESS_NAME} -n {settings.namespace}   # the legacy /proxy route"
+        f"  kubectl delete ingress {CONTROLLER_PROXY_INGRESS_NAME} -n {settings.namespace}   # the legacy /proxy route"
     )
     click.echo(f"  kubectl delete clusterissuer {' '.join(issuers)}   # first, while the CRD still exists")
     for release, namespace in release_pairs:
@@ -949,7 +838,7 @@ def install_cmd(
     source_ranges = [_normalize_source(value) for value in allow_sources]
     install(
         settings,
-        host=host or _default_host(settings),
+        host=host or default_federation_host(settings.cluster),
         source_ranges=source_ranges,
         tls_secret=tls_secret or DEFAULT_TLS_SECRET,
         cluster_issuer=cluster_issuer or DEFAULT_CLUSTER_ISSUER,

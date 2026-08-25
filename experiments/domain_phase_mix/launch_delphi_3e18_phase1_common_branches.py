@@ -28,8 +28,8 @@ from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix import launch_delphi_3e18_phase0_prefix_candidates as candidates
 from experiments.domain_phase_mix import launch_delphi_3e18_phase0_prefix_replay as replay

@@ -1,0 +1,942 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Critical rules notify operators immediately. Warning rules remain visible in
+# Grafana without sending notifications. The k8s rules read the bridge's
+# /k8s/alerts/* endpoints, which return string label columns plus exactly one
+# numeric column. Most also always emit at least one row per cluster (explicit
+# zeros when healthy), making their NoData state unreachable by construction;
+# gpu_rack_trays is the exception. Every rule still sets noDataState/execErrState
+# to Alerting so monitoring-path failures remain visible.
+#
+# Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
+# dashboard-only: they have expected benign causes (capacity pressure, user
+# error), so paging on them would be noise.
+apiVersion: 1
+
+deleteRules:
+  - orgId: 1
+    uid: infra-probe-failed
+
+groups:
+  - orgId: 1
+    name: k8s-control-plane
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: k8s-cluster-unreachable
+        title: K8sClusterUnreachable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: k8s API server unreachable ({{ $labels.error_class }})"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/unreachable
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: error_class, text: error_class, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-control-plane-crashloop
+        title: ControlPlaneCrashLooping
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: a watched control-plane component is in backoff"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/crashloops
+              url_options:
+                method: GET
+                params:
+                  - { key: scope, value: control-plane }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: scope, text: scope, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-webhook-endpoints-empty
+        title: WebhookEndpointsEmpty
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.webhook }} has no ready endpoints — fail-closed admission will reject pod CREATE"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/webhook_ready
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: webhook, text: webhook, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: k8s-control-plane-degraded
+        title: ControlPlaneDegraded
+        condition: C
+        for: 15m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.component }} has fewer ready replicas than desired"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/degraded
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: component, text: component, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-node-kernel-deadlock
+        title: CoreWeaveNodeKernelDeadlock
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: node {{ $labels.node }} reports KernelDeadlock ({{ $labels.reason }})"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/node_deadlocks
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-gpu-pod-termination-stuck
+        title: GpuPodTerminationStuck
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: GPU pod termination stuck on {{ $labels.node }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/.agents/skills/recover-stuck-k8s-pod/SKILL.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/stuck_gpu_pods
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-arch-mismatch-image
+        title: ArchMismatchImageExecuted
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: containers from {{ $labels.image }} died instantly on {{ $labels.node }}"
+          description: >-
+            Containers died the way an image built for the wrong CPU architecture dies.
+            Check the evidence column on /k8s/arch_mismatch: "message" means the kubelet
+            recorded the runtime's "exec format error" and the mismatch is confirmed,
+            while "signature" means only exit 255 in under a second, which an unrelated
+            instant failure also produces. The runbook has the confirmation commands.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#image-architecture-mismatch
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/arch_mismatch
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: image, text: image, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-gpu-rack-trays-low
+        title: GpuRackTraysBelowMinimum
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: rack {{ $labels.rack_name }} has fewer than 16 trays Ready"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/gpu_rack_trays
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: rack_name, text: rack_name, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [16] }
+
+  # The marin datasource combines a query-path probe of the GCE hub with the
+  # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
+  # NotReady when /health misses its fifteen-second deadline; the hub reports its
+  # measured one-row log query latency. The alert projection returns an explicit zero for
+  # every healthy server, so NoData means the monitoring path itself failed.
+  - orgId: 1
+    name: finelog-health
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: finelog-fleet-unhealthy
+        title: FinelogFleetUnhealthy
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.server }} is {{ $labels.state }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/fleet_health
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: server, text: server, type: string }
+                - { selector: role, text: role, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: error_class, text: error_class, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
+  - orgId: 1
+    name: coreweave-storage
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: coreweave-storage-capacity
+        title: CoreWeaveStorageCapacity
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.region }}: CoreWeave storage exceeds 80% of quota"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 129600, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT metric, zone, bucket, storage_class, value_bytes, observed_at,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
+                               ) AS row_num
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
+                      ), latest AS (
+                        SELECT metric, zone, storage_class, value_bytes
+                        FROM ranked
+                        WHERE row_num = 1
+                          AND observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'
+                      ), usage AS (
+                        SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
+                        FROM latest
+                        WHERE metric = 'used_bytes'
+                        GROUP BY zone, storage_class
+                      ), quota AS (
+                        SELECT zone, storage_class, MAX(value_bytes) AS quota_bytes
+                        FROM latest
+                        WHERE metric = 'quota_bytes'
+                        GROUP BY zone, storage_class
+                      )
+                      SELECT usage.zone AS region,
+                             usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value
+                      FROM usage
+                      JOIN quota
+                        ON quota.zone = usage.zone
+                       AND quota.storage_class = usage.storage_class
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
+
+      - uid: coreweave-storage-telemetry-stale
+        title: CoreWeaveStorageTelemetryStale
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.region }}: CoreWeave {{ $labels.metric }} telemetry is stale for {{ $labels.detail }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 10800, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT metric, zone, bucket, storage_class, observed_at,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, metric, zone, bucket, storage_class
+                                 ORDER BY observed_at DESC, seq DESC
+                               ) AS row_num
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
+                      )
+                      SELECT zone AS region,
+                             metric,
+                             COALESCE(bucket, storage_class) AS detail,
+                             1 AS value
+                      FROM ranked
+                      WHERE row_num = 1
+                        AND observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: metric, text: metric, type: string }
+                - { selector: detail, text: detail, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # Hero-run stalled-training detection. A fresh running task-state row whose
+  # root is named hero-*-coord or hero-*-coord-<retry> enrolls the job.
+  # Structured run_id telemetry supplies current-execution progress;
+  # task-to-node GPU attribution is not required.
+  - orgId: 1
+    name: training-progress
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: training-progress-stalled
+        title: TrainingProgressStalled
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.job }} has {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-stall-alert-contract.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_stalls
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: phase, text: phase, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # A hero run whose lowest loss over the last five minutes clears its own
+      # trailing mean plus six standard deviations, or stops being finite. It
+      # takes the same hero-run route as the stall alert: a hero run diverging
+      # unwatched costs more than a false page, which a silence answers. Grouping
+      # by root job excludes `reason`, so a spike that later goes non-finite
+      # threads under the message it already sent.
+      - uid: training-loss-spike
+        title: TrainingLossSpike
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/loss_spikes
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # Hero run health beyond progress and loss: the telemetry path, the optimizer,
+  # MoE routing, throughput, evaluation, and Iris retries. These watch every run
+  # the Iris rollup or Levanter telemetry reports, so an outage on one path
+  # leaves the other watching. See docs/ops/hero-run-health-alerts.md.
+  - orgId: 1
+    name: training-health
+    folder: Alerts
+    interval: 1m
+    rules:
+      # Silent for ten minutes while Iris still reports the tasks running.
+      # Levanter publishes phase every minute, so this is the telemetry path or
+      # the process. TrainingProgressStalled defers rather than page again.
+      - uid: training-telemetry-gone
+        title: TrainingTelemetryGone
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} publishes no telemetry while Iris runs its tasks"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_telemetry
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # The optimizer signals that precede a divergence TrainingLossSpike catches
+      # later: a loss floor a whole unit above its trailing floor, a gradient
+      # norm above the band this run has no clipping for, and skipped steps.
+      - uid: training-optimizer-unstable
+        title: TrainingOptimizerUnstable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} optimizer reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_optimizer
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # Token drops, router collapse, a throughput or MFU floor, a worse
+      # evaluation, a stale Iris state row, and controller retries. These take
+      # the explicit notification=slack exception: an operator reads them beside
+      # the run dashboard, so they announce without opening a triage session.
+      - uid: training-run-health-degraded
+        title: TrainingRunHealthDegraded
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_health
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # This warning finds an active Zephyr producer that reports no shard
+  # completion for 45 minutes. The bridge removes expired producers.
+  - orgId: 1
+    name: zephyr-progress
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: zephyr-pipeline-progress-stalled
+        title: ZephyrPipelineProgressStalled
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.job }} execution {{ $labels.execution }} has stale shard progress"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/zephyr/OPS.md#stale-pipeline-warning
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/zephyr_stalls
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: execution, text: execution, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
+  # existing per-cluster iris datasources. The health row always exists (the
+  # bridge answers reachable=false rather than erroring), and `up` is its 0/1
+  # numeric mirror. The rule carries the cluster label itself since the endpoint
+  # is already cluster-scoped. marin-dev is warning: its controller matters to
+  # dev work, not to production paging.
+  - orgId: 1
+    name: iris-control-plane
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: iris-federation-peer-unreachable
+        title: IrisFederationPeerUnreachable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          cluster: marin
+        annotations:
+          summary: "marin federation cannot reach {{ $labels.peer }} through {{ $labels.controller_address }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /peers
+              url_options: { method: GET }
+              columns:
+                - { selector: peer, text: peer, type: string }
+                - { selector: controller_address, text: controller_address, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: iris-controller-down-marin
+        title: IrisControllerDown
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          cluster: marin
+        annotations:
+          summary: "marin: Iris controller /health is unreachable"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /health
+              url_options: { method: GET }
+              columns:
+                - { selector: up, text: up, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: iris-controller-down-marin-dev
+        title: IrisControllerDown
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          cluster: marin-dev
+        annotations:
+          summary: "marin-dev: Iris controller /health is unreachable"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin-dev
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin-dev }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /health
+              url_options: { method: GET }
+              columns:
+                - { selector: up, text: up, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }

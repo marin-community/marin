@@ -32,10 +32,21 @@ Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
+The launcher takes the shared experiment CLI (`marin.experiment.cli`): `--version` sets the
+checkpoint version and is required, and `--run` builds the trial (without it the lowered plan is
+printed and nothing runs). The checkpoint version is deferred to `--version`, so pass `--version dev`
+to iterate (per-user namespace, rebuilds each run) or a calendar version `YYYY.MM.DD` to keep a run.
+
+Print the plan (no run):
+
+```bash
+uv run python experiments/grug/base/launch.py --version dev
+```
+
 Local run (lowers the trial and runs it through the `StepRunner`):
 
 ```bash
-uv run python experiments/grug/base/launch.py
+uv run python experiments/grug/base/launch.py --version dev --run
 ```
 
 Iris cluster run (from a dev box, on `marin` prod cluster):
@@ -43,7 +54,7 @@ Iris cluster run (from a dev box, on `marin` prod cluster):
 ```bash
 uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.grug.base.launch
+  -- python -m experiments.grug.base.launch --version dev --run
 ```
 
 The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
@@ -89,8 +100,13 @@ Useful flags:
 ## Checkpoints and resume
 
 - Checkpoints are written to `<output_path>/checkpoints` by default in `base/launch.py`.
-- `run_grug` restores from `trainer.load_checkpoint_path` when set, otherwise tries the run checkpoint path.
-- If `trainer.load_checkpoint=True` and no checkpoint is found, startup fails; otherwise it starts from scratch.
+- An own-run checkpoint resumes the complete state, including the optimizer and step, and takes precedence over
+  `trainer.initialize_from`.
+- `trainer.initialize_from` initializes a new phase from external model weights when no own-run checkpoint was loaded.
+  The optimizer and step remain fresh. MoE runs also load `pending_qb_betas`; EMA starts from the loaded parameters.
+- `trainer.load_checkpoint_path` is a complete-state resume, not a phase-chaining input.
+- If `trainer.load_checkpoint=True` and no resume checkpoint is found, startup fails. With no resume checkpoint and no
+  `trainer.initialize_from`, the run starts from scratch.
 
 ## Environment variables you will likely use
 

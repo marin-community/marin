@@ -64,7 +64,7 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
 
-    # config narrows the base's model_type to its own concrete model class (LSP narrowing; mypy flags the same)
+    # config narrows the base's model_type to its own concrete model class (LSP narrowing; pyrefly flags the same)
     @property
     def model_type(self) -> Type["WhisperModel"]:  # pyrefly: ignore[bad-override]
         return WhisperModel
@@ -242,7 +242,7 @@ class WhisperLayer(ModuleWithStateDictSerialization, eqx.Module):
 
         if has_cross:
             encoder_attn_ln = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
-            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_attn)
+            encoder_attn = WhisperAttention.init(Heads, HeadSize, config, key=k_cross)
         else:
             encoder_attn_ln = None
             encoder_attn = None

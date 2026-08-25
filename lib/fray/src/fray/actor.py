@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
+class ActorUnavailableError(RuntimeError):
+    """Raised when an actor endpoint is temporarily unavailable."""
+
+
 class ActorHandle(Protocol):
     """Handle to a remote actor with .method.remote() calling convention."""
 

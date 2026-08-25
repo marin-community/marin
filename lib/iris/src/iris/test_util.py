@@ -10,6 +10,16 @@ from collections.abc import Callable
 from rigging.timing import Deadline, Duration
 
 
+class FakeStatsTable:
+    """Records every finelog ``Table.write`` call so tests can assert on emitted rows."""
+
+    def __init__(self) -> None:
+        self.writes: list[list[object]] = []
+
+    def write(self, rows) -> None:
+        self.writes.append(list(rows))
+
+
 class SentinelFile:
     """File-based signal for cross-thread/cross-process coordination in tests.
 

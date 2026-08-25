@@ -1,52 +1,30 @@
 ---
 name: commit
-description: Lint, run the pre-PR checks, commit, push, and author or update the branch's pull request in the required plain-text format. Use when committing, pushing, or creating/updating a PR.
+description: Use only when a change is ready to commit, push, or open or update its pull request; do not activate during implementation.
 ---
 
-# Skill: Commit & PR
+# Commit and PR
 
-Get the branch clean, commit it, run the advisory lint review over the committed
-diff, then — when it is ready — open or update the pull request.
+Before authoring a commit or PR title or body, read:
 
-**Order matters.** Your own cleanups and the mechanical fixes come first, then the
-commit, and only *then* the `--review` pass. Committing before the review gives
-you a clean checkpoint to review against (the review reads the whole branch diff
-versus the merge base) and a natural place to land any follow-up fixes as a new
-commit. The review is read-only: it never edits, commits, or pushes for you.
+- `.agents/skills/writing-style/SKILL.md`
+- `.agents/skills/writing-style/pull-requests.md`
+- `.agents/skills/writing-style/ai-writing-donts.md`
 
-## Checklist
-
-Work top to bottom. For a quick work-in-progress checkpoint, do **1, 2, 4, 5,
-7** (clean up, lint, stage, commit, push) and stop. The changed-test cleanup in
-step 1 is a PR-readiness gate, not required for disposable WIP checkpoints. Run
-the whole list before you open or update a PR.
-
-1. Clean up your own diff (self-review).
-2. Mechanical lint & format — `./infra/pre-commit.py --changed-files --fix`.
-3. Tests & docs checks, when relevant.
-4. Stage the specific files for this work.
-5. Commit. ← natural checkpoint; the working tree is now clean.
-6. Lint-catalog review — `./infra/pre-commit.py --review`; fix or answer every finding.
-7. Push (maybe).
-8. Open or update the PR.
+Clean and validate the diff, commit it, run the advisory review over the
+committed branch, push, update the PR, then monitor it. A WIP checkpoint may
+stop after clean-up, lint, staging, commit, and push.
 
 ## 1. Clean up your own diff
 
-Read your own `git diff` before anything else. Drop dead code, debugging
-leftovers, and stale comments; tighten names; make the change say only what it
-means to. The review in step 6 is advisory and read-only — it will not clean up
-for you.
+Read the complete branch diff and remove dead code, weak tests, stale prose,
+debugging artifacts, and unrelated changes.
 
 If the diff touches tests and this commit is intended for a PR or review, read
 root `TESTING.md` and the relevant module-specific `AGENTS.md` or testing docs
-as part of this self-review. Review every changed test for slop: tautological
-assertions, disposable smoke probes left as pytest tests, internal call-count
-assertions, incidental string or command-fragment assertions, over-mocking,
-weakened tolerances, sleeps, skipped tests, and local marker/fake/mock
-violations.
-
-Fix or delete low-value tests before a PR-ready commit. Scratch probes are fine
-during development and WIP checkpointing, but they must not survive into a PR.
+as part of this self-review. Apply `TESTING.md`'s behavioral-value gate to every
+changed test. Delete disposable probes and low-value tests before a PR-ready
+commit.
 
 ## 2. Lint and format
 
@@ -54,40 +32,33 @@ during development and WIP checkpointing, but they must not survive into a PR.
 ./infra/pre-commit.py --changed-files --fix   # diff-scoped; use --all-files for a full sweep
 ```
 
-`./infra/pre-commit.py` is the required entry point — never `uv run pre-commit`,
-never `--no-verify`. If `--fix` cannot resolve something, fix it by hand. Do not
-skip or weaken checks.
+This is the required entry point; do not substitute `uv run pre-commit`, skip
+hooks, or weaken checks.
 
 ## 3. Tests and docs checks (when relevant)
 
-- `uv run pytest -m 'not slow'` over the test directories your change touches.
+- `uv run --no-project infra/ci/run_tests.py` to run affected safe unit tests.
+  Do not override the repository's default marker expression.
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
 - If the change is docs-heavy: `uv run mkdocs build --strict`.
 
 ## 4. Stage changes
 
-Review `git status` and `git diff`, then stage the specific files that are part
-of this work.
-
-- Stage specific files — avoid `git add -A` / `git add .`.
-- Never stage secrets (`.env`, credentials, tokens).
-- If unrelated changes are present, ask the user before including them.
+Review `git status` and `git diff`, then stage only this task's explicit files.
+Never stage secrets or unrelated work.
 
 ## 5. Commit
 
-- **Subject**: imperative sentence (<72 chars), optional `[scope]` prefix
-  (`[iris]`, `[zephyr]`, `[docs]`, …).
-- **Body** (optional, blank-line separated): what changed and why — the context a
-  reviewer needs. Keep it short and readable.
-- No emoji, no markdown, no bullets in the subject. Do not credit yourself —
-  this includes any `Co-Authored-By: Claude`/`Generated with` trailer. Omit it
-  even if a harness default suggests adding one.
+Follow `writing-style/pull-requests.md` for the commit subject and body.
 
-Create the commit. If a pre-commit hook fails, fix the issue and make a **new**
-commit — never amend (unless the user asks) and never force-push.
+Review the exact message before committing. After the commit, inspect it with
+`git show -s --format='%s%n%n%b' HEAD`; do not push if a tool added attribution,
+a session trailer, or other text that was not in the reviewed message.
 
-This is the checkpoint the rest of the flow builds on: the working tree is clean
-and the branch diff is settled before the review reads it.
+If a hook fails, fix the issue and create a new commit. Do not amend unless the
+user asks.
+
+If there are no changes to commit, say so and stop.
 
 ## 6. Lint-catalog review (before every PR)
 
@@ -95,171 +66,132 @@ and the branch diff is settled before the review reads it.
 ./infra/pre-commit.py --review --agent-command='<your headless CLI>'
 ```
 
-Run this **after** the commit and before opening a PR. It fans out read-only
-agents over the **branch diff against the merge base with `main`** — committed and
-uncommitted work alike — so the clean checkpoint from step 5 is exactly what gets
-reviewed. Pass your own headless invocation (`--agent-command='claude -p'` for
-Claude Code, `'codex exec'` for Codex; defaults to `claude -p`).
+Run this after the initial commit and before publishing the PR. It reviews the
+whole branch diff against the merge base, including uncommitted work. Resolve
+every finding and put fixes in a new commit. Inspect the matching `infra/lint`
+rule and apply findings when they improve the change.
 
-The review is **advisory and read-only**: it reports findings on stdout and does
-not edit, stage, commit, or push anything. Then fix or answer every finding,
-reporting your actions to the user, and land any fixes as a **new** commit. Search
-the `infra/lint` files for the rule behind each `ml-...` code. Treat findings as
-guidelines — apply them when they make the code *better*; the goal is
-high-quality code, not blind adherence.
+The advisory review is read-only: it does not edit, stage, commit, or push.
 
-Each run writes the raw per-arm prompts and outputs, the combined findings, and a
-summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
-read it when a lane is slow or a run looks wrong.
+Do not recursively rerun `--review` after small, targeted touch-ups made in
+response to its findings. Validate behavioral edits with the normal mechanical
+checks and relevant tests. For a formatter-only mechanical edit, rerun formatting
+and lint checks only. Rerun the advisory review only when the follow-up materially
+changes the branch's implementation approach or scope, or when the user asks for
+another pass.
+
+Artifacts are written under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/`.
 
 ## 7. Push
 
-If asked, or if the branch has an upstream, push to the remote tracking branch (`git push -u origin HEAD` if no upstream is
-set). If the push is rejected (diverged history), stop and ask the user — do not
-force-push.
+Push when requested or when the branch has an upstream. Use
+`git push -u origin HEAD` when needed. Stop on rejection; do not force-push
+without explicit authorization.
 
 ## 8. Open or update the PR
 
-Do this once the branch is ready for review. The PR description becomes the
-squash-merge commit message, so **write it the way you'd write a good commit
-message a reviewer reads in `git log`.**
+The PR body becomes the squash-merge commit message. Follow
+`.agents/skills/writing-style/pull-requests.md`.
 
-**Title:** short imperative sentence; optional `[scope]` tag.
+Add `Fixes #NNNN` or `Part of #NNNN` only when an existing issue applies.
 
-**Body:** Lead with what the change does, in plain language, then the motivation —
-the problem it fixes or the reason it's shaped this way. Include only what a
-reviewer needs to understand and approve it. The body should stand on its own: a
-reader who never saw the diff should come away knowing what happened and why.
+**Inspect the payload.** Draft the body in a uniquely named temporary file and
+use `--body-file`. Re-open that file and apply the final compression pass before
+publishing. After creating or editing the PR, fetch the
+exact `title,body` with `gh pr view --json` and immediately correct text inserted
+by a tool or stale template.
 
-Write for the reviewer, not for a template. Most PRs are a paragraph or two with
-no headings. Markdown earns its place when it makes the change *clearer* — a
-short list of the distinct things that changed, a table, a mermaid diagram of a
-new flow are all welcome when they help. Reach for them to aid the reviewer,
-never to fill in a standard set of sections. Let the change decide the shape; do
-not impose a What/Change/Scope/Testing scaffold.
-
-Keep the title and body aligned with the branch's actual scope — including when
-you change a branch that already has a PR.
-
-**Hard rules — violations are rejected:**
-
-- No "Testing" / "Validation" / "Test plan" section, and no "how I verified it"
-  narration. The body is *what & why*. If a test result is the very thing that
-  justifies the change, fold that one fact into the *why*; otherwise leave it out.
-- No empty boilerplate headings — a `## Summary` that restates the title, a
-  `## Changes` that just lists the touched files. If a heading's body adds nothing
-  the reviewer can't get from the title or the diff, delete the heading.
-- No "written by …" / "Created by Claude" notes; don't credit yourself.
-- No checkboxes (`- [ ]`, `- [x]`), no emoji.
-- No filler openers ("This PR…", "I noticed…", "Summary of changes:").
-- Under ~500 words. Shorter is better; a one-line change gets a one-line body.
-
-Example:
-
-```
-Title: [RL] Fix loss: use global token normalization instead of per-example
-
-Body:
-Switch DAPO loss from per-example normalization (/ n_i) to global token
-normalization (/ N). Per-example normalization over-weights short responses,
-hurting math reasoning where correct answers need longer derivations.
-
-Fixes #1234
-```
-
-**Issue linking.** If the work came from a GitHub issue, add `Fixes #NNNN`
-(auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
-just to satisfy this — omit the link when none exists.
-
-**Specifications (>500 LOC only).** A *genuinely large* PR must carry a spec —
-in the linked issue, the PR description, or a linked design doc. A spec still
-obeys every rule above: it leads with what the change does and is not a template.
-It just covers more ground — what was broken or missing (with file/line refs),
-which modules change and what is added/removed, and 10–30 line snippets for
-non-obvious logic. Cover those points in whatever prose and headings genuinely
-help a reviewer; they are not a required `Problem`/`Approach` section scaffold,
-and a large PR still never gets a "Verification" section. This applies to large
-PRs; a small change gets a short prose body, never a spec template.
-
-**Create it.** Unless the user says otherwise and permissions allow, push to a
-branch on the main repository and open the PR from it (use a fork only when
-direct push is unavailable or the user asks):
+Push to the main repository unless direct access is unavailable or the user
+asks for a fork:
 
 ```bash
-gh pr create --title "<title>" --body "<plain text body>" --label agent-generated
+gh pr create --title "<title>" --body-file "<body-file>" --label agent-generated
 ```
 
 - Always add the `agent-generated` label.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
-- If you have a specific github tool, you may use it.
 
-## 9. Monitor the PR — mandatory, in a loop
+## 9. Monitor the PR
 
-Opening the PR does not end your turn. You MUST monitor until the PR is merged or
-closed, or the user tells you to stop. A summary message to the user is NOT a
-substitute for monitoring and is NOT an exit condition.
+Green CI is not an exit condition. Monitor every PR until it
+merges or closes, the user tells you to stop, or a 12-hour wait times out.
 
-Drive the loop with `scripts/ci/wait_for.py`, which blocks on **all** the things
-that matter at once (CI finishing, a new comment or review, the PR closing) and
-returns as soon as the first one fires — so you no longer hand-roll a
-`gh pr checks --watch` then `ScheduleWakeup` backoff. Run it **in the background**
-and you are re-invoked when an event fires; it handles the exponential backoff
-internally.
+Before the first wait, read every current issue comment, inline review comment,
+and submitted review once, then address anything actionable. This is a one-time
+inspection, not a monitoring loop. The comment and review arms establish a
+baseline when they start and wake only for later new or edited feedback.
+
+If Loom is available, set one honest status immediately before waiting:
+
+```bash
+loom status set --tag ok --message "waiting for PR #<N> events"
+```
+
+Do not refresh that status while nothing changes. Invoke one `wait_for.py`
+process in the foreground and keep it attached until it exits:
 
 ```bash
 uv run scripts/ci/wait_for.py --timeout 12h \
-  "github.ci <N>" "github.pr_comment <N>" "github.review <N>" \
-  'poll test "$(gh pr view <N> --json state --jq .state)" != OPEN'
+  "github.ci <N>" "github.pr <N>" \
+  "github.pr_comment <N>" "github.review <N>"
 ```
 
-The `poll '<shell command>'` arm is the escape hatch for anything without a
-built-in: it fires when the command exits `0`, so the command itself is the
-predicate. Here it detects the PR closing/merging (the loop's stop condition);
-use the same pattern to wait on a specific check, a downstream job, or a deploy —
-compose with the shell (`| grep -q`, `| jq -e`, `test`).
+The command's `--timeout 12h` is the only timeout. Do not background or detach
+the process, wrap it in a shell `timeout`, or give the command runner or agent a
+shorter deadline. A tool reporting that the command is still running does not
+end the foreground wait. Give the process handle back to the runtime's blocking
+wait/resume facility and continue waiting for that same process to exit. Repeat
+the blocking resume as often as the execution interface requires.
 
-It prints one JSON object naming the arm that fired and its payload, then exits
-(`0` fired, `2` the 12h timeout elapsed, `1` an error). **Firing is not a verdict:**
-`github.ci` fires when CI *finishes*, pass or fail — read `result.conclusion`.
-On `result.status == "timeout"` — 12h with no event — you may **stand down**: report
-where the PR stands and stop. The long timeout exists precisely so an idle PR
-(green CI, awaiting human review with nothing actionable) lets you end the turn
-rather than re-arm forever.
+`github.pr` covers terminal merged/closed state, merge conflicts,
+ready-for-review transitions, and review-decision changes. It does not inspect
+comment or review bodies, so it does not replace `github.pr_comment` or
+`github.review`. Keep all three arms. Monitoring must not use a raw `poll` shell
+expression, `gh pr checks --watch`, or repeated `gh pr view` calls.
 
-When an arm fires, act on it, then re-arm `wait_for.py` for the next event:
+The wait owns its exponential backoff. While it is running:
 
-1. **`github.ci`** — if `result.conclusion` is `failure`, read the failing job
-   log and fix it. A failure in a file you did not touch is NOT automatically
-   pre-existing: first check whether the same job fails on `main` without your
-   change (or whether your change altered an API, config, or behavior that breaks
-   that caller/test). If your change caused it — even in an untouched file — it is
-   your regression; fix it. Only call it pre-existing once you have confirmed it
-   fails on `main` independently, then handle per the unrelated-changes rule.
-   Never silently absorb a failure. Once CI has finished, **drop the `github.ci`
-   arm** from later re-arms — CI stays terminal, so it would fire immediately on
-   every poll. Re-add it only when you push a new commit (which restarts CI).
-2. **`github.pr_comment` / `github.review`** — respond to it (see below). CI being
-   green does NOT mean there is nothing to do — review bots and humans comment
-   after CI passes. Never declare the PR done on CI status alone. `wait_for.py`
-   ignores your own comments by default, so it wakes you only on others' activity.
-3. **`poll` (PR closed)** — the PR merged or closed; this is an exit condition.
+- remain silent until it returns an event, timeout, or error;
+- do not poll GitHub manually;
+- do not launch another `wait_for.py`;
+- do not narrate unchanged CI, review, or merge state;
+- resume a yielded process handle only with another blocking wait on that same
+  handle; do not treat the yield as an event.
 
-Respond to every human and agent comment: address obvious ones directly (commit
-the fix, then reply, prefixing agent replies with `🤖`) and resolve them. For
-comments you are unsure about, report your analysis and proposed action to the
-user — but keep monitoring while you wait.
+The command prints one JSON object and exits: `0` means an arm fired, `2` means
+the overall timeout elapsed, and `1` means the wait failed. An event is not
+always a successful verdict. Read `result.conclusion` for `github.ci` and
+`result.reasons` for `github.pr`.
 
-Exit conditions (the ways to stop the loop): the PR is merged or closed, the user
-explicitly tells you to stop, or `wait_for.py` hits its 12h timeout with nothing
-left to act on (stand down with a status report). Blocking on a user question
-pauses for the answer; it does not end monitoring.
+Act on the event, read any feedback that arrived concurrently, then re-arm:
 
-## Rules
+1. **`github.ci`** — on failure, read the failing job log and fix the
+   regression. A failure in an untouched file is not automatically
+   pre-existing: confirm the same job fails on `main` independently before
+   treating it as unrelated. Once CI finishes, omit `github.ci` from the next
+   wait because its terminal result would fire immediately. Add it back after a
+   push starts a new run.
+2. **`github.pr`** — `merged` and `closed` are terminal. Resolve `conflicted`
+   before re-arming; an unchanged conflict is intentionally reported again by a
+   fresh wait. `ready_for_review` and `review_decision` describe review-state
+   changes in the attached snapshots. When `review_decision` fires, inspect the
+   submitted review because the lifecycle payload does not include its body.
+3. **`github.pr_comment` / `github.review`** — address every actionable human
+   and agent comment. Prefix agent-authored replies with `🤖` and resolve the
+   thread. The default significant-comment filter ignores the authenticated
+   user's comments, review-bot progress placeholders, clean verdicts, wrappers,
+   Loom's exact `Working on this in loom: <session URL>` acknowledgement, and
+   Loom access-control replies addressed to a bot.
+4. **Timeout** — report the last statuses in the timeout payload and hand off.
+   Do not replace the completed 12-hour block with manual polling.
 
-- `./infra/pre-commit.py` is the only pre-commit entry point.
-- Commit before you run `--review`; the review never commits, pushes, or edits.
-- Never amend a commit unless the user explicitly asks.
-- If there are no changes to commit, say so and stop.
-- `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
-- `AGENTS.md` — coding guidelines.
+Re-arm after every non-terminal event. Once CI finishes, omit `github.ci` so its
+terminal result does not fire immediately; keep `github.pr`,
+`github.pr_comment`, and `github.review` armed for later feedback. Read current
+feedback once before each re-arm so simultaneous events are not absorbed into a
+new baseline without being handled.
+
+A question requiring user input pauses monitoring: raise `attention`, ask the
+question, and resume after the answer. Otherwise the only exit conditions are a
+merged or closed PR, an explicit request to stop, or a 12-hour timeout.

@@ -79,9 +79,9 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Send zstd; accept both zstd and gzip. gzip is kept only as a fallback.
-_SEND_COMPRESSION = ZstdCompression()
-_ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
+_FINELOG_ZSTD_LEVEL = 1
+_SEND_COMPRESSION = ZstdCompression(level=_FINELOG_ZSTD_LEVEL)
+_ACCEPT_COMPRESSIONS = (_SEND_COMPRESSION, GzipCompression())
 
 _BACKOFF_INITIAL = 0.5
 _BACKOFF_MAX = 30.0
@@ -91,6 +91,20 @@ _OVERFLOW_LOG_INTERVAL = 5.0
 class FlushResult(StrEnum):
     SUCCEEDED = "succeeded"
     TIMEOUT = "timeout"
+
+
+@dataclass(frozen=True)
+class NamespaceInfo:
+    """Registered namespace schema and current storage statistics."""
+
+    namespace: str
+    schema: Schema
+    row_count: int
+    byte_size: int
+    min_seq: int
+    max_seq: int
+    segment_count: int
+    storage_policy: StoragePolicy
 
 
 def _format_exc_summary(exc: BaseException) -> str:
@@ -114,6 +128,25 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
     bytes: stats_pb2.COLUMN_TYPE_BYTES,
     datetime: stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
 }
+
+# Human-readable list of the dataclass field types finelog can infer a column
+# from, for the unsupported-type error message.
+_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str]"
+
+
+def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
+    """Resolve a non-``Optional`` field annotation to a ``ColumnType``.
+
+    Returns ``None`` for an unsupported annotation. ``dict[str, str]`` infers to
+    ``COLUMN_TYPE_MAP`` (a native ``Map<Utf8,Utf8>`` column); every other
+    supported field is a bare primitive class in ``_PRIMITIVE_TYPE_MAP``.
+    """
+    primitive = _PRIMITIVE_TYPE_MAP.get(inner)
+    if primitive is not None:
+        return primitive
+    if typing.get_origin(inner) is dict and typing.get_args(inner) == (str, str):
+        return stats_pb2.COLUMN_TYPE_MAP
+    return None
 
 
 def _strip_optional(annotation: Any) -> tuple[Any, bool]:
@@ -161,11 +194,11 @@ def schema_from_dataclass(cls: type) -> Schema:
         # rebuild and wedge all writes. _strip_optional still runs to unwrap the
         # inner type of ``T | None`` fields and to reject unsupported unions.
         inner, _nullable = _strip_optional(annotation)
-        col_type = _PRIMITIVE_TYPE_MAP.get(inner)
+        col_type = _column_type_for_annotation(inner)
         if col_type is None:
             raise SchemaValidationError(
                 f"dataclass {cls.__name__}: field {field.name!r} has unsupported "
-                f"type {annotation!r} (supported: str, int, float, bool, bytes, datetime)"
+                f"type {annotation!r} (supported: {_SUPPORTED_FIELD_TYPES})"
             )
         columns.append(Column(name=field.name, type=col_type, nullable=True))
     key_column = getattr(cls, "key_column", "")
@@ -324,6 +357,12 @@ class Table:
             self._cond.notify_all()
         self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
         with self._cond:
+            if self._processed_seq < self._pushed_seq:
+                logger.warning(
+                    "Table(%s) close() timed out before draining %d pending row(s); they were not sent",
+                    self._namespace,
+                    self._pushed_seq - self._processed_seq,
+                )
             self._closed = True
             self._cond.notify_all()
 
@@ -449,6 +488,7 @@ class Table:
 
 
 _ClientT = TypeVar("_ClientT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class LogClient:
@@ -572,6 +612,30 @@ class LogClient:
                 f"(add a LIMIT or pass a higher max_rows)"
             )
         return result
+
+    def list_namespaces(self) -> list[NamespaceInfo]:
+        """Return every queryable namespace with its schema and storage statistics."""
+        response = self._stats_rpc(lambda client: client.list_namespaces(stats_pb2.ListNamespacesRequest()))
+        return [
+            NamespaceInfo(
+                namespace=info.namespace,
+                schema=schema_from_proto(info.schema),
+                row_count=info.row_count,
+                byte_size=info.byte_size,
+                min_seq=info.min_seq,
+                max_seq=info.max_seq,
+                segment_count=info.segment_count,
+                storage_policy=StoragePolicy.from_proto(info.storage_policy),
+            )
+            for info in response.namespaces
+        ]
+
+    def get_table_schema(self, namespace: str) -> Schema:
+        """Return the registered schema for ``namespace`` without creating a Table handle."""
+        response = self._stats_rpc(
+            lambda client: client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace=namespace))
+        )
+        return schema_from_proto(response.schema)
 
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
@@ -767,9 +831,14 @@ class LogClient:
             log_service_client.close()
 
     def _stats_query(self, sql: str) -> pa.Table:
+        response = self._stats_rpc(lambda client: client.query(stats_pb2.QueryRequest(sql=sql)))
+        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
+        return reader.read_all()
+
+    def _stats_rpc(self, call: Callable[[StatsServiceClientSync], _ResponseT]) -> _ResponseT:
         client = self._get_stats_client()
         try:
-            response = client.query(stats_pb2.QueryRequest(sql=sql))
+            return call(client)
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))
@@ -777,8 +846,6 @@ class LogClient:
         except (ConnectionError, OSError, TimeoutError) as exc:
             self._invalidate(_format_exc_summary(exc))
             raise
-        reader = paipc.open_stream(pa.BufferReader(bytes(response.arrow_ipc)))
-        return reader.read_all()
 
     def _stats_flush(self, namespace: str, batch: pa.RecordBatch) -> None:
         sink = io.BytesIO()

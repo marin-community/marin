@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { formatTimestampMs } from '@/utils/formatting'
+import { timeZoneMode } from '@/composables/useDisplayPrefs'
 import { computed, ref } from 'vue'
 import { logRpcCall } from '@/composables/useRpc'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -70,7 +72,11 @@ function shortLevel(level: string | undefined): string {
 function fmtTime(ts: LogEntry['timestamp']): string {
   const ms = Number(ts?.epochMs ?? 0)
   if (!ms) return ''
-  return new Date(ms).toISOString().slice(11, 23)
+  // Time of day only — the date is constant down a tailed stream and the column
+  // is narrow. The zone follows the header control; in epoch mode there is no
+  // date prefix to drop, and the count is only useful whole.
+  if (timeZoneMode.value === 'raw') return formatTimestampMs(ms, 'raw')
+  return formatTimestampMs(ms, timeZoneMode.value).slice(11)
 }
 
 const sortedEntries = computed(() => entries.value.slice())

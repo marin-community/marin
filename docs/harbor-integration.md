@@ -1,250 +1,150 @@
-# Harbor Framework Integration
+# Harbor evaluation
 
-This document describes Marin's integration with [Harbor](https://harborframework.com), a framework for evaluating and optimizing agents in containerized environments.
+Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts one model
+server, gives Harbor its Iris capability URL, normalizes completed trials into v2
+`EvalRunRecord`/`EvalSample` artifacts, and tears inference down after the selected evaluations
+finish.
 
-## Overview
+Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
+GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported sandbox environment.
+See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
+matrix. This page documents Harbor-specific configuration and output behavior.
 
-The Harbor integration enables running **any Harbor dataset** from the [Harbor registry](https://harborframework.com/registry) without custom adapters. Harbor provides 45+ benchmarks including:
+## Run a benchmark
 
-- **AIME** (60 math problems from AIME 2024, 2025-I, 2025-II)
-- **Terminal-Bench** (89 terminal tasks)
-- **SWE-bench Verified** (500 software engineering tasks)
-- **And 40+ more benchmarks** for code, reasoning, data science, and more
+Use a model and evaluation name from `experiments/evaluation/models.py` and
+`experiments/evaluation/evals.py`:
 
-## Key Features
-
-✅ **Generic Integration** - No custom adapters needed for each benchmark
-✅ **45+ Datasets** - Access entire Harbor registry with one evaluator
-✅ **Sandboxed Execution** - Tasks run in isolated environments (Docker or cloud workspaces)
-✅ **Multi-Environment Support** - Local Docker, Daytona, E2B, Modal
-✅ **Agent Flexibility** - Use Claude Code, custom agents, or build your own
-
-## Quick Start
-
-### Prerequisites
-
-Harbor is an optional dependency. The `evaluate_harbor()` function automatically installs it via the `harbor` extra.
-
-Alternatively, install manually:
 ```bash
-cd lib/marin
-uv add --optional harbor "harbor>=0.1.42"
+# Inspect placement, task limit, and record destination.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals tb2-lite \
+  --dry-run
+
+# Serve once and run two Terminal-Bench tasks in Daytona.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals tb2-lite
 ```
 
-### Running AIME Evaluation
+The `agentic` suite expands to the standard Harbor presets:
 
-```python
-from experiments.evals.evals import evaluate_harbor
-from fray.cluster import ResourceConfig
-
-# Evaluate AIME@1.0 (60 math problems)
-step = evaluate_harbor(
-    model_name="anthropic/claude-opus-4-1",
-    model_path=None,  # API model
-    dataset="aime",
-    version="1.0",
-    max_eval_instances=5,  # Start with 5 tasks
-    agent="claude-code",
-    n_concurrent=2,
-    env="daytona",  # Use cloud sandboxes to avoid local Docker setup
-)
-```
-
-Or use the provided sanity check script:
 ```bash
-export ANTHROPIC_API_KEY=your_key_here
-export DAYTONA_API_KEY=your_key_here
-uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
-
-# Use local Docker instead of Daytona:
-ENV_TYPE=local uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals agentic
 ```
 
-## Available Datasets
+Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
 
-See the full list at [harborframework.com/registry](https://harborframework.com/registry).
+Launch a Harbor `JobConfig` without adding it to the catalog:
 
-Popular datasets include:
-
-| Dataset | Version | Tasks | Description |
-|---------|---------|-------|-------------|
-| `aime` | 1.0 | 60 | Competition math problems |
-| `terminal-bench` | 2.0 | 89 | Terminal/bash tasks |
-| `swebench-verified` | 1.0 | 500 | Software engineering bugs |
-| `ds-1000` | 6.0 | 1000 | Data science problems |
-| `gpqa-diamond` | 1.0 | 198 | Graduate-level science Q&A |
-| `usaco` | 2.0 | 304 | Programming competition problems |
-
-## API Reference
-
-### `evaluate_harbor()`
-
-```python
-def evaluate_harbor(
-    model_name: str,
-    model_path: str | None,
-    dataset: str,
-    version: str = "1.0",
-    max_eval_instances: int | None = None,
-    resource_config: ResourceConfig | None = None,
-    apply_chat_template: bool = False,
-    wandb_tags: list[str] | None = None,
-    generation_params: dict | None = None,
-    agent: str = "claude-code",
-    n_concurrent: int = 4,
-    env: str = "local",
-) -> StepSpec
-```
-
-**Parameters:**
-- `model_name`: Model identifier (e.g., "anthropic/claude-opus-4-1", "qwen2.5-7b-instruct")
-- `model_path`: Path to model (None for API models, GCS path for custom models)
-- `dataset`: Harbor dataset name from registry
-- `version`: Dataset version (default: "1.0")
-- `max_eval_instances`: Limit number of tasks (None = all tasks)
-- `agent`: Harbor agent type:
-  - `"claude-code"` - Anthropic's Claude Code agent (default)
-  - `"terminus-2"` - Harbor's reference agent
-- `n_concurrent`: Number of parallel trials (default: 4)
-- `env`: Container environment:
-  - `"local"` - Local Docker (default, good for testing)
-  - `"daytona"` - Daytona cloud containers (requires API key)
-  - `"e2b"` - E2B containers (requires API key)
-  - `"modal"` - Modal containers (requires API key)
-- `wandb_tags`: Additional W&B tags
-- `resource_config`: Fray resource configuration (dispatched to Iris or a local backend)
-
-## Examples
-
-### Terminal-Bench (Terminal Tasks)
-
-```python
-step = evaluate_harbor(
-    model_name="anthropic/claude-opus-4-1",
-    model_path=None,
-    dataset="terminal-bench",
-    version="2.0",
-    max_eval_instances=10,
-    agent="claude-code",
-    n_concurrent=4,
-    env="local",
-)
-```
-
-### SWE-bench Verified (Software Engineering)
-
-```python
-step = evaluate_harbor(
-    model_name="anthropic/claude-opus-4-1",
-    model_path=None,
-    dataset="swebench-verified",
-    version="1.0",
-    max_eval_instances=50,
-    agent="claude-code",
-    n_concurrent=8,
-    env="daytona",  # Use cloud for better performance
-)
-```
-
-### Custom Model (Qwen 2.5 Instruct)
-
-```python
-step = evaluate_harbor(
-    model_name="qwen2.5-7b-instruct",
-    model_path="gs://marin-us-central2/models/qwen2.5-7b-instruct",
-    dataset="aime",
-    version="1.0",
-    agent="terminus-2",
-    n_concurrent=4,
-    env="local",
-)
-```
-
-## Architecture
-
-### HarborEvaluator
-
-The `HarborEvaluator` class in `lib/marin/src/marin/evaluation/evaluators/harbor_evaluator.py` provides the integration.
-
-**Key design decisions:**
-1. **No adapters needed** - Uses Harbor's registry system to load any dataset
-2. **CLI-based execution** - Wraps `harbor run` command for reliability
-3. **Standardized results** - Parses Harbor's JSON output into Marin format
-4. **Optional dependency** - Harbor installed via `--extra harbor` only when needed
-
-### Result Format
-
-Harbor returns results with per-task rewards (0.0 to 1.0):
-
-```json
-{
-  "trials": {
-    "aime_60": {
-      "reward": 1.0,
-      "correct": true,
-      "status": "success",
-      "trajectory_length": 15
-    },
-    "aime_61": {
-      "reward": 0.0,
-      "correct": false,
-      "status": "failed",
-      "trajectory_length": 42
-    }
-  },
-  "aggregate": {
-    "total_trials": 60,
-    "successful_trials": 42,
-    "mean_reward": 0.70,
-    "accuracy": 0.70
-  }
-}
-
-## Environment Variables
-
-Required for different agents and environments:
-
-- `ANTHROPIC_API_KEY` - For Claude Code agent
-- `OPENAI_API_KEY` - For OpenAI-based agents
-- `DAYTONA_API_KEY` - For Daytona environment
-- `E2B_API_KEY` - For E2B environment
-- `MODAL_API_KEY` - For Modal environment
-
-## Troubleshooting
-
-### "harbor: command not found"
-
-Harbor is auto-installed via the `harbor` extra. Install it manually with:
 ```bash
-cd lib/marin
-uv sync --extra harbor
+# Validate policy, model overlay, and placement without opening Iris.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2 \
+  --dry-run
+
+# Serve the model and run the checked-in policy with a two-task cap.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2
 ```
 
-### Docker errors in local environment
+`--harbor-config` is repeatable and additive with `--evals`. All selected built-in and supplied
+Harbor policies pass pinned-schema and placeholder effective-job validation before the launcher
+opens an Iris client.
 
-Ensure Docker daemon is running:
-```bash
-docker ps
+## Credentials
+
+Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
+They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
+Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
+
+The generic launcher resolves declared references immediately before Iris submission. The isolated
+Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
+Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
+
+## Endpoint lifecycle
+
+Harbor receives a `RunningModel` whose base URL is an Iris link endpoint. The inference runner
+chooses the opaque endpoint name, registers either the direct server or broker proxy with Iris, and
+mints the capability URL. Daytona never receives a worker address.
+
+Each inference session chooses an opaque endpoint name. Iris endpoint leases remove abandoned
+registrations, and a retried task attempt atomically replaces its own same-name registration.
+
+## Policies and datasets
+
+Harbor policy belongs in YAML. This example uses a Hugging Face repository whose root contains
+Harbor task directories:
+
+```yaml
+n_concurrent_trials: 4
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - name: hf://DCAgent2/terminal_bench_2
+    ref: main
 ```
 
-### Slow execution with local Docker
+Use `datasets[].name`, not `datasets[].path`, for `hf://org/repository`. The evaluator downloads the
+snapshot on the submitted worker and gives Harbor a local path. A Harbor registry source uses its
+native selector, such as `name: aime` plus `version: "1.0"`. A local source uses a relative path:
 
-Consider using cloud environment for better performance:
-```python
-env="daytona"  # Or "e2b", "modal"
+```yaml
+environment:
+  type: daytona
+agents:
+  - name: terminus-2
+datasets:
+  - path: tasks
 ```
 
-### API key errors
+Local paths resolve against the directory containing the policy. The resulting directory must remain
+inside the Marin workspace and must be included in the Iris workspace bundle. The launcher stores its
+workspace-relative path so the submitted worker resolves it under the unpacked workspace. Absolute,
+outside-workspace, and missing local directories fail before Iris submission. Hugging Face selector
+syntax is checked before submission; repository availability is checked when the worker downloads the
+snapshot.
 
-Check environment variables:
-```bash
-echo $ANTHROPIC_API_KEY
-```
+Every catalog policy lives under `experiments/evaluation/configs/harbor/` and shares its filename
+with its `EVALS` key. Keep suite membership, runtime task caps, model and hardware selection, and
+secret source declarations in `experiments/evaluation/evals.py`.
 
-## References
+## Ownership boundary
 
-- [Harbor Documentation](https://harborframework.com/docs)
-- [Harbor Registry](https://harborframework.com/registry)
-- [Harbor GitHub](https://github.com/laude-institute/harbor)
-- [ARES (Harbor RL Integration)](https://github.com/withmartian/ares)
-- [Terminal-Bench 2.0 Announcement](https://www.tbench.ai/news/announcement-2-0)
+Marin does not install or import Harbor, `harbor_config`, Daytona, or Harbor's path runtime. The
+root workspace lock contains none of those packages. `marin.external_dependencies.HARBOR` identifies
+the exact Git revision used by two isolated calls:
+
+1. Preflight parses YAML or JSON with Harbor's Pydantic models, rejects unsupported launch shapes,
+   validates a placeholder model/endpoint overlay, and emits opaque deterministic policy JSON plus
+   Marin-owned metadata.
+2. Execution reparses the opaque policy, applies the real endpoint, served model, output directory,
+   materialized dataset path, model kwargs, and task limit, then validates the complete typed job
+   before calling Harbor.
+
+Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
+the served endpoint/model, output paths, materialized source, and explicit `--limit` override both.
+Temporary policy and overlay files are owner-readable and removed after each isolated call.
+
+## Results
+
+Each Harbor evaluation writes:
+
+- `{records_prefix}/{run_id}/record.json`
+- `{records_prefix}/{run_id}/results/samples_harbor.parquet`
+- durable Harbor trial directories and trajectory references
+
+Every completed trial becomes an agentic `EvalSample`. The verifier reward is stored as
+`Grading(method="harbor:verifier")`, and the trajectory is referenced by `trajectory_uri`. Evaldash
+ingests the record and sample parquet in the same way as Evalchemy runs. `record.json` stores the
+deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
+remains part of the policy digest.

@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast
 
 from draccus.utils import DataclassInstance
-from fray.types import CpuConfig, ResourceConfig, TpuConfig
+from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
@@ -22,7 +22,9 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, check_gcs_paths_same_region, marin_temp_bucket, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
 from marin.processing.tokenize import read_tokenized_cache_stats
@@ -149,20 +151,41 @@ def _output_path_temp_component(output_path: str) -> str:
     return output_path.strip("/")
 
 
-def temporary_checkpoint_base_path(output_path: str) -> str:
-    """Return the region-local temporary checkpoint base for an executor output path."""
+def temporary_storage_base_path(output_path: str, *, ttl_days: int, category: str) -> str:
+    """Return region-local temporary storage keyed by an executor output path."""
     output_component = _output_path_temp_component(output_path)
-    temp_prefix = os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component, DEFAULT_CHECKPOINTS_PATH)
     return marin_temp_bucket(
-        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
-        prefix=temp_prefix,
+        ttl_days=ttl_days,
+        prefix=os.path.join(category, output_component),
         source_prefix=output_path,
     )
 
 
+def temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the region-local temporary checkpoint base for an executor output path."""
+    temporary_root = temporary_storage_base_path(
+        output_path,
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        category=TEMPORARY_CHECKPOINTS_PATH,
+    )
+    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+
+
+def data_local_temporary_checkpoint_base_path(output_path: str) -> str:
+    """Return the legacy data-local checkpoint path, bypassing the cluster temp override."""
+    output_component = _output_path_temp_component(output_path)
+    temporary_root = marin_temp_bucket(
+        ttl_days=TEMPORARY_CHECKPOINT_TTL_DAYS,
+        prefix=os.path.join(TEMPORARY_CHECKPOINTS_PATH, output_component),
+        source_prefix=output_path,
+        use_env_override=False,
+    )
+    return prefix_join(temporary_root, DEFAULT_CHECKPOINTS_PATH)
+
+
 def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
     """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
-    and time-policy (temporary) checkpoints on region-local storage keyed off ``output_path``.
+    and time-policy (temporary) checkpoints on region-local storage keyed by ``output_path``.
 
     ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
     identity, so a run id suffix would double it up. Every other checkpointer field is preserved.
@@ -367,10 +390,11 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
 
     JAX automatically places XLA sub-caches (autotune, kernel cache) as
     subdirectories of the compilation cache dir.  The autotune cache uses
-    XLA's C++ ``tsl::Env`` which only supports local paths — it crashes on
-    ``gs://`` and ``s3://``.  Since the autotune cache is ephemeral (skipped
-    entirely on a JAX cache hit) and only saves minutes on cold compiles,
-    we disable it via the JAX config rather than trying to redirect it.
+    XLA's C++ ``tsl::Env`` which only supports local paths, so it cannot follow
+    the compilation cache onto ``gs://`` or ``s3://``.
+
+    This covers backends that never reach Iris's JAX init, which applies the
+    same guard and redirects the autotune cache to node-local disk.
     """
     cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
     if "://" not in cache_dir:
@@ -379,6 +403,37 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
         return
     env["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
+
+
+# XLA disables the NCCL collective watchdog by default (-1). A positive value
+# makes XLA abort the communicators and raise TimeoutError once a collective is
+# stuck that long, so a hung collective becomes a process crash Iris can retry
+# instead of a silent mesh-wide hang.
+GPU_NCCL_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
+# Counts only time spent inside a collective, so it does not fire during compile
+# or data loading. Set above the longest legitimate collective (cross-rank skew on
+# a cold start, checkpoint/eval barriers). Override per run via XLA_FLAGS.
+DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
+TENSORSTORE_CURL_LOW_SPEED_TIME_ENV = "TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS"
+TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV = "TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES"
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME = "60"
+# TensorStore passes this decimal bytes-per-second value directly to libcurl: 1 Mbit/s.
+DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT = "125000"
+
+
+def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
+    """Set the NCCL collective-watchdog timeout and NCCL_DEBUG in ``env`` (in place).
+
+    Defers to an explicit termination timeout already in ``XLA_FLAGS`` and to a
+    preset ``NCCL_DEBUG``.
+    """
+    xla_flags = env.get("XLA_FLAGS", "")
+    if GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in xla_flags:
+        flag = f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}"
+        env["XLA_FLAGS"] = f"{xla_flags} {flag}".strip()
+
+    # WARN surfaces the abort and transport errors without INFO's per-collective volume.
+    env.setdefault("NCCL_DEBUG", "WARN")
 
 
 def resolve_training_env(
@@ -390,8 +445,9 @@ def resolve_training_env(
     Combines the base env from the user (typically ``train_config.env_vars``)
     with hardware-specific defaults from ``levanter.infra.cli_helpers``, run
     metadata (GIT_COMMIT, FERRY_DATE, etc. via ``add_run_env_variables``), a
-    JAX compilation cache pointing at ``marin_temp_bucket``, and a guard
-    against XLA's autotune subcache when the cache lives on remote storage.
+    JAX compilation cache pointing at ``marin_temp_bucket``, a TensorStore
+    stalled-request watchdog, and a guard against XLA's autotune subcache when
+    the cache lives on remote storage.
     """
     default_launch_config = _cli_helpers_module().load_config()
 
@@ -403,6 +459,15 @@ def resolve_training_env(
         _check_for_wandb_key(env)
 
     env = add_run_env_variables(env)
+
+    if isinstance(resources.device, GpuConfig):
+        _add_gpu_collective_watchdog_env(env)
+
+    # TensorStore's S3 retry policy only activates after curl reports an error. Without this
+    # watchdog, a dead connection has no request deadline and can remain in flight until the
+    # operating system times it out.
+    env.setdefault(TENSORSTORE_CURL_LOW_SPEED_TIME_ENV, DEFAULT_TENSORSTORE_CURL_LOW_SPEED_TIME)
+    env.setdefault(TENSORSTORE_CURL_LOW_SPEED_LIMIT_ENV, DEFAULT_TENSORSTORE_CURL_LOW_SPEED_LIMIT)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(

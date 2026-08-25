@@ -1,21 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.runtime.multigpu in-task GPU process supervisor and the
-client-side entrypoint wrapping that drives it. None of this imports jax."""
+"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
 
+import shlex
 import signal
 import subprocess
 import sys
 import textwrap
 
 import pytest
-from iris.client.client import _wrap_entrypoint_for_multiprocess
-from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
-from iris.runtime import multigpu
-from iris.runtime.multigpu import run
+from iris.cluster.types import ResourceSpec, gpu_device
+from iris.hooks import multigpu_main as multigpu
+from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.hooks.multigpu_main import main, run
 from rigging.timing import Duration
 
 
@@ -87,7 +88,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.runtime.multigpu import run
+        from iris.hooks.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
@@ -110,58 +111,85 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     assert proc.returncode == 128 + signal.SIGTERM
 
 
+def test_child_streams_stay_separate_and_rank_tagged(capfd: pytest.CaptureFixture[str]) -> None:
+    # Each stream keeps its identity so iris still classifies an unprefixed
+    # stderr line as an error rather than as INFO on stdout.
+    code = "import sys; print('hello out'); print('hello err', file=sys.stderr)"
+    assert run(nproc=2, devices_per_proc=1, child_argv=_py(code)) == 0
+    captured = capfd.readouterr()
+    assert sorted(line for line in captured.out.splitlines() if "hello" in line) == [
+        "[rank0] hello out",
+        "[rank1] hello out",
+    ]
+    assert sorted(line for line in captured.err.splitlines() if "hello" in line) == [
+        "[rank0] hello err",
+        "[rank1] hello err",
+    ]
+
+
 def test_run_rejects_empty_command() -> None:
     with pytest.raises(ValueError, match="no child command"):
         run(nproc=2, devices_per_proc=1, child_argv=[])
+
+
+def _recording_child(output_dir) -> list[str]:
+    code = (
+        "import os,pathlib; "
+        f"pathlib.Path({str(output_dir)!r}, os.environ['IRIS_MULTIGPU_PROCESS_INDEX']).write_text("
+        "os.environ.get('WRAPPED', '0'))"
+    )
+    return _py(code)
+
+
+def _environment_wrapper() -> str:
+    code = (
+        "import os,sys; "
+        "os.environ['WRAPPED']='1'; "
+        "separator=sys.argv.index('--'); "
+        "os.execv(sys.argv[separator + 1], sys.argv[separator + 1:])"
+    )
+    return shlex.join(_py(code))
+
+
+def _assert_process_outputs(output_dir, expected: str) -> None:
+    assert sorted(path.name for path in output_dir.iterdir()) == ["0", "1"]
+    assert {path.read_text() for path in output_dir.iterdir()} == {expected}
+
+
+def test_wrap_prefixes_each_child(tmp_path) -> None:
+    result = main(
+        ["--nproc", "2", "--wrap", _environment_wrapper(), "--", *_recording_child(tmp_path)],
+    )
+    assert result == 0
+    _assert_process_outputs(tmp_path, "1")
 
 
 def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_wrap_entrypoint_one_process_per_gpu() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
-    )
-    assert wrapped.command == [
-        "python",
-        "-m",
-        "iris.runtime.multigpu",
-        "--nproc",
-        "8",
-        "--devices-per-proc",
-        "1",
-        "--",
-        "python",
-        "train.py",
-        "--steps",
-        "10",
-    ]
+def test_hook_wrap_builds_command_accepted_by_entry_point(tmp_path) -> None:
+    wrapped = MultiGpuHook(nproc=2).wrap(_recording_child(tmp_path))
+    subprocess.run(wrapped, check=True)
+    _assert_process_outputs(tmp_path, "0")
 
 
-def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
-    )
-    assert wrapped.command[:8] == [
-        "python",
-        "-m",
-        "iris.runtime.multigpu",
-        "--nproc",
-        "4",
-        "--devices-per-proc",
-        "2",
-        "--",
-    ]
+def test_hook_wrap_child_applies_per_process_wrapper(tmp_path) -> None:
+    wrapped = MultiGpuHook(nproc=2, wrap_child=_environment_wrapper()).wrap(_recording_child(tmp_path))
+    subprocess.run(wrapped, check=True)
+    _assert_process_outputs(tmp_path, "1")
 
 
-def test_wrap_entrypoint_requires_gpu() -> None:
+def test_build_multigpu_hook_groups_devices() -> None:
+    assert build_multigpu_hook(_gpu_resources(8), 4) == MultiGpuHook(nproc=4, devices_per_proc=2)
+
+
+def test_build_multigpu_hook_requires_gpu() -> None:
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
     with pytest.raises(ValueError, match="requires a GPU device"):
-        _wrap_entrypoint_for_multiprocess(Entrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+        build_multigpu_hook(cpu_only, 2)
 
 
-def test_wrap_entrypoint_requires_divisible_gpu_count() -> None:
-    entry = Entrypoint.from_command("python", "x.py")
+def test_build_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
-        _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=3)
+        build_multigpu_hook(_gpu_resources(8), 3)

@@ -1,6 +1,6 @@
 Marin has most of the pieces for end-to-end data processing \- download, dedup, filtering, classification, decontamination, tokenization \- but the code is scattered across `experiments/` and `lib/marin/` with inconsistent formats, ad-hoc ID handling, and unclear provenance.
 
-We propose consolidating this into **datakit**: a set of composable pipeline stages with standardized formats and conventions, living in `lib/marin/datakit/`. Dataset-specific wiring (e.g., "for Arxiv, apply these transforms") lives in `experiments/` or reference configurations.
+We propose consolidating this into **datakit**: a set of composable pipeline stages with standardized formats and conventions, living in `lib/marin/src/marin/datakit/`. Dataset-specific wiring (e.g., "for Arxiv, apply these transforms") lives in `experiments/` or reference configurations.
 
 
 Links:
@@ -27,7 +27,7 @@ Convert raw data into the **datakit standard format**:
 * **Mandatory columns**:
   * `id` \- unique document identifier (see [ID Column](#id-column) below)
   * `text` \- primary text content \- we enforce UTF-8
-  * `partition_id` \- int, the row's output shard at normalize time. Stamped at write time and preserved by every downstream stage. Shufflers (e.g. fuzzy/exact dedup) use it as the `group_by` key to land output co-partitioned with the source. The shard count itself lives on the artifact (`NormalizedData.num_partitions`), not on every row.
+* **Partition identity**: derived, not stored on rows. Normalize writes `part-x-of-y` files and downstream stages recover the source partition index from the sorted file order (zephyr's `shard.shard_idx`). Stages that emit attributes materialize it as a `partition_id` column on their own output — see `marin.datakit.decon`.
 * **Arbitrary additional columns**: any fields present in the raw data are preserved
 * **Directory structure**: preserver original directory structure
 * **Partition structure**: partition layout from the source does NOT need to be preserved at this point \- and in most cases it will not be
@@ -94,7 +94,7 @@ This means:
 * All downstream stages (embed, classify, dedup) preserve this structure \- same shard count, same ID ranges per shard
 * Consolidation can use Zephyr's `sorted_merge_join` without a costly `group_by` shuffle
 
-For per-document stages (embed, per-doc classify) this falls out of reading source partitions 1:1. For stages that shuffle globally (fuzzy/exact dedup, anything graph-structured), records carry their `partition_id` through the shuffle and the writer does `group_by(partition_id)` to land output back in matching files — so co-partitioning is enforced by data, not by filename arithmetic.
+For per-document stages (embed, per-doc classify) this falls out of reading source partitions 1:1 and reusing the input shard index in the output filename. For stages that shuffle globally (fuzzy/exact dedup, anything graph-structured), the shuffle key determines the output partition: normalize's exact dedup groups by `id`, so the post-shuffle shard index is itself the partition number.
 
 ## Attributes Datasets {#attributes-datasets}
 
@@ -184,12 +184,12 @@ tokenized = StepSpec(
 
 # API Surface
 
-## `lib/marin/datakit/`
+## `lib/marin/src/marin/datakit/`
 
 Core primitives — the reusable building blocks:
 
 ```
-lib/marin/datakit/
+lib/marin/src/marin/datakit/
   normalize       # Raw format -> standard Parquet (id, text, ...)
   embed           # Document embedding
   classify        # Quality/topic classification

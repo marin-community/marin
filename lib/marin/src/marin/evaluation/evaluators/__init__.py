@@ -1,2 +1,4 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+
+"""Legacy checkpoint-native evaluators used by data-mixing research."""

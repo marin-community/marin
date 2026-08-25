@@ -272,7 +272,7 @@ class GemmaConfig(HFCompatConfig):
         )
         return config
 
-    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     @property
     def model_type(self) -> type["GemmaLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return GemmaLMHeadModel
@@ -844,11 +844,6 @@ class Gemma3Config(Gemma2Config):
 
     # Gemma3 specific rope frequency for local attention
     rope_local_base_freq: float = 10_000.0
-
-    @property
-    def local_rope(self) -> RotaryEmbeddingsConfig:
-        """Local RoPE config used for Gemma-3's alternating local attention."""
-        return dataclasses.replace(self.rope, theta=self.rope_local_base_freq)
 
     # ---------- Convenience ----------
     @property  # type: ignore[override]

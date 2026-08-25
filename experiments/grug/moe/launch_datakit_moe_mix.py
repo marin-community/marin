@@ -14,8 +14,9 @@ from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
@@ -312,6 +313,55 @@ def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_l
     return total_steps * batch_size * max_seq_len
 
 
+def _simulated_epoching_budgets(
+    *,
+    total_steps: int,
+    batch_size: int,
+    max_seq_len: int,
+    target_budget: int,
+    enable_simulated_epoching: bool,
+) -> tuple[int | None, int | None]:
+    if not enable_simulated_epoching:
+        return None, None
+    experiment_budget = _simulated_experiment_budget(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+    )
+    if experiment_budget > target_budget:
+        raise ValueError(f"experiment_budget {experiment_budget} exceeds target_budget {target_budget}")
+    return target_budget, experiment_budget
+
+
+def _two_phase_data_config(
+    *,
+    tokenizer: str,
+    components: dict[str, DatasetComponent | ConcatDatasetComponent],
+    phase_weights: tuple[dict[str, float], dict[str, float]],
+    phase_1_start: int,
+    val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
+    target_budget: int | None,
+    experiment_budget: int | None,
+) -> LmDataConfig:
+    val_zero_weights = {name: 0.0 for name in val_components}
+    budget_kwargs = {}
+    if target_budget is not None:
+        budget_kwargs = {"target_budget": target_budget, "experiment_budget": experiment_budget}
+
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components={**components, **val_components},
+        train_weights=[
+            (0, {**phase_weights[0], **val_zero_weights}),
+            (phase_1_start, {**phase_weights[1], **val_zero_weights}),
+        ],
+        auto_build_caches=False,
+        mixture_block_size=_MIXTURE_BLOCK_SIZE,
+        **budget_kwargs,
+    )
+
+
 def _datakit_data_config(
     *,
     total_steps: int,
@@ -321,34 +371,22 @@ def _datakit_data_config(
     val_components: dict[str, DatasetComponent | ConcatDatasetComponent],
 ) -> LmDataConfig:
     phase_1_start = _phase_1_start_step(total_steps, batch_size)
-    budget_kwargs: dict = {}
-    if enable_simulated_epoching:
-        experiment_budget = _simulated_experiment_budget(
-            total_steps=total_steps,
-            batch_size=batch_size,
-            max_seq_len=max_seq_len,
-        )
-        if experiment_budget > _TARGET_BUDGET_TOKENS:
-            raise ValueError(f"experiment_budget {experiment_budget} exceeds target_budget {_TARGET_BUDGET_TOKENS}")
-        budget_kwargs = {
-            "target_budget": _TARGET_BUDGET_TOKENS,
-            "experiment_budget": experiment_budget,
-        }
+    target_budget, experiment_budget = _simulated_epoching_budgets(
+        total_steps=total_steps,
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        target_budget=_TARGET_BUDGET_TOKENS,
+        enable_simulated_epoching=enable_simulated_epoching,
+    )
 
-    all_components = {**_datakit_components(), **val_components}
-    val_zero_weights = {name: 0.0 for name in val_components}
-
-    return LmDataConfig(
+    return _two_phase_data_config(
         tokenizer=marin_tokenizer,
-        cache_dir=None,
-        components=all_components,
-        train_weights=[
-            (0, {**_phase_weights(0), **val_zero_weights}),
-            (phase_1_start, {**_phase_weights(1), **val_zero_weights}),
-        ],
-        auto_build_caches=False,
-        mixture_block_size=_MIXTURE_BLOCK_SIZE,
-        **budget_kwargs,
+        components=_datakit_components(),
+        phase_weights=(_phase_weights(0), _phase_weights(1)),
+        phase_1_start=phase_1_start,
+        val_components=val_components,
+        target_budget=target_budget,
+        experiment_budget=experiment_budget,
     )
 
 
@@ -369,8 +407,10 @@ _VALIDATION = [
 ]
 
 
-def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Grug MoE on the us-central2 datakit store with the mixture-3 two-phase bucket schedule."""
+    name = f"grug/datakit_moe_mix_{_SLUG}"
+    version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if ctx.is_fingerprint:
@@ -412,7 +452,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(f"grug/datakit_moe_mix_{_SLUG}", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
@@ -423,4 +463,4 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
 
 
 if __name__ == "__main__":
-    StepRunner().run([build().lower()])
+    experiment_main(build)()

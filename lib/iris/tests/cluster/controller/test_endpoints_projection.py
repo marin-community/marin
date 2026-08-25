@@ -15,10 +15,9 @@ from iris.cluster.controller.projections.endpoints import (
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+from iris.testing.controller import make_job_request, submit_job
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update
-
-from .conftest import make_job_request, submit_job
 
 
 def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "h:1") -> EndpointRow:
@@ -57,6 +56,28 @@ def test_add_updates_memory_after_commit(state):
 
     assert state._endpoints.get("e1") is not None
     assert [r.endpoint_id for r in state._endpoints.query()] == ["e1"]
+
+
+def test_projection_publishes_one_atomic_mutation_per_transaction(state):
+    task = submit_job(state, "j", make_job_request("j"))[0].task_id
+    mutations = []
+    state._endpoints.subscribe(mutations.append)
+
+    with state._db.transaction() as cur:
+        state._endpoints.add(cur, _make_row("e1", "alpha", task))
+        state._endpoints.add(cur, _make_row("e2", "beta", task))
+
+    assert len(mutations) == 1
+    assert {row.endpoint_id for row in mutations[0].upserts} == {"e1", "e2"}
+    assert mutations[0].deletes == ()
+
+    with state._db.transaction() as cur:
+        state._endpoints.add(cur, _make_row("e1", "renamed", task))
+        state._endpoints.remove(cur, "e2")
+
+    assert len(mutations) == 2
+    assert [row.endpoint_id for row in mutations[1].upserts] == ["e1"]
+    assert mutations[1].deletes == ("e2",)
 
 
 def test_rollback_leaves_memory_untouched(state):

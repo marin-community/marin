@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict, cast
 
 import equinox as eqx
 import jax
@@ -21,7 +21,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter
@@ -51,8 +51,6 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
-    SupervisedLmDatasetFormat,
-    SupervisedTextProcessor,
     TextLmDatasetFormat,
 )
 from levanter.models.lm_model import LmExample
@@ -204,8 +202,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
 
         if loss_weights_key is None:
 
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
+            def _create_unweighted_lm_example(tokens: jax.Array) -> GrugLmExample:
                 example = GrugLmExample.causal(
                     tokens=tokens,
                     eos_id=eos_id,
@@ -214,13 +211,17 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 example = jax.lax.with_sharding_constraint(example, sharding)
                 return example
 
+            create_unweighted_lm_example = cast(
+                Callable[[jax.Array], GrugLmExample],
+                eqx.filter_jit(_create_unweighted_lm_example),
+            )
+
             def _map(example: dict) -> GrugLmExample:
-                return _create_lm_example(example[input_ids_key])
+                return create_unweighted_lm_example(example[input_ids_key])
 
         else:
 
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens: jax.Array, loss_weight: jax.Array) -> GrugLmExample:
+            def _create_weighted_lm_example(tokens: jax.Array, loss_weight: jax.Array) -> GrugLmExample:
                 example = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
@@ -230,10 +231,15 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 example = jax.lax.with_sharding_constraint(example, sharding)
                 return example
 
+            create_weighted_lm_example = cast(
+                Callable[[jax.Array, jax.Array], GrugLmExample],
+                eqx.filter_jit(_create_weighted_lm_example),
+            )
+
             def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
                 loss_weight = self.loss_weight_transform(loss_weight)
-                return _create_lm_example(example[input_ids_key], loss_weight)
+                return create_weighted_lm_example(example[input_ids_key], loss_weight)
 
         super().__init__(self.dataset, _map)
 
@@ -331,7 +337,7 @@ class DatasetComponent(DatasetComponentBase):
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
-    pack: bool | int | Literal["pad"] | None = None
+    pack: bool | int | None = None
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -384,7 +390,7 @@ class HierarchicalMixtureDatasetComponent(DatasetComponentBase):
                 )
 
 
-def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
+def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
@@ -442,6 +448,26 @@ class LazyAsyncDataset(AsyncDataset[T_co]):
         return await dataset.getitem_async(index)
 
 
+def _resolve_pack_config(
+    pack: bool | int,
+    *,
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> tuple[int, Literal["left", "right", "raise"]]:
+    """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
+
+    A falsy value (``False``/``0``) selects one document per example, padded to
+    ``Pos``, with over-long documents raising instead of being silently truncated.
+    ``True`` packs up to 64 documents per example; an integer packs up to that many.
+    ``packed_slice_strategy`` applies only to the packing branches -- the
+    one-document-per-example case always raises.
+    """
+    if not pack:
+        return 1, "raise"
+    if pack is True:
+        return 64, packed_slice_strategy
+    return int(pack), packed_slice_strategy
+
+
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -478,6 +504,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -495,6 +522,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -547,6 +575,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
+                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -566,14 +595,13 @@ def dataset_for_component(
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
         if pack:
-            max_segments = 64 if pack is True else int(pack)
+            max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
                 Pos,
                 max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
             )
         return CausalLmDataset(
@@ -582,38 +610,15 @@ def dataset_for_component(
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,
         )
-    elif isinstance(fmt, SupervisedLmDatasetFormat):
-        loss_weights_key = SupervisedTextProcessor.loss_weights_key
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        if pack:
-            max_segments = 64 if pack is True else int(pack)
-            return PackedTokenDataset(
-                cache,
-                Pos,
-                max_segments_per_example=max_segments,
-                loss_weights_key=loss_weights_key,
-                block_cross_document_attention=block_cross_document_attention,
-            )
-        return CausalLmDataset(
-            TokenSeqDataset(cache, Pos.size, loss_weights_key=loss_weights_key),
-            Pos,
-            eos_id=eos_id,
-            block_cross_document_attention=block_cross_document_attention,
-        )
     elif isinstance(fmt, ChatLmDatasetFormat):
-        effective_pack = pack
-        if effective_pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
-        mask_user_turns = fmt.mask_user_turns
+        # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         return ChatDataset(
             cache,
             Pos,
             max_segments_per_example=max_segments,
-            mask_user_turns=mask_user_turns,
+            slice_strategy=slice_strategy,
+            mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
@@ -685,8 +690,8 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _split_into_trainval_sets(
-    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
-) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
+    dataset: "AsyncDataset[T_co]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[T_co]", "AsyncDataset[T_co]"]:
     """Split a dataset into train/val portions, optionally shuffling first.
 
     When shuffle is True, a deterministic shuffle is applied before
@@ -779,6 +784,16 @@ class LmDataConfig:
     simulated_epoch_subset_seed: int | None = None
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
+    max_train_batches_subset_seed: int | None = None
+    """Select capped component support with a fixed seed before applying the run-specific training shuffle."""
+    max_train_batches_start: dict[str, int] | None = None
+    """Start offsets, in initial batches, into the fixed component-support permutation."""
+    train_holdout_sequences: dict[str, int] | None = None
+    """Sequence counts to reserve by seeded random partition before selecting finite support."""
+    train_holdout_seed: int | None = None
+    """Seed for deterministic sequence-level holdouts shared across paired support regimes."""
+    train_holdout_partition: Literal["random_sparse_swap"] | None = None
+    """Explicit holdout implementation contract; required when a training holdout is configured."""
     num_validation_sequences: dict[str, int] | None = None
     shuffle_before_trainval_split: bool = True
     """Whether to shuffle the dataset before splitting off validation sequences.
@@ -810,6 +825,38 @@ class LmDataConfig:
             assert (
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
+        if self.max_train_batches_subset_seed is not None and self.max_train_batches is None:
+            raise ValueError("max_train_batches_subset_seed requires max_train_batches")
+        if self.max_train_batches_subset_seed is not None and not self.shuffle:
+            raise ValueError("max_train_batches_subset_seed requires dataset shuffling")
+        if self.max_train_batches_start is not None:
+            if self.max_train_batches is None or self.max_train_batches_subset_seed is None:
+                raise ValueError(
+                    "max_train_batches_start requires max_train_batches and max_train_batches_subset_seed"
+                )
+            unknown_components = set(self.max_train_batches_start) - set(self.max_train_batches)
+            if unknown_components:
+                raise ValueError(
+                    f"max_train_batches_start contains components absent from max_train_batches: {sorted(unknown_components)}"
+                )
+            if any(start < 0 for start in self.max_train_batches_start.values()):
+                raise ValueError("max_train_batches_start values must be nonnegative")
+        holdout_fields = (
+            self.train_holdout_sequences,
+            self.train_holdout_seed,
+            self.train_holdout_partition,
+        )
+        if any(value is None for value in holdout_fields) and any(value is not None for value in holdout_fields):
+            raise ValueError(
+                "train_holdout_sequences, train_holdout_seed, and train_holdout_partition must be specified together"
+            )
+        if self.train_holdout_sequences is not None:
+            if self.train_holdout_partition != "random_sparse_swap":
+                raise ValueError(f"Unsupported training holdout partition: {self.train_holdout_partition!r}")
+            if self.num_validation_sequences is not None:
+                raise ValueError("train_holdout_sequences and num_validation_sequences cannot both be set")
+            if any(count <= 0 for count in self.train_holdout_sequences.values()):
+                raise ValueError("train_holdout_sequences counts must be positive")
 
     @cached_property
     def the_tokenizer(self) -> MarinTokenizer:
@@ -1062,12 +1109,6 @@ class LmDataConfig:
 
         return datasets
 
-    @staticmethod
-    def _position_axis(seq_len: int) -> Axis:
-        if seq_len <= 0:
-            raise ValueError(f"seq_len must be positive, got {seq_len}")
-        return Axis("position", seq_len)
-
     def train_set(
         self,
         Pos: Axis,
@@ -1090,13 +1131,7 @@ class LmDataConfig:
         )
         return NamedLmDataset(mixture, Pos)
 
-    def train_sets(
-        self,
-        Pos: Axis,
-        *,
-        initial_batch_size: int | None = None,
-        key: PRNGKeyArray,
-    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+    def _base_train_sets(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = None if self._has_hierarchical_components() else self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
@@ -1107,6 +1142,43 @@ class LmDataConfig:
                         ds, self.num_validation_sequences[name], shuffle=self.shuffle_before_trainval_split
                     )
                     datasets[name] = train_ds
+        return datasets
+
+    def _split_train_holdout_sets(
+        self,
+        datasets: Mapping[str, AsyncDataset[GrugLmExample]],
+    ) -> tuple[dict[str, AsyncDataset[GrugLmExample]], dict[str, AsyncDataset[GrugLmExample]]]:
+        retained = dict(datasets)
+        holdouts: dict[str, AsyncDataset[GrugLmExample]] = {}
+        if self.train_holdout_sequences is None:
+            return retained, holdouts
+
+        assert self.train_holdout_seed is not None
+        assert self.train_holdout_partition == "random_sparse_swap"
+        unknown_components = set(self.train_holdout_sequences) - set(datasets)
+        if unknown_components:
+            raise ValueError(f"train_holdout_sequences contains unknown components: {sorted(unknown_components)}")
+        for name, num_sequences in self.train_holdout_sequences.items():
+            retained[name], holdouts[name] = datasets[name].random_holdout_split(
+                num_sequences,
+                key=_stable_simulated_epoch_subset_key(name, "train_holdout", self.train_holdout_seed),
+                perm_type=self.permutation_type,
+            )
+        return retained, holdouts
+
+    def holdout_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        """Return the frozen training holdouts before support selection or run-order shuffling."""
+        _, holdouts = self._split_train_holdout_sets(self._base_train_sets(Pos))
+        return holdouts
+
+    def train_sets(
+        self,
+        Pos: Axis,
+        *,
+        initial_batch_size: int | None = None,
+        key: PRNGKeyArray,
+    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
+        datasets, _ = self._split_train_holdout_sets(self._base_train_sets(Pos))
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -1171,7 +1243,7 @@ class LmDataConfig:
                 if shuffle_cfg:
                     key_iter = key_iterator(key)
                     datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
-        elif shuffle_cfg:
+        elif shuffle_cfg and self.max_train_batches_subset_seed is None:
             key_iter = key_iterator(key)
             datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 
@@ -1181,28 +1253,28 @@ class LmDataConfig:
             ), "initial_batch_size must be provided if max_train_batches is provided"
             for name, ds in datasets.items():
                 if name in self.max_train_batches:
+                    if self.max_train_batches_subset_seed is not None:
+                        ds = shuffle_ds(
+                            ds,
+                            _stable_simulated_epoch_subset_key(name, "train", self.max_train_batches_subset_seed),
+                        )
+                    start_batch = 0
+                    if self.max_train_batches_start is not None:
+                        start_batch = self.max_train_batches_start.get(name, 0)
+                    start_sequence = start_batch * initial_batch_size
                     num_sequences = self.max_train_batches[name] * initial_batch_size
+                    end_sequence = start_sequence + num_sequences
                     len_dataset = len(ds.as_sync_dataset())
                     assert (
-                        num_sequences <= len_dataset
-                    ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
-                    datasets[name] = ds.slice_dataset(end_index=num_sequences)
+                        end_sequence <= len_dataset
+                    ), f"Capped sequence interval for {name} ({start_sequence}:{end_sequence}) exceeds dataset size ({len_dataset})"
+                    datasets[name] = ds.slice_dataset(start_index=start_sequence, end_index=end_sequence)
+
+        if shuffle_cfg and self.max_train_batches_subset_seed is not None:
+            key_iter = key_iterator(key)
+            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 
         return datasets
-
-    def train_grug_sets(
-        self,
-        *,
-        seq_len: int,
-        initial_batch_size: int | None = None,
-        key: PRNGKeyArray,
-    ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
-        """Build train datasets that emit array-first [GrugLmExample][]."""
-        return self.train_sets(
-            self._position_axis(seq_len),
-            initial_batch_size=initial_batch_size,
-            key=key,
-        )
 
     def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
         doc_caches = None if self._has_hierarchical_components() else self.build_caches("validation")
@@ -1223,11 +1295,6 @@ class LmDataConfig:
     def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
         validation_datasets = self._validation_datasets_unwrapped(Pos)
         return {name: NamedLmDataset(ds, Pos) for name, ds in validation_datasets.items()}
-
-    def validation_grug_sets(self, *, seq_len: int) -> Mapping[str, AsyncDataset[GrugLmExample]]:
-        """Build validation datasets that emit array-first [GrugLmExample][]."""
-        Pos = self._position_axis(seq_len)
-        return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         items: list[tuple[str, "DatasetComponent"]] = []
@@ -1296,8 +1363,19 @@ class LmDataConfig:
                 return name, cache, None
 
             if cache_exists:
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
-                return name, cache, None
+                try:
+                    cache = load_lm_dataset_cache(
+                        cache_path,
+                        component.format,
+                        self.the_tokenizer,
+                        self.enforce_eos,
+                    )
+                    return name, cache, None
+                except FileNotFoundError:
+                    logger.warning(
+                        "Cache dir at %s exists but is unloadable (likely a partial build); rebuilding it.",
+                        cache_path,
+                    )
             return name, None, (cache_path, shard_source, component.format)
 
         caches: dict[str, TreeCache[dict]] = {}
@@ -1342,15 +1420,6 @@ class LmDataConfig:
 
     def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
         eval_sets = self.validation_sets(Pos)
-        tagged = []
-        for name, ds in eval_sets.items():
-            tags = (self.components[name].tags or []) + [name]
-            tagged.append((ds, tags))
-        return tagged
-
-    def tagged_eval_grug_sets(self, *, seq_len: int) -> list[tuple[AsyncDataset[GrugLmExample], list[str]]]:
-        """Build tagged validation datasets for array-first evaluators."""
-        eval_sets = self.validation_grug_sets(seq_len=seq_len)
         tagged = []
         for name, ds in eval_sets.items():
             tags = (self.components[name].tags or []) + [name]
@@ -1454,4 +1523,4 @@ if __name__ == "__main__":
                 metric = key.split("/")[4]
                 print(f"{name} {metric}: {value}")
 
-    main()
+    main()  # pyrefly: ignore[missing-argument]  # levanter.config.main injects the parsed config at runtime

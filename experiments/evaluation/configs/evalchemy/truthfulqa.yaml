@@ -1,0 +1,6 @@
+tasks: [truthfulqa_mc2]
+task_options:
+  truthfulqa_mc2:
+    num_fewshot: 0
+    task_alias: truthfulqa_mc2_0shot
+max_tokens: 256

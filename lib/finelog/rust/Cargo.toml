@@ -6,22 +6,22 @@
 members = ["pyext"]
 resolver = "2"
 
-# Thin LTO + parallel codegen. Within ~1% of fat-LTO runtime, but builds in a
-# fraction of the time: fat LTO + codegen-units=1 is a single-threaded
-# multi-minute link over the whole datafusion/arrow tree. Applies to every
-# workspace member — the finelog-server binary and the finelog/pyext cdylib.
+# Optimized production profile with parallel codegen and no LTO. Finelog's
+# DataFusion/Arrow dependency graph makes even thin LTO add several minutes to
+# small server changes, while ordinary opt-level 3 remains representative for
+# deployment. Applies to every workspace member: the finelog-server binary and
+# the finelog/pyext cdylib.
 [profile.release]
-lto = "thin"
+lto = false
 codegen-units = 16
 strip = "symbols"
 
-# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
-# entirely and opt-level to 2 on top of release's parallel codegen. Still
-# optimized enough to be representative. The deploy Dockerfile passes
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): lowers
+# opt-level to 2 on top of release's parallel codegen. Still optimized enough
+# to be representative. The deploy Dockerfile passes
 # `--build-arg CARGO_PROFILE=fast`.
 [profile.fast]
 inherits = "release"
-lto = false
 opt-level = 2
 
 [package]
@@ -88,14 +88,12 @@ rustls = { version = "0.23", default-features = false, features = [
     "logging",
 ] }
 webpki-roots = "1"
-# Phase 5d: ServeDir static-file service for the Vue SPA `/static` mount. The
-# `fs` feature is the only one needed; tower-http 0.6 is compatible with the
-# crate's axum 0.7 tower::Service contract. `tower` (already in the lock via
-# axum/tower-http) supplies the `Service` trait bound for the SPA catch-all's
-# method-fallback to the connect service.
+# ServeDir hosts the Vue SPA. Telemetry uses zstd request decompression and
+# advertises accepted request encodings on responses.
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["decompression-zstd", "fs", "set-header"] }
 http-body = "1"
+http-body-util = "0.1"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
@@ -130,6 +128,9 @@ url = "2"
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
+regex-syntax = "0.8"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of

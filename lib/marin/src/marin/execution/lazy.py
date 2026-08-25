@@ -34,13 +34,13 @@ import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
-from urllib.parse import urlparse
 
-from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix, marin_region
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
-    CALVER_RE,
     EXPECTED_FINGERPRINT_KEY,
     FINGERPRINT_KEY,
     RESULT_TYPE_KEY,
@@ -50,42 +50,16 @@ from marin.execution.artifact import (
     FingerprintMismatchError,
     is_mutable_version,
     result_type_name,
+    validate_path_segment,
+    validate_version,
     write_record,
 )
+from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
-
-
-def _validate_segment(label: str, value: str) -> None:
-    """A ``name``/``version`` is a path segment: non-empty, no ``..``, no leading/trailing
-    slash, no URL scheme. A malformed one is a caller bug, not a silent malformed path."""
-    if not value:
-        raise ValueError(f"{label} must be non-empty")
-    if "://" in value or urlparse(value).scheme:
-        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
-    if ".." in value:
-        raise ValueError(f"{label} {value!r} must not contain '..'")
-    if value.startswith("/") or value.endswith("/"):
-        raise ValueError(f"{label} {value!r} must not start or end with '/'")
-
-
-def _validate_version(version: str) -> None:
-    """A version is a calendar version ``YYYY.MM.DD[.N]`` or a mutable ``dev``/``<label>-dev``.
-
-    ``v1``-style and other ad-hoc strings are rejected: an artifact's version is the author's
-    explicit statement of "when this recipe was frozen", not an opaque tag.
-    """
-    _validate_segment("version", version)
-    if is_mutable_version(version):
-        return
-    if not CALVER_RE.match(version):
-        raise ValueError(
-            f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
-            "or a mutable 'dev'/'<label>-dev'"
-        )
 
 
 @dataclass(frozen=True)
@@ -231,8 +205,8 @@ class ArtifactStep(Generic[T]):
     ``None`` to opt out."""
 
     def __post_init__(self) -> None:
-        _validate_segment("name", self.name)
-        _validate_version(self.version)
+        validate_path_segment("name", self.name)
+        validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
 
@@ -305,19 +279,34 @@ def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
 
-def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
+def materialized_config(
+    handle: "ArtifactStep",
+    prefix: str,
+    *,
+    artifact_cache: dict[int, Artifact] | None = None,
+) -> Any:
     """The concrete config a run would receive, for inspection/golden tests.
 
     Resolves ``ctx.output_path`` / ``ctx.artifact_path(dep)`` against ``prefix`` and passes the
     handle's real ``runtime_args`` (so a ``build_config`` that reads ``ctx.runtime_arg(...)`` does
     not ``KeyError``) without running anything. Region is ``None``, so this is not identical to the
     run-time config, which also binds a real region.
+
+    ``artifact_cache`` may be shared across calls that resolve the same immutable dependency
+    handles. This keeps a panel audit from rereading identical artifact records for every row;
+    each row's ``build_config`` still runs independently.
     """
-    return handle.build_config(
-        StepContext.for_run(
-            output_path=handle.path(prefix), prefix=prefix, runtime_args=handle.runtime_args, deps=handle.deps
-        )
+    context = StepContext(
+        output_path=handle.path(prefix),
+        prefix=prefix,
+        region=None,
+        is_fingerprint=False,
+        _dep_ref=lambda dependency: dependency.path(prefix),
+        _runtime_args=handle.runtime_args,
+        _deps=handle.deps,
+        _loaded={} if artifact_cache is None else artifact_cache,
     )
+    return handle.build_config(context)
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
@@ -325,7 +314,7 @@ def _output_path_spec(handle: "ArtifactStep") -> str:
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
-def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
+def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:
     """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
@@ -334,10 +323,19 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
     inspects ``handle.run``.
 
+    ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
+    lowered once. Without it a diamond re-walks the shared subgraph — and re-runs its
+    ``build_config`` — once per path through it. Pass one ``memo`` across a whole ``run`` to share
+    it between terminals.
+
     Raises :class:`FingerprintMismatchError` if ``expected_fingerprint`` is set and differs;
     :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep.
     """
-    dep_specs = [_lower(dep, provenance) for dep in handle.deps]
+    memo = {} if memo is None else memo
+    cached = memo.get(id(handle))
+    if cached is not None:
+        return cached
+    dep_specs = [_lower(dep, provenance, memo) for dep in handle.deps]
     payload = handle.fingerprint_payload()
     fingerprint = fingerprint_hash(payload)
     if handle.expected_fingerprint is not None and fingerprint != handle.expected_fingerprint:
@@ -411,7 +409,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     if handle.expected_fingerprint is not None:
         hash_attrs[EXPECTED_FINGERPRINT_KEY] = handle.expected_fingerprint
 
-    return StepSpec(
+    spec = StepSpec(
         name=handle.name,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
@@ -420,6 +418,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
         fn=fn,
         writes_record=True,
     )
+    memo[id(handle)] = spec
+    return spec
 
 
 def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: bool = True) -> list[T]:
@@ -432,8 +432,9 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
     provenance = Provenance.capture()
+    memo: dict[int, StepSpec] = {}
     StepRunner().run(
-        [_lower(h, provenance) for h in handles],
+        [_lower(h, provenance, memo) for h in handles],
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
@@ -512,7 +513,7 @@ def apply(
     name: str,
     fn: Callable[..., Any],
     *,
-    version: str,
+    version: str | None = None,
     artifact_type: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
     pin: str | None = None,
     **inputs: Any,
@@ -527,8 +528,13 @@ def apply(
     an already-wrapped ``remote(fn, resources=…)`` as ``fn``. ``artifact_type`` selects the
     produced :class:`Artifact` type; ``pin`` references existing data.
 
+    ``version`` defaults to the ambient :class:`~marin.execution.build_context.BuildContext`'s
+    version for ``name`` when omitted (build inside :func:`~marin.execution.build_context.build_context`);
+    an explicit value always wins.
+
     Raises :class:`TypeError` if ``fn``'s signature cannot bind the inputs.
     """
+    version = resolve_version(name, version)
     try:
         inspect.signature(fn).bind(**inputs)
     except TypeError as e:

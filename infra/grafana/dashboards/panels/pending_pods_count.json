@@ -1,0 +1,57 @@
+{
+  "type": "stat",
+  "title": "Pending pods",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "k8s"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "min": 0,
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "auto",
+    "orientation": "auto"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/overview",
+      "url_options": {
+        "method": "GET",
+        "params": []
+      },
+      "columns": [
+        {
+          "selector": "pending_pods",
+          "text": "pending_pods",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

@@ -3,12 +3,14 @@
 
 import asyncio
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterator, Sequence
 
 import numpy as np
 import pytest
-from zephyr.execution import ZephyrWorkerError
+from zephyr.stage_io import ZephyrWorkerError
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
@@ -22,6 +24,7 @@ from levanter.store.cache import (
     TreeCache,
     TreeStore,
     build_or_load_cache,
+    consolidate_shard_cache_ledgers,
     write_levanter_cache,
 )
 
@@ -200,6 +203,66 @@ def test_sharded_flat_field_offsets_read_shards_concurrently(monkeypatch):
 
     np.testing.assert_array_equal(offsets, np.array([3, 2, 5, 9], dtype=np.int64))
     assert max_active_reads == len(shard_names)
+
+
+def test_sharded_jagged_array_tree_flattens_list_valued_field(monkeypatch):
+    """Regression for #7351.
+
+    A structural exemplar from tokenize keys sequence fields as python lists, e.g.
+    ``{"input_ids": [0, 0]}``. The writer's ledger records the flat leaf ``input_ids``
+    (``heuristic_is_leaf`` treats a list-of-scalars as one leaf). The sharded reader must
+    address the same flat field, not walk the list into ``input_ids/0``.
+    """
+    shard_names = ["shard_0", "shard_1"]
+    field_counts_by_shard = {"shard_0": {"input_ids": 2}, "shard_1": {"input_ids": 3}}
+    ledger = CacheLedger(
+        total_num_rows=2,
+        shard_rows={shard_name: 1 for shard_name in shard_names},
+        is_finished=True,
+        finished_shards=shard_names,
+        field_counts={"input_ids": 5},
+        field_counts_by_shard=field_counts_by_shard,
+        layout=CACHE_LAYOUT_SHARDED,
+    )
+    cache = TreeCache("/unused", {"input_ids": [0, 0]}, ledger)
+
+    requested_fields = []
+
+    class FakeRead:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __await__(self):
+            async def read():
+                return np.array([self.value], dtype=np.int64)
+
+            return read().__await__()
+
+    class FakeOffsets:
+        def __init__(self, value: int):
+            self.value = value
+
+        def __getitem__(self, item):
+            return self
+
+        def read(self):
+            return FakeRead(self.value)
+
+    class FakeFieldStore:
+        def __init__(self, value: int):
+            self.offsets = FakeOffsets(value)
+
+    async def shard_field_store(shard_name: str, field: str):
+        requested_fields.append(field)
+        return FakeFieldStore(field_counts_by_shard[shard_name][field])
+
+    monkeypatch.setattr(cache, "_shard_field_store_async", shard_field_store)
+
+    input_ids_store = cache.jagged_array_tree()["input_ids"]
+    offsets = input_ids_store.offsets[0:3].read().result()
+
+    np.testing.assert_array_equal(offsets, np.array([2, 2, 5], dtype=np.int64))
+    assert set(requested_fields) == {"input_ids"}
 
 
 @pytest.mark.asyncio
@@ -512,3 +575,239 @@ def test_write_levanter_cache_end_to_end():
         assert len(store) == len(records)
         assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
         assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
+
+
+def _build_sharded_cache(root: Path, num_shards: int, rows_per_shard: int, seq_len: int) -> TreeCache:
+    exemplar = {"input_ids": np.array([0], dtype=np.int32)}
+    shard_paths = []
+    for shard_index in range(num_shards):
+        shard_path = str(root / f"shard_{shard_index}")
+        first_row = shard_index * rows_per_shard
+        records = [
+            {"input_ids": np.full(seq_len, first_row + row_index, dtype=np.int32)}
+            for row_index in range(rows_per_shard)
+        ]
+        with SerialCacheWriter(shard_path, exemplar) as writer:
+            writer.write_batch(records)
+        shard_paths.append(shard_path)
+
+    consolidate_shard_cache_ledgers(shard_paths, str(root), exemplar)
+    return TreeCache.load(str(root), exemplar)
+
+
+class _AsyncOpenTracker:
+    def __init__(self, monkeypatch):
+        self.paths: list[str] = []
+        self.active = 0
+        self.max_active = 0
+        real_open_async = TreeStore.open_async
+
+        async def tracked_open_async(exemplar, path, **kwargs):
+            self.paths.append(path)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                return await real_open_async(exemplar, path, **kwargs)
+            finally:
+                self.active -= 1
+
+        monkeypatch.setattr(TreeStore, "open_async", staticmethod(tracked_open_async))
+
+
+@pytest.mark.asyncio
+async def test_sharded_flat_field_batch_opens_distinct_shards_concurrently(tmp_path, monkeypatch):
+    num_shards = 8
+    rows_per_shard = 4
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards, rows_per_shard, seq_len)
+    tracker = _AsyncOpenTracker(monkeypatch)
+
+    offsets = [row_index * seq_len for row_index in range(num_shards * rows_per_shard)]
+    batch = await cache.get_flat_field_batch("input_ids", offsets, seq_len)
+
+    for row_index, row in enumerate(batch):
+        np.testing.assert_array_equal(row, np.full(seq_len, row_index, dtype=np.int32))
+    assert tracker.max_active == num_shards
+    assert sorted(tracker.paths) == sorted(str(tmp_path / f"shard_{i}") for i in range(num_shards))
+
+
+@pytest.mark.asyncio
+async def test_sharded_field_open_is_shared_between_same_loop_readers(tmp_path, monkeypatch):
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=8, seq_len=seq_len)
+    tracker = _AsyncOpenTracker(monkeypatch)
+
+    results = await asyncio.gather(
+        *[cache.get_flat_field_batch("input_ids", [row_index * seq_len], seq_len) for row_index in range(8)]
+    )
+
+    for row_index, batch in enumerate(results):
+        np.testing.assert_array_equal(batch[0], np.full(seq_len, row_index, dtype=np.int32))
+    assert tracker.paths == [str(tmp_path / "shard_0")]
+
+
+@pytest.mark.asyncio
+async def test_sharded_row_batch_shares_and_overlaps_shard_opens(tmp_path, monkeypatch):
+    num_shards = 4
+    rows_per_shard = 4
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards, rows_per_shard, seq_len)
+    tracker = _AsyncOpenTracker(monkeypatch)
+
+    rows = await cache.get_batch(list(range(num_shards * rows_per_shard)))
+
+    for row_index, row in enumerate(rows):
+        np.testing.assert_array_equal(row["input_ids"], np.full(seq_len, row_index, dtype=np.int32))
+    assert tracker.max_active == num_shards
+    assert sorted(tracker.paths) == sorted(str(tmp_path / f"shard_{i}") for i in range(num_shards))
+
+
+@pytest.mark.asyncio
+async def test_failed_shard_field_open_is_retried(tmp_path, monkeypatch):
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=seq_len)
+    real_open_async = TreeStore.open_async
+    attempts = 0
+
+    async def flaky_open_async(exemplar, path, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(0)
+        if attempts == 1:
+            raise TimeoutError("simulated stalled open")
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(flaky_open_async))
+
+    with pytest.raises(TimeoutError, match="simulated stalled open"):
+        await cache.get_flat_field_batch("input_ids", [0], seq_len)
+
+    batch = await cache.get_flat_field_batch("input_ids", [0], seq_len)
+    np.testing.assert_array_equal(batch[0], np.zeros(seq_len, dtype=np.int32))
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_cancel_shared_shard_field_open(tmp_path, monkeypatch):
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=seq_len)
+    real_open_async = TreeStore.open_async
+    open_started = asyncio.Event()
+    release_open = asyncio.Event()
+    attempts = 0
+
+    async def delayed_open_async(exemplar, path, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        open_started.set()
+        await release_open.wait()
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(delayed_open_async))
+
+    cancelled_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+    await open_started.wait()
+    surviving_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+    await asyncio.sleep(0)
+
+    cancelled_reader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_reader
+
+    release_open.set()
+    batch = await surviving_reader
+    np.testing.assert_array_equal(batch[0], np.zeros(seq_len, dtype=np.int32))
+    assert attempts == 1
+
+
+def test_shard_field_open_retries_after_owner_loop_closes(tmp_path, monkeypatch):
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=seq_len)
+    real_open_async = TreeStore.open_async
+    attempts = 0
+
+    async def blocked_first_open(exemplar, path, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            await asyncio.Future()
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(blocked_first_open))
+
+    async def abandon_first_read():
+        reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        while attempts == 0:
+            await asyncio.sleep(0)
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
+
+    asyncio.run(abandon_first_read())
+    batch = asyncio.run(cache.get_flat_field_batch("input_ids", [0], seq_len))
+
+    np.testing.assert_array_equal(batch[0], np.zeros(seq_len, dtype=np.int32))
+    assert attempts == 2
+
+
+def test_closed_foreign_loop_does_not_evict_live_pending_shard_open(tmp_path, monkeypatch):
+    seq_len = 16
+    cache = _build_sharded_cache(tmp_path, num_shards=1, rows_per_shard=4, seq_len=seq_len)
+    real_open_async = TreeStore.open_async
+    first_open_started = threading.Event()
+    second_open_started = threading.Event()
+    start_second_reader = threading.Event()
+    second_owner_reader_started = threading.Event()
+    release_first_open = threading.Event()
+    attempts = 0
+    attempts_lock = threading.Lock()
+
+    async def blocked_open_async(exemplar, path, **kwargs):
+        nonlocal attempts
+        with attempts_lock:
+            attempts += 1
+            attempt = attempts
+        if attempt == 1:
+            first_open_started.set()
+            await asyncio.to_thread(release_first_open.wait)
+        elif attempt == 2:
+            second_open_started.set()
+            await asyncio.Future()
+        else:
+            await asyncio.to_thread(release_first_open.wait)
+        return await real_open_async(exemplar, path, **kwargs)
+
+    monkeypatch.setattr(TreeStore, "open_async", staticmethod(blocked_open_async))
+
+    async def read_on_owner_loop():
+        first_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        await asyncio.to_thread(start_second_reader.wait)
+        second_reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        # Drive the public read through its gather layers to the mocked TreeStore boundary.
+        for _ in range(4):
+            await asyncio.sleep(0)
+        second_owner_reader_started.set()
+        return await asyncio.gather(first_reader, second_reader)
+
+    async def cancel_foreign_reader():
+        reader = asyncio.create_task(cache.get_flat_field_batch("input_ids", [0], seq_len))
+        await asyncio.to_thread(second_open_started.wait)
+        reader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reader
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        owner_reader = executor.submit(asyncio.run, read_on_owner_loop())
+        first_open_started.wait()
+        foreign_reader = executor.submit(asyncio.run, cancel_foreign_reader())
+        foreign_reader.result()
+        start_second_reader.set()
+        second_owner_reader_started.wait()
+        release_first_open.set()
+        batches = owner_reader.result()
+
+    for batch in batches:
+        np.testing.assert_array_equal(batch[0], np.zeros(seq_len, dtype=np.int32))
+    assert attempts == 2

@@ -1,23 +1,19 @@
 ---
 name: file-issue
-description: File a GitHub issue for a bug or improvement found this session.
+description: File a GitHub issue only when explicitly requested or delegated by another selected workflow; do not create issues merely because a problem was found.
 ---
 
-# Skill: File GitHub Issue
+# File a GitHub issue
 
-Create a GitHub issue in `marin-community/marin` from bugs, regressions, or
-improvements identified in the current conversation.
+Before drafting, read `AGENTS.md` and:
 
-## Background
-
-Read first:
-
-@AGENTS.md
+- `.agents/skills/writing-style/SKILL.md`
+- `.agents/skills/writing-style/issues.md`
+- `.agents/skills/writing-style/ai-writing-donts.md`
 
 ## Issue Kinds and Body Structure
 
-Pick the kind, then use the matching body structure below. There are no GitHub
-issue templates — these structures live here.
+Pick the smallest matching structure.
 
 | Kind | When to use | Labels |
 |---|---|---|
@@ -28,27 +24,23 @@ issue templates — these structures live here.
 ### Bug body
 
 ```markdown
-**Describe the bug**
-<what is broken -- concrete symptoms, error messages>
+<what is broken and its impact -- concrete symptoms or error messages>
 
-**To Reproduce**
+Reproduce:
 1. <step>
 2. <step>
 
-**Expected behavior**
-<what should happen instead>
+Expected: <what should happen instead>
 
-**Additional context**
-<root cause analysis, file:line references, suggested fix if known>
+<optional: concise evidence or confirmed root cause>
 ```
 
 ### Task body
 
 ```markdown
-## Description
 <what needs to be done and why -- enough context for anyone on the team>
 
-### Definition of Done
+Done when:
 <specific, testable completion criteria>
 ```
 
@@ -84,23 +76,12 @@ issue templates — these structures live here.
 
 ## Workflow
 
-### 1. Gather Context from Conversation
+### 1. Gather and classify
 
-Extract from the conversation:
+Extract the symptom or desired outcome, impact, location, reproduction, known
+cause, and severity. Ask when the issue or its kind is ambiguous.
 
-- **What is broken or missing** -- concrete symptoms, error messages, failing test output.
-- **Where it happens** -- file paths, line numbers, module names.
-- **How to reproduce** -- steps, commands, or minimal config that triggers it.
-- **Root cause** (if known).
-- **Severity** -- blocks work, causes data loss, or cosmetic?
-
-If it's ambiguous what to file, ask the user before proceeding.
-
-### 2. Classify the Issue
-
-Pick the kind (bug, task, or experiment). If unsure, ask the user.
-
-### 3. Duplicate Check
+### 2. Check duplicates
 
 Search for existing issues first:
 
@@ -110,32 +91,34 @@ gh issue list --repo marin-community/marin --state open --search "<keyword>"
 
 If a match exists, tell the user and offer to comment on it instead.
 
-### 4. Draft the Issue
+### 3. Draft
 
-**Title**: Short imperative sentence under 80 characters, optionally prefixed
-with a scope tag (e.g. `[levanter] Fix gradient accumulation off-by-one`).
+**Title**: At most 80 characters, optionally prefixed with a scope tag. State a
+factual symptom for a bug (e.g. `[levanter] Gradient accumulation drops the last
+microbatch`) and an imperative outcome for a task (e.g. `[levanter] Handle
+partial accumulation steps`). Do not add `bug:`, `task:`, or another type
+prefix.
 
-**Body**: Use the section structure for the chosen kind (see above).
+Use the body structure above. Keep the facts needed to act; link code with
+`file:line`, trim errors to relevant frames, and omit filler, repeated titles,
+diff inventories, and unnecessary implementation narration. Bugs need numbered
+reproduction steps; tasks need testable completion criteria.
 
-**Rules for the body:**
+### 4. Inspect the payload
 
-- No filler ("I noticed...", "During our conversation...").
-- No markdown images or tables.
-- Reference code with `file:line` links, not inline dumps.
-- Keep bug and task issues under ~200 words; experiment issues may be longer
-  when the tracking context needs it.
-- Include error messages or stack traces in code blocks, trimmed to the
-  relevant frames.
-- For task issues: include a concrete Definition of Done.
-- For bug issues: include numbered reproduction steps.
+Apply the writing-style final compression pass to the exact title and body that
+will be sent to GitHub. For a bug or task, verify the title is at most 80
+characters. Every remaining sentence must add
+a symptom, impact, reproduction step, observation, expected behavior, or
+completion criterion.
 
-### 5. Confirm or File Directly
+### 5. Apply the approval boundary
 
 If the user explicitly asked to file an issue, skip the preview — file it and
 share the link. If the agent surfaced the issue (not explicitly requested),
 show the drafted title and body and wait for approval or edits.
 
-### 6. File the Issue
+### 6. File the issue
 
 Write the body to a uniquely named temp file, then pass it with `--body-file`.
 Do not inline the body with shell substitution (`--body "$(cat <<'EOF' ...)"`)
@@ -151,10 +134,10 @@ cat > "$body_file" <<'EOF'
 <body>
 EOF
 
-gh issue create --repo marin-community/marin \
+issue_url="$(gh issue create --repo marin-community/marin \
   --title "<title>" \
   --label "agent-generated" \
-  --body-file "$body_file"
+  --body-file "$body_file")"
 ```
 
 Add kind-appropriate labels (`bug`, `experiment`). If a relevant label does not
@@ -165,33 +148,10 @@ Before creating the issue, re-open the body file and verify it contains no
 unrelated shell output (pre-commit logs, pytest session headers, prompt
 transcripts). If it does, clean the draft before posting.
 
-### 7. Report Back
+After creating the issue, fetch its published text with
+`gh issue view "$issue_url" --json title,body` and correct any text added or
+altered by the publishing tool.
+
+### 7. Report
 
 Print the issue URL.
-
-## Writing Style
-
-Follow the terse style from `fix-issue`: every sentence conveys new
-information; no preamble or editorializing; no restating code a link covers;
-annotate code links, don't narrate them.
-
-## Tasks
-
-- [ ] Extract bug/issue details from conversation
-- [ ] Classify as bug, task, or experiment
-- [ ] Run duplicate check against open issues
-- [ ] Draft issue title and body using the matching kind structure
-- [ ] Show draft to user for confirmation
-- [ ] File issue with `gh issue create`
-- [ ] Report issue URL to user
-
-## Rules
-
-0. Never credit yourself in the issue.
-1. Always add the `agent-generated` label.
-2. Confirm with the user before filing only when the agent surfaced the issue
-   (not when the user explicitly asked to file).
-3. If the conversation does not contain a clear bug or actionable improvement,
-   say so and ask the user what they want to file.
-4. Always use the section structure for the matching kind (see "Issue Kinds
-   and Body Structure" above).

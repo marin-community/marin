@@ -3,10 +3,11 @@
 
 """Canary ferry regression gate: validate training metrics against thresholds.
 
-Reads tracker_metrics.jsonl from the canary ferry's GCS output directory and
-checks final metrics against coarse thresholds. Exits non-zero if any
-threshold is breached. Intended to run as a post-training step in the
-marin-canary-ferry GitHub Actions workflow.
+Reads tracker_metrics.jsonl from the canary ferry's output directory (GCS for
+the TPU lane, CoreWeave object storage for the GPU lane) and checks final
+metrics against coarse thresholds. Exits non-zero if any threshold is breached.
+Intended to run as a post-training step in the marin-canary-ferry GitHub Actions
+workflow.
 
 Thresholds are deliberately loose — they catch total failures (job hung,
 loss exploded, zero throughput) not quality regressions. Tighten after
@@ -19,7 +20,8 @@ import os
 import sys
 from collections.abc import Callable
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.ferries.canary_ferry import build
 
@@ -39,10 +41,13 @@ def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]
 def resolve_canary_output_path() -> str:
     """Resolve the canary ferry's output path from its lazy checkpoint.
 
-    Uses mirror:// so the read works regardless of which region the canary
-    wrote to (an R2 pin resolves to its absolute bucket path instead).
+    GCS canaries write to a region-selected temporary bucket, so validation reads
+    the same object key through ``mirror://``. S3 pins keep their absolute path.
     """
-    return build().path("mirror://")
+    output_path = StoragePath(build().path("mirror://"))
+    if output_path.scheme != "gs":
+        return str(output_path)
+    return str(StoragePath(scheme="mirror", segments=output_path.segments, rooted=False))
 
 
 def read_summary(output_path: str) -> dict:
@@ -89,6 +94,10 @@ def print_report(results: list[tuple[str, float | None, float, bool]]) -> None:
 
 
 def main():
+    # The GPU lane's output lives on CoreWeave object storage; this configures
+    # s3:// access from CW_KEY_* when they are present (no-op on the GCS lane).
+    configure_coreweave_s3()
+
     output_path = resolve_canary_output_path()
     print(f"Canary output path: {output_path}")
 

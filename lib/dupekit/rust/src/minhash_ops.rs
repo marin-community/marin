@@ -3,7 +3,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64;
-use regex::Regex;
 use std::sync::Arc;
 use xxhash_rust::xxh3;
 
@@ -14,11 +13,6 @@ use xxhash_rust::xxh3;
 /// 4. Trim
 pub fn clean_text(arr: &StringArray) -> PyResult<Arc<StringArray>> {
     let mut builder = StringBuilder::with_capacity(arr.len(), arr.len() * 50);
-    let whitespace_re = Regex::new(r"\s+").map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let punctuation: &[char] = &[
-        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<',
-        '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
-    ];
 
     for i in 0..arr.len() {
         if arr.is_null(i) {
@@ -27,10 +21,26 @@ pub fn clean_text(arr: &StringArray) -> PyResult<Arc<StringArray>> {
         }
 
         let text = arr.value(i);
+        // Whole-string lowercasing preserves context-sensitive mappings such as
+        // Greek final sigma; lowercasing each character independently does not.
         let lower = text.to_lowercase();
-        let no_punct: String = lower.chars().filter(|c| !punctuation.contains(c)).collect();
-        let normalized = whitespace_re.replace_all(&no_punct, " ");
-        builder.append_value(normalized.trim());
+        let mut cleaned = String::with_capacity(text.len());
+        let mut pending_space = false;
+        for character in lower.chars() {
+            if character.is_ascii_punctuation() {
+                continue;
+            }
+            if character.is_whitespace() {
+                pending_space = !cleaned.is_empty();
+                continue;
+            }
+            if pending_space {
+                cleaned.push(' ');
+                pending_space = false;
+            }
+            cleaned.push(character);
+        }
+        builder.append_value(cleaned);
     }
 
     Ok(Arc::new(builder.finish()))
@@ -43,18 +53,10 @@ pub fn compute_minhash(
     ngram_size: usize,
     seed: u64,
 ) -> PyResult<Arc<dyn Array>> {
-    // Generate permutations using Duplodocus strategy (Single u128 coefficient)
-    let mut rng = Pcg64::seed_from_u64(seed);
-    let mut coeffs = Vec::with_capacity(num_perms);
-
-    for _ in 0..num_perms {
-        // Duplodocus ensures coefficients are odd to preserve properties of the permutation group
-        let mut c = rng.gen::<u128>();
-        if c % 2 == 0 {
-            c = c.wrapping_add(1);
-        }
-        coeffs.push(c);
+    if ngram_size == 0 {
+        return Err(PyValueError::new_err("ngram_size must be positive"));
     }
+    let coeffs = permutation_coefficients(num_perms, seed);
 
     let values_builder = UInt64Builder::with_capacity(arr.len() * num_perms);
     let mut list_builder = ListBuilder::new(values_builder);
@@ -65,24 +67,60 @@ pub fn compute_minhash(
             continue;
         }
 
-        let text = arr.value(i);
-        let chars: Vec<char> = text.chars().collect();
-        let mut signature = vec![u64::MAX; num_perms];
-
-        if chars.len() < ngram_size {
-            let hash = xxh3::xxh3_64(text.as_bytes()) as u128;
-            update_signature(&mut signature, hash, &coeffs);
-        } else {
-            for window in chars.windows(ngram_size) {
-                let s: String = window.iter().collect();
-                let hash = xxh3::xxh3_64(s.as_bytes()) as u128;
-                update_signature(&mut signature, hash, &coeffs);
-            }
-        }
+        let signature = minhash_signature(arr.value(i), num_perms, ngram_size, &coeffs);
         list_builder.values().append_slice(&signature);
         list_builder.append(true);
     }
     Ok(Arc::new(list_builder.finish()))
+}
+
+fn permutation_coefficients(num_perms: usize, seed: u64) -> Vec<u128> {
+    // Generate permutations using the Duplodocus strategy (one u128 coefficient).
+    let mut rng = Pcg64::seed_from_u64(seed);
+    let mut coeffs = Vec::with_capacity(num_perms);
+    for _ in 0..num_perms {
+        // Odd coefficients preserve the permutation group's properties.
+        let mut coefficient = rng.gen::<u128>();
+        if coefficient % 2 == 0 {
+            coefficient = coefficient.wrapping_add(1);
+        }
+        coeffs.push(coefficient);
+    }
+    coeffs
+}
+
+fn minhash_signature(text: &str, num_perms: usize, ngram_size: usize, coeffs: &[u128]) -> Vec<u64> {
+    let mut signature = vec![u64::MAX; num_perms];
+    let bytes = text.as_bytes();
+    if text.is_ascii() {
+        if bytes.len() < ngram_size {
+            update_signature(&mut signature, xxh3::xxh3_64(bytes) as u128, coeffs);
+            return signature;
+        }
+        for ngram in bytes.windows(ngram_size) {
+            update_signature(&mut signature, xxh3::xxh3_64(ngram) as u128, coeffs);
+        }
+        return signature;
+    }
+
+    let mut char_offsets: Vec<usize> = text.char_indices().map(|(offset, _)| offset).collect();
+    char_offsets.push(text.len());
+    let char_count = char_offsets.len() - 1;
+
+    if char_count < ngram_size {
+        update_signature(
+            &mut signature,
+            xxh3::xxh3_64(text.as_bytes()) as u128,
+            coeffs,
+        );
+        return signature;
+    }
+
+    for start in 0..=char_count - ngram_size {
+        let ngram = &bytes[char_offsets[start]..char_offsets[start + ngram_size]];
+        update_signature(&mut signature, xxh3::xxh3_64(ngram) as u128, coeffs);
+    }
+    signature
 }
 
 #[inline(always)]

@@ -72,9 +72,9 @@ To keep our Docker artifact registries tidy, we provide a script and Makefile ta
 except we keep the most recent 16 tags.
 
 The canonical region list is sourced from `config/marin.yaml`
-(us-central1, us-central2, us-east1, us-east5, us-west4, europe-west4) — the same
-single source of truth used by `infra/configure_buckets.py`. Scripts read that map
-rather than hardcoding regions, so they never drift from the runtime view of the fleet.
+(us-central1, us-central2, us-east1, us-east5, us-west1, us-west4, europe-west4) — the same
+single source of truth used by the regional data-bucket Pulumi component. Scripts read that
+map rather than hardcoding regions, so they never drift from the runtime view of the fleet.
 
 ### Script: `infra/configure_gcp_registry.py`
 - This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days (keeping the 16 most recent tags).

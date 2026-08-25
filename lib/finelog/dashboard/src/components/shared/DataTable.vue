@@ -8,7 +8,15 @@ export interface Column {
   align?: 'left' | 'center' | 'right'
   width?: string
   mono?: boolean
+  /** Right-aligns and applies tabular figures, so digits line up down the column. */
+  numeric?: boolean
 }
+
+/**
+ * Character budget for a cell before it truncates. Matches the `max-w-[44ch]`
+ * below closely enough to decide whether to offer the expand affordance.
+ */
+const TRUNCATE_AT = 44
 
 const props = withDefaults(defineProps<{
   columns: Column[]
@@ -18,16 +26,23 @@ const props = withDefaults(defineProps<{
   sortDir?: 'asc' | 'desc'
   pageSize?: number
   emptyMessage?: string
+  /**
+   * Enables the cell-detail affordance. Cells stay truncated but become
+   * clickable, and the table emits `inspect` instead of swallowing the value.
+   */
+  inspectable?: boolean
 }>(), {
   loading: false,
   sortDir: 'asc',
   pageSize: 25,
   emptyMessage: 'No data',
+  inspectable: false,
 })
 
 const emit = defineEmits<{
   sort: [key: string, dir: 'asc' | 'desc']
   page: [offset: number]
+  inspect: [column: string, row: Record<string, unknown>]
 }>()
 
 const slots = useSlots()
@@ -67,6 +82,17 @@ function alignClass(align?: 'left' | 'center' | 'right'): string {
 
 function hasSlot(name: string): boolean {
   return name in (slots ?? {})
+}
+
+/** True when the rendered text is wider than the column can show. */
+function isTruncated(row: unknown, key: string): boolean {
+  const text = String(cellValue(row, key) ?? '')
+  return text.length > TRUNCATE_AT
+}
+
+function inspect(row: unknown, key: string) {
+  if (!props.inspectable) return
+  emit('inspect', key, row as Record<string, unknown>)
 }
 </script>
 
@@ -122,22 +148,26 @@ function hasSlot(name: string): boolean {
                 :key="col.key"
                 :class="[
                   'px-3 py-2 text-[13px] align-top',
-                  alignClass(col.align),
+                  col.numeric ? 'text-right tabular-nums' : alignClass(col.align),
                   col.mono ? 'font-mono' : '',
                 ]"
-                :title="hasSlot(`cell-${col.key}`) ? undefined : String(cellValue(row, col.key) ?? '')"
               >
-                <div class="max-w-[40ch] truncate">
+                <component
+                  :is="inspectable ? 'button' : 'div'"
+                  :class="[
+                    'max-w-[44ch] truncate block',
+                    col.numeric ? 'text-right w-full' : 'text-left',
+                    inspectable ? 'hover:text-accent hover:underline decoration-dotted underline-offset-2 cursor-pointer' : '',
+                  ]"
+                  :title="inspectable
+                    ? (isTruncated(row, col.key) ? 'Show full value' : 'Show row')
+                    : String(cellValue(row, col.key) ?? '')"
+                  @click="inspect(row, col.key)"
+                >
                   <slot :name="`cell-${col.key}`" :value="cellValue(row, col.key)" :row="row">
                     {{ cellValue(row, col.key) ?? '—' }}
                   </slot>
-                </div>
-              </td>
-            </tr>
-            <!-- Expanded row content -->
-            <tr v-if="hasSlot('expanded')" class="bg-surface-sunken">
-              <td :colspan="columns.length" class="p-0">
-                <slot name="expanded" :row="row" :index="rowIdx" />
+                </component>
               </td>
             </tr>
           </template>

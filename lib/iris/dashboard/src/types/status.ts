@@ -68,6 +68,16 @@ export function stateDisplayName(state: string): string {
   return STATE_DISPLAY_NAMES[state] ?? state
 }
 
+/** Use Waiting when a building task has a current wait reason. */
+export function taskStateDisplayName(
+  protoState: string | number | null | undefined,
+  statusMessage: string | null | undefined,
+): string {
+  const state = stateToName(protoState)
+  if (state === 'building' && statusMessage?.trim()) return 'Waiting'
+  return stateDisplayName(state)
+}
+
 const STATE_DISPLAY_NAMES: Record<string, string> = {
   unspecified: 'Unspecified',
   pending: 'Pending',

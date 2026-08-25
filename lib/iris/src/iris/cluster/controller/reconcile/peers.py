@@ -5,12 +5,16 @@
 
 from collections.abc import Sequence
 
+from rigging.timing import Timestamp
+
+from iris.cluster.controller.reconcile.effects import TaskActionEvent, TaskActionReason
 from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.task import merge_task_termination
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     ActiveTaskRow,
 )
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -60,6 +64,16 @@ def terminate_coscheduled_siblings(
             now_ms,
             stamp_attempt_finished=False,
         )
+        state.emit_task_event(
+            TaskActionEvent(
+                task_id=sib.task_id,
+                attempt_id=sib.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=TaskActionReason.COSCHEDULED_SIBLING_TERMINATED,
+                message=error,
+                severity=TaskEventSeverity.WARNING,
+            )
+        )
 
 
 def requeue_coscheduled_siblings(
@@ -89,4 +103,13 @@ def requeue_coscheduled_siblings(
             now_ms,
             stamp_attempt_finished=False,
             attempt_state=job_pb2.TASK_STATE_COSCHED_FAILED,
+        )
+        state.emit_task_event(
+            TaskActionEvent(
+                task_id=sib.task_id,
+                attempt_id=sib.current_attempt_id,
+                ts=Timestamp.from_ms(now_ms),
+                reason=TaskActionReason.COSCHEDULED_SIBLING_REQUEUED,
+                message=error,
+            )
         )

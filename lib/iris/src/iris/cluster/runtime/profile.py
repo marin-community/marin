@@ -23,71 +23,16 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import Protocol
 
+from iris.cluster.stats.tables import IrisProfile, ProfileFormat, ProfileTrigger, ProfileType
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
-
-# finelog namespace for ``IrisProfile`` rows.
-PROFILE_NAMESPACE = "iris.profile"
-
-
-class ProfileType(StrEnum):
-    CPU = "cpu"
-    MEMORY = "memory"
-    THREAD = "thread"
-
-
-class ProfileFormat(StrEnum):
-    # CPU
-    RAW = "raw"
-    FLAMEGRAPH = "flamegraph"
-    SPEEDSCOPE = "speedscope"
-    # Memory
-    HTML = "html"
-    TABLE = "table"
-    STATS = "stats"
-
-
-class ProfileTrigger(StrEnum):
-    PERIODIC = "periodic"
-    ON_DEMAND = "on_demand"
-
-
-@dataclass
-class IrisProfile:
-    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
-
-    # The dashboard lists captures per source (a task, a worker, or every task
-    # under a job via a source prefix) ordered by captured_at. Clustering segments
-    # by source lets parquet row-group min/max prune to the few segments holding
-    # that source instead of scanning the whole namespace.
-    key_column: ClassVar[str] = "source"
-
-    source: str
-    attempt_id: int | None
-    vm_id: str
-    captured_at: datetime
-    duration_seconds: int
-    type: str
-    format: str
-    trigger: str
-    rate_hz: int | None = None
-    native: bool | None = None
-    leaks: bool | None = None
-    locals_dump: bool | None = None
-    profile_data: bytes = b""
-
-    def __post_init__(self) -> None:
-        ProfileType(self.type)
-        ProfileFormat(self.format)
-        ProfileTrigger(self.trigger)
 
 
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
@@ -204,7 +149,12 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
 
 
 def build_pyspy_dump_cmd(
-    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
+    pid: str,
+    py_spy_bin: str = "py-spy",
+    *,
+    include_locals: bool = False,
+    include_native: bool = False,
+    subprocesses: bool = True,
 ) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
     cmd = [py_spy_bin, "dump", "--pid", pid]
@@ -212,6 +162,8 @@ def build_pyspy_dump_cmd(
         cmd.append("--subprocesses")
     if include_locals:
         cmd.append("--locals")
+    if include_native:
+        cmd.append("--native")
     return cmd
 
 
@@ -333,10 +285,21 @@ def capture_cpu(
 
 
 def capture_threads(
-    dispatch: ProfileDispatch, *, pid: str, include_locals: bool = False, subprocesses: bool = True
+    dispatch: ProfileDispatch,
+    *,
+    pid: str,
+    include_locals: bool = False,
+    include_native: bool = False,
+    subprocesses: bool = True,
 ) -> bytes:
     """Collect thread stacks with py-spy dump and return the raw stdout bytes."""
-    cmd = build_pyspy_dump_cmd(pid, dispatch.pyspy_bin, include_locals=include_locals, subprocesses=subprocesses)
+    cmd = build_pyspy_dump_cmd(
+        pid,
+        dispatch.pyspy_bin,
+        include_locals=include_locals,
+        include_native=include_native,
+        subprocesses=subprocesses,
+    )
     result = dispatch.exec_profiler(cmd, sample_timeout=THREAD_DUMP_TIMEOUT_SECONDS)
     if result.returncode != 0:
         partial_ok = subprocesses and bool(result.stdout.strip()) and _PYSPY_NON_PYTHON_CHILD_ERROR in result.stderr
@@ -430,7 +393,13 @@ def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileTy
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return capture_threads(dispatch, pid=pid, include_locals=profile_type.threads.locals, subprocesses=False)
+        return capture_threads(
+            dispatch,
+            pid=pid,
+            include_locals=profile_type.threads.locals,
+            include_native=profile_type.threads.native,
+            subprocesses=False,
+        )
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
         return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid=pid, subprocesses=False)
@@ -570,6 +539,7 @@ def build_profile_row(
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
             locals_dump=bool(profile_type.threads.locals),
+            native=bool(profile_type.threads.native),
             profile_data=profile_data,
         )
     raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

@@ -10,6 +10,8 @@ selecting appropriate TPU slice sizes for training runs.
 import math
 from dataclasses import dataclass
 
+from fray.types import tpu_hbm_bytes_per_chip
+
 
 @dataclass(frozen=True)
 class TpuSpec:
@@ -17,9 +19,6 @@ class TpuSpec:
 
     prefix: str
     """TPU generation prefix, e.g. "v5p" or "v4"."""
-
-    hbm_per_chip_gib: int
-    """High-bandwidth memory per chip in GiB."""
 
     cores_per_chip: int
     """Number of cores per chip."""
@@ -32,14 +31,12 @@ class TpuSpec:
 
 V5P_SPEC = TpuSpec(
     prefix="v5p",
-    hbm_per_chip_gib=95,
     cores_per_chip=2,
     core_options=(8, 16, 32, 64, 128, 256, 512, 1024, 2048),
 )
 
 V4_SPEC = TpuSpec(
     prefix="v4",
-    hbm_per_chip_gib=32,
     cores_per_chip=2,
     core_options=(8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096),
 )
@@ -58,7 +55,7 @@ def pick_tpu_type(estimated_memory_bytes: int, spec: TpuSpec) -> str:
     Raises:
         ValueError: If the model is too large for available slices.
     """
-    chip_bytes = spec.hbm_per_chip_gib * 1024**3
+    chip_bytes = tpu_hbm_bytes_per_chip(spec.prefix)
     chips = math.ceil(estimated_memory_bytes / chip_bytes)
     cores_req = chips * spec.cores_per_chip
 

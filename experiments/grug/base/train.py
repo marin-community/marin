@@ -44,12 +44,13 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.base.model import GrugModelConfig, Transformer
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -180,7 +181,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -446,7 +447,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so P(("replica_dcn", "data")) spans slices directly.
     mesh = compact_grug_mesh()
-    with set_mesh(mesh):
+    checkpointer = trainer.checkpointer.create(run_id)
+    with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -474,7 +476,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -482,6 +483,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if trainer.initialize_from is not None:
+            state = init_weights_only_from_checkpoint(
+                state,
+                trainer.initialize_from,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -525,11 +533,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                callbacks.profile(
+                profiler_cfg.build(
                     str(trainer.log_dir / run_id / "profiler"),
-                    profiler_cfg.start_step,
-                    profiler_num_steps,
-                    profiler_cfg.perfetto_link,
+                    run_id=run_id,
+                    num_steps=profiler_num_steps,
                 ),
                 every=1,
             )

@@ -25,6 +25,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -153,7 +155,7 @@ def summarize_benchmarks(cell: pd.DataFrame) -> pd.DataFrame:
 
     summaries = []
     for metric, group in cell.groupby("metric", sort=False):
-        n_domains = int(len(group))
+        n_domains = len(group)
         min_harm = float(group["p_harm"].min())
         min_two = float(group["p_two_sided"].min())
         best_harm = group.loc[group["p_harm"].idxmin()]
@@ -202,7 +204,7 @@ def compute_pvalues(comparison: pd.DataFrame, noise_matrix: pd.DataFrame) -> tup
         noise_sd = float(np.std(noise, ddof=1))
         if not np.isfinite(noise_sd) or noise_sd <= 0.0:
             continue
-        n_noise = int(len(noise))
+        n_noise = len(noise)
         df = n_noise - 1
         predictive_sd = noise_sd * math.sqrt(1.0 + 1.0 / n_noise)
         selected_row = selected[selected["metric"].eq(metric)].iloc[0]
@@ -292,13 +294,13 @@ def add_expected_line(
     )
 
 
-def plot_histograms(cell: pd.DataFrame, benchmark: pd.DataFrame) -> go.Figure:
+def plot_histograms(cell: pd.DataFrame, benchmark: pd.DataFrame, *, title: str) -> go.Figure:
     fig = make_subplots(
         rows=2,
         cols=2,
         subplot_titles=[
-            "All selected smooth proxy × deleted-domain cells: one-sided harm p",
-            "All selected smooth proxy × deleted-domain cells: two-sided p",
+            "All selected smooth proxy x deleted-domain cells: one-sided harm p",
+            "All selected smooth proxy x deleted-domain cells: two-sided p",
             "One raw min-p per benchmark: anti-conservative if selected post hoc",
             "One Bonferroni-corrected min-p per benchmark: adjusted over 39 deletions",
         ],
@@ -329,7 +331,7 @@ def plot_histograms(cell: pd.DataFrame, benchmark: pd.DataFrame) -> go.Figure:
             fig.update_xaxes(range=[0, 1], dtick=0.1, title="p-value", row=row, col=col)
             fig.update_yaxes(title="count", row=row, col=col)
     fig.update_layout(
-        title=("300M proportional domain-deletion p-value histograms " "(selected one smooth proxy per benchmark)"),
+        title=title,
         bargap=0.03,
         height=900,
         width=1450,
@@ -346,10 +348,7 @@ def write_slide_png(
     callout: str,
     xlabel: str,
 ) -> None:
-    import matplotlib
-    import matplotlib.pyplot as plt
-
-    matplotlib.rcParams["text.usetex"] = False
+    mpl.rcParams["text.usetex"] = False
     values = benchmark[p_column].dropna().to_numpy(dtype=float)
     bins = np.linspace(0.0, 1.0, 21)
     counts, _ = np.histogram(values, bins=bins)
@@ -412,10 +411,7 @@ def write_slide_png(
 
 
 def write_cell_slide_png(cell: pd.DataFrame) -> None:
-    import matplotlib
-    import matplotlib.pyplot as plt
-
-    matplotlib.rcParams["text.usetex"] = False
+    mpl.rcParams["text.usetex"] = False
     values = cell["p_harm"].dropna().to_numpy(dtype=float)
     bins = np.linspace(0.0, 1.0, 21)
     counts, _ = np.histogram(values, bins=bins)
@@ -519,12 +515,21 @@ def plot_top_benchmarks(benchmark: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def write_report(cell: pd.DataFrame, benchmark: pd.DataFrame, summary: dict[str, Any]) -> None:
+def write_report(
+    cell: pd.DataFrame,
+    benchmark: pd.DataFrame,
+    summary: dict[str, Any],
+    *,
+    analysis_description: str,
+) -> None:
     lines = [
         "# Domain-Ablation P-Value Histograms",
         "",
-        "This analysis uses the 300M proportional domain-deletion panel and the pooled proportional reference distribution.",
-        "The proportional reference pools the original `baseline_proportional` row with the 10 controlled proportional-repeat rows.",
+        analysis_description,
+        (
+            "The proportional reference pools the original `baseline_proportional` row with the 10 controlled "
+            "proportional-repeat rows."
+        ),
         "",
         "For a deletion contrast \\(\\Delta U_{m,j}=U_m(w^{\\\\setminus j})-\\bar U_m(p)\\), the test statistic is",
         "",
@@ -532,7 +537,10 @@ def write_report(cell: pd.DataFrame, benchmark: pd.DataFrame, summary: dict[str,
         "t_{m,j}=\\frac{\\Delta U_{m,j}}{\\hat\\sigma_m(p)\\sqrt{1+1/n_m}},",
         "\\]",
         "",
-        "with \\(n_m-1\\) degrees of freedom. `p_harm` is one-sided for \\(\\Delta U<0\\); `p_two_sided` tests any effect.",
+        (
+            "with \\(n_m-1\\) degrees of freedom. `p_harm` is one-sided for \\(\\Delta U<0\\); "
+            "`p_two_sided` tests any effect."
+        ),
         "",
         "## Summary",
         "",
@@ -580,6 +588,17 @@ def parse_args() -> argparse.Namespace:
         default=OUTPUT_DIR,
         help="Directory for histogram artifacts.",
     )
+    parser.add_argument(
+        "--title",
+        default="300M proportional domain-deletion p-value histograms (selected one smooth proxy per benchmark)",
+    )
+    parser.add_argument(
+        "--analysis-description",
+        default=(
+            "This analysis uses the 300M proportional domain-deletion panel and the pooled proportional reference "
+            "distribution."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -598,7 +617,7 @@ def main() -> None:
 
     cell.to_csv(OUTPUT_DIR / "domain_ablation_cell_pvalues.csv", index=False)
     benchmark.to_csv(OUTPUT_DIR / "domain_ablation_benchmark_min_pvalues.csv", index=False)
-    plot_histograms(cell, benchmark).write_html(
+    plot_histograms(cell, benchmark, title=args.title).write_html(
         OUTPUT_DIR / "domain_ablation_pvalue_histograms.html",
         include_plotlyjs="cdn",
         config=TO_IMAGE_CONFIG,
@@ -628,7 +647,7 @@ def main() -> None:
         "domain_comparison": str(args.domain_comparison) if args.cell_pvalues is None else None,
         "noise_matrix": str(args.noise_matrix) if args.cell_pvalues is None else None,
         "selected_smooth_metrics": int(benchmark["metric"].nunique()),
-        "domain_cell_tests": int(len(cell)),
+        "domain_cell_tests": len(cell),
         "target_domains_per_metric_min": int(cell.groupby("metric")["target_domain"].nunique().min()),
         "target_domains_per_metric_max": int(cell.groupby("metric")["target_domain"].nunique().max()),
         "benchmarks_raw_min_harm_p_le_0p05": int((benchmark["min_p_harm_raw"] <= 0.05).sum()),
@@ -642,7 +661,7 @@ def main() -> None:
         "median_cell_p_two_sided": float(cell["p_two_sided"].median()),
     }
     (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-    write_report(cell, benchmark, summary)
+    write_report(cell, benchmark, summary, analysis_description=args.analysis_description)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 

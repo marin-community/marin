@@ -28,7 +28,7 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
 )
-from marin.rl.placement import marin_prefix_for_region
+from rigging.filesystem import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_baseline_scaling_downstream_evals import (
     _checkpoint_hf_checkpoints,
@@ -368,8 +368,8 @@ def collect_eval_results(config: Collect300MMissingMmluResultsConfig) -> None:
 
 
 def build_eval_steps(state_rows: list[MissingMmluEvalSpec]) -> tuple[list[ExecutorStep], dict[str, InputName]]:
-    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
-    from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT
+    from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness  # noqa: PLC0415
+    from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_SL_VERB_5_SHOT  # noqa: PLC0415
 
     eval_steps: list[ExecutorStep] = []
     results_by_eval_key: dict[str, InputName] = {}

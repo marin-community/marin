@@ -1,0 +1,11 @@
+[project]
+name = "marin-external-marinskyrl"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = ["marinskyrl"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }

@@ -1,0 +1,17 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The custom status panel reads several fixed bridge routes. One root datasource
+# lets one panel receive GitHub, Iris, finelog, provisioning, and W&B frames.
+apiVersion: 1
+
+datasources:
+  - name: status
+    uid: status
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081

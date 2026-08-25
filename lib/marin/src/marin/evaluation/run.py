@@ -18,22 +18,18 @@ import draccus
 from rigging.filesystem import StoragePath
 
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
-from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.evaluation.utils import discover_hf_checkpoints
 
 logger = logging.getLogger(__name__)
 
+# New evals use endpoint-oriented runners. These two adapters remain only for historical data-mixing
+# launchers that require smooth sample metrics or direct Levanter checkpoint evaluation.
 EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
     "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
-    "evalchemy": EvalchemyEvaluator,
-    "debug": SimpleEvaluator,
-    "harbor": HarborEvaluator,
 }
 
 

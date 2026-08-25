@@ -1,0 +1,158 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""vLLM local inference backend."""
+
+import contextlib
+import os
+import socket
+import tempfile
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
+from marin.inference.config import (
+    DEFAULT_CUDA_VLLM_VERSION,
+    InferenceModelConfig,
+    VllmEngineConfig,
+    VllmLauncherType,
+    VllmSource,
+)
+from marin.inference.vllm_server import (
+    IsolatedCudaVllm,
+    IsolatedTpuVllm,
+    PreinstalledVllm,
+    VllmEnvironment,
+    VllmLauncher,
+    VllmLauncherWithEnvironment,
+    VllmType,
+)
+
+
+def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
+    if config.launcher is VllmLauncherType.PREINSTALLED:
+        return PreinstalledVllm()
+    if config.launcher is VllmLauncherType.TPU:
+        return IsolatedTpuVllm(
+            vllm_ref=VLLM_FORK_REQUIREMENT,
+            tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
+        )
+    source = VllmType.MARIN_FORK if config.source is VllmSource.MARIN_FORK else VllmType.UPSTREAM
+    version = config.version if source is VllmType.UPSTREAM else None
+    if source is VllmType.UPSTREAM and version is None:
+        version = DEFAULT_CUDA_VLLM_VERSION
+    return IsolatedCudaVllm(source=source, version=version)
+
+
+def _with_subprocess_env(
+    launcher: VllmLauncher,
+    subprocess_env: Mapping[str, str] | None,
+) -> VllmLauncher:
+    if not subprocess_env:
+        return launcher
+    return VllmLauncherWithEnvironment(launcher, subprocess_env)
+
+
+def _reserve_localhost_port(host: str) -> int:
+    with socket.socket() as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+@contextlib.contextmanager
+def _chat_template_argument(content: str | None) -> Iterator[tuple[str, ...]]:
+    if content is None:
+        yield ()
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".jinja", prefix="marin_serve_chat_", delete=False) as handle:
+        handle.write(content)
+        path = handle.name
+    try:
+        yield ("--chat-template", path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+
+
+@dataclass(frozen=True)
+class VllmServedModel:
+    base_url: str
+    model_id: str
+    environment: VllmEnvironment
+
+    def check_alive(self) -> None:
+        self.environment.check_alive()
+
+
+@dataclass(frozen=True)
+class VllmBackend:
+    config: VllmEngineConfig
+    host: str = "127.0.0.1"
+    port: int | None = None
+    name: str = "vllm"
+
+    @contextlib.contextmanager
+    def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
+        with self.start(spec) as environment:
+            environment.wait_until_ready()
+            yield VllmServedModel(
+                base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
+                model_id=spec.api_model,
+                environment=environment,
+            )
+
+    @contextlib.contextmanager
+    def start(
+        self,
+        spec: ModelSpec,
+        *,
+        extra_args: Sequence[str] = (),
+        subprocess_env: Mapping[str, str] | None = None,
+    ) -> Iterator[VllmEnvironment]:
+        """Start vLLM without imposing HTTP readiness on the caller."""
+        resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        model = self._model_config(spec)
+        launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
+        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
+            with VllmEnvironment(
+                model=model,
+                host=self.host,
+                port=resolved_port,
+                timeout_seconds=self.config.startup_timeout_seconds,
+                extra_args=self._serve_args(spec, chat_template_args, extra_args),
+                launcher=launcher,
+                compilation_cache_mode=self.config.compilation_cache,
+                wait_for_ready=False,
+            ) as environment:
+                yield environment
+
+    def _serve_args(
+        self,
+        spec: ModelSpec,
+        chat_template_args: Sequence[str],
+        extra_args: Sequence[str],
+    ) -> list[str]:
+        return [
+            *(
+                ("--tensor-parallel-size", str(spec.tensor_parallel_size))
+                if spec.tensor_parallel_size is not None
+                else ()
+            ),
+            "--served-model-name",
+            spec.api_model,
+            *(("--revision", spec.revision) if spec.revision is not None else ()),
+            *chat_template_args,
+            *self.config.extra_args,
+            *extra_args,
+        ]
+
+    def _model_config(self, spec: ModelSpec) -> InferenceModelConfig:
+        engine_kwargs: dict[str, object] = {"dtype": spec.dtype}
+        if spec.max_model_len is not None:
+            engine_kwargs["max_model_len"] = spec.max_model_len
+        if self.config.max_num_batched_tokens is not None:
+            engine_kwargs["max_num_batched_tokens"] = self.config.max_num_batched_tokens
+        if self.config.max_num_seqs is not None:
+            engine_kwargs["max_num_seqs"] = self.config.max_num_seqs
+        return InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)

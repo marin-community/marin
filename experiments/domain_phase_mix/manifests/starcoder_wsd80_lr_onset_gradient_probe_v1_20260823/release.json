@@ -1,0 +1,28 @@
+{
+  "analysis_contract_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_gradient_probe_v1_20260823/analysis_contract.json",
+  "analysis_contract_sha256": "a4118a3670e2624851f551a0e3ad29653389a4afaa91fcf08db81b94801fb2ae",
+  "cc_review_path": ".agents/handoffs/starcoder_wsd80_lr_onset_gradient_probe_cc_review_20260823.md",
+  "cc_review_sha256": "c2f2b90f3fdbe0f8fdae1e96496aaad8d14935182f2f1cf7df9e3f89edbd5c42",
+  "confirmation": "I_AUTHORIZE_THE_STARCODER_WSD80_LR_ONSET_GRADIENT_PROBES",
+  "endpoint_metrics_read": false,
+  "implementation_files": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/freeze_starcoder_wsd80_gradient_mechanism_repair_20260818.py": "c1dc757662630bc7331a805cb6da76a97cd64cfb6a1329604eb4c6e186e91300",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/freeze_starcoder_wsd80_gradient_probe_20260816.py": "b052203f00aae50d8163a788ecfdf66652eaf5709dcebc1e4e46b4e451c9f082",
+    "experiments/domain_phase_mix/launch_starcoder_wsd80_lr_onset_intervention.py": "78c8a0a3302ae2065ef396ba1462c53f2114512b7bcfa448cec4e900344756c8",
+    "experiments/domain_phase_mix/starcoder_wsd80_gradient_mechanism_repair.py": "075dba6336eab07951b7fe4a53d69088ef8cf39bf49cc2369fbe6d6e8047ffc2",
+    "experiments/domain_phase_mix/starcoder_wsd80_gradient_probe.py": "d8b3a23cfe70fc569a76746fdb924530c9dab6b5e2741283538f6a78200d3b2f"
+  },
+  "manifest_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_gradient_probe_v1_20260823/probe_manifest.json",
+  "manifest_row_count": 192,
+  "manifest_sha256": "1a24556825278599defafe2e772327e349e1fd660b2d70c9424843915749d86b",
+  "maximum_concurrent": 64,
+  "release_sha256": "f9cf79331aab726a967d257e40ffbac09e3baf4bd7650baa1008f931addbb4fb",
+  "release_version": "2026.08.23.1",
+  "result_root": "gs://marin-us-central1/analysis/pinlin_calvin_xu/data_mixture/starcoder_wsd80_lr_onset_gradient_probe_v1_20260823",
+  "runtime_path": "experiments/domain_phase_mix/starcoder_wsd80_lr_onset_gradient_probe.py",
+  "runtime_sha256": "c5b1e39f46a31c72b3286122b32ae0c081d17fd0f2caea3864a889b599ef0885",
+  "task_image": "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab",
+  "training_release_file_sha256": "ba64126a061b527988cca7863310ff233b8e6080a08e7f5456db41472b13f7ce",
+  "training_release_path": "experiments/domain_phase_mix/manifests/starcoder_wsd80_lr_onset_intervention_v1_20260823/release.json",
+  "training_release_sha256": "c9d034f319b9f891f28ba7757ef7a6fda27640a2be274760f1c4a3c51f01381b"
+}

@@ -76,6 +76,18 @@ _TRACEBACK = [
             20,
             ["RuntimeError: shard missing"],
         ),
+        # Rank-tagged lines from the multi-GPU supervisor: the tag hides neither
+        # the traceback frames nor the noise, and survives into the output.
+        (
+            [
+                "[rank1]  45%|####5     | 450/1000 [00:12<00:15,  3.21it/s]",
+                "[rank1] Fatal Python error: Segmentation fault",
+                '[rank1]   File "/app/train.py", line 42 in step',
+                "[rank1] Extension modules: jax",
+            ],
+            20,
+            ["[rank1] Fatal Python error: Segmentation fault", '[rank1]   File "/app/train.py", line 42 in step'],
+        ),
         # No signal line → fall back to the de-noised tail so output is never empty.
         (["step 1", "step 2", "step 3"], 20, ["step 1", "step 2", "step 3"]),
         # Empty input → empty output.
@@ -88,5 +100,5 @@ _TRACEBACK = [
         ),
     ],
 )
-def test_extract_failure_highlights(lines, max_lines, expected):
+def test_failure_highlights_with_mixed_logs_returns_bounded_signal(lines, max_lines, expected):
     assert extract_failure_highlights(lines, max_lines=max_lines) == expected

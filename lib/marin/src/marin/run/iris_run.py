@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 from iris.cluster.client.bundle import collect_workspace_files
+from iris.cluster.redaction import redact_submit_argv
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,12 @@ DEFAULT_WORKING_DIR_EXCLUDES = [
     "experiments/domain_phase_mix/exploratory/two_phase_many/*.png",
 ]
 
+# The staged workspace drops .git, so the Iris client cannot date itself from git history.
+IRIS_PACKAGE_DIR = "lib/iris"
+IRIS_BUILD_INFO_RELATIVE = Path("lib/iris/src/iris/_build_info.py")
+BUILD_DATE_PLACEHOLDER = 'BUILD_DATE = ""'
+GIT_TIMEOUT = 10.0
+
 
 def _matches_exclude(relative_path: str, pattern: str) -> bool:
     relative_path = relative_path.replace("\\", "/")
@@ -85,22 +92,80 @@ def _should_exclude(relative_path: str, patterns: list[str]) -> bool:
     return any(_matches_exclude(relative_path, pattern) for pattern in patterns)
 
 
+def _should_stage(relative_path: str, exclude_patterns: list[str], include_patterns: list[str]) -> bool:
+    if any(_matches_exclude(relative_path, pattern) for pattern in include_patterns):
+        return True
+    return not _should_exclude(relative_path, exclude_patterns)
+
+
+def _extra_include_globs(include_patterns: list[str]) -> list[str]:
+    globs: list[str] = []
+    for pattern in include_patterns:
+        globs.append(pattern)
+        if not any(character in pattern for character in "*?["):
+            globs.append(f"{pattern.rstrip('/')}/**/*")
+    return globs
+
+
+def _iris_revision_date(workspace: Path) -> str:
+    """Return the ISO commit date of the Iris source tree, or "" if git cannot answer."""
+    try:
+        return subprocess.check_output(
+            ["git", "log", "-1", "--format=%cs", "--", IRIS_PACKAGE_DIR],
+            cwd=workspace,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT,
+        ).strip()
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
+def _stamp_iris_build_date(staged_workspace: Path, revision_date: str) -> None:
+    """Record the client revision date in the staged tree the way wheel builds do.
+
+    The staged workspace has no ``.git``, so ``iris.version.client_revision_date`` cannot
+    fall back to ``git log`` and reports an empty date. The controller reads that as a
+    client from the day its freshness check shipped and rejects the submission. Writing the
+    real commit date into the staged ``_build_info.py`` is the same mechanism
+    ``scripts/python_libs_package.py`` uses when it builds a wheel.
+    """
+    build_info = staged_workspace / IRIS_BUILD_INFO_RELATIVE
+    if not build_info.exists():
+        logger.warning("Staged workspace has no %s; leaving the client date unset", IRIS_BUILD_INFO_RELATIVE)
+        return
+    original = build_info.read_text()
+    stamped = original.replace(BUILD_DATE_PLACEHOLDER, f'BUILD_DATE = "{revision_date}"')
+    if stamped == original:
+        logger.warning("Could not stamp BUILD_DATE in %s; leaving it unchanged", IRIS_BUILD_INFO_RELATIVE)
+        return
+    build_info.write_text(stamped)
+    logger.info("Stamped staged Iris client revision date %s", revision_date)
+
+
 def _create_filtered_workspace(
     workspace: Path,
     exclude_patterns: list[str],
+    include_patterns: list[str],
 ) -> Path:
-    files = collect_workspace_files(workspace)
+    files = collect_workspace_files(workspace, extra_includes=_extra_include_globs(include_patterns))
     temp_workspace = Path(tempfile.mkdtemp(prefix="iris_workspace_"))
 
     copied_count = 0
     for file_path in files:
         relative_path = file_path.relative_to(workspace).as_posix()
-        if _should_exclude(relative_path, exclude_patterns):
+        if not _should_stage(relative_path, exclude_patterns, include_patterns):
             continue
         destination = temp_workspace / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file_path, destination)
         copied_count += 1
+
+    revision_date = _iris_revision_date(workspace)
+    if revision_date:
+        _stamp_iris_build_date(temp_workspace, revision_date)
+    else:
+        logger.warning("Could not resolve the Iris commit date; the controller may reject this client as stale")
 
     logger.info(
         "Prepared filtered Iris workspace with %d files at %s",
@@ -125,6 +190,12 @@ def _parse_args() -> argparse.Namespace:
         help="Additional glob-style path pattern to exclude from the staged workspace.",
     )
     parser.add_argument(
+        "--working-dir-include",
+        action="append",
+        default=[],
+        help="Glob-style path to retain even when an exclude pattern matches it.",
+    )
+    parser.add_argument(
         "--no-default-working-dir-excludes",
         action="store_true",
         help="Disable the standard Marin workspace exclusions.",
@@ -135,6 +206,11 @@ def _parse_args() -> argparse.Namespace:
         help="Arguments forwarded to `iris job run`. Start with `--`.",
     )
     return parser.parse_args()
+
+
+def _redacted_command(command: list[str]) -> str:
+    """Render a command for logging with Iris environment credentials masked."""
+    return subprocess.list2cmdline(redact_submit_argv(command))
 
 
 def main() -> int:
@@ -164,8 +240,8 @@ def main() -> int:
     ]
 
     logger.info("Running Iris job submission via filtered workspace")
-    logger.info("Command: %s", subprocess.list2cmdline(iris_cmd))
-    temp_workspace = _create_filtered_workspace(workspace_root, exclude_patterns)
+    logger.info("Command: %s", _redacted_command(iris_cmd))
+    temp_workspace = _create_filtered_workspace(workspace_root, exclude_patterns, args.working_dir_include)
     try:
         result = subprocess.run(
             iris_cmd,

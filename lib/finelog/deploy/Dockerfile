@@ -7,8 +7,8 @@
 # Build context must be the marin repo root:
 #   docker build -f lib/finelog/deploy/Dockerfile -t finelog:dev .
 #
-# The server is unauthenticated by design — restrict at the network layer
-# (k8s NetworkPolicy, GCP firewall). Do NOT expose it to the public internet.
+# The server's authenticated-ingress policy is default-deny. Keep Kubernetes
+# NetworkPolicy and GCP firewall restrictions as defense in depth.
 
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the runtime stage at
@@ -19,7 +19,10 @@ FROM node:22-slim AS dashboard
 WORKDIR /build/dashboard
 
 # Copy manifests first so dependency install is cached across source edits.
+# The image builds the SPA and never runs the e2e suite, so Playwright's
+# browsers are skipped — they are ~400 MB the build has no use for.
 COPY lib/finelog/dashboard/package.json lib/finelog/dashboard/package-lock.json ./
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY lib/finelog/dashboard/ ./
@@ -33,11 +36,11 @@ RUN npm run build
 # system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
 
-# Cargo profile to build. Defaults to the fat-LTO `release` profile for
-# production images. Dev/test deploys pass `--build-arg CARGO_PROFILE=fast`
-# (no LTO, parallel codegen) for a far faster final link; see `[profile.fast]`
-# in lib/finelog/rust/Cargo.toml. The profile name is also the target/<profile>/ subdir
-# (true for `release` and any custom profile), so the cp below resolves it.
+# Cargo profile to build. The default `release` profile uses opt-level 3 without
+# LTO. Dev/test deploys may pass `--build-arg CARGO_PROFILE=fast` for opt-level
+# 2; see `[profile.fast]` in lib/finelog/rust/Cargo.toml. The profile name is
+# also the target/<profile>/ subdir (true for `release` and any custom profile),
+# so the cp below resolves it.
 ARG CARGO_PROFILE=release
 
 # mold: a fast, multi-threaded linker. The cargo build runs under `mold -run`,
@@ -49,8 +52,19 @@ ARG CARGO_PROFILE=release
 RUN apt-get update && apt-get install -y --no-install-recommends mold \
     && rm -rf /var/lib/apt/lists/*
 
+# The source revision this image is built from. Only lib/finelog/rust is copied
+# in, so there is no checkout here for build.rs to read; the builder passes what
+# it built from and build.rs stamps it into the binary, where `/api/server`
+# reports it. Unset leaves the deployed server reporting an unknown revision.
+ARG SOURCE_COMMIT=""
+ARG SOURCE_TREE=""
+ARG SOURCE_DIRTY=""
+
 WORKDIR /build/rust
 COPY lib/finelog/rust/ ./
+ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
+    FINELOG_SOURCE_TREE=${SOURCE_TREE} \
+    FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
@@ -89,7 +103,7 @@ RUN groupadd --system --gid 1000 finelog \
 
 VOLUME ["/var/cache/finelog"]
 
-# The k8s manifest sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
+# The Kubernetes Deployment sets FINELOG_PORT + FINELOG_REMOTE_DIR but NOT
 # FINELOG_LOG_DIR; the Python launcher defaulted port=10001 and
 # log-dir=/var/cache/finelog in its CLI. The Rust clap CLI defaults port 8080
 # and has NO log-dir default — an unset log-dir runs the store in-memory and

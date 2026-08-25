@@ -6,6 +6,32 @@ numerical tolerances, and integration-test boundaries. Before writing or
 reviewing tests, read root `AGENTS.md`, this file, the nearest module
 `AGENTS.md`, and any testing docs referenced there.
 
+## Running Tests Locally
+
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
+
+```bash
+uv run pytest <test path>
+uv run --no-project infra/ci/run_tests.py
+```
+
+The repository defaults exclude `slow`, `integration`, `data_integration`,
+`cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
+partial marker expression such as `-m "not slow"`; pytest replaces the default
+expression and may select live-cluster tests. Run excluded markers only when
+requested or directed by the relevant module guide.
+
+Tests run from the repository root have a 60-second per-test timeout, including
+fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
+with `SIGALRM`; if the test suppresses that failure, the test process exits five
+seconds later. Give a legitimately longer test an explicit
+`@pytest.mark.timeout(...)` value instead of increasing the repository default.
+
+A formatter-only mechanical edit does not require another test run. Rerun the
+repository formatting and lint checks after the edit; rerun tests only when the
+follow-up changes executable behavior or test expectations.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
@@ -53,6 +79,9 @@ Delete or rewrite tests with negative value:
   are valid when the failure is externally observable.
 - Tests for Python language semantics.
 - Registration tests: Tests that check that specific items are registered in global registries.
+- Configuration projections: assertions that a lowered or constructed field equals the same value
+  supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
+  or a real external wire translation instead.
 - Permanently skipped tests or empty test files.
 - Screenshot-only tests without behavioral assertions.
 - "Does not raise" tests without a comment explaining why that is the contract.

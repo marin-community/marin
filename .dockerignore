@@ -1,5 +1,13 @@
 .git
 
+# Sibling checkouts. Builds whose context is the repo root would otherwise send every
+# worktree's venv and caches to the daemon.
+.worktrees
+.claude/worktrees
+
+# Locally downloaded toolchains (zig, …); no image builds from them.
+.tools
+
 scratch
 cache
 levanter/cache
@@ -51,10 +59,9 @@ instance/
 docs/_build/
 docs/figures/
 
-# PyBuilder and rust
-target/
-
-lib/*/target/
+# PyBuilder and rust build artifacts. Cargo workspaces live at varying depths
+# (lib/finelog/rust/target, lib/iris/rust/target), so match the directory at any level.
+**/target
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -83,11 +90,14 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments. Patterns are context-root-anchored, so the `**/` forms are what exclude
+# nested venvs (lib/*/.venv and the ones inside sibling checkouts).
 .env
 .venv
+**/.venv
 env/
 venv/
+**/node_modules
 ENV/
 env.bak/
 venv.bak/

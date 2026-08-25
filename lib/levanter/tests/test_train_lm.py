@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
 import json
 import math
 import os
@@ -17,17 +18,18 @@ from haliax import Axis
 from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
-import tiny_test_corpus
+from levanter.testing import tiny_corpus
 from levanter.adaptor import LoraAdaptorConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path, load_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.models.qwen import Qwen3Config
+from levanter.optim.config import AdamConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
-from levanter.trainer_state import trainables_only
-from test_utils import arrays_only
+from levanter.trainer_state import TrainerState, trainables_only
+from levanter.testing.helpers import arrays_only
 
 
 def _array_leaves(tree):
@@ -51,7 +53,7 @@ def _assert_training_recorded(output_path: str) -> dict:
 
 def test_train_lm():
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
         config = train_lm.TrainLmConfig(
             data=data_config,
             model=train_lm.LlamaConfig(
@@ -74,6 +76,89 @@ def test_train_lm():
         )
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
+
+
+def test_train_lm_exact_continuation_preserves_optimizer_schedule_and_state():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
+        model_config = train_lm.LlamaConfig(
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=2,
+            max_seq_len=64,
+            hidden_dim=32,
+            attn_backend=None,
+        )
+        optimizer_config = AdamConfig(learning_rate=1e-3, warmup=1, decay=3)
+        parent_checkpoints = os.path.join(tmpdir, "parent_checkpoints")
+        fork_checkpoints = os.path.join(tmpdir, "fork_checkpoints")
+
+        def config(
+            output_path: str,
+            checkpoint_path: str,
+            *,
+            initialize_from: str | None = None,
+        ) -> train_lm.TrainLmConfig:
+            return train_lm.TrainLmConfig(
+                data=data_config,
+                data_seed=0,
+                model=model_config,
+                optimizer=optimizer_config,
+                optimizer_schedule_num_train_steps=5 if initialize_from is not None else None,
+                trainer=train_lm.TrainerConfig(
+                    num_train_steps=5,
+                    train_batch_size=len(jax.devices()),
+                    max_eval_batches=1,
+                    seed=0,
+                    tracker=JsonFileTrackerConfig(output_path=output_path),
+                    checkpointer=CheckpointerConfig(
+                        base_path=checkpoint_path,
+                        append_run_id_to_base_path=False,
+                        save_interval=None,
+                        keep=[{"every": 2, "until": 2}, {"every": 4, "until": None}],
+                    ),
+                    load_checkpoint=False if initialize_from is not None else None,
+                    initialize_from=initialize_from,
+                    require_accelerator=False,
+                    distributed=DistributedConfig(initialize_jax_distributed=False),
+                ),
+            )
+
+        train_lm.main(config(os.path.join(tmpdir, "parent"), parent_checkpoints))
+        source_checkpoint = os.path.join(parent_checkpoints, "step-2")
+        train_lm.main(
+            config(
+                os.path.join(tmpdir, "fork"),
+                fork_checkpoints,
+                initialize_from=source_checkpoint,
+            )
+        )
+
+        trainer_config = config(os.path.join(tmpdir, "template"), os.path.join(tmpdir, "unused"))
+        _, _, model_key, training_key = jrandom.split(jrandom.PRNGKey(trainer_config.trainer.seed), 4)
+        template = TrainerState.init(
+            optimizer_config.build(5),
+            model_config.build(Axis("vocab", len(data_config.the_tokenizer)), key=model_key),
+            key=training_key,
+            mp=trainer_config.trainer.mp,
+        )
+        mesh = trainer_config.trainer.device_mesh
+        with trainer_config.trainer.use_device_mesh():
+            parent_state = load_checkpoint(
+                template,
+                os.path.join(parent_checkpoints, "step-4"),
+                axis_mapping=trainer_config.trainer.parameter_axis_mapping,
+                mesh=mesh,
+            )
+            fork_state = load_checkpoint(
+                template,
+                os.path.join(fork_checkpoints, "step-4"),
+                axis_mapping=trainer_config.trainer.parameter_axis_mapping,
+                mesh=mesh,
+            )
+        assert int(parent_state.step) == int(fork_state.step) == 5
+        for parent_leaf, fork_leaf in zip(_array_leaves(parent_state), _array_leaves(fork_state), strict=True):
+            assert jnp.array_equal(parent_leaf, fork_leaf)
 
 
 def test_optimizer_schedule_can_extend_past_execution_horizon():
@@ -104,7 +189,7 @@ def test_minimum_initial_step_rejects_incomplete_restore() -> None:
 
 def test_train_lm_scratch_hf_model_uses_resolved_data_tokenizer(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
 
         def fail_remote_tokenizer_load(*args, **kwargs):
             raise AssertionError("scratch training must not load the model's remote reference tokenizer")
@@ -137,7 +222,7 @@ def test_train_lm_scratch_hf_model_uses_resolved_data_tokenizer(monkeypatch):
 
 def test_train_lm_fp8():
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
         config = train_lm.TrainLmConfig(
             data=data_config,
             model=train_lm.LlamaConfig(
@@ -154,6 +239,7 @@ def test_train_lm_fp8():
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),
@@ -164,7 +250,7 @@ def test_train_lm_fp8():
 
 def test_train_lm_with_lora_adapter():
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
         config = train_lm.TrainLmConfig(
             data=data_config,
             model=train_lm.LlamaConfig(
@@ -180,6 +266,7 @@ def test_train_lm_with_lora_adapter():
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),
@@ -246,9 +333,124 @@ def test_train_lm_direct_dataset():
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),
         )
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
+
+
+def _frozen_lm_config(tmpdir, data_config, *, out, seed, init_from=None, ckpt_base=None):
+    """A tiny one-step ``TrainLmConfig`` with LR 0 (weights frozen) and a fixed data order.
+
+    Freezing the weights (LR 0) and pinning ``data_seed`` makes the single logged ``train/loss`` a
+    deterministic function of the initial model and the data alone — so two runs log the same loss
+    iff they start from the same weights, regardless of the trainer ``seed`` that would otherwise
+    change the random init.
+    """
+    # Always base the checkpointer under tmpdir (never the default relative "checkpoints/", which would
+    # pollute the cwd). The step policy saves every step so the run leaves a discoverable checkpoint;
+    # append_run_id_to_base_path=False keeps it at a stable <base>/step-0 address for init_from.
+    checkpointer = CheckpointerConfig(
+        base_path=ckpt_base or os.path.join(out, "ckpts"),
+        save_interval=datetime.timedelta(minutes=30),
+        keep=[dict(every=1)],
+        append_run_id_to_base_path=False,
+    )
+    return train_lm.TrainLmConfig(
+        data=data_config,
+        model=train_lm.LlamaConfig(
+            num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=64, hidden_dim=32, attn_backend=None
+        ),
+        optimizer=AdamConfig(learning_rate=0.0),
+        data_seed=0,
+        initialize_model_from_checkpoint_path=init_from,
+        trainer=train_lm.TrainerConfig(
+            num_train_steps=1,
+            train_batch_size=len(jax.devices()),
+            max_eval_batches=1,
+            tracker=JsonFileTrackerConfig(output_path=out),
+            require_accelerator=False,
+            seed=seed,
+            checkpointer=checkpointer,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+        ),
+    )
+
+
+def _logged_loss(output_path: str) -> float:
+    with open(os.path.join(output_path, "eval_results.json")) as f:
+        return json.load(f)["train/loss"]
+
+
+def test_train_lm_initialize_model_from_checkpoint():
+    """initialize_model_from_checkpoint_path restores the model weights (fresh optimizer, step 0).
+
+    Run once from scratch (seed 0) saving a checkpoint, then again initializing weights-only from it
+    with a different trainer seed. With LR 0 and a fixed data order, the second run logs the first
+    run's loss iff the weights were actually loaded; a control run from scratch with the second seed
+    logs a different loss, proving the assertion is sensitive to which weights the model started from.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
+
+        ref_base = os.path.join(tmpdir, "ref_ckpts")
+        out_ref = os.path.join(tmpdir, "ref")
+        train_lm.main(_frozen_lm_config(tmpdir, data_config, out=out_ref, seed=0, ckpt_base=ref_base))
+        loss_ref = _logged_loss(out_ref)
+
+        out_init = os.path.join(tmpdir, "init")
+        train_lm.main(
+            _frozen_lm_config(tmpdir, data_config, out=out_init, seed=999, init_from=latest_checkpoint_path(ref_base))
+        )
+        loss_init = _logged_loss(out_init)
+
+        out_ctrl = os.path.join(tmpdir, "ctrl")
+        train_lm.main(_frozen_lm_config(tmpdir, data_config, out=out_ctrl, seed=999))
+        loss_ctrl = _logged_loss(out_ctrl)
+
+        assert loss_init == pytest.approx(loss_ref, abs=1e-4), "weights were not restored from the checkpoint"
+        assert abs(loss_ctrl - loss_ref) > 1e-4, "control run coincidentally matched; test is not sensitive"
+
+
+def test_train_lm_rejects_multiple_init_sources():
+    """The three weight-init sources are mutually exclusive."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=64, hidden_dim=32),
+            initialize_from_checkpoint_path="/some/full/checkpoint",
+            initialize_model_from_checkpoint_path="/some/model/checkpoint",
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=1,
+                train_batch_size=len(jax.devices()),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        with pytest.raises(ValueError, match="at most one of"):
+            train_lm.main(config)
+
+
+def test_train_lm_rejects_weights_only_init_with_trainer_initialize_from():
+    """trainer.initialize_from is a full-state resume; combined with the weights-only field it would
+    restore step > 0 and silently skip the weights-only init, so reject the combination."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=64, hidden_dim=32),
+            initialize_model_from_checkpoint_path="/some/model/checkpoint",
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=1,
+                train_batch_size=len(jax.devices()),
+                initialize_from="/some/full/checkpoint",
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        with pytest.raises(ValueError, match="trainer.initialize_from"):
+            train_lm.main(config)

@@ -110,9 +110,9 @@ message Controller {
     // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
     // is stamped at build time by scripts/python_libs_package.py; for editable
     // installs it's derived from `git log` on the iris source tree. Root
-    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
-    // Nested submissions (is_root == false) are exempt. Empty string is
-    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    // submissions more than FRESHNESS_WINDOW (14d) older than the controller's
+    // own build are rejected. Nested submissions (is_root == false) are exempt,
+    // as is an empty string, which means the build can't identify itself.
     string client_revision_date = 36;
 
     // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
@@ -139,6 +139,13 @@ message Controller {
     // allowlist gates on. The peer re-checks it against the same claim carried in
     // the federation JWT before trusting it (defense in depth).
     string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
   }
 
   message LaunchJobResponse {
@@ -169,6 +176,10 @@ message Controller {
   }
 
   message TerminateJobRequest {
+    string job_id = 1;
+  }
+
+  message CompleteJobRequest {
     string job_id = 1;
   }
 
@@ -428,6 +439,10 @@ message Controller {
   message MintEndpointTokenResponse {
     string token = 1;
     iris.time.Timestamp expires_at = 2;
+    // Fully-qualified capability URL the controller assembled for this token:
+    // a cluster-tagged parent URL when a public parent is configured, else the
+    // local origin. Empty when the controller has no public origin configured.
+    string capability_url = 3;
   }
 
   message RegisterEndpointResponse {
@@ -560,6 +575,26 @@ message Controller {
     string quota = 12;
   }
 
+  // One physical Kubernetes node. Identity, liveness, and allocatable capacity come from the periodic kubectl
+  // node sync. Hardware utilization is published by the Iris node agent.
+  message NodeStatus {
+    string name = 1;
+    bool ready = 2;               // kubelet Ready condition
+    bool schedulable = 3;         // not cordoned (spec.unschedulable is false)
+    string status_summary = 4;    // "Ready", "NotReady", "Ready,SchedulingDisabled"
+    string instance_type = 5;
+    string region = 6;
+    int32 gpu_count = 7;          // allocatable nvidia.com/gpu
+    string gpu_model = 8;
+    int64 cpu_millicores = 9;     // allocatable cpu
+    int64 memory_bytes = 10;      // allocatable memory
+    int64 disk_bytes = 11;        // allocatable ephemeral-storage
+    int32 running_pods = 12;      // Iris-managed pods scheduled on this node
+    string created = 13;          // node creationTimestamp (RFC3339)
+
+    reserved 20 to 32;
+  }
+
   message GetKubernetesClusterStatusResponse {
     string namespace = 1;
     int32 total_nodes = 2;
@@ -569,13 +604,14 @@ message Controller {
     repeated KubernetesPodStatus pod_statuses = 6;
     string provider_version = 7;
     repeated NodePoolStatus node_pools = 8;
+    repeated NodeStatus nodes = 9;
   }
 
   // --- Budget Management ---
   message SetUserBudgetRequest {
     string user_id = 1;
     int64 budget_limit = 2;      // max budget value (0 = unlimited)
-    iris.job.PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+    iris.job.PriorityBand max_band = 3;   // highest-priority band this user can submit to
   }
   message SetUserBudgetResponse {}
 
@@ -662,6 +698,14 @@ message Controller {
     }
   }
 
+  // Capacity held by admitted work at one priority band, per resource token.
+  message BandCapacity {
+    iris.job.PriorityBand band = 1;
+    // Held amount per resource token, same keys and units as
+    // ResourceAvailability.amounts (accelerator variant -> chips, e.g. {"h100": 8}).
+    map<string, int64> amounts = 2;
+  }
+
   // How much of each consumable resource a backend has free right now. Wrapped in
   // a message (not a bare map on BackendSummary) so a peer that predates the field
   // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
@@ -669,8 +713,12 @@ message Controller {
   // one. UNSET => legacy peer, the parent falls back to shape-only federation for
   // that backend; SET with empty amounts => authoritative "nothing free".
   message ResourceAvailability {
-    // Metric-semantics version. A parent that does not recognize the version treats
+    // Metric-semantics version. A parent reading a version newer than it knows treats
     // the availability as unknown rather than trusting the amounts.
+    //
+    // v2: `amounts` counts only capacity admitted work actually holds (work still
+    // queued for admission no longer subtracts from it) and `held_by_band` splits the
+    // held remainder by priority band.
     uint32 version = 1;
     // When the serving peer computed these amounts, ms since epoch. The parent's
     // reservation ledger keys on this as the observation GENERATION: reservations
@@ -682,8 +730,15 @@ message Controller {
     // Total amount per resource token over the same capacity the free amounts were
     // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
     // keys as `amounts`; a token's free amount never exceeds its total. Display
-    // only — the federation availability gate reads `amounts` alone.
+    // only — the federation availability gate never reads it.
     map<string, int64> total_amounts = 4;
+    // What admitted work holds, split by the priority band holding it. A parent
+    // whose queued job outranks a band knows that band's amount is reclaimable by
+    // preemption on this peer, so a peer with no free capacity is still a valid
+    // placement for higher-priority work. Empty when the serving backend cannot
+    // attribute held capacity to a band — the parent then reclaims nothing and
+    // gates on `amounts` alone.
+    repeated BandCapacity held_by_band = 5;
   }
 
   message BackendSummary {
@@ -807,6 +862,7 @@ service ControllerService {
   rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
   rpc GetJobState(Controller.GetJobStateRequest) returns (Controller.GetJobStateResponse);
   rpc TerminateJob(Controller.TerminateJobRequest) returns (iris.job.Empty);
+  rpc CompleteJob(Controller.CompleteJobRequest) returns (iris.job.Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
   // Task operations
@@ -818,10 +874,6 @@ service ControllerService {
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  // Endpoint registry (generic service discovery)
-  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
-  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
-  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
   // Mint a scoped bearer token for one endpoint's /proxy path (owner/admin only).
   rpc MintEndpointToken(Controller.MintEndpointTokenRequest) returns (Controller.MintEndpointTokenResponse);
 
@@ -885,9 +937,7 @@ service ControllerService {
 // the owning task's row lifetime. RegisterEndpoint returns the granted
 // lease_duration so the client can pace its renewals off the server's policy.
 //
-// The ControllerService.{RegisterEndpoint,UnregisterEndpoint,ListEndpoints}
-// RPCs forward here so clients that call the old surface keep working; clients
-// that want to renew call this service directly to learn their lease.
+// MintEndpointToken (scoped proxy tokens) lives on ControllerService.
 service EndpointService {
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);

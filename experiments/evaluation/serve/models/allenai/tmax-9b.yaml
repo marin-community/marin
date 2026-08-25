@@ -1,0 +1,13 @@
+name: tmax-9b
+location: allenai/tmax-9b
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 32768
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

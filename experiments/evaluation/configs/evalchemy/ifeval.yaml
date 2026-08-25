@@ -1,0 +1,13 @@
+tasks:
+  - ifeval
+task_options:
+  ifeval:
+    num_fewshot: 0
+    task_alias: ifeval_0shot
+    generation: true
+apply_chat_template: true
+limit: null
+batch_size: 1
+seed: 1234
+max_tokens: 2048
+runtime_extras: [ifeval]

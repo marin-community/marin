@@ -1,21 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import logging
 import os
 import urllib.parse
 from collections.abc import Callable, Sequence
-from typing import TypeVar
+from typing import ClassVar, Protocol, TypeVar, cast
 
 import fsspec
 import jax
 from fsspec import AbstractFileSystem
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.utils.jax_utils import barrier_sync_named
 
 logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
+RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
+# The barrier runs one clock, started by the first rank to arrive, so this bounds the spread
+# between arrivals rather than the length of a restore. A gang whose object-store caches are only
+# partly warm spreads widest, since re-reading a checkpoint is an order of magnitude faster than
+# reading it cold, and killing a stalled gang is what leaves a fleet in that state. Expiring
+# aborts the attempt for the scheduler to retry, rather than holding every rank behind one that
+# never arrives.
+RESTORE_BARRIER_TIMEOUT = 40 * 60
+
+
+class _GrugState(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, dataclasses.Field[object]]]
+
+    @property
+    def step(self) -> jax.Array: ...
+
+    @property
+    def params(self) -> object: ...
+
+    @property
+    def ema_params(self) -> object | None: ...
+
+
+GrugStateT = TypeVar("GrugStateT", bound=_GrugState)
 
 
 def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
@@ -105,6 +131,7 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
+            barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
             return loaded
@@ -125,6 +152,38 @@ def restore_grug_state_from_checkpoint(
 
     logger.info("Checkpoint not found under %s. Starting from scratch.", checkpoint_search_paths)
     return state
+
+
+def init_weights_only_from_checkpoint(
+    state: GrugStateT,
+    checkpoint_path: str,
+    *,
+    mesh: jax.sharding.Mesh | None,
+    allow_partial: bool,
+    additional_weight_fields: Sequence[str] = (),
+) -> GrugStateT:
+    """Initialize a fresh Grug state from external weights."""
+    if int(state.step) != 0:
+        return state
+
+    concrete_checkpoint_path = latest_checkpoint_path(checkpoint_path)
+    weight_fields = ("params", *additional_weight_fields)
+    exemplar = {field_name: getattr(state, field_name) for field_name in weight_fields}
+    logger.info("Initializing model weights from %s", concrete_checkpoint_path)
+    loaded = cast(
+        dict[str, object],
+        load_checkpoint(
+            exemplar,
+            concrete_checkpoint_path,
+            axis_mapping=None,
+            mesh=mesh,
+            allow_partial=allow_partial,
+        ),
+    )
+    updates = {field_name: loaded[field_name] for field_name in weight_fields}
+    if state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return cast(GrugStateT, dataclasses.replace(state, **updates))
 
 
 def _load_candidate_state(

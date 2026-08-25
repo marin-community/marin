@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+import pytest
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.budget import compute_effective_band
@@ -19,10 +20,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, RunningTaskInfo, WorkerCapacity
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     ControllerTestHarness,
     dispatch_task,
     make_controller_state,
@@ -35,6 +33,9 @@ from .conftest import (
     register_worker,
     submit_job,
 )
+from iris.testing.controller_state import submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.timing import Timestamp
 
 
 def _make_simple_context(workers: list[WorkerCapacity]) -> "FakeSchedulingContext":
@@ -117,23 +118,21 @@ def _tpu_capacity(worker_id: WorkerId, *, attributes: dict[str, AttributeValue] 
 # ---------------------------------------------------------------------------
 
 
-def test_production_preempts_batch():
-    """PRODUCTION task preempts a BATCH task on the same worker."""
-    w1 = WorkerId("w1")
-    # Worker with 4 CPUs, all committed (0 available)
-    cap = WorkerCapacity(
-        worker_id=w1,
-        available_cpu_millicores=0,
-        available_memory=0,
-        available_gpus=0,
-        available_tpus=0,
-    )
-    ctx = _make_simple_context([cap])
-
+@pytest.mark.parametrize(
+    "preemptor_band, victim_band",
+    [
+        (job_pb2.PRIORITY_BAND_SYSTEM, job_pb2.PRIORITY_BAND_PRODUCTION),
+        (job_pb2.PRIORITY_BAND_PRODUCTION, job_pb2.PRIORITY_BAND_BATCH),
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, job_pb2.PRIORITY_BAND_BATCH),
+    ],
+)
+def test_higher_band_preempts_lower_band(preemptor_band, victim_band):
+    worker = WorkerId("worker")
+    ctx = _make_simple_context([WorkerCapacity(worker, 0, 0, 0, 0)])
     victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/batch-job:0"),
-        worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        task_id=JobName.from_wire("/alice/victim:0"),
+        worker_id=worker,
+        priority_band=victim_band,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -141,49 +140,15 @@ def test_production_preempts_batch():
         gpu_count=0,
         tpu_count=0,
     )
+    preemptor_id = JobName.from_wire("/bob/preemptor:0")
 
-    preemptor_id = JobName.from_wire("/bob/prod-job:0")
-    unscheduled = [
-        PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
-    ]
+    preemptions = run_preemption_pass(
+        [PreemptionCandidate(preemptor_id, _cpu_requirements(1), preemptor_band)],
+        [victim],
+        ctx,
+    ).evictions
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
-    assert len(preemptions) == 1
-    assert preemptions[0] == (preemptor_id, victim.task_id)
-
-
-def test_interactive_preempts_batch():
-    """INTERACTIVE task preempts a BATCH task."""
-    w1 = WorkerId("w1")
-    cap = WorkerCapacity(
-        worker_id=w1,
-        available_cpu_millicores=0,
-        available_memory=0,
-        available_gpus=0,
-        available_tpus=0,
-    )
-    ctx = _make_simple_context([cap])
-
-    victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/batch-job:0"),
-        worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
-        resource_value=1000,
-        is_coscheduled=False,
-        cpu_millicores=1000,
-        memory_bytes=1024**3,
-        gpu_count=0,
-        tpu_count=0,
-    )
-
-    preemptor_id = JobName.from_wire("/bob/interactive-job:0")
-    unscheduled = [
-        PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
-    ]
-
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
-    assert len(preemptions) == 1
-    assert preemptions[0] == (preemptor_id, victim.task_id)
+    assert preemptions == [(preemptor_id, victim.task_id)]
 
 
 def test_interactive_does_not_preempt_production():
@@ -201,7 +166,7 @@ def test_interactive_does_not_preempt_production():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/prod-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_PRODUCTION,
+        priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -215,7 +180,7 @@ def test_interactive_does_not_preempt_production():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 0
 
 
@@ -235,7 +200,7 @@ def test_batch_never_preempts():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -249,7 +214,7 @@ def test_batch_never_preempts():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_BATCH),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 0
 
 
@@ -268,7 +233,7 @@ def test_same_band_no_preemption():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/job-a:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -282,7 +247,7 @@ def test_same_band_no_preemption():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 0
 
 
@@ -301,7 +266,7 @@ def test_coscheduled_not_preempted():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/gang-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
         cpu_millicores=1000,
@@ -315,7 +280,7 @@ def test_coscheduled_not_preempted():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 0
 
 
@@ -332,7 +297,7 @@ def test_solo_preempts_same_variant_tpu():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -347,7 +312,7 @@ def test_solo_preempts_same_variant_tpu():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert preemptions == [(preemptor_id, victim.task_id)]
 
 
@@ -359,7 +324,7 @@ def test_solo_does_not_preempt_different_variant():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -374,7 +339,7 @@ def test_solo_does_not_preempt_different_variant():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-256"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert preemptions == []
 
 
@@ -389,7 +354,7 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -407,7 +372,7 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     # Exactly N pairs emitted, one preemptor task per victim sibling.
     assert len(preemptions) == 4
     assert {p[1] for p in preemptions} == {v.task_id for v in victims}
@@ -415,6 +380,41 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
     # short-circuit via the satisfied_preemptor_jobs guard.
     preemptors_used = {p[0] for p in preemptions}
     assert len(preemptors_used) == 1
+
+
+def test_coscheduled_preemptor_is_placed_on_the_freed_slice():
+    """Each preemptor sibling is bound to one worker of the slice it evicts, so the
+    gang is committed onto the freed capacity rather than re-competing next tick."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    ctx = _make_simple_context([_tpu_capacity(w) for w in workers])
+
+    victim_job = JobName.from_wire("/alice/cosched-batch")
+    victims = [
+        RunningTaskInfo(
+            task_id=victim_job.child(str(i)),
+            worker_id=workers[i],
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
+            resource_value=1000,
+            is_coscheduled=True,
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
+            device_variant="v5p-8",
+        )
+        for i in range(4)
+    ]
+
+    preemptor_job = JobName.from_wire("/bob/cosched-prod")
+    req = _tpu_requirements("v5p-8", is_coscheduled=True)
+    unscheduled = [
+        PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
+    ]
+
+    plan = run_preemption_pass(unscheduled, victims, ctx)
+    assert len(plan.placements) == 4
+    assert {task for task, _ in plan.placements} == {preemptor_job.child(str(i)) for i in range(4)}
+    assert {worker for _, worker in plan.placements} == set(workers)
 
 
 def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
@@ -427,7 +427,7 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -445,7 +445,7 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     assert preemptions == []
 
 
@@ -467,7 +467,7 @@ def test_coscheduled_preemptor_skips_slice_failing_hard_constraint():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -489,7 +489,7 @@ def test_coscheduled_preemptor_skips_slice_failing_hard_constraint():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     assert preemptions == []
 
 
@@ -505,7 +505,7 @@ def test_coscheduled_preemptor_evicts_slice_satisfying_hard_constraint():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -533,7 +533,7 @@ def test_coscheduled_preemptor_evicts_slice_satisfying_hard_constraint():
         PreemptionCandidate(preemptor_job.child(str(i)), req, job_pb2.PRIORITY_BAND_PRODUCTION) for i in range(4)
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     assert {p[1] for p in preemptions} == {v.task_id for v in victims}
 
 
@@ -547,7 +547,7 @@ def test_coscheduled_preemptor_skips_undersized_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -566,7 +566,7 @@ def test_coscheduled_preemptor_skips_undersized_slice():
         for i in range(4)  # needs 4, slice has 2
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     assert preemptions == []
 
 
@@ -580,7 +580,7 @@ def test_solo_preemptor_does_not_tear_down_slice():
         RunningTaskInfo(
             task_id=victim_job.child(str(i)),
             worker_id=workers[i],
-            band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
             cpu_millicores=1000,
@@ -597,7 +597,7 @@ def test_solo_preemptor_does_not_tear_down_slice():
         PreemptionCandidate(preemptor_id, _tpu_requirements("v5p-8"), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, victims, ctx)
+    preemptions = run_preemption_pass(unscheduled, victims, ctx).evictions
     assert preemptions == []
 
 
@@ -667,7 +667,7 @@ def _solo_victim(
     return RunningTaskInfo(
         task_id=task_id,
         worker_id=worker_id,
-        band_sort_key=band,
+        priority_band=band,
         resource_value=resource_value,
         is_coscheduled=False,
         cpu_millicores=cpu_millicores,
@@ -702,11 +702,37 @@ def test_gang_preempts_cpu_squatter_on_blocking_host():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx).evictions
 
     assert len(preemptions) == 1
     assert preemptions[0][1] == squatter.task_id
     assert preemptions[0][0].parent == gang  # attributed to one gang sibling
+
+
+def test_gang_partial_host_places_gang_on_freed_and_fitting_hosts():
+    """The gang is committed onto every host it will use — the already-fitting
+    hosts plus the one freed by evicting the squatter."""
+    workers = [WorkerId(f"w{i}") for i in range(4)]
+    req = _gang_req()
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(3)]
+    caps.append(_pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM))
+    ctx = _make_simple_context(caps)
+
+    squatter = _solo_victim(
+        JobName.from_wire("/michael/ft-prep:0"),
+        workers[3],
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        cpu_millicores=64000,
+        memory_bytes=_SQUATTER_RAM,
+    )
+
+    gang = JobName.from_wire("/larry/grug-moe")
+    plan = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx)
+
+    assert [v for _, v in plan.evictions] == [squatter.task_id]
+    assert len(plan.placements) == 4
+    assert {task for task, _ in plan.placements} == {gang.child(str(i)) for i in range(4)}
+    assert {worker for _, worker in plan.placements} == set(workers)
 
 
 def test_gang_does_not_preempt_same_band_squatter():
@@ -728,7 +754,7 @@ def test_gang_does_not_preempt_same_band_squatter():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [squatter], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [squatter], ctx).evictions
     assert preemptions == []
 
 
@@ -754,7 +780,7 @@ def test_gang_partial_host_skips_when_not_enough_recoverable():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [only_victim], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [only_victim], ctx).evictions
     assert preemptions == []
 
 
@@ -776,7 +802,7 @@ def test_gang_partial_host_no_preemption_when_enough_hosts_free():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 4), [squatter], ctx).evictions
     assert preemptions == []
 
 
@@ -820,7 +846,7 @@ def test_gang_partial_host_commits_minimal_evictions():
     ]
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 3), victims, ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 3), victims, ctx).evictions
     assert len(preemptions) == 1
     assert preemptions[0][1] == victims[1].task_id  # the cheapest victim's host
 
@@ -841,7 +867,7 @@ def test_gang_partial_host_ignores_coscheduled_cotenant():
     cosched_cotenant = RunningTaskInfo(
         task_id=JobName.from_wire("/other/cosched-batch").child("0"),
         worker_id=workers[1],
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
         cpu_millicores=0,
@@ -852,7 +878,7 @@ def test_gang_partial_host_ignores_coscheduled_cotenant():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [cosched_cotenant], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [cosched_cotenant], ctx).evictions
     assert preemptions == []
 
 
@@ -878,7 +904,7 @@ def test_gang_preempts_solo_tpu_cotenant_on_blocking_host():
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
-    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [tpu_cotenant], ctx)
+    preemptions = run_preemption_pass(_gang_unscheduled(gang, req, 2), [tpu_cotenant], ctx).evictions
     assert len(preemptions) == 1
     assert preemptions[0][1] == tpu_cotenant.task_id
 
@@ -904,7 +930,7 @@ def test_two_gangs_do_not_double_book_hosts():
     gang_b = JobName.from_wire("/larry/gang-b")
     unscheduled = _gang_unscheduled(gang_a, req, 4) + _gang_unscheduled(gang_b, req, 4)
 
-    preemptions = run_preemption_pass(unscheduled, [squatter], ctx)
+    preemptions = run_preemption_pass(unscheduled, [squatter], ctx).evictions
     # Only gang A's single squatter eviction; gang B sees every host reserved.
     assert len(preemptions) == 1
     assert preemptions[0][1] == squatter.task_id
@@ -914,69 +940,6 @@ def test_two_gangs_do_not_double_book_hosts():
 # ---------------------------------------------------------------------------
 # Integration tests using ControllerTestState
 # ---------------------------------------------------------------------------
-
-
-def test_preempted_task_retries():
-    """Preempted task transitions to PENDING (retries) when preemption budget remains."""
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        # Submit a batch job with preemption retries
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=5,
-        )
-        task = tasks[0]
-
-        # Dispatch and advance to RUNNING
-        harness.dispatch(task, w1)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-
-        # Preempt
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-
-        # Task should be PENDING (retry)
-        updated = query_task(state, task.task_id)
-        assert updated.state == job_pb2.TASK_STATE_PENDING
-        assert updated.preemption_count == 1
-        assert updated.error == "Preempted by /bob/prod-job:0"
-
-
-def test_preempted_task_exhausted_retries():
-    """Preempted task transitions to PREEMPTED when preemption budget exhausted."""
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=0,
-        )
-        task = tasks[0]
-
-        harness.dispatch(task, w1)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                now=Timestamp.now(),
-            )
-
-        updated = query_task(state, task.task_id)
-        assert updated.state == job_pb2.TASK_STATE_PREEMPTED
-        assert updated.preemption_count == 1
 
 
 def test_preemption_skips_if_capacity_available():
@@ -995,7 +958,7 @@ def test_preemption_skips_if_capacity_available():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1010,7 +973,7 @@ def test_preemption_skips_if_capacity_available():
     ]
 
     # Should not preempt since capacity is available
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 0
 
 
@@ -1029,7 +992,7 @@ def test_preemption_picks_cheapest_victim():
     expensive_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/big-batch:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=5000,
         is_coscheduled=False,
         cpu_millicores=4000,
@@ -1040,7 +1003,7 @@ def test_preemption_picks_cheapest_victim():
     cheap_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/small-batch:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1054,7 +1017,7 @@ def test_preemption_picks_cheapest_victim():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [expensive_victim, cheap_victim], ctx).evictions
     assert len(preemptions) == 1
     assert preemptions[0][1] == cheap_victim.task_id
 
@@ -1083,7 +1046,7 @@ def test_over_budget_user_tasks_preemptible():
     victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/interactive-job:0"),
         worker_id=w1,
-        band_sort_key=effective,  # BATCH due to budget
+        priority_band=effective,  # BATCH due to budget
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1098,7 +1061,7 @@ def test_over_budget_user_tasks_preemptible():
         PreemptionCandidate(preemptor_id, _cpu_requirements(1), job_pb2.PRIORITY_BAND_INTERACTIVE),
     ]
 
-    preemptions = run_preemption_pass(unscheduled, [victim], ctx)
+    preemptions = run_preemption_pass(unscheduled, [victim], ctx).evictions
     assert len(preemptions) == 1
     assert preemptions[0] == (preemptor_id, victim.task_id)
 
@@ -1135,7 +1098,7 @@ def test_running_tasks_report_stamped_band():
         _dispatch_with_band(state, tasks_alice[0], w1, job_pb2.PRIORITY_BAND_INTERACTIVE)
         _dispatch_with_band(state, tasks_bob[0], w2, job_pb2.PRIORITY_BAND_BATCH)
 
-        running = {r.task_id: r.band_sort_key for r in get_running_tasks_with_band_and_value(state._db)}
+        running = {r.task_id: r.priority_band for r in get_running_tasks_with_band_and_value(state._db)}
         assert running == {
             tasks_alice[0].task_id: job_pb2.PRIORITY_BAND_INTERACTIVE,
             tasks_bob[0].task_id: job_pb2.PRIORITY_BAND_BATCH,
@@ -1219,15 +1182,17 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         )
 
+        # The child inherits the parent's requested PRODUCTION, not the BATCH the
+        # scheduler stamped on the parent's task row.
         child_task = query_tasks_for_job(state, child_id)[0]
-        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
         with state._db.read_snapshot() as tx:
             pending = reads.pending_tasks_with_jobs(tx)
@@ -1312,7 +1277,7 @@ def test_preemption_multiple_victims_one_pass():
     victim1 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job-1:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1323,7 +1288,7 @@ def test_preemption_multiple_victims_one_pass():
     victim2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job-2:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=2000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1343,7 +1308,7 @@ def test_preemption_multiple_victims_one_pass():
         job_pb2.PRIORITY_BAND_PRODUCTION,
     )
 
-    preemptions = run_preemption_pass([preemptor1, preemptor2], [victim1, victim2], ctx)
+    preemptions = run_preemption_pass([preemptor1, preemptor2], [victim1, victim2], ctx).evictions
     assert len(preemptions) == 2
     victims_preempted = {p[1] for p in preemptions}
     assert victim1.task_id in victims_preempted
@@ -1373,7 +1338,7 @@ def test_preemption_across_multiple_workers():
     victim_w1 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-w1:0"),
         worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1384,7 +1349,7 @@ def test_preemption_across_multiple_workers():
     victim_w2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-w2:0"),
         worker_id=w2,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=500,
         is_coscheduled=False,
         cpu_millicores=1000,
@@ -1400,9 +1365,50 @@ def test_preemption_across_multiple_workers():
         job_pb2.PRIORITY_BAND_PRODUCTION,
     )
 
-    preemptions = run_preemption_pass([preemptor], [victim_w1, victim_w2], ctx)
+    preemptions = run_preemption_pass([preemptor], [victim_w1, victim_w2], ctx).evictions
     assert len(preemptions) == 1
     assert preemptions[0][1] == victim_w2.task_id
+
+
+def test_solo_preemptor_is_placed_on_the_freed_worker():
+    """The solo preemptor is bound to the worker of the victim it evicts."""
+    w1, w2 = WorkerId("w1"), WorkerId("w2")
+    ctx = _make_simple_context(
+        [
+            WorkerCapacity(
+                worker_id=w1, available_cpu_millicores=0, available_memory=0, available_gpus=0, available_tpus=0
+            ),
+            WorkerCapacity(
+                worker_id=w2, available_cpu_millicores=0, available_memory=0, available_gpus=0, available_tpus=0
+            ),
+        ]
+    )
+    # w2's victim is cheaper, so it is the one evicted; the preemptor lands there.
+    victim_w1 = _solo_victim(
+        JobName.from_wire("/alice/batch-w1:0"),
+        w1,
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        resource_value=1000,
+    )
+    victim_w2 = _solo_victim(
+        JobName.from_wire("/alice/batch-w2:0"),
+        w2,
+        band=job_pb2.PRIORITY_BAND_BATCH,
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        resource_value=500,
+    )
+
+    preemptor = JobName.from_wire("/bob/prod:0")
+    plan = run_preemption_pass(
+        [PreemptionCandidate(preemptor, _cpu_requirements(1), job_pb2.PRIORITY_BAND_PRODUCTION)],
+        [victim_w1, victim_w2],
+        ctx,
+    )
+    assert plan.evictions == [(preemptor, victim_w2.task_id)]
+    assert plan.placements == [(preemptor, w2)]
 
 
 def test_preemption_nonexistent_task_is_noop():
@@ -1417,63 +1423,6 @@ def test_preemption_nonexistent_task_is_noop():
         assert not result.tasks
         assert not result.attempts
         assert not result.jobs
-
-
-def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
-    """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
-
-    ``preempt_task`` marks the attempt PREEMPTED via
-    ``task.merge_task_termination(stamp_attempt_finished=False)``, which
-    deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
-    subsequent terminal-state heartbeat to stamp it. Without the stamp the row
-    stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
-    capacity for as long as the worker lives.
-    """
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit("/alice/job", cpu=1, replicas=1, max_retries_preemption=5)
-        task = tasks[0]
-        harness.dispatch(task, w1)
-        attempt_id = query_task(state, task.task_id).current_attempt_id
-
-        # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-        attempt = query_attempt(state, task.task_id, attempt_id)
-        assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
-        assert attempt.finished_at_ms is None, "producer transition should leave finalization for heartbeat"
-
-        # Worker's heartbeat for the now-terminal attempt — the deferred finalization.
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=w1,
-                        updates=[
-                            TaskUpdate(
-                                task_id=task.task_id,
-                                attempt_id=attempt_id,
-                                new_state=job_pb2.TASK_STATE_KILLED,
-                            )
-                        ],
-                    )
-                ],
-                health=state._health,
-                now=Timestamp.now(),
-            )
-
-        attempt = query_attempt(state, task.task_id, attempt_id)
-        assert attempt.finished_at_ms is not None, (
-            "worker's terminal-state heartbeat must stamp finished_at_ms on the preempted "
-            "attempt; otherwise the row stays in resource_usage_by_worker and ghost-pins capacity"
-        )
 
 
 def test_preemption_terminal_task_is_noop():
@@ -1749,88 +1698,3 @@ def test_preempt_task_cascades_coscheduled_siblings():
         # is terminated by the peer cascade, not a separate preempt decision.
         preempted = {ev.entity_id for ev in result0.log_events if ev.action == "task_preempted"}
         assert preempted == {tasks[0].task_id.to_wire()}
-
-
-def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
-    """Regression: after preempt_task retries a task (state -> PENDING, attempt -> PREEMPTED),
-    a late worker heartbeat for the dead attempt_id must NOT revive the attempt row back
-    to RUNNING while leaving `error` and `finished_at_ms` set.
-
-    Observed in production (job /eczech/iris-run-exp109_bolinas_sweep_eval-...): the
-    attempt ended up in the impossible mixed state
-        state=RUNNING, error="Preempted by ...", finished_at_ms=<set>
-    because preempt_task leaves `tasks.current_attempt_id` pointing at the dead
-    attempt, so task.apply_one_transition's stale-attempt guard fails to fire and
-    overwrites `state` on the attempt row (COALESCE only protects
-    finished_at_ms / error / exit_code).
-    """
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        worker_id = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=5,
-        )
-        task = tasks[0]
-
-        harness.dispatch(task, worker_id)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-        dead_attempt_id = query_task(state, task.task_id).current_attempt_id
-        assert dead_attempt_id == 0
-
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-
-        # Sanity: task went to PENDING (budget remains), attempt row is in
-        # PREEMPTED reporting state. ``preempt_task`` is a producer transition
-        # (``stamp_attempt_finished=False``), so ``finished_at_ms`` is intentionally
-        # left NULL — the worker still holds the chips until a terminal
-        # heartbeat (or worker-failure synthesis) lands.
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
-        attempt_after_preempt = query_attempt(state, task.task_id, dead_attempt_id)
-        assert attempt_after_preempt is not None
-        assert attempt_after_preempt.state == job_pb2.TASK_STATE_PREEMPTED
-        assert (
-            attempt_after_preempt.finished_at_ms is None
-        ), "producer-side preempt must not stamp finished_at_ms; that is the heartbeat path's job"
-        assert attempt_after_preempt.error == "Preempted by /bob/prod-job:0"
-
-        # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
-        # it is RUNNING. This simulates the RPC-in-flight race.
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=worker_id,
-                        updates=[
-                            TaskUpdate(
-                                task_id=task.task_id,
-                                attempt_id=dead_attempt_id,
-                                new_state=job_pb2.TASK_STATE_RUNNING,
-                            )
-                        ],
-                    )
-                ],
-                health=state._health,
-                now=Timestamp.now(),
-            )
-
-        # The attempt row must remain in a consistent state — NOT flipped
-        # back to RUNNING. ``finished_at`` may still be NULL because the
-        # producer-side preempt deliberately leaves it that way.
-        attempt_final = query_attempt(state, task.task_id, dead_attempt_id)
-        assert attempt_final is not None, "attempt row disappeared"
-        assert attempt_final.state == job_pb2.TASK_STATE_PREEMPTED, (
-            f"attempt {dead_attempt_id} was revived to state={attempt_final.state} "
-            f"(expected PREEMPTED={job_pb2.TASK_STATE_PREEMPTED}); "
-            f"error={attempt_final.error!r}, finished_at={attempt_final.finished_at_ms}"
-        )
-        assert attempt_final.error == "Preempted by /bob/prod-job:0"

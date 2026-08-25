@@ -90,16 +90,16 @@ of them. The complete `build()` function for DCLM 1B/1x:
 
 ```python
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.train import train_lm
+from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.llama import llama3_tokenizer
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
-from experiments.recipes import core_tasks
+from experiments.evals.task_configs import CORE_TASKS
 
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
 
@@ -127,7 +127,7 @@ def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
         seq_len=SEQ_LEN,
         num_train_steps=NUM_TRAIN_STEPS,
         z_loss_weight=1e-4,
-        evals=core_tasks(every=10000),
+        evals=EvalSuite(CORE_TASKS, every=10000),
         resources=TRAIN_RESOURCES,
         tags=["DCLM_1B_1X"],
     )
@@ -186,6 +186,27 @@ for the full `iris job run` reference, including `--no-wait` for detached submis
 W&B receives metrics throughout training. The run name defaults to the `run_id` argument
 (when omitted, `train_lm` derives one from the artifact name). Checkpoints are written to
 `{prefix}/{name}/{version}/checkpoints/`.
+
+Iris shows a private `training-control` endpoint for Marin `train_lm` jobs. It contains the run ID,
+resolved Levanter configuration, and redacted process environment. Select **Save checkpoint** to write a temporary
+checkpoint after the current training step. Manual saves use `temporary_base_path` when it is configured. Otherwise,
+they use the main checkpoint path. Temporary retention applies in both cases.
+
+Use an Iris capability URL to request the same checkpoint from a CLI. First, set the root job ID:
+
+```bash
+JOB_ID=/user/training-job
+ENDPOINT=$(uv run iris --config lib/iris/config/marin.yaml endpoints list "$JOB_ID" \
+  | awk '$1 ~ /training-control$/ {print $1}')
+CAPABILITY_URL=$(uv run iris --config lib/iris/config/marin.yaml endpoints mint "$ENDPOINT" \
+  | awk '$1 == "url" {print $2}')
+
+curl -X POST \
+  -H 'X-Levanter-Training-Control: request-checkpoint' \
+  "${CAPABILITY_URL%/}/checkpoint"
+```
+
+The capability URL is a credential for one endpoint. Do not share it. Iris sets an expiration time when it creates the URL.
 
 ## Memory pressure
 

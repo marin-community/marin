@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
+import { useControllerRpc, useEndpointRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { stateToName } from '@/types/status'
+import { stateToName, taskStateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
 import {
   isLocal,
   LOCAL_CLUSTER,
+  attemptFailureReason,
   type TaskStatus,
   type GetTaskStatusResponse,
   type EndpointInfo,
@@ -28,6 +29,7 @@ import Sparkline from '@/components/shared/Sparkline.vue'
 import ProfileButtons from '@/components/shared/ProfileButtons.vue'
 import ProfileLink from '@/components/shared/ProfileLink.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import TaskEventTimeline from '@/components/shared/TaskEventTimeline.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
@@ -60,7 +62,7 @@ const rootCauseHighlights = computed(() => taskResponse.value?.rootCauseHighligh
 const {
   data: endpointsResponse,
   refresh: fetchEndpoints,
-} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', () => ({ taskIds: [props.taskId] }))
 
 const endpoints = computed<EndpointInfo[]>(() => endpointsResponse.value?.endpoints ?? [])
 
@@ -69,6 +71,18 @@ const normalizedState = computed(() => (task.value ? stateToName(task.value.stat
 const isActive = computed(() => {
   const s = normalizedState.value
   return s === 'running' || s === 'building' || s === 'assigned'
+})
+
+// The attempt the page is focused on. Defaults to the task's current attempt;
+// clicking a row in the Attempts table (selectAttempt) points it elsewhere.
+// Drives the Events panel so it follows the same attempt as the log viewer.
+const selectedAttemptId = ref<number | undefined>(undefined)
+const effectiveAttemptId = computed(() => selectedAttemptId.value ?? task.value?.currentAttemptId)
+const effectiveAttemptUid = computed(() => {
+  const attempts = task.value?.attempts ?? []
+  const attemptId = effectiveAttemptId.value
+  if (attemptId === undefined) return attempts[attempts.length - 1]?.attemptUid
+  return attempts.find((attempt) => (attempt.attemptId ?? 0) === attemptId)?.attemptUid
 })
 
 const startedMs = computed(() => timestampMs(task.value?.startedAt))
@@ -148,6 +162,51 @@ const statusTextDetail = computed<string>(() => {
   return rows[0]?.status_text_detail_md ?? ''
 })
 
+// --- Scheduling / lifecycle events from finelog stats (iris.task_event) ---
+//
+// One row per Kubernetes event the worker relayed for this task (pod, kueue,
+// container). Newest-first and filtered by attempt UID so a recreated task does
+// not show events retained from an earlier job incarnation. This is the primary
+// signal for a task wedged in BUILDING/pending: it surfaces the k8s reasons
+// (SchedulingGated, ImagePullBackOff, quota/topology denials) behind the wait.
+const TASK_EVENT_NAMESPACE = 'iris.task_event'
+
+interface TaskEventRow {
+  ts?: number
+  type?: string
+  reason?: string
+  message?: string
+  source?: string
+  count?: number
+}
+
+function buildTaskEventsSql(taskId: string, attemptUid: string | undefined): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = taskId.replace(/'/g, "''")
+  const attemptPredicate = attemptUid
+    ? `AND attempt_uid = '${attemptUid.replace(/'/g, "''")}'`
+    : 'AND 1 = 0'
+  return `
+SELECT ts, type, reason, message, source, count
+FROM "${TASK_EVENT_NAMESPACE}"
+WHERE task_id = '${escaped}'
+${attemptPredicate}
+ORDER BY ts DESC
+LIMIT 200
+`.trim()
+}
+
+const { data: taskEventsData, refresh: fetchTaskEvents } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskEventsSql(props.taskId, effectiveAttemptUid.value) }),
+)
+
+const taskEvents = computed<TaskEventRow[]>(() => {
+  const ipc = taskEventsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as TaskEventRow[]
+})
+
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
 // Latest sample drives the current-value gauges and labels. resource_usage
@@ -214,22 +273,35 @@ const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRe
   5_000,
   false,
 )
+const { start: startEventsRefresh, stop: stopEventsRefresh } = useAutoRefresh(
+  fetchTaskEvents,
+  5_000,
+  false,
+)
 const { start: startEndpointsRefresh, stop: stopEndpointsRefresh } = useAutoRefresh(
   fetchEndpoints,
   5_000,
   false,
 )
 
+// Re-query events as soon as the focused attempt changes so a manual attempt
+// pick (or a new attempt appearing) reflects immediately, not on the next poll.
+watch(effectiveAttemptUid, () => {
+  fetchTaskEvents()
+})
+
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEventsRefresh()
     startEndpointsRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
     stopStatusTextRefresh()
+    stopEventsRefresh()
     stopEndpointsRefresh()
   }
 })
@@ -238,11 +310,13 @@ onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
   fetchStatusText()
+  fetchTaskEvents()
   fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
     startStatusTextRefresh()
+    startEventsRefresh()
     startEndpointsRefresh()
   }
 })
@@ -261,6 +335,7 @@ function handleProfile(type: 'cpu' | 'memory' | 'threads') {
 const logViewerRef = ref<{ selectedAttemptId: number } | null>(null)
 
 function selectAttempt(attemptId: number) {
+  selectedAttemptId.value = attemptId
   if (logViewerRef.value) {
     logViewerRef.value.selectedAttemptId = attemptId
   }
@@ -273,16 +348,22 @@ function selectAttempt(attemptId: number) {
 watch(() => props.taskId, async () => {
   taskResponse.value = null
   taskStatsData.value = null
+  taskEventsData.value = null
   endpointsResponse.value = null
+  // Re-follow the new task's current attempt rather than the previous pick.
+  selectedAttemptId.value = undefined
   stopRefresh()
   stopStatsRefresh()
+  stopEventsRefresh()
   stopEndpointsRefresh()
   await fetchTask()
   fetchTaskStats()
+  fetchTaskEvents()
   fetchEndpoints()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startEventsRefresh()
     startEndpointsRefresh()
   }
 })
@@ -316,8 +397,25 @@ watch(() => props.taskId, async () => {
         <!-- Status card -->
         <InfoCard title="Status">
           <InfoRow label="State">
-            <StatusBadge :status="task.state" size="sm" />
+            <StatusBadge
+              :status="task.state"
+              :label="taskStateDisplayName(task.state, task.statusMessage)"
+              size="sm"
+            />
           </InfoRow>
+          <!-- Human-readable status for a waiting/building task (e.g. the Kueue
+               admission detail). Often long and multi-line, so it renders as a
+               full-width callout under a neutral label rather than a row. -->
+          <div v-if="task.statusMessage" class="pt-0.5">
+            <div class="text-sm text-text-secondary mb-1">Status</div>
+            <div
+              class="rounded border border-surface-border bg-surface-sunken px-2.5 py-2
+                     font-mono text-xs leading-relaxed text-text-secondary
+                     whitespace-pre-wrap break-words"
+            >
+              {{ task.statusMessage }}
+            </div>
+          </div>
           <InfoRow v-if="task.workerId" label="Worker">
             <!-- A federated task's worker is an opaque peer-side id with no local
                  worker row, so /worker/<id> would 404 — render it as plain text. -->
@@ -394,10 +492,11 @@ watch(() => props.taskId, async () => {
           <div v-else class="text-sm text-text-muted py-2">No resource data</div>
         </InfoCard>
 
-        <!-- Build info card -->
-        <InfoCard title="Build Info">
+        <!-- Container provenance. Worker-daemon builds include timing/cache data;
+             direct Kubernetes tasks use the selected prebuilt runtime image. -->
+        <InfoCard title="Build / Runtime">
           <template v-if="task.buildMetrics">
-            <InfoRow label="Image Tag">
+            <InfoRow label="Runtime Image">
               <span class="font-mono text-xs break-all">
                 {{ task.buildMetrics.imageTag ?? '-' }}
               </span>
@@ -405,15 +504,21 @@ watch(() => props.taskId, async () => {
             <InfoRow v-if="buildDuration" label="Build Time">
               <span class="font-mono">{{ buildDuration }}</span>
             </InfoRow>
-            <InfoRow label="From Cache">
+            <InfoRow v-if="task.buildMetrics.buildStarted || task.buildMetrics.buildFinished" label="From Cache">
               <span :class="task.buildMetrics.fromCache ? 'text-status-success' : 'text-text-muted'">
                 {{ task.buildMetrics.fromCache ? 'Yes' : 'No' }}
               </span>
             </InfoRow>
           </template>
-          <div v-else class="text-sm text-text-muted py-2">No build data</div>
+          <div v-else class="text-sm text-text-muted py-2">No runtime image data</div>
         </InfoCard>
       </div>
+
+      <!-- Scheduling / lifecycle events (finelog iris.task_event). Surfaces why a
+           task is wedged in BUILDING; follows the page's selected attempt. -->
+      <InfoCard v-if="isActive || taskEvents.length > 0" title="Events" class="mb-6">
+        <TaskEventTimeline :events="taskEvents" />
+      </InfoCard>
 
       <!-- Endpoints registered by this task, linked through the controller proxy -->
       <InfoCard v-if="endpoints.length > 0" title="Endpoints" class="mb-6">
@@ -539,8 +644,13 @@ watch(() => props.taskId, async () => {
                 <td class="px-3 py-2 text-[13px] font-mono">
                   {{ formatDuration(timestampMs(attempt.startedAt), timestampMs(attempt.finishedAt) || undefined) }}
                 </td>
-                <td class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs">
-                  {{ attempt.error ?? '-' }}
+                <!-- The reason can run to 500 chars, so the cell truncates and
+                     the full text lives in the tooltip. -->
+                <td
+                  class="px-3 py-2 text-[13px] text-status-danger truncate max-w-xs"
+                  :title="attemptFailureReason(attempt)"
+                >
+                  {{ attemptFailureReason(attempt) || '-' }}
                 </td>
               </tr>
             </tbody>

@@ -16,5 +16,4 @@ Each file in that directory (e.g.,
 [tutorials/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py))
 corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
-Running each experiment produces provenance records for every artifact it builds. From
-the data browser you can follow links to the Iris dashboard and W&B (for training steps).
+Running each experiment produces provenance records for every artifact it builds.

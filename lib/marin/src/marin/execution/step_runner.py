@@ -26,7 +26,8 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -38,7 +39,7 @@ from marin.execution.artifact import (
     is_mutable_version,
     write_step_record,
 )
-from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.remote import RemoteCallable, sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
 # Re-export for backward compatibility
@@ -52,7 +53,7 @@ from marin.execution.step_status import (
     step_lock,
     worker_id,
 )
-from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
+from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _is_built(step: StepSpec) -> bool:
+def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
     A non-mutable step whose output already has a ``SUCCESS`` status. This is the
@@ -195,10 +196,8 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Steps are pulled from the iterable one at a time, so unbounded
-        generators are supported: the runner never consumes more than it
-        needs to make progress. For each pulled step, its unseen transitive
-        deps are scheduled in post-order before the step itself (deduped by
+        For each step pulled from the iterable, its unseen transitive deps are
+        scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
         Concurrency is bounded by the thread pool (``max_concurrent``
@@ -238,7 +237,7 @@ class StepRunner:
         # confirmed from cache rather than run. Disabled under dry_run, which stays
         # I/O-free and lists the full static graph.
         pruned: set[str] = set()
-        is_built = (lambda _s: False) if dry_run else _is_built
+        is_built = (lambda _s: False) if dry_run else step_is_built
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
@@ -496,7 +495,7 @@ def _submit_iris_job(
         result = raw_fn(output_path)
         write_step_record(identity, output_path=output_path, result=result)
 
-    job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
+    job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
     request = JobRequest(
         name=job_name,
@@ -504,7 +503,7 @@ def _submit_iris_job(
         resources=resources,
         environment=create_environment(
             extras=dependency_groups,
-            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
+            env_vars=env_vars,
         ),
     )
     handle = current_client().submit(request)

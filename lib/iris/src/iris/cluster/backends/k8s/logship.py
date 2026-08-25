@@ -38,7 +38,7 @@ from rigging.timing import Timestamp
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import classify_log_level
 from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import EndpointServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -319,9 +319,9 @@ class LogShipper:
             logger.warning("logship: final flush failed", exc_info=True)
 
 
-def _resolve_log_service(controller_client: ControllerServiceClientSync, server_url: str) -> str:
+def _resolve_log_service(endpoint_client: EndpointServiceClientSync, server_url: str) -> str:
     """Resolve the log server address via the controller's endpoint registry."""
-    resp = controller_client.list_endpoints(
+    resp = endpoint_client.list_endpoints(
         controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
     )
     if not resp.endpoints:
@@ -334,13 +334,13 @@ def _connect_log_client(controller_address: str) -> LogClient:
 
     Unauthenticated — the finelog log service performs no auth.
     """
-    controller_client = ControllerServiceClientSync(
+    endpoint_client = EndpointServiceClientSync(
         address=controller_address,
         timeout_ms=10_000,
     )
     return LogClient.connect(
         LOG_SERVER_ENDPOINT_NAME,
-        resolver=lambda server_url: _resolve_log_service(controller_client, server_url),
+        resolver=lambda server_url: _resolve_log_service(endpoint_client, server_url),
     )
 
 

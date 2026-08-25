@@ -15,7 +15,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from datasets import load_dataset
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _parquet_file_matches_split(path: str, split: str) -> bool:
@@ -32,6 +33,7 @@ def find_split_parquet_files(input_path: str, split: str, subset: str | None) ->
     restricted to that subset so sibling subsets sharing the same split name
     are not pulled in; otherwise it falls back to the whole tree.
     """
+    input_path = StoragePath.normalize(input_path)
     fs, root = url_to_fs(input_path)
     roots: list[str] = []
     if subset and subset != "default":

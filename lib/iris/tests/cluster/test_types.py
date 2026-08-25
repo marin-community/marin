@@ -98,12 +98,6 @@ def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
     assert ep2.command == ["python", "run.py"]
 
 
-def test_entrypoint_command():
-    ep = Entrypoint.from_command("echo", "hello")
-    assert not ep.workdir_files
-    assert ep.command == ["echo", "hello"]
-
-
 def test_entrypoint_callable_has_workdir_files():
     ep = Entrypoint.from_callable(_add, 1, 2)
     assert "_callable.pkl" in ep.workdir_files

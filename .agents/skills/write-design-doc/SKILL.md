@@ -1,13 +1,16 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design doc, open a PR, and ping Discord for review.
+description: Create Marin design-doc artifacts only when explicitly asked for a design doc, one-pager, or proposal; do not use for inline architecture discussion.
 ---
 
 # Skill: Design Doc Workflow
 
 ## Purpose
 
-A design doc in Marin is a ~1-page document posted as a PR for early feedback. It surfaces design issues *before* implementation, not to gate work — area owners LGTM or comment quickly, and the author implements in parallel. See [issue #5210](https://github.com/marin-community/marin/issues/5210) for rationale.
+A design doc in Marin is a ~1-page proposal for early feedback before
+implementation. Area owners LGTM or comment quickly, and the author implements
+in parallel. See [issue #5210](https://github.com/marin-community/marin/issues/5210)
+for rationale.
 
 This skill is **interactive**: ask the user questions when you genuinely don't know, but make reasonable inferences and proceed when you can.
 
@@ -21,21 +24,31 @@ The template lives at `.agents/projects/design-template.md`. New docs go to a sl
 
 ## When to use this skill
 
-- A task will likely take more than a day, or is load-bearing for other work.
-- A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
-- A change introduces a new service, package, or persistent data shape.
+This is a change-mode design workflow. Use it only when the user explicitly
+asks to create a design doc, one-pager, or proposal. Diff size, complexity,
+duration, and cross-subproject scope do not invoke this skill. This skill owns
+the repository files and publishing workflow for design artifacts.
 
-If none apply, just open the PR — don't manufacture a design doc for a 50-line bug fix.
+Do **not** use this skill for questions, walkthroughs, informal architecture
+reviews, or requests to assess whether an idea is reasonable. Investigate those
+requests and answer inline. Start this workflow only after the user explicitly
+asks for a design.
 
 ---
 
 # Workflow
 
-Seven phases. Confirm with the user at natural decision points (after Research, Draft, Spec, before Publish), but don't ask permission when the next step is obvious.
+The workflow has seven phases. Confirm with the user at natural decision points
+(after Research, Draft, Spec, before Publish), but don't ask permission when the
+next step is obvious.
 
 ## 1. Frame
 
-The user starts the skill with a framing paragraph stating what they want and why. If they didn't, query them — or infer it from rich prior conversation context. A one-sentence "fix the foo thing" is *not* enough; push back and ask for the why.
+The user starts the skill with a framing paragraph stating what they want and
+why. If they did not, infer it from rich conversation, repository, or prior-work
+context when safe. Ask only when the missing rationale would materially change
+the design; a question is not a reason to turn an answer-mode request into this
+workflow.
 
 **You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>/`") and proceed — only stop if it collides with an existing directory, then propose a disambiguator.
 
@@ -109,7 +122,17 @@ Show the user a brief summary: what you incorporated (design vs spec), what you'
 
 Two actions, can run together. After this, the skill is done.
 
-1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Single commit adding the `.agents/projects/<slug>/` directory (design.md, research.md, spec.md — all three always present). PR title `[Design] <slug>`. PR body is a short summary (3–6 sentences) — the framing paragraph plus the one-line gist — with explicit links to the three sibling files and a "Discussion welcome — see Open Questions in `design.md`" footer. Use absolute branch-rooted URLs for those links (relative paths 404 from PR descriptions — see "Linking conventions"). The full 1-pager lives in `design.md` on the branch; reviewers click through. Labels `design` and `agent-generated`.
+1. **Commit and PR** via the `commit` skill. Branch `design/<slug>`. Use one
+   commit to add `.agents/projects/<slug>/design.md`, `research.md`, and
+   `spec.md`. Use an imperative PR title such as `[Design] Add finelog
+   persistence`. State the proposed behavior and motivation in the PR body,
+   then link all three files with absolute branch-rooted URLs
+   (relative paths 404 from PR descriptions; see "Linking conventions"). Do not
+   add a stock discussion footer; the design's Open Questions section identifies
+   requested feedback. Follow
+   `.agents/skills/writing-style/pull-requests.md` and
+   `.agents/skills/writing-style/ai-writing-donts.md`. Labels `design` and
+   `agent-generated`.
 
 2. **Discord ping.** Run `python scripts/ops/discord.py --channel code-review` with a 2-line message: PR title + URL + the framing paragraph (or a one-sentence compression). Send it; no need to confirm exact text unless asked.
 

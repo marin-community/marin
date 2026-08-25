@@ -1,0 +1,107 @@
+{
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "checkpoint_recovery": {
+    "automatic_run_local_discovery": true,
+    "interval_seconds": 120,
+    "keep_last_temporary_checkpoints": 1,
+    "restart_step_tolerance": 0,
+    "stable_output_identity_across_attempts": true,
+    "stable_wandb_identity_across_attempts": true
+  },
+  "decision": {
+    "next_on_fail": "diagnose this bounded mechanism canary; do not launch C64",
+    "next_on_pass": "freeze one production-cadence C64 recovery gate; do not add concurrency rungs",
+    "reason": "Generation 18 admitted all 64 independent tasks but a routine preemption invalidated a gate that disabled the retry and checkpoint semantics used by production. This C6 is a mechanism test, not another load rung."
+  },
+  "endpoint_metrics_read": false,
+  "fault_injections": [
+    {
+      "phase": "before_data_switch",
+      "task_index": 0,
+      "trigger_step": 1024
+    },
+    {
+      "phase": "after_data_switch",
+      "task_index": 1,
+      "trigger_step": 2048
+    },
+    {
+      "phase": "after_optimizer_decay",
+      "task_index": 2,
+      "trigger_step": 2944
+    }
+  ],
+  "gates": {
+    "all_rows_reach_terminal_step": true,
+    "child_preemptions_min": 3,
+    "each_forced_retry_discovers_nonzero_checkpoint": true,
+    "each_forced_row_has_retry_claim": true,
+    "forced_retry_loads_parent_checkpoint_or_newer": true,
+    "fresh_checkpoint_and_wandb_namespaces": true,
+    "iris_parent_and_child_succeed": true,
+    "no_endpoint_metrics": true,
+    "post_initialization_state_matches_worker_checkpoint_claim": true,
+    "remote_preregistration_hash_matches": true,
+    "wandb_operational_history_step_complete": true
+  },
+  "generation": 19,
+  "implementation_sha256": {
+    "analyzer": "3c0abfa1826268885f7c1c05d6aba91e274a855c7fd93a78b8d87d8567c59a1c",
+    "checkpoint": "3d38cf4aa8b56e9878d2051061a274e8483d0fa6782b5a7c8407de02e55d8717",
+    "datasets": "87cda8fb9989e3d8bdc0710e696495f84d2286fb9998b1ce838d7ff3ef36297d",
+    "full_launcher": "279fa9fe31c3f89fe345328154e3e70de0dc84a820338eaffa031f3eb1236847",
+    "launcher": "4761b979a2e45270a3651dd83377929fd7c8624f482b0cbb73ec6325f776f021",
+    "loader": "c07442578302658cde4fb9c75167e3cb24425686f80b2d7bf3e23f56413afee9",
+    "stress_launcher": "3479350336d6e624bf70aff0397b3fe94b84cea69dcb8ba96f075e2f06be7c48",
+    "tests": "df07d56359c61e1c677eb0c7cf415666359d791a6012625a47d823b3541412a3",
+    "tracker": "49759e0cfb750868b95543850977e77dd84ad114c68c87da901b1f88565086e4",
+    "train_lm": "a616284fec862e970c59a9227594a8481d7d34a7c25efa4a53f2047007593ed0"
+  },
+  "integrity": {
+    "application_failure_retries": 0,
+    "child_preemptible": true,
+    "cross_replica_jax": false,
+    "iris_topology_coscheduling": false,
+    "max_preemption_retries_per_task": 100,
+    "parent_preemptible": false,
+    "parent_retries": 0,
+    "placement_region": "us-central1",
+    "placement_zone": "us-central1-a"
+  },
+  "rows": {
+    "optimizer_decay_steps": [
+      2048,
+      2176,
+      2560,
+      2688,
+      2304,
+      2432
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026089600,
+      2026089601,
+      2026089602,
+      2026089603,
+      2026089604,
+      2026089605
+    ],
+    "trajectory_ids": [
+      "c06_000_m100a",
+      "c06_001_m100a",
+      "c06_002_m100a",
+      "c06_003_m100a",
+      "c06_004_full",
+      "c06_005_m100b"
+    ]
+  },
+  "stage": 6,
+  "version": "2026-08-13-c06-per-task-resume-canary-v4"
+}

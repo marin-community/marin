@@ -3,6 +3,7 @@
 
 """Writers for common output formats."""
 
+import functools
 import itertools
 import logging
 import os
@@ -20,7 +21,10 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from pyarrow import fs as pa_fs
-from rigging.filesystem import StoragePath, atomic_rename, open_url, url_to_fs
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.s3_compat import S3_RETRY_MAX_ATTEMPTS
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
 
@@ -42,7 +46,7 @@ _MICRO_BATCH_SIZE = 8
 _LEVANTER_BATCH_SIZE = 16384
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
-# Used by ``_write_pickle_chunks`` in execution.py.
+# Used by ``_write_pickle_chunks`` in stage_io.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -63,7 +67,7 @@ def ensure_parent_dir(path: str) -> None:
 @contextmanager
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
-    if output_path.endswith(".zst"):
+    if output_path.endswith((".zst", ".zstd")):
         cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
             with cctx.stream_writer(raw_f) as f:
@@ -105,7 +109,7 @@ def batchify(batch: Iterable, n: int = 1024) -> Iterable:
         yield batch
 
 
-def _accumulate_tables(
+def _accumulate_row_tables(
     records: Iterable,
     *,
     schema: pa.Schema | None = None,
@@ -182,6 +186,8 @@ def _accumulate_tables(
         return pa.Table.from_pylist(dicts, schema=widened), widened
 
     for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
+        if any(isinstance(record, pa.RecordBatch) for record in micro_batch):
+            raise TypeError("A writer input stream cannot mix row records and pyarrow.RecordBatch objects")
         if convert is None:
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
@@ -204,6 +210,63 @@ def _accumulate_tables(
 
     if chunks:
         yield pa.concat_tables(chunks, promote_options="permissive")
+
+
+def _accumulate_record_batch_tables(
+    batches: Iterable,
+    *,
+    schema: pa.Schema | None,
+    target_bytes: int,
+) -> Iterable[pa.Table]:
+    """Yield tables from a schema-stable stream of RecordBatches."""
+    expected_schema = schema
+    schema_origin = "explicitly provided by caller" if schema is not None else "inferred from first RecordBatch"
+    chunks: list[pa.RecordBatch] = []
+    bytesize = 0
+
+    for batch in batches:
+        if not isinstance(batch, pa.RecordBatch):
+            raise TypeError("A writer input stream cannot mix pyarrow.RecordBatch objects and row records")
+        if expected_schema is None:
+            expected_schema = batch.schema
+        elif not expected_schema.equals(batch.schema, check_metadata=True):
+            raise pa.ArrowInvalid(
+                "RecordBatch schema mismatch writing Arrow batches:\n"
+                f"Expected schema ({schema_origin}):\n{expected_schema}\n"
+                f"Got schema:\n{batch.schema}"
+            )
+
+        chunks.append(batch)
+        bytesize += batch.nbytes
+        if bytesize >= target_bytes:
+            assert expected_schema is not None
+            yield pa.Table.from_batches(chunks, schema=expected_schema)
+            chunks = []
+            bytesize = 0
+
+    if chunks:
+        assert expected_schema is not None
+        yield pa.Table.from_batches(chunks, schema=expected_schema)
+
+
+def _accumulate_tables(
+    records: Iterable,
+    *,
+    schema: pa.Schema | None = None,
+    target_bytes: int = DEFAULT_TARGET_BUFFER_BYTES,
+) -> Iterable[pa.Table]:
+    """Accumulate either row records or RecordBatches without mixing representations."""
+    iterator = iter(records)
+    try:
+        first = next(iterator)
+    except StopIteration:
+        return
+
+    records_with_first = itertools.chain((first,), iterator)
+    if isinstance(first, pa.RecordBatch):
+        yield from _accumulate_record_batch_tables(records_with_first, schema=schema, target_bytes=target_bytes)
+        return
+    yield from _accumulate_row_tables(records_with_first, schema=schema, target_bytes=target_bytes)
 
 
 # Finite network timeouts for the native S3FileSystem, matching the bounds
@@ -241,6 +304,31 @@ def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
     return kwargs
 
 
+@functools.cache
+def _native_s3_filesystem(kwargs: tuple[tuple[str, str | bool | int], ...]) -> pa_fs.S3FileSystem:
+    """One S3 filesystem per configuration, held for the life of the process.
+
+    Each filesystem owns a connection pool that dies with it, so one per file
+    exhausts the pod's ephemeral ports via ``TIME_WAIT`` (#8402). The retry
+    strategy is explicit because pyarrow otherwise uses the AWS C++ SDK
+    default.
+    """
+    return pa_fs.S3FileSystem(
+        retry_strategy=pa_fs.AwsStandardS3RetryStrategy(max_attempts=S3_RETRY_MAX_ATTEMPTS),
+        **dict(kwargs),
+    )
+
+
+@functools.cache
+def _native_gcs_filesystem() -> pa_fs.GcsFileSystem:
+    return pa_fs.GcsFileSystem()
+
+
+@functools.cache
+def _native_local_filesystem() -> pa_fs.LocalFileSystem:
+    return pa_fs.LocalFileSystem()
+
+
 def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     """Resolve ``path`` to a native pyarrow ``(filesystem, path)``, or ``None``.
 
@@ -252,23 +340,25 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
     in tests); those fall back to an fsspec handle.
     """
     if "://" not in path:
-        return pa_fs.LocalFileSystem(), path
+        return _native_local_filesystem(), path
     if path.startswith("file://"):
-        return pa_fs.LocalFileSystem(), path[len("file://") :]
+        return _native_local_filesystem(), path[len("file://") :]
     if path.startswith("gs://"):
-        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+        return _native_gcs_filesystem(), path[len("gs://") :]
     if path.startswith("s3://"):
-        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+        return _native_s3_filesystem(tuple(sorted(_s3_filesystem_kwargs().items()))), path[len("s3://") :]
     return None
 
 
 @contextmanager
-def _parquet_sink(temp_path: str):
+def parquet_sink(temp_path: str):
     """Yield ``(where_fd, native_fs)`` for ``pq.ParquetWriter``/``pq.write_table``.
 
     Prefers a native pyarrow filesystem for flat-memory streaming; falls back
     to a buffered fsspec handle (``filesystem=None``) for protocols pyarrow
-    cannot address.
+    cannot address. The native filesystem carries the S3-compatible endpoint's
+    virtual-host addressing (``force_virtual_addressing``), which pyarrow cannot
+    infer from a bare ``s3://`` URI — required for CoreWeave object storage.
     """
     native = _pyarrow_filesystem(temp_path)
     if native is not None:
@@ -289,7 +379,8 @@ def write_parquet_file(
     """Write records to a Parquet file.
 
     Args:
-        records: Records to write (iterable of dicts)
+        records: Row records or ``pyarrow.RecordBatch`` objects to write. One
+            stream cannot mix the two representations.
         output_path: Path to output file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
         target_buffer_bytes: Target buffer size in bytes for accumulating records
@@ -302,7 +393,7 @@ def write_parquet_file(
     count = 0
 
     with atomic_rename(output_path) as temp_path:
-        with _parquet_sink(temp_path) as (where_fd, native_fs):
+        with parquet_sink(temp_path) as (where_fd, native_fs):
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
@@ -332,7 +423,8 @@ def write_vortex_file(
     """Write records to a Vortex file using streaming writes.
 
     Args:
-        records: Records to write (iterable of dicts)
+        records: Row records or ``pyarrow.RecordBatch`` objects to write. One
+            stream cannot mix the two representations.
         output_path: Path to output .vortex file
         schema: PyArrow schema (optional, will be inferred from first batch if None)
         target_buffer_bytes: Target buffer size in bytes for accumulating records

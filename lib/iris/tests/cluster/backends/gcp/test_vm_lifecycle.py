@@ -53,7 +53,7 @@ def test_tpu_quota_exceeded_retry():
     assert status.worker_count > 0
 
 
-def test_tpu_init_stuck():
+def test_tpu_with_unhealthy_bootstrap_remains_creating():
     """A monitored TPU whose workers never become healthy stays non-READY (CREATING)."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)
@@ -69,7 +69,7 @@ def test_tpu_init_stuck():
     assert status.state == CloudSliceState.CREATING
 
 
-def test_tpu_preempted():
+def test_tpu_after_termination_becomes_unknown():
     """TPU reaches READY, then termination destroys the slice."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)

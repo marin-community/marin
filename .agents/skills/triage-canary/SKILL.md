@@ -1,6 +1,6 @@
 ---
 name: triage-canary
-description: Triage a failed canary ferry run (CI-invoked).
+description: Triage a failed canary ferry run only when invoked by CI with the required CANARY context.
 ---
 
 # Skill: Triage Canary

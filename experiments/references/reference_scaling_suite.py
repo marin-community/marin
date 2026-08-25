@@ -57,7 +57,7 @@ from marin.scaling_laws.eval_metrics_reader import read_eval_records
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from pydantic import Field
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
@@ -437,9 +437,14 @@ def _optimal_step(
     name = user_namespaced_name(f"{EXPERIMENT_NAME}-optimal-{budget:.0e}{suffix}", version)
 
     def build_config(ctx: StepContext) -> OptimalTrainingConfig:
-        artifact = ctx.resolved(analysis)
+        # scaling_fits is a value output of the analysis step, unavailable at fingerprint time.
+        # Key a placeholder off the dep path so the analysis identity still enters the fingerprint.
+        if ctx.is_fingerprint:
+            scaling_fits = {ctx.artifact_path(analysis): (0.0, 0.0)}
+        else:
+            scaling_fits = ctx.resolved(analysis).scaling_fits
         return OptimalTrainingConfig(
-            scaling_fits=artifact.scaling_fits,
+            scaling_fits=scaling_fits,
             target_budget=budget,
             resources=resources,
             batch_size=batch_size,

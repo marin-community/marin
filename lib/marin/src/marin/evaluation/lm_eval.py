@@ -1,13 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from marin.execution.artifact import Artifact
 from marin.inference.types import RunningModel
 
 LmEvalModelArgValue = str | int | float | bool
+LM_EVAL_UV_PACKAGES = (
+    "lm-eval[api]@git+https://github.com/EleutherAI/lm-evaluation-harness@f4d4b3de3ee6741a7151a9fe74945ee515262f4c",
+    "transformers<5",
+)
+
+
+class LmEvalResults(Artifact):
+    """A lazy reference to lm-eval metrics and samples."""
+
+    results_path: str
 
 
 class LmEvalAdapter(StrEnum):
@@ -30,51 +42,55 @@ class LmEvalRun:
     """A single lm-eval run against an already served model."""
 
     tasks: Sequence[str]
-    output_path: str
     adapter: LmEvalAdapter = LmEvalAdapter.LOCAL_COMPLETIONS
     apply_chat_template: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: int | str | None = None
+    confirm_run_unsafe_code: bool = False
     extra_model_args: Mapping[str, LmEvalModelArgValue] = field(default_factory=dict)
 
 
-def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
-    """Run lm-eval against a launcher-neutral served model."""
+def run_lm_eval(model: RunningModel, run: LmEvalRun, output_path: str) -> None:
+    """Evaluate tasks against a served model and persist metrics and samples."""
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
-    # lm_eval is only installed with Marin's eval extra.
-    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415  # optional dep: lm_eval
-    from lm_eval.loggers import EvaluationTracker  # noqa: PLC0415  # optional dep: lm_eval
-
-    evaluation_tracker = EvaluationTracker(output_path=run.output_path)
-    results = simple_evaluate(
-        model=run.adapter.value,
-        tasks=list(run.tasks),
-        num_fewshot=run.num_fewshot,
-        model_args=build_lm_eval_model_args(model, run),
-        apply_chat_template=run.apply_chat_template,
-        batch_size=run.batch_size,
-        confirm_run_unsafe_code=True,
-        limit=run.limit,
-        evaluation_tracker=evaluation_tracker,
-        log_samples=True,
+    command = ["uv", "run", "--isolated", "--no-project"]
+    for package in LM_EVAL_UV_PACKAGES:
+        command.extend(["--with", package])
+    command.extend(
+        [
+            "lm_eval",
+            "--model",
+            run.adapter.value,
+            "--model_args",
+            build_lm_eval_model_args(model, run),
+            "--tasks",
+            ",".join(run.tasks),
+            "--output_path",
+            output_path,
+            "--log_samples",
+        ]
     )
-    if results is None:
-        raise RuntimeError("lm-eval returned no results.")
-
-    samples = results.pop("samples")
-    evaluation_tracker.save_results_aggregated(results=results, samples=samples)
-    for task_name in results["configs"].keys():
-        evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
+    if run.apply_chat_template:
+        command.append("--apply_chat_template")
+    if run.confirm_run_unsafe_code:
+        command.append("--confirm_run_unsafe_code")
+    if run.limit is not None:
+        command.extend(["--limit", str(run.limit)])
+    if run.num_fewshot is not None:
+        command.extend(["--num_fewshot", str(run.num_fewshot)])
+    if run.batch_size is not None:
+        command.extend(["--batch_size", str(run.batch_size)])
+    subprocess.run(command, check=True)
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
     """Build the comma-delimited model_args string consumed by lm-eval API models."""
     model_args: dict[str, object] = {
         "model": model.endpoint.model,
-        "base_url": _lm_eval_base_url(model, run),
+        "base_url": model.endpoint.url(run.adapter.endpoint_path),
         "tokenizer_backend": "huggingface",
         "tokenized_requests": False,
     }
@@ -86,10 +102,6 @@ def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
     return ",".join(
         f"{_format_model_arg_key(key)}={_format_model_arg_value(value)}" for key, value in model_args.items()
     )
-
-
-def _lm_eval_base_url(model: RunningModel, run: LmEvalRun) -> str:
-    return model.endpoint.url(run.adapter.endpoint_path)
 
 
 def _format_model_arg_key(key: str) -> str:

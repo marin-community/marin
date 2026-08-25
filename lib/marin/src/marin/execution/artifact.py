@@ -26,9 +26,12 @@ import logging
 import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -65,6 +68,7 @@ FINGERPRINT_KEY = "fingerprint"
 VERSION_KEY = "version"
 RESULT_TYPE_KEY = "result_type"
 EXPECTED_FINGERPRINT_KEY = "expected_fingerprint"
+ARTIFACT_LOAD_CONTEXT_KEY = "artifact_load"
 
 
 class FingerprintMismatchError(Exception):
@@ -175,14 +179,45 @@ class ArtifactRecord(BaseModel):
 
 
 # The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
-# revisions on the same day), shared by the lazy layer (``lazy._validate_version``) and
-# ``marin.publish``. Keep it here so callers agree on version identity without importing ``lazy``.
+# revisions on the same day). Kept here, beside ``validate_version``, so callers agree on version
+# identity without importing ``lazy``.
 CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
 def is_mutable_version(version: str) -> bool:
     """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
     return version == "dev" or version.endswith("-dev")
+
+
+def validate_path_segment(label: str, value: str) -> None:
+    """A ``name``/``version`` is a single path segment: non-empty, no URL scheme, no ``..``, no
+    leading/trailing slash. A malformed one is a caller bug, not a silent malformed path."""
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+    if "://" in value or urlparse(value).scheme:
+        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
+    if ".." in value:
+        raise ValueError(f"{label} {value!r} must not contain '..'")
+    if value.startswith("/") or value.endswith("/"):
+        raise ValueError(f"{label} {value!r} must not start or end with '/'")
+
+
+def validate_version(version: str) -> None:
+    """Validate an artifact version string, raising :class:`ValueError` if malformed.
+
+    A version is a path segment that is either a calendar version ``YYYY.MM.DD`` (optionally
+    ``YYYY.MM.DD.N``) or a mutable ``dev``/``<label>-dev``. ``v1``-style tags are rejected: an
+    artifact's version is the author's explicit statement of "when this recipe was frozen", not an
+    opaque label.
+    """
+    validate_path_segment("version", version)
+    if is_mutable_version(version):
+        return
+    if not CALVER_RE.match(version):
+        raise ValueError(
+            f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
+            "or a mutable 'dev'/'<label>-dev'"
+        )
 
 
 def _resolved(output_path: str) -> str:
@@ -274,7 +309,9 @@ def write_record(record: ArtifactRecord) -> None:
     StoragePath(prefix_join(record.output_path, RECORD_FILENAME)).write_text(record.model_dump_json(indent=2))
 
 
-def _payload_json(value: object) -> JSONValue:
+def payload_json(value: object) -> JSONValue:
+    """Canonical JSON encoding for a record payload: a ``BaseModel`` or dataclass to its dict,
+    anything already JSON-shaped straight through."""
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if is_dataclass(value) and not isinstance(value, type):
@@ -292,13 +329,13 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
     output_path = _resolved(output_path)
     record = read_record(output_path)
     if record is not None and record.result is not None:
-        return cast(M, schema.model_validate(record.result))
+        return cast(M, schema.model_validate(record.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True}))
     raise FileNotFoundError(f"no artifact payload at {output_path}")
 
 
 def write_artifact(value: object, output_path: str) -> None:
     """Write a minimal record carrying ``value`` as its ``result`` — the manual save API."""
-    write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
+    write_record(ArtifactRecord(output_path=output_path, result=payload_json(value)))
 
 
 @dataclass(frozen=True)
@@ -333,7 +370,7 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
             deps=identity.deps,
             dep_paths=identity.dep_paths,
             config=identity.config,
-            result=_payload_json(result) if result is not None else None,
+            result=payload_json(result) if result is not None else None,
             fingerprint_payload=identity.fingerprint_payload,
             provenance=launch_provenance(),
         )

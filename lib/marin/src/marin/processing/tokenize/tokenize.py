@@ -32,9 +32,9 @@ from levanter.data.text.datasets import (
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
@@ -48,6 +48,7 @@ from marin.processing.tokenize._core import (
     parquet_window_hint,
     tokenize_pipeline,
 )
+from marin.processing.tokenize.cache_stats import read_tokenized_cache_stats
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,11 @@ class TokenizedCache(Artifact):
     def tags(self) -> list[str]:
         tags = self._config.get("tags")
         return list(tags) if isinstance(tags, list) else []
+
+    @property
+    def num_train_tokens(self) -> int:
+        """Total number of tokens in the training split (from the cache's ``.stats.json``)."""
+        return read_tokenized_cache_stats(self.cache_dir, "train").total_tokens
 
     def as_component(self) -> DatasetComponent:
         """A Levanter mixture component pointing at this built cache.
@@ -311,7 +317,6 @@ def _run_split(
 
     ctx = ZephyrContext(
         resources=config.worker_resources,
-        map_task_resources=config.map_task_resources,
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
@@ -325,6 +330,7 @@ def _run_split(
         dataset=tokenized_ds,
         output_path=prefix,
         batch_size=batch_size,
+        task_resources=config.map_task_resources,
     )
 
     stats_path, _ = write_stats_json(prefix, ledger)

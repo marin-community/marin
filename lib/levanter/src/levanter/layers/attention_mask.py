@@ -49,6 +49,18 @@ def _materialize_sliding_window_mask(
     return (diff >= 0) & (diff < window)
 
 
+def _materialize_bidirectional_window_mask(
+    radius: int, QPos: Axis, KPos: Axis, q_slice: haliax.dslice, k_slice: haliax.dslice
+) -> NamedArray:
+    """Materialize a symmetric (bidirectional) sliding window mask: query i attends to key j iff |i - j| <= radius."""
+    sub_q = QPos.resize(q_slice.size)
+    sub_k = KPos.resize(k_slice.size)
+    q_pos = hax.arange(sub_q) + q_slice.start
+    k_pos = hax.arange(sub_k) + k_slice.start
+    diff = q_pos.broadcast_axis(sub_k) - k_pos.broadcast_axis(sub_q)
+    return (diff <= radius) & (diff >= -radius)
+
+
 class AttentionMask(eqx.Module):
     """
 
@@ -83,6 +95,9 @@ class AttentionMask(eqx.Module):
     explicit_mask: Optional[NamedArray] = None
     segment_ids: tuple[NamedArray, NamedArray] | None = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
+    # Symmetric window radius for bidirectional (encoder) attention: query i attends to key j iff
+    # |i - j| <= bidirectional_window. Unlike ``sliding_window`` (which is causal), this looks both ways.
+    bidirectional_window: Optional[int] = eqx.field(default=None, static=True)
     # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
     # TODO: add prefixlm
     # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
@@ -138,6 +153,12 @@ class AttentionMask(eqx.Module):
             )
             mask = combine_masks_and(mask, sw_mask)
 
+        if self.bidirectional_window is not None:
+            bw_mask = _materialize_bidirectional_window_mask(
+                self.bidirectional_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
+            )
+            mask = combine_masks_and(mask, bw_mask)
+
         if self.segment_ids is not None:
             segment_mask = _materialize_segment_mask(self.segment_ids, QPos, KPos, q_slice, k_slice)
             mask = combine_masks_and(mask, segment_mask)
@@ -176,6 +197,11 @@ class AttentionMask(eqx.Module):
     def explicit(mask: NamedArray) -> "AttentionMask":
         return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
 
+    @staticmethod
+    def bidirectional_sliding_window(radius: int) -> "AttentionMask":
+        """Symmetric (non-causal) sliding window: query i attends to key j iff ``|i - j| <= radius``."""
+        return AttentionMask(is_causal=False, bidirectional_window=radius)
+
     def __post_init__(self):
         # Normalize legacy single-array segment_ids to a tuple for consistency
         if self.segment_ids is not None and not isinstance(self.segment_ids, tuple):
@@ -201,6 +227,7 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=seg_field,
             sliding_window=self.sliding_window,
+            bidirectional_window=self.bidirectional_window,
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
@@ -211,6 +238,7 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
+            bidirectional_window=self.bidirectional_window,
         )
 
     def __and__(self, other) -> "AttentionMask":
@@ -244,12 +272,20 @@ class AttentionMask(eqx.Module):
         else:
             sliding_window = min(self.sliding_window, other.sliding_window)
 
+        if self.bidirectional_window is None:
+            bidirectional_window = other.bidirectional_window
+        elif other.bidirectional_window is None:
+            bidirectional_window = self.bidirectional_window
+        else:
+            bidirectional_window = min(self.bidirectional_window, other.bidirectional_window)
+
         return AttentionMask(
             is_causal=is_causal,
             causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
+            bidirectional_window=bidirectional_window,
         )
 
     def __or__(self, other) -> "AttentionMask":
@@ -273,12 +309,17 @@ class AttentionMask(eqx.Module):
             sliding_window = None
         else:
             sliding_window = max(self.sliding_window, other.sliding_window)
+        if self.bidirectional_window is None or other.bidirectional_window is None:
+            bidirectional_window = None
+        else:
+            bidirectional_window = max(self.bidirectional_window, other.bidirectional_window)
         return AttentionMask(
             is_causal=is_causal,
             causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
             sliding_window=sliding_window,
+            bidirectional_window=bidirectional_window,
         )
 
     def _check_for_same_segment_ids(self, other):

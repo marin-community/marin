@@ -13,19 +13,18 @@ subsequent tasks.
 import threading
 import time
 
+import pytest
 from iris.managed_thread import ManagedThread
 
 
 def test_on_stop_runs_when_stop_is_called():
     stopped = threading.Event()
-    released = threading.Event()
 
     def target(stop_event: threading.Event) -> None:
         stop_event.wait(timeout=5.0)
 
     def on_stop() -> None:
         stopped.set()
-        released.set()
 
     t = ManagedThread(target=target, name="stop-called", on_stop=on_stop)
     t.start()
@@ -59,9 +58,10 @@ def test_on_stop_runs_when_target_returns_naturally():
     assert on_stop_ran.is_set(), "on_stop must run when target completes naturally"
 
 
-def test_on_stop_runs_when_target_raises():
+def test_on_stop_runs_when_target_raises(monkeypatch: pytest.MonkeyPatch):
     """on_stop must also fire when the target raises — exception path."""
     on_stop_ran = threading.Event()
+    uncaught: list[BaseException] = []
 
     class _Boom(Exception):
         pass
@@ -72,10 +72,13 @@ def test_on_stop_runs_when_target_raises():
     def on_stop() -> None:
         on_stop_ran.set()
 
+    monkeypatch.setattr(threading, "excepthook", lambda args: uncaught.append(args.exc_value))
     t = ManagedThread(target=target, name="raising-target", on_stop=on_stop)
     t.start()
     t.join()
     assert on_stop_ran.is_set(), "on_stop must run even when target raises"
+    assert len(uncaught) == 1
+    assert isinstance(uncaught[0], _Boom)
 
 
 def test_on_stop_runs_only_once():

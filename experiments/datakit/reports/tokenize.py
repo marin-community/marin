@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage report for tokenize: per-source attribute parquet (``{id, input_ids}``).
+"""Stage report for tokenize: per-source attribute parquet (``{id, chunk_index, input_ids}``).
 
 Doc and token totals come from each source's per-split ``tokenize/*`` counters;
 the token-length histogram reads a bounded ``input_ids`` sample from the first
-few sources' shards and bins the list lengths into power-of-two buckets.
+few sources' shards and bins the list lengths into power-of-two buckets. The
+histogram bins rows, so a document that the tokenizer split across rows appears
+as its chunks. The totals above it count documents.
 """
 
 import os.path
@@ -58,8 +60,8 @@ def tokenize_report(output_path: str, sources: dict[str, TokenizedAttrData], spl
         "n_sources": len(sources),
         "sampled_docs": len(lengths),
     }
-    # Common parent of the per-source main dirs: char-wise prefix trimmed back to a path boundary.
-    data_root = os.path.commonprefix([sources[name].source_main_dirs[split] for name in names]).rsplit("/", 1)[0]
+    # Common parent of the source keys: char-wise prefix trimmed back to a path boundary.
+    data_root = os.path.commonprefix([sources[name].source_keys[split] for name in names]).rsplit("/", 1)[0]
     sampling = (
         f"docs/tokens from step counters (exact); token-length histogram from the first "
         f"{HIST_ROWS_PER_SOURCE} rows per source (file order) over {len(sampled)} of {len(sources)} sources"

@@ -77,7 +77,7 @@ class QwenConfig(LlamaConfig):
             use_bias=not getattr(hf_config, "no_bias", True),
         )
 
-    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     def to_hf_config(  # pyrefly: ignore[bad-override]
         self, vocab_size: int, config_overrides: Optional[Dict] = None
     ) -> HfQwenConfig:
@@ -193,7 +193,7 @@ class QwenDecoderLayer(eqx.Module):
 # Modified transformer for Qwen
 class QwenTransformer(LlamaTransformer):
     # config-reuse: QwenTransformer reuses LlamaTransformer but narrows config/layers to its own
-    # Qwen types (LSP narrowing; mypy flags the same)
+    # Qwen types (LSP narrowing; pyrefly flags the same)
     config: QwenConfig = eqx.field(static=True)  # pyrefly: ignore[bad-override]
     layers: BlockFoldable[QwenDecoderLayer]  # pyrefly: ignore[bad-override]
     norm: hnn.RmsNorm

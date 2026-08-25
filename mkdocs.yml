@@ -57,6 +57,9 @@ watch:
   - docs/
   - lib/marin/src/
 
+hooks:
+  - infra/mkdocs_hooks.py
+
 nav:
   - Home: index.md
   - Tutorials:
@@ -67,6 +70,7 @@ nav:
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
+      - Run Evaluations: tutorials/run-lm-evals.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Evaluation: explanations/evaluation.md
@@ -77,6 +81,7 @@ nav:
       - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Data Mixing NeurIPS Notes: reports/data-mixing-neurips/index.md
+      - Agent MoE Experiment Digest: reports/agent-moe-experiments.md
       - Marin 8B Retro: reports/marin-8b-retro.md
       - Marin 32B Retro: reports/marin-32b-retro.md
       - Markdownified Datasets: reports/markdownified-datasets.md
@@ -94,6 +99,7 @@ nav:
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
+      - Browsing Buckets with fsutil: references/fsutil.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

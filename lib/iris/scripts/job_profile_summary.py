@@ -51,7 +51,7 @@ from pathlib import Path
 import yaml
 from finelog.client.log_client import LogClient
 from finelog.deploy.config import FinelogConfig, load_finelog_config
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, ProfileType
+from iris.cluster.stats.tables import PROFILE_NAMESPACE, ProfileType
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)

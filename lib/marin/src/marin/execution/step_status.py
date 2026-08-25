@@ -16,18 +16,21 @@ import functools
 import json
 import logging
 import os
-import time
 from collections.abc import Callable, Generator
 from threading import Event, Thread
+from time import sleep
 from typing import TypeVar
 
-from rigging.filesystem import prefix_join, url_to_fs
+from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
     create_lock,
     default_worker_id,
 )
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,7 @@ STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
+_LOCK_WAIT_LOG_INTERVAL = 5 * 60
 
 
 def get_status_path(output_path: str) -> str:
@@ -139,9 +143,9 @@ class StatusFile:
         """Release the lock if we hold it."""
         self._lock.release()
 
-    def has_active_lock(self) -> bool:
-        """Check if any worker has an active (non-stale) lock."""
-        return self._lock.has_active_holder()
+    def active_lock_holder(self) -> str | None:
+        """Return the active lock-owner ID, or None if no active lock exists."""
+        return self._lock.active_holder_id()
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +154,11 @@ class StatusFile:
 
 
 def worker_id() -> str:
-    return default_worker_id()
+    local_worker_id = default_worker_id()
+    job_info = get_job_info()
+    if job_info is None:
+        return local_worker_id
+    return f"{job_info.task_attempt.to_wire()} ({local_worker_id})"
 
 
 class PreviousTaskFailedError(Exception):
@@ -169,11 +177,13 @@ def should_run(
     """
     wid = status_file.worker_id
     log_once = True
+    wait_log_limiter = RateLimiter(interval_seconds=_LOCK_WAIT_LOG_INTERVAL)
 
     while True:
         status = status_file.status
+        active_lock_holder = status_file.active_lock_holder() if status == STATUS_RUNNING else None
 
-        if log_once:
+        if log_once and active_lock_holder is None:
             logger.info(f"[{wid}] Status {step_name}: {status}")
             log_once = False
 
@@ -186,9 +196,18 @@ def should_run(
                 logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and status_file.has_active_lock():
-            logger.debug(f"[{wid}] Step {step_name} has active lock, waiting...")
-            time.sleep(5)
+        elif status == STATUS_RUNNING and active_lock_holder is not None:
+            if wait_log_limiter.should_run():
+                logger.info(
+                    "[%s] Status %s: %s. Another worker holds the active lock (owner=%s). "
+                    "Waiting for that worker to finish.",
+                    wid,
+                    step_name,
+                    status,
+                    active_lock_holder,
+                )
+            log_once = False
+            sleep(5)
             continue
         elif status == STATUS_RUNNING:
             logger.info(f"[{wid}] Step {step_name} has no active lock, taking over.")
@@ -208,7 +227,7 @@ def should_run(
             return True
 
         logger.info(f"[{wid}] Lost lock race for {step_name}, retrying...")
-        time.sleep(1)
+        sleep(1)
 
 
 # ---------------------------------------------------------------------------

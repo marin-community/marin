@@ -1,14 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``ducky`` command group: ``ducky deploy`` and ``ducky query``."""
+"""The ``ducky`` command group: ``ducky query``.
+
+Deploying is Pulumi's job — see infra/ducky (the ``ducky-marin`` stack) and the Deploy
+section of the README.
+"""
 
 from __future__ import annotations
 
 import click
 
 from ducky.client import query
-from ducky.deploy import cli as deploy_command
 
 
 @click.group()
@@ -16,7 +19,6 @@ def cli() -> None:
     """ducky — ad-hoc DuckDB SQL service."""
 
 
-cli.add_command(deploy_command, name="deploy")
 cli.add_command(query)
 
 

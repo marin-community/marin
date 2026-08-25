@@ -22,8 +22,7 @@ from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     EXECUTING_TASK_STATES,
     ActiveTaskRow,
-    TaskDetailRow,
-    task_is_finished,
+    task_is_finished_row,
 )
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
@@ -92,16 +91,6 @@ class TransitionOutcome:
 # ─── Snapshot lookups ───
 
 
-def task_is_finished_row(task: TaskDetailRow) -> bool:
-    return task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
-
-
 def active_row_from_snapshot(snapshot: TransitionSnapshot, task_id: JobName) -> ActiveTaskRow | None:
     """Resolve the snapshot's active-task row for ``task_id``."""
     task = snapshot.tasks.get(task_id)
@@ -146,6 +135,7 @@ def merge_task_termination(
     *,
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
+    exit_code: int | None = None,
 ) -> None:
     """Move a task to ``task_state`` and record its attempt.
 
@@ -178,6 +168,7 @@ def merge_task_termination(
                     attempt_id=attempt_id,
                     state=effective_attempt_state,
                     finished_at=now if stamp_attempt_finished else None,
+                    exit_code=exit_code,
                     error=error,
                 )
             )
@@ -187,6 +178,7 @@ def merge_task_termination(
             task_id=task_name,
             state=task_state,
             error=error,
+            exit_code=exit_code,
             finished_at=task_finished_at,
         )
     )
@@ -364,8 +356,13 @@ def apply_one_transition(
     # snapshot row when no overlay entry exists.
     prior_state = overlay_state if overlay_state is not None else task.state
 
-    # Fast path: task already in the reported state with no new data to apply.
-    has_new_data = update.error is not None or update.exit_code is not None
+    # Fast path: task already in the reported state with no new data to apply. A
+    # changed status_message counts as new data so a same-state BUILDING tick still
+    # emits a task delta — which persists the message AND appends a federation
+    # changelog row (commit._flush_tasks), so a stuck task's reason reaches the hub.
+    # An unchanged message stays a no-op, so the message does not churn the changelog.
+    message_changed = update.status_message is not None and update.status_message != (task.status_message or "")
+    has_new_data = update.error is not None or update.exit_code is not None or message_changed
     if update.new_state == prior_state and not has_new_data:
         return None
 
@@ -410,15 +407,17 @@ def apply_one_transition(
         started_ms = now_ms
         task_state = job_pb2.TASK_STATE_RUNNING
     elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-        # Stamp started_at_ms on BUILDING so the execution-timeout scan
-        # (gated on started_at_ms IS NOT NULL) can finalize wedged builds.
-        # COALESCE on the RUNNING write preserves this stamp. Issue #6077.
-        started_ms = now_ms
+        # Worker BUILDING runs setup, so start its clock to catch wedged builds
+        # (#6077). K8s BUILDING includes pre-admission waits, so its clock starts
+        # at RUNNING instead (#7431).
+        if source is TransitionSource.WORKER_RECONCILE:
+            started_ms = now_ms
         task_state = job_pb2.TASK_STATE_BUILDING
     elif update.new_state in (
         job_pb2.TASK_STATE_FAILED,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_PREEMPTED,
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_SUCCEEDED,
     ):
@@ -450,8 +449,14 @@ def apply_one_transition(
             if failure_count <= task.max_retries_failure:
                 task_state = job_pb2.TASK_STATE_PENDING
                 terminal_ms = None
-        elif update.new_state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_KILLED):
-            # Worker loss / infra (WORKER_FAILED) or an out-of-band container stop
+        elif update.new_state in (
+            job_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_KILLED,
+            job_pb2.TASK_STATE_PREEMPTED,
+        ):
+            # Worker loss / infra (WORKER_FAILED), a backend-observed preemption
+            # (PREEMPTED: a cluster backend's control plane evicted the attempt),
+            # or an out-of-band container stop
             # the worker reports as KILLED — a higher-priority job reclaiming the
             # slice, a node drain, a spot/preemptible reclaim, or a stop directive
             # the controller issued without recording a matching task transition.
@@ -466,11 +471,18 @@ def apply_one_transition(
             # EXECUTING (BUILDING/RUNNING) charges and gates on max_retries_preemption.
             # A truly-dead worker also misses its next ping/heartbeat (bumped
             # observer-side), so we don't double-count here.
+            # A KILLED keeps the WORKER_FAILED terminal so the task's terminal
+            # state stays inside the preemption-budget predicate.
+            terminal_state = (
+                job_pb2.TASK_STATE_PREEMPTED
+                if update.new_state == job_pb2.TASK_STATE_PREEMPTED
+                else job_pb2.TASK_STATE_WORKER_FAILED
+            )
             task_state = resolve_task_failure_state(
                 prior_state,
                 preemption_count,
                 task.max_retries_preemption,
-                terminal_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                terminal_state=terminal_state,
             )
             if task_state == job_pb2.TASK_STATE_PENDING:
                 terminal_ms = None
@@ -491,6 +503,10 @@ def apply_one_transition(
             finished_at=attempt_finished_at,
             exit_code=task_exit,
             error=update.error,
+            pod_name=update.pod_name,
+            pod_uid=update.pod_uid,
+            node_name=update.node_name,
+            terminal_reason=update.terminal_reason,
         )
     )
     state.merge_task(
@@ -502,6 +518,7 @@ def apply_one_transition(
             started_at=started_at,
             finished_at=task_finished_at,
             container_id=update.container_id,
+            status_message=update.status_message,
         )
     )
 

@@ -8,13 +8,18 @@ export type ModelId =
   | "grp"
   | "compact_retained_state"
   | "bucket_family_grp"
+  | "hierarchical_phase_bucket_replay"
+  | "retained_power_law"
+  | "crs_plus"
+  | "crs_bounded"
+  | "hpr_band"
   | "bucket_family_power_separate_heads"
   | "bucket_family_power_separate_heads_family_onset"
   | "bucket_family_weibull_shared_onset"
   | "bucket_family_weibull_family_replay";
-export type ExplorerTab = "mixtures" | "fit";
+export type ExplorerTab = "mixtures" | "population" | "fit";
 export type ViewMode = "prediction" | "residual" | "standardized" | "swoosh";
-export type SortMode = "difference" | "exposure" | "domain";
+export type SortMode = "difference" | "phase_difference" | "exposure" | "domain";
 export type PolicyClass = "single_phase" | "two_phase";
 export type PolicyFilter = "in_policy" | "off_policy" | "all";
 
@@ -53,6 +58,29 @@ export interface RowDiagnostics {
   supportDistance: number;
 }
 
+export interface PhasePopulationMetadata {
+  panelId: string;
+  candidateId: string;
+  anchorId: string;
+  anchorRunName: string;
+  directionId: string;
+  directionLabel: string;
+  sign: string;
+  seedBlock: number;
+  replicateIndex: number | null;
+  radiusFraction: number | null;
+  targetPhaseTv: number | null;
+  contrastFamily: "center_control" | "random_isotropic" | string;
+  phaseInformationKl: number;
+  feasibleRadius: number | null;
+  realizedRadius: number | null;
+  recipientDomains: string[];
+  phase0DolminoShare: number | null;
+  phase1DolminoShare: number | null;
+  phase0BroadShare: number | null;
+  phase1BroadShare: number | null;
+}
+
 export interface MixtureRow {
   id: string;
   name: string;
@@ -73,6 +101,7 @@ export interface MixtureRow {
   isSharedAlias: boolean;
   pairedRow: string | null;
   candidateTarget: string | null;
+  phasePopulation?: PhasePopulationMetadata | null;
   observed: Record<string, number | null>;
   phase0: number[];
   phase1: number[];
@@ -190,7 +219,7 @@ export interface SwarmData {
 }
 
 export interface DashboardData {
-  schemaVersion: 5;
+  schemaVersion: 6;
   generatedAt: string;
   models: Record<ModelId, ModelMetadata>;
   swarms: Record<string, SwarmData>;
@@ -229,4 +258,6 @@ export interface DashboardState {
   sort: SortMode;
   parameterDomain: string;
   parameterGroup: string;
+  populationPanel: string;
+  populationFamily: string;
 }

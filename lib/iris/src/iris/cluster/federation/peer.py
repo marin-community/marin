@@ -42,6 +42,10 @@ _PROFILE_PROXY_TIMEOUT_MARGIN_MS = 60_000
 _EXEC_PROXY_TIMEOUT_MARGIN_MS = 60_000
 _DEFAULT_PROFILE_DURATION = 10
 _DEFAULT_EXEC_TIMEOUT = 60
+# Process status has no duration; the peer's own worker/pod hop is bounded (a worker
+# forward caps at ~10s, a kubectl-exec /proc read is quick), so give the parent->peer
+# hop that budget plus margin to outlast the peer rather than time out first.
+_PROCESS_STATUS_PROXY_TIMEOUT_MS = 30_000
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +55,8 @@ class PeerConnection(Protocol):
 
     ``list_backends`` is the capability heartbeat; ``launch_job`` delivers a handoff;
     ``terminate_job`` routes a cancel; ``federation_sync`` runs one delta-sync round;
-    ``profile_task``/``exec_in_container`` proxy an on-demand RPC against a handed-off
-    task, which the peer resolves to its own worker.
+    ``profile_task``/``exec_in_container``/``get_process_status`` proxy an on-demand RPC
+    against a handed-off task, which the peer resolves to its own worker or pod.
     """
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
@@ -72,6 +76,8 @@ class PeerConnection(Protocol):
     def exec_in_container(
         self, request: controller_pb2.Controller.ExecInContainerRequest
     ) -> controller_pb2.Controller.ExecInContainerResponse: ...
+
+    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse: ...
 
     def shutdown(self) -> None: ...
 
@@ -151,6 +157,9 @@ class _PeerRpcConnection:
         else:
             budget_ms = (request.timeout_seconds or _DEFAULT_EXEC_TIMEOUT) * 1000
         return self._client.exec_in_container(request, timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS)
+
+    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+        return self._client.get_process_status(request, timeout_ms=_PROCESS_STATUS_PROXY_TIMEOUT_MS)
 
     def shutdown(self) -> None:
         self._client.close()
@@ -234,6 +243,10 @@ class FederationPeer:
     ) -> controller_pb2.Controller.ExecInContainerResponse:
         """Proxy an exec RPC for a handed-off task to the peer (reuses its ``ExecInContainer``)."""
         return self._connection.exec_in_container(request)
+
+    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+        """Proxy a process-status RPC for a handed-off task to the peer (reuses its ``GetProcessStatus``)."""
+        return self._connection.get_process_status(request)
 
     def close(self) -> None:
         """Release the peer connection."""

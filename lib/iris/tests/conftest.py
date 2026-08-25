@@ -3,6 +3,7 @@
 
 # Test configuration for iris
 
+import json
 import logging
 import os
 import subprocess
@@ -11,7 +12,7 @@ import threading
 import time
 import traceback
 import warnings
-from pathlib import Path
+from dataclasses import asdict
 
 import pytest
 from finelog.client import LogClient
@@ -19,22 +20,47 @@ from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
-from iris.cluster.config import (
-    IrisClusterConfig,
-    LocalSliceConfig,
-    ScaleGroupConfig,
-    ScaleGroupResources,
-    SliceConfig,
-    load_config,
-    make_local_config,
-)
-from iris.cluster.types import AcceleratorType, CapacityType
+from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
+from iris.cluster.types import JobName
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
+from iris.testing.config import make_controller_only_config
 from rigging.timing import Duration, ExponentialBackoff
 
-IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
+
+@pytest.fixture
+def recorded_job_submissions(monkeypatch):
+    """Record submissions made by the public ``iris job run`` command."""
+    submissions: list[dict[str, object]] = []
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            submissions.append(kwargs)
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *args, **kwargs: FakeClient())
+    return submissions
+
+
+@pytest.fixture
+def permissive_native_proxy_auth_json() -> str:
+    """Serialized no-auth policy for standalone native-proxy tests."""
+    return json.dumps(
+        asdict(
+            NativeProxyAuthConfig(
+                mode=NativeProxyAuthMode.PERMISSIVE,
+                issuers=(),
+                jwks={"keys": []},
+                leeway_seconds=0,
+                cache_capacity=16,
+                cache_ttl_seconds=60,
+                trusted_cidrs=(),
+            )
+        )
+    )
 
 
 @pytest.fixture
@@ -81,32 +107,10 @@ def log_service(embedded_log_server) -> LogServiceClientSync:
     return LogServiceClientSync(address=embedded_log_server.address)
 
 
-def _make_controller_only_config() -> IrisClusterConfig:
-    """Build a null-auth local config with no auto-scaled workers.
-
-    A local cluster boots with no persistent signing key, so it can only run in
-    null-auth mode (an authed provider requires ``auth.signing_key``). Auth tests
-    exercise loopback trust and identity attribution against this permissive
-    controller; the token-verification logic itself is unit-tested directly.
-    """
-    config = load_config(DEFAULT_CONFIG)
-    config.scale_groups = {
-        "placeholder": ScaleGroupConfig(
-            name="placeholder",
-            num_vms=1,
-            buffer_slices=0,
-            max_slices=0,
-            resources=ScaleGroupResources(
-                cpu_millicores=1000,
-                memory_bytes=1 * 1024**3,
-                disk_bytes=10 * 1024**3,
-                device_type=AcceleratorType.CPU,
-                capacity_type=CapacityType.ON_DEMAND,
-            ),
-            slice_template=SliceConfig(local=LocalSliceConfig()),
-        )
-    }
-    return make_local_config(config)
+@pytest.fixture
+def controller_only_config():
+    """Null-auth local config with no auto-scaled workers."""
+    return make_controller_only_config()
 
 
 def _docker_image_exists(tag: str) -> bool:
@@ -188,6 +192,20 @@ def local_iris_client():
         yield client
     finally:
         client.shutdown()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_iris_user():
+    """Shield the suite from the developer's IRIS_USER.
+
+    resolve_job_user consults it when naming submitted jobs; without this, a
+    developer's exported IRIS_USER changes job names across the whole suite.
+    Session-scoped so module-scoped fixtures that submit jobs are covered too.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("IRIS_USER", raising=False)
+    yield
+    mp.undo()
 
 
 @pytest.fixture(autouse=True)

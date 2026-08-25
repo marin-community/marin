@@ -1,0 +1,7 @@
+config:
+  # Vanity host for the API + dashboard. The DNS CNAME (echo -> ghs.googlehosted.com) is
+  # created in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
+  marin-echo:custom_domain: echo.oa.dev
+  marin-echo:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6YC2DHd3y8JuHwEecguhCNz4LDf2W4NIKTAfS2zzbRcSSQCdtF6iBjAbyelpZ3oPsfQDVzG7PFDNQL3J5YOoK2VuoIUMgWoiehRxDpwJX7cGwEN/kXdg7xRxjE5h8CF722FeNCn+6XsrpjI=

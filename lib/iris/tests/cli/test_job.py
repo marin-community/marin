@@ -1,28 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for iris.cli.job — validate_region_zone, executor heuristic, and related CLI validation."""
+"""Behavior tests for Iris Job submission and operator commands."""
 
-import io
-
-import click
 import pytest
 from click.testing import CliRunner
 from iris.cli.job import (
-    _collect_targets,
-    _parse_tpu_alternatives,
-    _read_targets_from_stdin,
-    _render_job_summary_text,
     build_job_constraints,
-    build_job_summary,
     build_resources,
-    build_tpu_alternatives,
-    kick,
+    cancel,
+    complete,
+    describe,
     run,
-    stop,
-    validate_extra_resources,
-    validate_region_zone,
+    wait,
 )
+from iris.client.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -33,6 +25,7 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
 
 
@@ -45,47 +38,108 @@ def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
     return IrisClusterConfig(scale_groups=scale_groups)
 
 
-def test_validate_region_zone_valid_region():
-    config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    validate_region_zone(("us-central2",), None, config)
+def _run_cli(args: list[str], *, config: IrisClusterConfig | None = None):
+    return CliRunner().invoke(
+        run,
+        [*args, "--no-wait", "--", "echo", "ok"],
+        obj={"controller_url": "http://controller.test", "config": config, "credentials": None},
+    )
 
 
-def test_validate_region_zone_valid_zone():
+def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    validate_region_zone(None, "europe-west4-a", config)
+    result = _run_cli(["--region", "us-central2"], config=config)
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+
+
+def test_validate_region_zone_valid_zone(recorded_job_submissions):
+    config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
+    result = _run_cli(["--zone", "europe-west4-a"], config=config)
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
 
 
 def test_validate_region_zone_invalid_region_raises():
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    with pytest.raises(click.BadParameter, match=r"eu-west4.*not a known region"):
-        validate_region_zone(("eu-west4",), None, config)
+    result = _run_cli(["--region", "eu-west4"], config=config)
+    assert result.exit_code != 0
+    assert "eu-west4" in result.output
+    assert "not a known region" in result.output
 
 
 def test_validate_region_zone_invalid_region_suggests_closest():
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    with pytest.raises(click.BadParameter, match="Did you mean 'europe-west4'"):
-        validate_region_zone(("eu-west4",), None, config)
+    result = _run_cli(["--region", "eu-west4"], config=config)
+    assert result.exit_code != 0
+    assert "Did you mean 'europe-west4'" in result.output
 
 
 def test_validate_region_zone_invalid_zone_raises():
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    with pytest.raises(click.BadParameter, match=r"us-central2-a.*not a known zone"):
-        validate_region_zone(None, "us-central2-a", config)
+    result = _run_cli(["--zone", "us-central2-a"], config=config)
+    assert result.exit_code != 0
+    assert "us-central2-a" in result.output
+    assert "not a known zone" in result.output
 
 
 def test_validate_region_zone_invalid_zone_suggests_closest():
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
-    with pytest.raises(click.BadParameter, match="Did you mean 'us-central2-b'"):
-        validate_region_zone(None, "us-central2-a", config)
+    result = _run_cli(["--zone", "us-central2-a"], config=config)
+    assert result.exit_code != 0
+    assert "Did you mean 'us-central2-b'" in result.output
 
 
-def test_validate_region_zone_no_config_skips():
-    validate_region_zone(("nonexistent",), "nonexistent", None)
+def test_job_run_accepts_unresolved_placement_without_cluster_metadata(recorded_job_submissions):
+    # Without cluster metadata, accepting an unresolved placement constraint is the public contract.
+    result = _run_cli(["--region", "nonexistent", "--zone", "nonexistent"])
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
 
 
-def test_validate_region_zone_no_constraints_skips():
+def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b"])
-    validate_region_zone(None, None, config)
+    # A configured cluster does not require callers to constrain placement.
+    result = _run_cli([], config=config)
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+
+
+@pytest.fixture
+def recorded_bundle_exclude(monkeypatch):
+    """Capture the ``bundle_exclude`` passed to ``IrisClient.remote`` by ``iris job run``."""
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
+
+    def fake_remote(*args, **kwargs):
+        captured["bundle_exclude"] = kwargs.get("bundle_exclude")
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+    return captured
+
+
+def test_exclude_options_become_one_or_ed_bundle_regex(recorded_bundle_exclude):
+    # Each --exclude flag contributes an independent alternative; a path matching any
+    # one is dropped, and an unrelated path is kept.
+    result = _run_cli(["--exclude", r"^docs/", "--exclude", r"^data/"])
+    assert result.exit_code == 0, result.output
+    pattern = recorded_bundle_exclude["bundle_exclude"]
+    assert pattern.search("docs/guide.md")
+    assert pattern.search("data/big.csv")
+    assert not pattern.search("src/main.py")
+
+
+def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_exclude):
+    result = _run_cli([])
+    assert result.exit_code == 0, result.output
+    assert recorded_bundle_exclude["bundle_exclude"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +210,6 @@ def _preemptible_values(constraints: list[Constraint]) -> list[str]:
 
 
 def test_build_job_constraints_preemptible_true_emits_true_constraint():
-    """--preemptible forces a preemptible=true constraint and bypasses the heuristic."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
@@ -165,7 +218,6 @@ def test_build_job_constraints_preemptible_true_emits_true_constraint():
 
 
 def test_build_job_constraints_preemptible_false_emits_false_constraint():
-    """--no-preemptible forces a preemptible=false constraint even for non-executor jobs."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=4.0, memory="16GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=False)
@@ -174,7 +226,6 @@ def test_build_job_constraints_preemptible_false_emits_false_constraint():
 
 
 def test_build_job_constraints_preemptible_none_runs_heuristic():
-    """Default (None) preserves the executor heuristic on small CPU jobs."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=None)
@@ -183,17 +234,14 @@ def test_build_job_constraints_preemptible_none_runs_heuristic():
 
 
 def test_build_job_constraints_preemptible_true_overrides_heuristic():
-    """Small CPU jobs normally auto-tag non-preemptible; --preemptible wins."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, preemptible=True)
 
-    # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
 
 
 def test_build_job_constraints_target_cluster_appends_cluster_pin():
-    """--target-cluster appends exactly one cluster EQ constraint naming the peer."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster="peer-cluster")
@@ -206,7 +254,6 @@ def test_build_job_constraints_target_cluster_appends_cluster_pin():
 
 
 def test_build_job_constraints_no_target_cluster_omits_cluster_pin():
-    """Omitting --target-cluster appends no cluster constraint."""
     resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
 
     constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster=None)
@@ -225,7 +272,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, *, workspace, credentials=None):
+    def fake_remote(controller_url, *, workspace, credentials=None, bundle_exclude=None):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
         captured["credentials"] = credentials
@@ -252,34 +299,56 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
     assert captured["entrypoint"].command == ["python", "train.py"]
 
 
+@pytest.mark.parametrize(
+    ("state", "expected_state", "expected_exit_code"),
+    [
+        (_job_pb2.JOB_STATE_SUCCEEDED, "succeeded", 0),
+        (_job_pb2.JOB_STATE_FAILED, "failed", 1),
+    ],
+)
+def test_job_wait_reports_terminal_state_and_exit_status(
+    monkeypatch,
+    state: _job_pb2.JobState,
+    expected_state: str,
+    expected_exit_code: int,
+) -> None:
+    class WaitClusterClient:
+        def wait_for_job(self, job_id, _timeout, _poll_interval):
+            return _job_pb2.JobStatus(job_id=job_id.to_wire(), state=state)
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(WaitClusterClient()))
+
+    result = CliRunner().invoke(
+        wait,
+        ["/alice/training-run"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == expected_exit_code
+    assert result.output == f"{expected_state}\n"
+
+
 # --tpu multi-variant parsing
 # ---------------------------------------------------------------------------
 
 
-def test_tpu_multi_variant_parsing():
-    # Single variant
-    primary, alts = _parse_tpu_alternatives("v6e-4")
-    assert (primary, alts) == ("v6e-4", [])
+def test_tpu_multi_variant_parsing(recorded_job_submissions):
+    result = _run_cli(
+        ["--enable-extra-resources", "--tpu", " v6e-4 , v5litepod-4 , v5p-8 "],
+    )
+    assert result.exit_code == 0, result.output
+    submission = recorded_job_submissions[0]
+    assert submission["resources"].device.tpu.variant == "v6e-4"
+    device_constraint = next(c for c in submission["constraints"] if c.key == WellKnownAttribute.DEVICE_VARIANT)
+    assert [value.value for value in device_constraint.values] == ["v6e-4", "v5litepod-4", "v5p-8"]
 
-    # Comma-separated list: first is primary, rest are alternatives; whitespace stripped
-    primary, alts = _parse_tpu_alternatives(" v6e-4 , v5litepod-4 , v5p-8 ")
-    assert (primary, alts) == ("v6e-4", ["v5litepod-4", "v5p-8"])
+    empty = _run_cli(["--enable-extra-resources", "--tpu", ", ,"])
+    assert empty.exit_code != 0
+    assert "at least one" in empty.output
 
-    # Empty / garbage input rejected
-    with pytest.raises(click.BadParameter, match="at least one"):
-        _parse_tpu_alternatives(", ,")
-
-    # Mismatched vm_count across variants rejected
-    with pytest.raises(click.BadParameter, match="vm_count"):
-        _parse_tpu_alternatives("v5p-8,v5p-16")
-
-    # build_tpu_alternatives: None → [], multi-variant → flat list
-    assert build_tpu_alternatives(None) == []
-    assert build_tpu_alternatives("v6e-4,v5litepod-4,v5p-8") == ["v6e-4", "v5litepod-4", "v5p-8"]
-
-    # build_resources picks the first variant as the canonical TPU type
-    spec = build_resources(tpu="v6e-4,v5litepod-4,v5p-8", gpu=None, cpu=8.0, memory="32GB", disk="50GB")
-    assert spec.device.tpu.variant == "v6e-4"
+    mismatched = _run_cli(["--enable-extra-resources", "--tpu", "v5p-8,v5p-16"])
+    assert mismatched.exit_code != 0
+    assert "vm_count" in mismatched.output
 
 
 # ---------------------------------------------------------------------------
@@ -287,32 +356,36 @@ def test_tpu_multi_variant_parsing():
 # ---------------------------------------------------------------------------
 
 
-def test_validate_extra_resources():
-    # Normal CPU-only job passes without the flag.
-    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        (["--tpu", "v5litepod-16"], "--tpu requires --enable-extra-resources"),
+        (["--gpu", "H100x8"], "--gpu requires --enable-extra-resources"),
+        (["--memory", "4GB"], "--memory 4GB"),
+        (["--disk", "10GB"], "--disk 10GB"),
+    ],
+)
+def test_validate_extra_resources(args, error):
+    result = _run_cli(args)
+    assert result.exit_code != 0
+    assert error in result.output
 
-    # TPU and GPU blocked without the flag; error names the coordinator pattern.
-    with pytest.raises(click.UsageError, match="--tpu requires --enable-extra-resources"):
-        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
-    with pytest.raises(click.UsageError, match="--gpu requires --enable-extra-resources"):
-        validate_extra_resources(tpu=None, gpu="H100x8", memory="1GB", disk="5GB", enable_extra_resources=False)
-    with pytest.raises(click.UsageError, match="coordinator"):
-        validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=False)
 
-    # Memory threshold: >= 4 GB blocked, < 4 GB allowed.
-    with pytest.raises(click.UsageError, match=r"--memory 4GB.*--enable-extra-resources"):
-        validate_extra_resources(tpu=None, gpu=None, memory="4GB", disk="5GB", enable_extra_resources=False)
-    validate_extra_resources(tpu=None, gpu=None, memory="3900MB", disk="5GB", enable_extra_resources=False)
-
-    # Disk threshold: >= 10 GB blocked, < 10 GB allowed.
-    with pytest.raises(click.UsageError, match=r"--disk 10GB.*--enable-extra-resources"):
-        validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="10GB", enable_extra_resources=False)
-    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="9900MB", enable_extra_resources=False)
-
-    # --enable-extra-resources bypasses all checks.
-    validate_extra_resources(tpu="v5litepod-16", gpu=None, memory="1GB", disk="5GB", enable_extra_resources=True)
-    validate_extra_resources(tpu=None, gpu=None, memory="64GB", disk="5GB", enable_extra_resources=True)
-    validate_extra_resources(tpu=None, gpu=None, memory="1GB", disk="100GB", enable_extra_resources=True)
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["--memory", "3900MB"],
+        ["--disk", "9900MB"],
+        ["--enable-extra-resources", "--tpu", "v5litepod-16"],
+        ["--enable-extra-resources", "--memory", "64GB"],
+        ["--enable-extra-resources", "--disk", "100GB"],
+    ],
+)
+def test_validate_extra_resources_accepts_supported_requests(args, recorded_job_submissions):
+    result = _run_cli(args)
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
 
 
 def _task(index: int, state, *, peak_mb: int, cur_mb: int, exit_code: int, duration_ms: int, error: str = ""):
@@ -329,172 +402,172 @@ def _task(index: int, state, *, peak_mb: int, cur_mb: int, exit_code: int, durat
     return t
 
 
-def test_build_job_summary_includes_peak_memory_and_sorts_numerically():
-    job = _job_pb2.JobStatus(
-        job_id="/u/j",
-        name="train",
-        state=_job_pb2.JOB_STATE_FAILED,
-        exit_code=1,
-        task_count=3,
-        completed_count=3,
-        task_state_counts={"succeeded": 2, "failed": 1},
-    )
-    tasks = [
+class _SummaryTransport:
+    def __init__(self, job: _job_pb2.JobStatus, tasks: tuple[_job_pb2.TaskStatus, ...]):
+        self.job = job
+        self.tasks = tasks
+
+    def get_job_status(self, _job_id):
+        return self.job
+
+    def list_tasks(self, _job_id):
+        return list(self.tasks)
+
+
+def _summary_statuses(job: _job_pb2.JobStatus, *tasks: _job_pb2.TaskStatus):
+    client = IrisClient(_SummaryTransport(job, tasks))
+    job_id = JobName.from_wire(job.job_id)
+    return client.job_status(job_id), client.list_tasks(job_id)
+
+
+def _description_task_rows(output: str) -> list[list[str]]:
+    rows = [line.split() for line in output.splitlines()]
+    return [row for row in rows if row and row[0].isdigit()]
+
+
+def test_job_describe_cli_includes_peak_memory_and_sorts_numerically(monkeypatch):
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(
+            job_id="/u/j",
+            name="train",
+            state=_job_pb2.JOB_STATE_FAILED,
+            exit_code=1,
+            task_count=3,
+            completed_count=3,
+            task_state_counts={"succeeded": 2, "failed": 1},
+        ),
         _task(10, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=2048, cur_mb=100, exit_code=0, duration_ms=65_000),
         _task(2, _job_pb2.TASK_STATE_FAILED, peak_mb=10_240, cur_mb=0, exit_code=137, duration_ms=5_000, error="OOM"),
         _task(1, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=1024, cur_mb=50, exit_code=0, duration_ms=3_000),
-    ]
-
-    summary = build_job_summary(job, tasks)
-
-    assert summary["job_id"] == "/u/j"
-    assert summary["state"] == "failed"
-    assert [t["index"] for t in summary["tasks"]] == ["1", "2", "10"]
-    peaks = {t["index"]: t["memory_peak_mb"] for t in summary["tasks"]}
-    assert peaks == {"1": 1024, "2": 10_240, "10": 2048}
-    oom = next(t for t in summary["tasks"] if t["index"] == "2")
-    assert oom["state"] == "failed"
-    assert oom["exit_code"] == 137
-    assert oom["error"] == "OOM"
-    assert oom["duration_ms"] == 5_000
-
-
-def test_build_job_summary_hides_exit_code_for_non_terminal_tasks():
-    # Proto scalar default for exit_code is 0 — a RUNNING/BUILDING task must
-    # not be reported as a clean exit=0 in the summary.
-    job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=3, completed_count=0)
-    running = _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000)
-    building = _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0)
-    done = _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000)
-    summary = build_job_summary(job, [running, building, done])
-    by_idx = {t["index"]: t for t in summary["tasks"]}
-    assert by_idx["0"]["exit_code"] is None
-    assert by_idx["1"]["exit_code"] is None
-    assert by_idx["2"]["exit_code"] == 0
-
-
-def test_render_job_summary_text_shows_peak_memory():
-    job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_FAILED, task_count=1, completed_count=1)
-    tasks = [_task(0, _job_pb2.TASK_STATE_FAILED, peak_mb=9999, cur_mb=0, exit_code=137, duration_ms=1000, error="OOM")]
-    text = _render_job_summary_text(build_job_summary(job, tasks))
-    assert "PEAK MEM" in text
-    # 9999 MB is formatted as "10 GB" by humanfriendly
-    assert "10 GB" in text
-    assert "137" in text
-    assert "OOM" in text
-
-
-# Bulk-action target collection (query→act bridge for kick/stop/kill)
-# ---------------------------------------------------------------------------
-
-
-def test_read_targets_from_stdin_drops_csv_header_and_extra_columns(monkeypatch):
-    # Exactly what `iris query -f csv "SELECT task_id, state FROM ..."` emits:
-    # a header line with no leading slash, then id + trailing columns per row.
-    stdin = io.StringIO("task_id,state\n/alice/job/0,3\n/bob/job/1,9\n")
-    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
-    assert _read_targets_from_stdin() == ["/alice/job/0", "/bob/job/1"]
-
-
-def test_read_targets_from_stdin_ignores_blank_and_non_id_lines(monkeypatch):
-    stdin = io.StringIO("/alice/job/0\n\n   \nNo jobs found.\n/bob/job\n")
-    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
-    assert _read_targets_from_stdin() == ["/alice/job/0", "/bob/job"]
-
-
-def test_read_targets_from_stdin_preserves_quoted_comma_and_space_ids(monkeypatch):
-    # JobName components may contain commas and spaces; iris query -f csv quotes
-    # comma-bearing fields via csv.writer, so a real CSV parse must round-trip them.
-    stdin = io.StringIO('task_id,state\n"/alice/a,b/0",3\n/alice/my job/1,3\n')
-    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
-    assert _read_targets_from_stdin() == ["/alice/a,b/0", "/alice/my job/1"]
-
-
-def test_read_targets_from_stdin_skips_rows_with_empty_first_field(monkeypatch):
-    # A NULL first column (e.g. an unassigned current_worker_id) emits a leading
-    # comma; the empty field must be skipped, not crash the whole action.
-    stdin = io.StringIO(",3\n/alice/job/0,worker-1\n")
-    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
-    assert _read_targets_from_stdin() == ["/alice/job/0"]
-
-
-def test_collect_targets_merges_positional_and_stdin(monkeypatch):
-    monkeypatch.setattr("iris.cli.job.sys.stdin", io.StringIO("/from/stdin/0\n"))
-    assert _collect_targets(("/pos/job/0",), use_stdin=True) == ["/pos/job/0", "/from/stdin/0"]
-
-
-def test_collect_targets_dash_sentinel_reads_stdin(monkeypatch):
-    monkeypatch.setattr("iris.cli.job.sys.stdin", io.StringIO("/from/stdin/0\n"))
-    # '-' is consumed as the stdin sentinel, not passed through as a target.
-    assert _collect_targets(("/pos/job/0", "-"), use_stdin=False) == ["/pos/job/0", "/from/stdin/0"]
-
-
-def test_collect_targets_no_stdin_returns_positional_only():
-    assert _collect_targets(("/a/b/0", "/a/c/0"), use_stdin=False) == ["/a/b/0", "/a/c/0"]
-
-
-def test_kick_dry_run_lists_targets_without_sending(monkeypatch):
-    def _boom(_ctx):
-        raise AssertionError("dry-run must not open a client or send an RPC")
-
-    monkeypatch.setattr("iris.cli.job._remote_client", _boom)
-
-    result = CliRunner().invoke(
-        kick,
-        ["--stdin", "--dry-run"],
-        input="task_id\n/alice/job/0\n/bob/job/1\n",
-        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
-
-    assert result.exit_code == 0, result.output
-    assert "would kick 2 target(s) to preempted" in result.output
-    assert "/alice/job/0" in result.output
-    assert "/bob/job/1" in result.output
-
-
-def test_kick_stdin_passes_collected_targets_to_client(monkeypatch):
-    captured: dict[str, object] = {}
 
     class FakeClient:
-        def kick_tasks(self, targets, *, desired_state, reason):
-            captured["targets"] = targets
-            captured["desired_state"] = desired_state
-            captured["reason"] = reason
-            return []
+        def job_status(self, _job_id):
+            return job
+
+        def list_tasks(self, _job_id):
+            return tasks
 
     monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+    result = CliRunner().invoke(describe, ["/u/j"], obj={"controller_url": "http://controller.test"})
 
+    assert result.exit_code == 0, result.output
+    task_lines = _description_task_rows(result.output)
+    assert [line[0] for line in task_lines] == ["1", "2", "10"]
+    assert task_lines[1][1:3] == ["failed", "137"]
+    assert "10.24 GB" in result.output
+    assert "OOM" in result.output
+
+
+def test_job_describe_cli_hides_exit_code_for_non_terminal_tasks(monkeypatch):
+    # The wire scalar default for exit_code is 0 — a RUNNING/BUILDING task must
+    # not be reported as a clean exit=0 in the description.
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=3, completed_count=0),
+        _task(0, _job_pb2.TASK_STATE_RUNNING, peak_mb=100, cur_mb=80, exit_code=0, duration_ms=1000),
+        _job_pb2.TaskStatus(task_id="/u/j/1", state=_job_pb2.TASK_STATE_BUILDING, exit_code=0),
+        _task(2, _job_pb2.TASK_STATE_SUCCEEDED, peak_mb=100, cur_mb=0, exit_code=0, duration_ms=1000),
+    )
+
+    class FakeClient:
+        def job_status(self, _job_id):
+            return job
+
+        def list_tasks(self, _job_id):
+            return tasks
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+    result = CliRunner().invoke(describe, ["/u/j"], obj={"controller_url": "http://controller.test"})
+
+    assert result.exit_code == 0, result.output
+    task_lines = {row[0]: row for row in _description_task_rows(result.output)}
+    assert task_lines["0"][2] == "-"
+    assert task_lines["1"][2] == "-"
+    assert task_lines["2"][2] == "0"
+
+
+def test_job_describe_cli_shows_active_backend_status(monkeypatch):
+    job, tasks = _summary_statuses(
+        _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=1),
+        _job_pb2.TaskStatus(
+            task_id="/u/j/0",
+            state=_job_pb2.TASK_STATE_BUILDING,
+            status_message='Kueue: excluded: resource "memory": 32',
+        ),
+    )
+
+    class FakeClient:
+        def job_status(self, _job_id):
+            return job
+
+        def list_tasks(self, _job_id):
+            return tasks
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+    result = CliRunner().invoke(describe, ["/u/j"], obj={"controller_url": "http://controller.test"})
+
+    assert result.exit_code == 0, result.output
+    assert 'Kueue: excluded: resource "memory": 32' in result.output
+
+
+class _JobActionClusterClient:
+    def __init__(self):
+        self.cancelled: list[JobName] = []
+        self.completed: list[JobName] = []
+
+    def list_jobs(self, *, query, **_kwargs):
+        jobs = [
+            _job_pb2.JobStatus(job_id="/alice/running", state=_job_pb2.JOB_STATE_RUNNING),
+            _job_pb2.JobStatus(job_id="/alice/done", state=_job_pb2.JOB_STATE_SUCCEEDED),
+            _job_pb2.JobStatus(job_id="/bob/running", state=_job_pb2.JOB_STATE_RUNNING),
+        ]
+        return [job for job in jobs if job.job_id.startswith(query.job_id_prefix)]
+
+    def terminate_job(self, job_id):
+        self.cancelled.append(job_id)
+
+    def complete_job(self, job_id):
+        self.completed.append(job_id)
+
+
+def test_job_cancel_combines_positional_and_csv_stdin_targets():
     result = CliRunner().invoke(
-        kick,
-        ["--stdin", "--state", "failed", "--reason", "drain"],
-        input="/alice/job/0\n/bob/job/1\n",
+        cancel,
+        ["/alice/first", "--stdin", "--dry-run"],
+        input='job_id,state\n"/alice/second,run",3\n',
         obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["targets"] == ["/alice/job/0", "/bob/job/1"]
-    assert captured["desired_state"] == _job_pb2.TASK_STATE_FAILED
-    assert captured["reason"] == "drain"
+    assert "/alice/first" in result.output
+    assert "/alice/second,run" in result.output
 
 
-def test_kick_no_targets_is_usage_error(monkeypatch):
-    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: pytest.fail("should not reach client"))
-    result = CliRunner().invoke(kick, [], obj={"controller_url": "http://c.test", "config": None, "credentials": None})
-    assert result.exit_code != 0
-    assert "No targets given" in result.output
+def test_job_cancel_prefix_cancels_only_active_jobs(monkeypatch):
+    cluster = _JobActionClusterClient()
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
 
-
-def test_stop_dry_run_lists_jobs_without_sending(monkeypatch):
-    monkeypatch.setattr(
-        "iris.cli.job._remote_client",
-        lambda _ctx: pytest.fail("dry-run must not open a client"),
-    )
     result = CliRunner().invoke(
-        stop,
-        ["--stdin", "--dry-run"],
-        input="job_id\n/alice/job\n",
-        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+        cancel,
+        ["--prefix", "/alice/"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
+
     assert result.exit_code == 0, result.output
-    assert "would terminate 1 job(s)" in result.output
-    assert "/alice/job" in result.output
+    assert cluster.cancelled == [JobName.from_wire("/alice/running")]
+    assert "/alice/running" in result.output
+    assert "/alice/done" not in result.output
+
+
+def test_job_complete_targets_selected_job(monkeypatch):
+    cluster = _JobActionClusterClient()
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(cluster))
+
+    result = CliRunner().invoke(
+        complete,
+        ["/alice/running"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert cluster.completed == [JobName.from_wire("/alice/running")]

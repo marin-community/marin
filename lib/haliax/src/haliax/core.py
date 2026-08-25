@@ -1717,7 +1717,7 @@ def broadcast_to(
     if not isinstance(a, NamedArray):
         a = named(jnp.asarray(a), ())
 
-    assert isinstance(a, NamedArray)  # mypy gets confused
+    assert isinstance(a, NamedArray)  # pyrefly gets confused
 
     a_axes_dict = axis_spec_to_shape_dict(a.axes)
 

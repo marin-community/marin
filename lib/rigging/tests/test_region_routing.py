@@ -31,16 +31,22 @@ def _mock_urlopen(zone_bytes: bytes) -> MagicMock:
     return mock_resp
 
 
-def test_region_from_metadata_parses_zone():
+def test_region_from_metadata_caches_parsed_zone():
+    response = _mock_urlopen(b"projects/12345/zones/us-central2-b")
     with patch(
         "rigging.filesystem.cluster_config.urllib.request.urlopen",
-        return_value=_mock_urlopen(b"projects/12345/zones/us-central2-b"),
+        side_effect=[response, AssertionError("metadata server called more than once")],
     ):
+        assert region_from_metadata() == "us-central2"
         assert region_from_metadata() == "us-central2"
 
 
-def test_region_from_metadata_returns_none_on_failure():
-    with patch("rigging.filesystem.cluster_config.urllib.request.urlopen", side_effect=OSError("not on GCP")):
+def test_region_from_metadata_caches_failure():
+    with patch(
+        "rigging.filesystem.cluster_config.urllib.request.urlopen",
+        side_effect=[OSError("not on GCP"), AssertionError("metadata server called more than once")],
+    ):
+        assert region_from_metadata() is None
         assert region_from_metadata() is None
 
 

@@ -29,10 +29,10 @@ Retrain + recalibrate the deployed model:
 ```bash
 python -m experiments.datakit.cluster.quality.fast_transformer.train \
     --labels s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \
-    --out-dir s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2
+    --out-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2
 python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \
-    --model-dir s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2 \
-    --out       s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2/calib_bme.json
+    --model-dir s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2 \
+    --out       s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/calib_bme.json
 ```
 
 ## Scoring
@@ -73,4 +73,4 @@ Core:
 ## Artifacts
 
 - Labels: `s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet` (5,578 oracle labels; `label_batch` marks `consensus_v3` / `junkgate_web_wiki` / `junkgate_code_math`).
-- Model: `s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).
+- Model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).

@@ -26,10 +26,21 @@ from typing import Any, NewType
 import cloudpickle
 import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    wants_gpu_extra,
+)
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.resources.state import (
+    TERMINAL_JOB_STATES as NATIVE_TERMINAL_JOB_STATES,
+)
+from iris.resources.state import (
+    TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
+)
 from iris.rpc import controller_pb2, job_pb2
 
 
@@ -452,6 +463,10 @@ class PendingTask:
     res_device_json: str | None
 
 
+DEFAULT_USER_BUDGET_LIMIT = 1000
+DEFAULT_USER_BUDGET_MAX_BAND = job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 @dataclass
 class UserBudgetDefaults:
     """Budget settings applied when a user has no override row in ``user_budgets``.
@@ -460,8 +475,8 @@ class UserBudgetDefaults:
     ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
     """
 
-    budget_limit: int = 1000
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: int = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class WorkerUsability(StrEnum):
@@ -628,6 +643,7 @@ class ResourceSpec:
     """Resource specification for jobs.
 
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
+    Memory is the container limit for anonymous memory and ``/dev/shm`` combined.
     """
 
     cpu: float = 0.0
@@ -661,7 +677,6 @@ CALLABLE_RUNNER = """\
 import cloudpickle
 import os
 import sys
-import traceback
 import logging
 
 # Reinitialize logging with the unified Iris format.
@@ -687,6 +702,10 @@ _root.addHandler(_handler)
 _root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -694,9 +713,12 @@ try:
     with open(os.path.join(workdir, "_callable.pkl"), "rb") as f:
         fn, args, kwargs = cloudpickle.loads(f.read())
     fn(*args, **kwargs)
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
+except BaseException as exc:
+    if not isinstance(exc, SystemExit) or exc.code not in (None, 0):
+        # The callable runner is an exception boundary. Retain the failure for
+        # atexit hooks before re-raising it with its original exit semantics.
+        sys.last_exc = exc
+    raise
 """
 
 
@@ -751,6 +773,15 @@ class EnvironmentSpec:
             # re-submitting captures this same env value.
             LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
+        if wants_gpu_extra(self.extras or ()):
+            default_env_vars.update(
+                {
+                    NCCL_RAS_ENABLE_ENV: "1",
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+                    "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
+                }
+            )
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
@@ -763,7 +794,6 @@ class EnvironmentSpec:
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
-                    quiet=setup_is_quiet(merged_env_vars),
                 )
             ]
             # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
@@ -811,25 +841,11 @@ class Namespace(str):
 
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.JOB_STATE_SUCCEEDED,
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_KILLED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    }
+    job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-        job_pb2.TASK_STATE_COSCHED_FAILED,
-    }
+    job_pb2.TaskState.Value(f"TASK_STATE_{state.name}") for state in NATIVE_TERMINAL_TASK_STATES
 )
 
 

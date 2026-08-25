@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E tests for WorkerPool using a local IrisClient."""
+"""Live-adapter proofs for the public WorkerPool API."""
 
 import pytest
 from iris.client.worker_pool import (
@@ -13,75 +13,45 @@ from iris.cluster.types import ResourceSpec
 pytestmark = pytest.mark.requires_cluster
 
 
-class TestWorkerPoolE2E:
-    """End-to-end tests for WorkerPool against a local IrisClient.
+def _add(a: int, b: int) -> int:
+    return a + b
 
-    These tests exercise the full job submission flow:
-    WorkerPool -> IrisClient -> RemoteClusterClient -> Controller -> Worker -> task execution.
-    """
 
-    def test_submit_executes_task(self, local_iris_client):
-        """submit() dispatches a task through real job infrastructure and returns correct result."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
+def _square(value: int) -> int:
+    return value * value
 
-        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
 
-            def add(a, b):
-                return a + b
+def _fail() -> None:
+    raise ValueError("intentional error")
 
-            future = pool.submit(add, 10, 20)
-            result = future.result(timeout=60.0)
 
-            assert result == 30
+def _pool_config(num_workers: int) -> WorkerPoolConfig:
+    return WorkerPoolConfig(
+        num_workers=num_workers,
+        resources=ResourceSpec(cpu=1, memory="512m"),
+    )
 
-    def test_map_executes_tasks(self, local_iris_client):
-        """map() distributes work through real job infrastructure."""
-        config = WorkerPoolConfig(
-            num_workers=2,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
 
-        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
+def test_worker_pool_executes_submitted_and_mapped_calls(local_iris_client):
+    with WorkerPool(local_iris_client, _pool_config(2), timeout=30.0) as pool:
+        submitted = pool.submit(_add, 10, 20)
+        mapped = pool.map(_square, [1, 2, 3, 4, 5])
 
-            def square(x):
-                return x * x
+        assert submitted.result(timeout=60.0) == 30
+        assert [future.result(timeout=60.0) for future in mapped] == [1, 4, 9, 16, 25]
 
-            futures = pool.map(square, [1, 2, 3, 4, 5])
-            results = [f.result(timeout=60.0) for f in futures]
 
-            assert results == [1, 4, 9, 16, 25]
+def test_worker_pool_propagates_user_exception(local_iris_client):
+    with WorkerPool(local_iris_client, _pool_config(1), timeout=30.0) as pool:
+        future = pool.submit(_fail)
 
-    def test_exception_propagates_to_caller(self, local_iris_client):
-        """Exceptions raised by user code propagate through job infrastructure to caller."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
+        with pytest.raises(ValueError, match="intentional error"):
+            future.result(timeout=60.0)
 
-        with WorkerPool(local_iris_client, config, timeout=30.0) as pool:
 
-            def fail():
-                raise ValueError("intentional error")
+def test_worker_pool_after_shutdown_rejects_submission(local_iris_client):
+    with WorkerPool(local_iris_client, _pool_config(1), timeout=30.0) as pool:
+        assert pool.job_id is not None
 
-            future = pool.submit(fail)
-
-            with pytest.raises(ValueError, match="intentional error"):
-                future.result(timeout=60.0)
-
-    def test_shutdown_prevents_new_submissions(self, local_iris_client):
-        """After shutdown, submit() raises RuntimeError."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        pool = WorkerPool(local_iris_client, config, timeout=30.0)
-        pool.__enter__()
-
-        pool.shutdown(wait=False)
-
-        with pytest.raises(RuntimeError, match="shutdown"):
-            pool.submit(lambda: 42)
+    with pytest.raises(RuntimeError, match="shutdown"):
+        pool.submit(_square, 42)

@@ -49,7 +49,6 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-_DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 GRUG_MOE_MODEL_TYPE = "grug_moe"
@@ -138,7 +137,7 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
-    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    capacity_factor: float = 1.0
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -161,6 +160,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.capacity_factor <= 0:
+            raise ValueError("capacity_factor must be positive")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -227,39 +228,33 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
+        # One name per field: core fields take the universal transformers spelling, MoE fields the
+        # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
+        # stays tolerant of the older spellings so existing artifacts keep loading.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
-            "hidden_dim": self.hidden_dim,
+            # core — universal transformers names
             "hidden_size": self.hidden_dim,
-            "intermediate_dim": self.intermediate_dim,
-            "intermediate_size": self.intermediate_dim,
-            "moe_intermediate_size": self.intermediate_dim,
-            "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
-            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
-            "num_experts": self.num_experts,
-            "num_local_experts": self.num_experts,
-            "num_experts_per_token": self.num_experts_per_token,
-            "num_experts_per_tok": self.num_experts_per_token,
-            "num_layers": self.num_layers,
             "num_hidden_layers": self.num_layers,
-            "num_heads": self.num_heads,
             "num_attention_heads": self.num_heads,
-            "num_kv_heads": self.num_kv_heads,
             "num_key_value_heads": self.num_kv_heads,
             "head_dim": self.inferred_head_dim,
-            "max_seq_len": self.max_seq_len,
             "max_position_embeddings": self.max_seq_len,
             "sliding_window": self.sliding_window,
-            "layer_norm_eps": self.layer_norm_eps,
             "rms_norm_eps": self.layer_norm_eps,
-            "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
+            "rope_theta": self.rope.theta,
+            "tie_word_embeddings": False,
+            # MoE — most common public spelling per field
+            "num_experts": self.num_experts,
+            "num_experts_per_tok": self.num_experts_per_token,
+            "moe_intermediate_size": self.intermediate_dim,
+            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
-            "rope_theta": self.rope.theta,
-            "tie_word_embeddings": False,
         }
         if config_overrides is not None:
             config.update(config_overrides)
@@ -621,14 +616,14 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
+        routed_flat, capacity_overflow = self.expert_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        router_stats["capacity_overflow"] = capacity_overflow.total.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -804,7 +799,7 @@ class Transformer(eqx.Module):
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(

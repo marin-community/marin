@@ -105,7 +105,7 @@ class ApertusConfig(LlamaConfig):
     )
     reference_checkpoint: str = "swiss-ai/Apertus-8B-2509"
 
-    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["ApertusConfig"]:

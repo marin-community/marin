@@ -1,0 +1,85 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+
+@import 'tailwindcss';
+
+@config '../../tailwind.config.ts';
+
+/*
+ * Instrument-readout identity. Chrome is warm lab-paper + ink (light) / deep slate
+ * (dark); color is reserved for *measurement*, not brand. Score magnitude uses the
+ * dataviz-validated blue sequential ramp (--c-score-1..7); run state uses the fixed
+ * status palette; fleet-best is a warm graphite-amber (--c-best) kept distinct from
+ * both so it never reads as a score or a status. Token *names* are unchanged, so every
+ * existing view re-themes from these values alone.
+ */
+:root {
+  --c-page:                 #F3F0E9;
+  --c-surface:              #FCFBF8;
+  --c-surface-raised:       #F0ECE3;
+  --c-surface-sunken:       #E9E4D9;
+  --c-surface-border:       #E3DED2;
+  --c-surface-border-subtle:#EDE9DF;
+
+  --c-text:                 #191B1E;
+  --c-text-secondary:       #565B63;
+  --c-text-muted:           #8B8F97;
+
+  --c-accent:               #2F4B7C;
+  --c-accent-hover:         #1F3A66;
+  --c-accent-subtle:        #DCE3EF;
+  --c-accent-border:        #9FB2D4;
+
+  --c-status-success:        #0A7A0A;
+  --c-status-success-bg:     #E4F3E4;
+  --c-status-success-border: #B7E0B7;
+
+  --c-status-warning:        #C2601F;
+  --c-status-warning-bg:     #FBEDE3;
+  --c-status-warning-border: #F0C4A8;
+
+  --c-status-danger:         #C1272C;
+  --c-status-danger-bg:      #FAE7E7;
+  --c-status-danger-border:  #EEB4B4;
+
+  /* score magnitude ramp (blue 100->700, dataviz-validated) */
+  --c-score-1:#CDE2FB; --c-score-2:#9EC5F4; --c-score-3:#6DA7EC; --c-score-4:#3987E5;
+  --c-score-5:#256ABF; --c-score-6:#184F95; --c-score-7:#0D366B;
+  --c-best:  #B4783B;
+}
+
+.dark {
+  --c-page:                 #0A0C10;
+  --c-surface:              #14171D;
+  --c-surface-raised:       #1B1F27;
+  --c-surface-sunken:       #0E1116;
+  --c-surface-border:       #262A33;
+  --c-surface-border-subtle:#1D212A;
+
+  --c-text:                 #E7E9ED;
+  --c-text-secondary:       #A0A5AE;
+  --c-text-muted:           #6B7077;
+
+  --c-accent:               #8FB0E6;
+  --c-accent-hover:         #B9CDEE;
+  --c-accent-subtle:        #1E2A3F;
+  --c-accent-border:        #35507E;
+
+  --c-status-success:        #4FC94F;
+  --c-status-success-bg:     #12280F;
+  --c-status-success-border: #2A6E2A;
+
+  --c-status-warning:        #F0996F;
+  --c-status-warning-bg:     #2A1A10;
+  --c-status-warning-border: #7A4327;
+
+  --c-status-danger:         #EE6A6A;
+  --c-status-danger-bg:      #2A1214;
+  --c-status-danger-border:  #7A2A2A;
+
+  --c-score-1:#12325C; --c-score-2:#184F95; --c-score-3:#256ABF; --c-score-4:#3987E5;
+  --c-score-5:#5598E7; --c-score-6:#86B6EF; --c-score-7:#CDE2FB;
+  --c-best:  #D6A46A;
+}
+
+body { background: var(--c-page); }

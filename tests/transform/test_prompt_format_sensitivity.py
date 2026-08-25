@@ -5,19 +5,21 @@ import gzip
 import json
 from pathlib import Path
 
+from marin.transform.evaluation.continuation_records import (
+    DEFAULT_CONTINUATION_OUTPUT_FILENAME,
+    ContinuationStagingConfig,
+)
 from marin.transform.evaluation.prompt_format_sensitivity import (
-    DEFAULT_PROMPT_FORMAT_OUTPUT_FILENAME,
     PROMPT_FORMAT_NUM_FEWSHOT,
     PROMPT_FORMAT_TASKS_BY_KEY,
     PROMPT_FORMAT_TEMPLATES,
-    PromptFormatSensitivityStagingConfig,
     prompt_format_record,
     stage_prompt_format_sensitivity_source,
 )
 
 
 def _read_records(output_path: Path) -> list[dict]:
-    with gzip.open(output_path / DEFAULT_PROMPT_FORMAT_OUTPUT_FILENAME, "rt", encoding="utf-8") as handle:
+    with gzip.open(output_path / DEFAULT_CONTINUATION_OUTPUT_FILENAME, "rt", encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
 
@@ -102,7 +104,7 @@ def test_prompt_format_every_slice_renders_heldout_query_unfinished() -> None:
 
 def test_stage_prompt_format_sensitivity_source_writes_target_only_records(tmp_path: Path) -> None:
     result = stage_prompt_format_sensitivity_source(
-        PromptFormatSensitivityStagingConfig(
+        ContinuationStagingConfig(
             output_path=str(tmp_path),
             task_key="record_extraction",
             template_key="xml",

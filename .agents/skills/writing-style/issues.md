@@ -23,16 +23,34 @@ more on what should be included rather than tone.
 - Avoid unexplained shorthand.
 - Keep the discussion focused and actionable.
 - Use a direct, practical tone with no narrative padding.
+- Keep the title at or below 80 characters. State a factual symptom for a bug
+  and an imperative outcome for a task.
+- Use as many words as needed for the symptom, impact, reproduction, expected
+  behavior, and completion criteria. Remove anything that does not help a
+  contributor understand or act on the issue.
+- Avoid section headings in normal bug and task issues. Use plain `Reproduce:`,
+  `Expected:`, or `Done when:` labels only when they make the issue easier to
+  act on.
+- Put extended investigation history in a linked comment, logbook, or artifact.
+- Do not prescribe an implementation unless the choice is part of the task.
+
+Before publishing, apply [ai-writing-donts.md](ai-writing-donts.md) to the exact
+title and body. Delete any sentence that does not add a symptom, impact,
+reproduction step, observation, expected behavior, or completion criterion.
 
 ### Example Shape
 
-- `Fails when chunk size > 256 due to X (see logs below).`
+- Title: `[zephyr] Handle chunk sizes above 256`
+- Body: `Chunks above 256 fail with <error>. Reproduce with <command>. Expected:
+  the stage accepts the configured chunk size. <link> contains the relevant
+  coordinator log.`
 
 ## Experiment Issues
 
 Treat experiment issues as part of Marin's scientific record. Use them as a summary layer, a coordination surface, and a long-lived artifact.
 
-They are frequently created using the [run-research](../run-research/SKILL.md) skill.
+For experiment issues attached to a research program, follow the
+[run-research](../run-research/SKILL.md) workflow.
 
 ### Assume This Reader
 

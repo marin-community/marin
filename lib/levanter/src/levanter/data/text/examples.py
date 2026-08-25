@@ -148,6 +148,13 @@ class GrugLmExample:
             dtype = jnp.float32
             loss_weight = causal_loss_mask.astype(dtype)
 
+        # Prepacked datasets mark padding positions with segment id -1. A position whose
+        # successor is padding predicts a pad token, so it must never contribute loss --
+        # otherwise the (arbitrary) padding value would leak into the objective.
+        if segment_ids is not None:
+            predicts_real_token = (jnp.roll(segment_ids, -1) >= 0).astype(dtype)
+            loss_weight = loss_weight * predicts_real_token
+
         if ignore_id is not None:
             ignore_mask = jnp.roll(tokens, -1) != ignore_id
             ignore_mask = ignore_mask.astype(loss_weight.dtype)

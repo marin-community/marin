@@ -97,11 +97,8 @@ pub fn vue_dist_dir() -> Option<PathBuf> {
             candidates.push(PathBuf::from(over));
         }
     }
-    // The crate lives at rust/finelog; the dashboard dist is at
-    // lib/finelog/dashboard/dist from the repo root. CARGO_MANIFEST_DIR is an
-    // absolute path to rust/finelog at build time; walk up to the repo root.
-    if let Some(repo_root) = repo_root_from_manifest() {
-        candidates.push(repo_root.join("lib/finelog/dashboard/dist"));
+    if let Some(in_repo) = in_repo_dist() {
+        candidates.push(in_repo);
     }
     candidates.push(PathBuf::from(DOCKER_VUE_DIST_DIR));
 
@@ -110,11 +107,13 @@ pub fn vue_dist_dir() -> Option<PathBuf> {
         .find(|c| c.is_dir() && c.join("index.html").is_file())
 }
 
-/// The repo root inferred from `CARGO_MANIFEST_DIR` (`<root>/rust/finelog`).
-fn repo_root_from_manifest() -> Option<PathBuf> {
+/// The in-repo dashboard build, `lib/finelog/dashboard/dist`.
+///
+/// `CARGO_MANIFEST_DIR` is the absolute path of `lib/finelog/rust` at build
+/// time, and the dashboard is its sibling.
+fn in_repo_dist() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // rust/finelog -> rust -> <repo root>
-    manifest.parent()?.parent().map(PathBuf::from)
+    Some(manifest.parent()?.join("dashboard/dist"))
 }
 
 /// Content-type for the static assets the Vue build emits, keyed off the file

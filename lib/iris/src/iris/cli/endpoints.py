@@ -14,7 +14,7 @@ import click
 from rigging.connect import capability_path
 from rigging.timing import Duration
 
-from iris.cli.connect import rpc_client_for_ctx
+from iris.cli.connect import endpoint_rpc_client_for_ctx, rpc_client_for_ctx
 from iris.cluster.types import EndpointAccess
 from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
@@ -45,7 +45,7 @@ def _access_label(access: int) -> str:
 @click.pass_context
 def list_(ctx, prefix: str, exact: bool, task_ids: tuple[str, ...]):
     """List registered endpoints, optionally filtered by PREFIX, --exact, or --task-id."""
-    with rpc_client_for_ctx(ctx) as client:
+    with endpoint_rpc_client_for_ctx(ctx) as client:
         resp = client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(
                 prefix=prefix,
@@ -88,17 +88,15 @@ def mint(ctx, name: str, ttl_hours: float):
             )
         )
 
-    config = (ctx.obj or {}).get("config")
-    dashboard_url = (config.dashboard_url if config else "").rstrip("/")
     hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
-    path = capability_path(name, resp.token)
 
     click.echo(f"Capability URL for {name} (token in the path — anyone with the URL can call it):")
-    if dashboard_url:
-        click.echo(f"  url        {dashboard_url}{path}/")
+    if resp.capability_url:
+        click.echo(f"  url        {resp.capability_url}/")
         click.echo(f"  expires    in {hours_left:.1f}h")
         click.echo("  note       append the app path (e.g. /v1 for an OpenAI server); no auth header needed")
     else:
-        # No public origin on this config — front the controller's /proxy/t route.
+        # No public origin on this cluster — front the controller's /proxy/t route.
+        path = capability_path(name, resp.token)
         click.echo(f"  path       {path}/  (front the controller's /proxy/t route to reach it off-cluster)")
         click.echo(f"  expires    in {hours_left:.1f}h")

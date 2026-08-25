@@ -7,8 +7,9 @@ import time
 
 import pytest
 from fray.iris_backend import OperationFuture
-from iris.actor import ActorClient, ActorServer
+from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
+from iris.actor.server import ActorServer
 from iris.rpc import actor_pb2
 
 

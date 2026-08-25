@@ -39,7 +39,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
-from marin.execution.remote import _sanitize_job_name
+from marin.execution.remote import sanitize_job_name
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import (
     TokenizerStep,
@@ -132,7 +132,7 @@ def default_raw_validation_sets() -> dict[str, Any]:
     raw_uncheatable = uncheatable_raw()
     validation_sets.update(
         {
-            os.path.join("uncheatable_eval", subset): raw_text_dataset(raw_uncheatable.cd(glob))
+            os.path.join("uncheatable_eval", subset): raw_text_dataset(os.path.join(raw_uncheatable.path(), glob))
             for subset, glob in UNCHEATABLE_SUBSETS.items()
         }
     )
@@ -455,7 +455,7 @@ def _submit_train_job(
     env = resolve_training_env(resolved_env_vars, resources)
 
     job_request = JobRequest(
-        name=_sanitize_job_name(name),
+        name=sanitize_job_name(name),
         entrypoint=Entrypoint.from_callable(entrypoint_callable, args=list(args)),
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),

@@ -1,36 +1,23 @@
 ---
 name: run-ferries
-description: Launch, monitor, and seal Marin canary and daily ferry runs.
+description: Launch, monitor, or seal a Marin canary or daily ferry only when explicitly requested.
 ---
 
-# Skill: Ferries (Canary + Daily)
+# Ferries
 
-## Overview
-Two ferry lanes:
-- `canary`: fast, low-cost always-on health check
-- `daily`: higher-scale integration run with bounded changes
-
-Both keep core data assumptions aligned and share the same monitoring/triage discipline.
-
-## Ferry Lanes
-Templates:
 - `experiments/ferries/canary_ferry.py` (MoE canary, TPU and GPU via `CANARY_ACCELERATOR`)
 - `experiments/ferries/daily.py`
 
-Intent:
-- canary: catch infra/pretraining regressions early with a stable Grug MoE config (one TPU, one GPU)
-- daily: exercise a larger run envelope and test small, explicit changes
+Canary is the stable, low-cost health check. Daily exercises a larger envelope
+with one or two explicit changes.
 
 Shared baseline:
 - data: shared `nemotron_mix` baseline
 - default cluster: `us-central1` (zone `us-central1-a`)
 - run log: `docs/experiments/daily-ferry-log.md`
 
-Daily baseline defaults:
-- model size: Llama ~150M (`llama_150m`)
-- sequence length: 4096
-- train batch size: 512
-- FLOP target: ~1e19 (overrideable via env)
+Daily defaults to `llama_150m`, sequence length 4096, batch size 512, and about
+1e19 FLOPs unless its configuration says otherwise.
 
 ## Inputs Before Proposing (Daily Only)
 Canary runs normally do not require a proposal cycle or PR. For daily, collect:
@@ -43,8 +30,8 @@ If objective is ambiguous, ask before editing.
 ## Operating Policy
 ### General
 - Hard launch gate: get explicit requester approval before launching any ferry job. Only exception: the requester explicitly says to launch without asking.
-- Follow the **babysit-job** skill until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early. Full ferry monitoring often takes 4-5 hours.
-- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with **babysit-job**, including the **debug** exception path.
+- Follow the `use-iris` skill's job-monitoring workflow until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early. Full ferry monitoring often takes 4-5 hours.
+- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with the Iris monitoring workflow, including the **debug** exception path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 - Seal each completed daily run with a pushed git tag pointing to the exact launch commit.
 - Canonical run-closure PR labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
@@ -121,7 +108,7 @@ uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
 ```
 
 #### 5) Monitor to terminal state
-Follow the **babysit-job** skill with `job_id`, `cluster`, `experiment=<ferry script path>`.
+Follow the `use-iris` skill's job-monitoring workflow with `job_id`, `cluster`, `experiment=<ferry script path>`.
 - Keep the monitoring loop active until terminal status; ferry runs commonly take 4-5 hours.
 - Follow monitoring-loop restart policy for recoverable failures.
 - Escalate non-trivial failures to humans.
@@ -137,20 +124,21 @@ uv run python scripts/ferries/daily_analysis.py \
   --format markdown
 ```
 
-Required terminal issue comment template:
+Use this terminal issue comment shape:
 
 ```markdown
 Final status: <SUCCEEDED|FAILED|STOPPED>
 Iris job id: <job_id>
 W&B link: <url>
-Final eval summary: <short summary + key metrics>
+Final eval summary: <key metrics>
 Experiment link: <experiment JSON/browser link>
 Recommendation / victory decision: <next action>
 ```
 
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
-- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following `.agents/skills/commit/SKILL.md` for description format.
+- Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following
+  `.agents/skills/commit/SKILL.md` for commit, PR text, and monitoring.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -177,19 +165,15 @@ If canary fails: triage and identify root cause, only then open a focused PR if 
 
 #### Canary profiling triage
 - The full `profile_summary.json` is in the workflow logs (default params: `--warmup-steps 5`, `--breakdown-mode exclusive_per_track`, `--hot-op-limit 25`). The step summary has pointers to the raw trace artifact and W&B run.
-- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `.agents/skills/profile-training/`.
+- The log summary is ephemeral and not published. To re-analyze with different parameters, fetch the raw trace via `--run-target` — see `.agents/skills/profile-training/SKILL.md`.
 - If the canary failed early, the profile may only cover warmup steps — check `step_time.all_steps.count` before drawing conclusions from steady-state stats.
 - `exclusive_per_track` (the default) can hide device stalls that overlap across tracks. Use `exclusive_global` when investigating stall-heavy profiles.
 
-## Promotion Rule (Daily)
-If a daily variant is clearly better holistically, promote it as the new default daily recipe/template.
+## Promotion rule
 
-Promotion signals:
-- eval losses are broadly better,
-- LM eval soft metrics improve in aggregate,
-- no reliability regressions.
-
-When promoting: open a follow-up PR updating `experiments/ferries/daily.py` and this skill; include a concise before/after metrics table.
+Promote a daily variant only when eval losses and aggregate LM metrics improve
+without a reliability regression. Open a follow-up PR for the recipe and this
+skill with a before/after metrics table.
 
 ## Validation Checklist
 - Diff is intentional and bounded for the selected lane.
@@ -197,9 +181,3 @@ When promoting: open a follow-up PR updating `experiments/ferries/daily.py` and 
 - Run-closure PR only updates `docs/experiments/daily-ferry-log.md`.
 - Ferry issue has updated launch metadata.
 - Monitoring loop ran until terminal state.
-
-## See Also
-- `docs/experiments/daily-ferry-log.md`
-- `.agents/skills/babysit-job/SKILL.md`
-- `.agents/projects/ferry_framework.md`
-- `.agents/skills/run-research/`

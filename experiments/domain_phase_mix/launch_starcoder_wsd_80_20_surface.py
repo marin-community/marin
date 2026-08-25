@@ -148,6 +148,7 @@ class SurfaceRunSpec:
     phase_1_starcoder: float
     run_name_override: str | None = None
     data_seed_override: int | None = None
+    simulated_epoch_subset_seed_override: int | None = None
 
     @property
     def run_id(self) -> int:
@@ -182,8 +183,10 @@ def build_run_specs() -> tuple[SurfaceRunSpec, ...]:
     )
 
 
-def _schedule_summary() -> dict[str, int | float]:
-    total_steps = EXPERIMENT_BUDGET // (BATCH_SIZE * SEQ_LEN)
+def _schedule_summary(experiment_budget: int = EXPERIMENT_BUDGET) -> dict[str, int | float]:
+    if experiment_budget < BATCH_SIZE * SEQ_LEN:
+        raise ValueError(f"Experiment budget must cover at least one batch, got {experiment_budget}")
+    total_steps = experiment_budget // (BATCH_SIZE * SEQ_LEN)
     step_alignment = MIXTURE_BLOCK_SIZE // math.gcd(BATCH_SIZE, MIXTURE_BLOCK_SIZE)
     boundary_step = (int(total_steps * PHASE_BOUNDARY) // step_alignment) * step_alignment
     return {
@@ -196,9 +199,9 @@ def _schedule_summary() -> dict[str, int | float]:
     }
 
 
-def _optimizer() -> MuonHConfig:
+def _optimizer(experiment_budget: int = EXPERIMENT_BUDGET) -> MuonHConfig:
     """Return the historical Muon optimizer with WSD aligned to phase 1."""
-    schedule = _schedule_summary()
+    schedule = _schedule_summary(experiment_budget)
     return MuonHConfig(
         learning_rate=0.02,
         adam_lr=0.008,
@@ -241,8 +244,12 @@ def _with_varying_mixture(
     validation_datasets: tuple[ArtifactStep[TokenizedCache], ...],
     phase_weights: list[tuple[int, dict[str, float]]],
     data_seed: int,
+    simulated_epoch_subset_seed: int,
+    experiment_budget: int,
+    target_budget: int,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Replace a standard training handle's static data with the reviewed schedule."""
+    materialized_tokens = int(_schedule_summary(experiment_budget)["materialized_tokens"])
 
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         pod_config = base.build_config(ctx)
@@ -251,9 +258,9 @@ def _with_varying_mixture(
             data_config,
             train_weights=phase_weights,
             mixture_block_size=MIXTURE_BLOCK_SIZE,
-            experiment_budget=_schedule_summary()["materialized_tokens"],
-            target_budget=TARGET_BUDGET,
-            simulated_epoch_subset_seed=data_seed,
+            experiment_budget=materialized_tokens,
+            target_budget=target_budget,
+            simulated_epoch_subset_seed=simulated_epoch_subset_seed,
         )
         trainer = replace(pod_config.train_config.trainer, seed=data_seed)
         train_config = replace(
@@ -277,6 +284,9 @@ def build_training_steps(
     run_specs: tuple[SurfaceRunSpec, ...] | None = None,
     wandb_experiment_tag: str = WANDB_EXPERIMENT_TAG,
     panel_tag: str = "surface64",
+    experiment_budget: int = EXPERIMENT_BUDGET,
+    target_budget: int = TARGET_BUDGET,
+    wandb_run_id_suffix: str = "",
 ) -> tuple[ArtifactStep[LevanterCheckpoint], ...]:
     """Build resumable training handles on shared pinned datasets."""
     nemotron = nemotron_datasets(tokenizer=llama3_tokenizer)
@@ -287,12 +297,17 @@ def build_training_steps(
         *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
     )
     resources = ResourceConfig.with_tpu(tpu_type, regions=(tpu_region,), zone=tpu_zone)
-    schedule = _schedule_summary()
+    schedule = _schedule_summary(experiment_budget)
     if run_specs is None:
         run_specs = build_run_specs()
     steps: list[ArtifactStep[LevanterCheckpoint]] = []
     for spec in run_specs:
         run_seed = spec.data_seed_override if spec.data_seed_override is not None else data_seed
+        subset_seed = (
+            spec.simulated_epoch_subset_seed_override
+            if spec.simulated_epoch_subset_seed_override is not None
+            else run_seed
+        )
         phase_0_weights = _phase_leaf_weights(
             spec.phase_0_starcoder,
             nemotron=nemotron,
@@ -308,7 +323,7 @@ def build_training_steps(
             name=f"checkpoints/{name_prefix}/{spec.run_name}",
             version=VERSION,
             model=REGMIX_60M_PROXY,
-            optimizer=_optimizer(),
+            optimizer=_optimizer(experiment_budget),
             datasets=static_weights,
             validation=validation_handles,
             batch_size=BATCH_SIZE,
@@ -320,7 +335,7 @@ def build_training_steps(
             steps_per_eval=1_000,
             wandb_project="marin",
             wandb_group=name_prefix,
-            run_id=spec.run_name,
+            run_id=f"{spec.run_name}{wandb_run_id_suffix}",
             tags=(wandb_experiment_tag, spec.run_name, "starcoder", "wsd80_20", panel_tag),
             env_vars={"HF_ALLOW_CODE_EVAL": "1"},
         )
@@ -334,6 +349,9 @@ def build_training_steps(
                     (schedule["boundary_step"], phase_1_weights),
                 ],
                 data_seed=run_seed,
+                simulated_epoch_subset_seed=subset_seed,
+                experiment_budget=experiment_budget,
+                target_budget=target_budget,
             )
         )
     return tuple(steps)

@@ -1,13 +1,14 @@
 ---
 name: debug
-description: Debug code bugs or Iris/Zephyr/TPU infrastructure faults with a structured debug log.
+description: Diagnose a stated code, JAX, Marin, Iris, Zephyr, or TPU fault or startup/performance regression; do not activate for ordinary implementation or optimization without a symptom.
 ---
 
-# Skill: Debug
+# Debug
 
-Systematic debugging for code-level bugs and Marin infrastructure faults.
-For infrastructure symptoms, route to the right `OPS.md` section first; for
-code bugs, keep a structured debug log.
+Keep working notes in the active task. Do not add repository debug-log files.
+Use `consult-echo` when repository policy requires prior-work search. After
+every incident handled by this workflow, use `write-ops-log` to publish its
+standalone Echo record and link it from the associated PR or issue.
 
 ## Infrastructure faults
 
@@ -21,34 +22,13 @@ the matching `OPS.md` section:
 | Zephyr pipeline slow / stragglers / data skew / worker failures | `lib/zephyr/OPS.md` → Diagnostic Patterns, Observability |
 | TPU bad node (`No accelerator found`, `FAILED_PRECONDITION`, `Device or resource busy`) | `lib/iris/OPS.md` → TPU Bad-Node Recovery |
 
-Operational guardrails (never modify the controller DB, prefer
-`iris process profile` over SSH, never run a full `iris cluster restart`
-without approval) live next to the relevant commands in `OPS.md` — read those
-sections. After a TPU recovery or zephyr fix, return to the active babysit
-loop (`babysit-job` or `babysit-zephyr`).
+Read the guardrails beside the commands. Never modify the controller database,
+prefer `iris process profile` over SSH, and never run a full
+`iris cluster restart` without approval. After a TPU recovery or Zephyr fix,
+return to the active Iris job-monitoring or `babysit-zephyr` loop.
 
 ## Code bugs
 
-For code-level bugs that are not infrastructure faults, maintain a debug log
-at `docs/debug-log-<task-name>.md`:
-
-```
-# Debugging log for <task>
-
-<goal>
-
-## Initial status
-<initial status, as reported or observed>
-
-## <Hypothesis N>
-The suspected source of the bug, or a change needed to isolate it.
-
-## Changes to make
-Which files you are altering and how.
-
-## Results
-Test results and any new hypotheses. Repeat the Hypothesis/Results cycle as needed.
-
-## Future work
-- [ ] Cleanups observed along the way
-```
+For code bugs, reproduce the failure, identify the smallest falsifiable
+hypothesis, change one cause at a time, and test the behavior that failed. Let
+exceptions propagate unless added context changes the diagnosis.
