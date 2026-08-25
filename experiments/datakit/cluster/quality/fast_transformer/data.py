@@ -8,57 +8,14 @@ training split (mirroring fasttext's ``minCount`` pruning so every embedding row
 actually trained and the table stays small), and packs into dense padded arrays.
 """
 
-import functools
-import json
 import logging
 from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from huggingface_hub import hf_hub_download
-from transformers import AutoTokenizer, PreTrainedTokenizerFast
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 logger = logging.getLogger(__name__)
-
-
-# Config keys that name classes or need class resolution, which the
-# tokenizer-file fallback below cannot honour (the tokenizer file already
-# carries the added-token table).
-_UNRESOLVABLE_TOKENIZER_CONFIG_KEYS = ("tokenizer_class", "auto_map", "added_tokens_decoder", "chat_template")
-
-
-@functools.lru_cache(maxsize=8)
-def load_tokenizer(tokenizer_name: str):
-    """Load a HuggingFace tokenizer, memoized per process.
-
-    ``AutoTokenizer.from_pretrained`` re-runs the slow→fast conversion of the
-    250K-vocab tokenizer on every call; scoring calls this once per batch, so
-    without the cache a many-batch shard reloads the tokenizer hundreds of times.
-
-    ``AutoTokenizer`` reads the repo's ``config.json`` to pick a tokenizer
-    class, so a repo shipping a custom architecture the installed transformers
-    cannot parse (``nvidia/Nemotron-Flash-1B``: ``layer_types`` naming deltanet
-    and mamba2 blocks) fails there rather than in anything tokenizer-related.
-    Those repos still ship a complete ``tokenizer.json``, so fall back to
-    building the fast tokenizer from it directly.
-    """
-    try:
-        return AutoTokenizer.from_pretrained(tokenizer_name)
-    except Exception as auto_error:
-        try:
-            tokenizer_file = hf_hub_download(tokenizer_name, "tokenizer.json")
-            with open(hf_hub_download(tokenizer_name, "tokenizer_config.json")) as fh:
-                config = json.load(fh)
-        except Exception:
-            # No usable tokenizer file: the original failure is the real one.
-            raise auto_error from None
-        kwargs = {k: v for k, v in config.items() if k not in _UNRESOLVABLE_TOKENIZER_CONFIG_KEYS}
-        logger.warning(
-            "AutoTokenizer could not load %s (%s); building PreTrainedTokenizerFast from its tokenizer.json",
-            tokenizer_name,
-            auto_error,
-        )
-        return PreTrainedTokenizerFast(tokenizer_file=tokenizer_file, **kwargs)
 
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
@@ -88,19 +45,14 @@ class PackedData:
     max_tokens: int
 
 
-def _encode(tokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
+def _encode(tokenizer: MarinTokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
     """Tokenize *texts* (no special tokens), truncating to ``max_tokens``."""
     # Pre-truncate by characters to bound tokenizer work; ~8 chars/token is a
     # safe over-estimate so we never starve the max_tokens budget.
     char_cap = max_tokens * 8
     capped = [t[:char_cap] for t in texts]
-    encoded = tokenizer(
-        capped,
-        add_special_tokens=False,
-        truncation=True,
-        max_length=max_tokens,
-    )["input_ids"]
-    return encoded
+    encoded = tokenizer.encode_batch(capped, add_special_tokens=False)
+    return [row[:max_tokens] for row in encoded]
 
 
 def _build_vocab(train_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:

@@ -31,9 +31,9 @@ Six modes:
   leaf and emit one row per (source, shard_index).
 * ``score`` -- one worker, one GPU: take this worker's slice of the manifest and
   stream join -> score -> write for each shard pair it owns. The output path
-  carries the scorer's identity, so the worker digests ``--model-dir`` against
-  the pin before it writes anything.
-* ``node`` -- fan out one ``score`` subprocess per visible GPU.
+  carries the scorer's identity, so the worker checks the model and calibration
+  digests against the pin before it writes anything.
+* ``node`` -- fan out independent ``score`` subprocesses across visible GPUs.
 * ``verify`` -- reconcile one source's written score shards against the manifest's
   per-shard embed row counts, and report the score distribution and bucket shares.
 
@@ -65,13 +65,13 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import cast
 
 import equinox as eqx
-import fsspec
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -82,9 +82,9 @@ import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
-from rigging.filesystem.factory import open_url
+from rigging.filesystem.factory import filesystem, open_url, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -106,12 +106,12 @@ DEFAULT_FOLDED_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_
 DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/manifest"
 # Cutpoints `calibrate_corpus` fitted through this scoring path; `verify` digitizes
 # the written scores under the interior knots to report bucket shares.
-DEFAULT_CALIBRATION = f"{DEFAULT_FOLDED_DIR}/calib_bme.json"
+DEFAULT_CALIBRATION = prefix_join(DEFAULT_FOLDED_DIR, "calib_bme.json")
 
 # Sources kept out of the manifest, mapped to why. A held source is not scored at
 # all, which is safer than scoring it against a leaf chosen by guess, and the
 # per-source output layout means adding one back later costs only its own shards.
-HOLD_SOURCES: dict[str, str] = {}
+HOLD_SOURCES: Mapping[str, str] = MappingProxyType({})
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
@@ -148,7 +148,7 @@ DEFAULT_PREFETCH_BLOCKS = 2
 # memory to the largest one. Blocking caps a worker's resident join at roughly
 # `(prefetch + 1) * block_docs * 6 KB` whatever the shard holds.
 DEFAULT_BLOCK_DOCS = 32_768
-# The fold is exact in principle; assert it on real rows rather than trust it.
+# The fold is exact in principle; assert it on deterministic probe rows.
 FOLD_PARITY_ROWS = 256
 FOLD_PARITY_TOLERANCE = 1e-5
 # Read size when digesting a model directory. The deployed `.eqx` is 165 MB, so the
@@ -262,14 +262,14 @@ def fold_mode(args) -> dict:
     if delta > FOLD_PARITY_TOLERANCE:
         raise ValueError(f"fold changed scores by {delta:.3e} (> {FOLD_PARITY_TOLERANCE:.0e}); refusing to write")
 
-    out_dir = args.out_dir.rstrip("/")
+    out_dir = StoragePath(args.out_dir)
     eqx_name, remap_name, meta_name = artifact_names(args.stem)
     local = f"/tmp/{eqx_name}"
     eqx.tree_serialise_leaves(local, folded)
     size = os.path.getsize(local)
-    with open(local, "rb") as fh, open_url(f"{out_dir}/{eqx_name}", "wb") as out:
+    with open(local, "rb") as fh, (out_dir / eqx_name).open("wb") as out:
         out.write(fh.read())
-    with open_url(f"{out_dir}/{remap_name}", "w") as fh:
+    with (out_dir / remap_name).open("w") as fh:
         fh.write(json.dumps({str(k): v for k, v in scorer.remap.items()}))
     meta = {
         "tokenizer": scorer.tokenizer_name,
@@ -278,10 +278,10 @@ def fold_mode(args) -> dict:
         "folded_from": args.model_dir,
         "fold_max_abs_score_delta": delta,
     }
-    with open_url(f"{out_dir}/{meta_name}", "w") as fh:
+    with (out_dir / meta_name).open("w") as fh:
         fh.write(json.dumps(meta, indent=2))
     logger.info("wrote folded model to %s (%.1f MB)", out_dir, size / 1e6)
-    return {"out_dir": out_dir, "eqx_bytes": size, "fold_max_abs_score_delta": delta, "vocab": vocab}
+    return {"out_dir": str(out_dir), "eqx_bytes": size, "fold_max_abs_score_delta": delta, "vocab": vocab}
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ def pair_shards(source: str, out_dir: str, token_entries: Sequence[dict], embed_
                 "num_shards": len(token),
                 "tokens_path": f"s3://{entry['name']}",
                 "embed_path": found[0] if found else "",
-                "output_path": f"{out_dir}/{base}",
+                "output_path": prefix_join(out_dir, base),
                 "embed_leaves": 1 if found else 0,
                 "tokens_bytes": entry["size"],
                 "embed_bytes": found[1] if found else 0,
@@ -372,7 +372,6 @@ def manifest_mode(args) -> dict:
     stage root, so a leaf whose hash no longer matches current code, or whose
     artifact records no result at all, is still found.
     """
-    fs = fsspec.filesystem("s3")
     registered = hero_data.source_names()
     sources = [s for s in registered if s not in HOLD_SOURCES]
     missing_embed = sorted(s for s in sources if s not in hero_data.harrier_paths())
@@ -393,15 +392,19 @@ def manifest_mode(args) -> dict:
     if missing_embed:
         raise ValueError(f"no harrier leaf mapped for {len(missing_embed)} source(s): {missing_embed}")
 
+    def detailed_listing(path: str) -> list[dict]:
+        fs, normalized = url_to_fs(path)
+        return fs.ls(normalized, detail=True)
+
     def leaf_shards(source: str) -> SourceShards:
-        tok_dir = f"{hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path.rstrip('/')}/{SPLIT}"
-        out_dir = hero_data.quality(source, NEMOTRON_88K).output_path.rstrip("/")
-        embed_dir = hero_data.harrier(source).rstrip("/")
+        tok_dir = prefix_join(hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path, SPLIT)
+        out_dir = hero_data.quality(source, NEMOTRON_88K).output_path
+        embed_dir = hero_data.harrier(source)
         return pair_shards(
             source,
             out_dir,
-            fs.ls(tok_dir.removeprefix("s3://"), detail=True),
-            fs.ls(embed_dir.removeprefix("s3://"), detail=True),
+            detailed_listing(tok_dir),
+            detailed_listing(embed_dir),
         )
 
     with ThreadPoolExecutor(max_workers=args.discovery_threads) as pool:
@@ -417,13 +420,13 @@ def manifest_mode(args) -> dict:
     def embed_rows(row: dict) -> int:
         if not row["embed_path"]:
             return 0
-        with fs.open(row["embed_path"], "rb", cache_type="none") as raw:
+        with StoragePath(row["embed_path"]).open("rb", cache_type="none") as raw:
             return pq.ParquetFile(raw).metadata.num_rows
 
     with ThreadPoolExecutor(max_workers=args.footer_threads) as pool:
         for row, count in zip(rows, pool.map(embed_rows, rows), strict=True):
             row["embed_rows"] = count
-    path = f"{args.manifest.rstrip('/')}/manifest.parquet"
+    path = prefix_join(args.manifest, "manifest.parquet")
     with open_url(path, "wb") as fh:
         pl.DataFrame(rows).write_parquet(fh)
     result = {
@@ -442,8 +445,8 @@ def manifest_mode(args) -> dict:
 
 
 def read_manifest(manifest: str) -> pl.DataFrame:
-    root = manifest.rstrip("/")
-    shards = sorted(str(p) for p in StoragePath(f"{root}/*.parquet").glob())
+    root = StoragePath(manifest)
+    shards = sorted(str(p) for p in (root / "*.parquet").glob())
     if not shards:
         raise ValueError(f"no manifest parquet under {root}")
     frames = []
@@ -707,9 +710,8 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
                 yield flush()
     if pending:
         yield flush()
-    # Cardinality, asserted rather than assumed: one output row per embed row, no
-    # fan-out and no drop. `claimed` makes over-emission unreachable, so this is a
-    # guard on the expansion arithmetic itself.
+    # `claimed` makes over-emission unreachable; containment is checked after the
+    # stream completes because missing token ids can still leave embed rows unclaimed.
     if matched_total > embed_rows:
         raise AssertionError(
             f"{task.source} shard {task.shard_index}: join emitted {matched_total} rows for "
@@ -738,17 +740,16 @@ def model_dir_sha256(model_dir: str) -> str:
     are inside the hash, so a renamed or added artifact is a different model
     rather than the same one under a different layout.
     """
-    root: str | None = None
+    root: StoragePath | None = None
     files: dict[bytes, StoragePath] = {}
     # `walk` yields the root first, in the filesystem's own normalized form, so
     # relative paths are taken against that rather than against the argument.
-    for directory, _subdirs, names in StoragePath(model_dir.rstrip("/")).walk():
+    for directory, _subdirs, names in StoragePath(model_dir).walk():
         if root is None:
-            root = str(directory)
-        relative_dir = str(directory)[len(root) :].strip("/")
+            root = directory
         for name in names:
-            relative = f"{relative_dir}/{name}" if relative_dir else name
-            files[relative.encode()] = directory / name
+            file_path = directory / name
+            files[file_path.relative_to(root).encode()] = file_path
     if not files:
         raise ValueError(f"no files under {model_dir}; a model directory cannot digest to nothing")
     digest = hashlib.sha256()
@@ -758,6 +759,18 @@ def model_dir_sha256(model_dir: str) -> str:
             while chunk := fh.read(DIGEST_CHUNK_BYTES):
                 content.update(chunk)
         digest.update(relative + b"\0" + content.digest())
+    return digest.hexdigest()
+
+
+def calibration_sha256(path: str) -> str:
+    """Digest one calibration file using its basename and contents."""
+    calibration = StoragePath(path)
+    content = hashlib.sha256()
+    with calibration.open("rb") as fh:
+        while chunk := fh.read(DIGEST_CHUNK_BYTES):
+            content.update(chunk)
+    digest = hashlib.sha256()
+    digest.update(calibration.name.encode() + b"\0" + content.digest())
     return digest.hexdigest()
 
 
@@ -783,6 +796,17 @@ def require_pinned_model(quality_model: QualityPin, model_dir: str) -> str:
     return digest
 
 
+def require_pinned_calibration(quality_model: QualityPin, calibration: str) -> str:
+    """Return the calibration digest after checking it against ``quality_model``."""
+    digest = calibration_sha256(calibration)
+    if digest != quality_model.calibration_sha256:
+        raise ValueError(
+            f"{calibration} digests to {digest}, but {quality_model.name} pins "
+            f"{quality_model.calibration_sha256}; the score path claims a different calibration"
+        )
+    return digest
+
+
 def digest_mode(args) -> dict:
     """Report a model directory's digest: the value a :class:`QualityPin` carries."""
     return {"model_dir": args.model_dir, "model_sha256": model_dir_sha256(args.model_dir)}
@@ -799,11 +823,10 @@ def load_folded_scorer(model_dir: str) -> PooledScorer:
 
 
 def write_scores(path: str, doc_ids: np.ndarray, scores: np.ndarray, model_tag: str, fs) -> int:
-    """Write the narrow score shard: id + score + a model tag, nothing else.
+    """Write ``id``, ``score``, and ``model`` columns; return the row count.
 
-    Deliberately not joined back to the input. Keeping the output to the join key
-    and the score keeps the write cheap and leaves it trivially re-joinable by
-    ``id`` against any other attribute over the same corpus.
+    Duplicate ids are preserved. Consumers that need row-for-row joins must pair
+    duplicate occurrences consistently instead of taking an id-keyed cross product.
     """
     frame = pl.DataFrame(
         {
@@ -836,11 +859,19 @@ def require_containment(task: ShardTask, stats: ShardStats) -> None:
 def score_mode(args) -> dict:
     """Score this worker's slice of the manifest."""
     configure_coreweave_s3()
-    fs = fsspec.filesystem("s3")
+    fs = filesystem("s3")
     digest = require_pinned_model(NEMOTRON_88K, args.model_dir)
+    calibration_digest = require_pinned_calibration(NEMOTRON_88K, args.calibration)
     scorer = load_folded_scorer(args.model_dir)
     vocab_size = scorer.model.config.vocab_size
-    logger.info("worker %d: %s holds %s (%s)", args.worker, args.model_dir, NEMOTRON_88K.name, digest)
+    logger.info(
+        "worker %d: %s holds %s (model %s, calibration %s)",
+        args.worker,
+        args.model_dir,
+        NEMOTRON_88K.name,
+        digest,
+        calibration_digest,
+    )
     logger.info("worker %d rss after model load: %.2f GB", args.worker, rss_bytes() / 1e9)
     logger.info(
         "worker %d/%d: model max_tokens=%d devices=%s batch=%d",
@@ -1047,7 +1078,7 @@ class ScoreShard:
 
 
 def read_score_shard(path: str, fs) -> ScoreShard | None:
-    """A written score shard's scores, model tags and duplicate-id count."""
+    """Read one score shard, or return ``None`` when it does not exist."""
     if not fs.exists(path):
         return None
     with fs.open(path, "rb", cache_type="none") as raw:
@@ -1057,6 +1088,24 @@ def read_score_shard(path: str, fs) -> ScoreShard | None:
         model_tags=set(frame.get_column("model").unique().to_list()),
         duplicate_ids=frame.height - frame.get_column("id").n_unique(),
     )
+
+
+def require_complete_scores(
+    source: str,
+    missing_files: int,
+    mismatched_shards: int,
+    score_rows: int,
+    embed_rows: int,
+    model_tags: Sequence[str],
+) -> None:
+    """Reject incomplete rows or a model tag that disagrees with the score path."""
+    if missing_files or mismatched_shards or score_rows != embed_rows:
+        raise ValueError(
+            f"{source} verification failed: {missing_files} score files missing, {mismatched_shards} shards have "
+            f"the wrong row count, and {score_rows} score rows were written for {embed_rows} embed rows"
+        )
+    if list(model_tags) != [NEMOTRON_88K.name]:
+        raise ValueError(f"{source} verification found model tags {list(model_tags)}, expected {NEMOTRON_88K.name!r}")
 
 
 def verify_source(manifest: str, source: str, calibration: str, verify_threads: int) -> dict:
@@ -1074,7 +1123,8 @@ def verify_source(manifest: str, source: str, calibration: str, verify_threads: 
     wants distinct documents collapses on ``id`` downstream, while one that joins
     back to the token store row for row needs every row present.
     """
-    fs = fsspec.filesystem("s3")
+    require_pinned_calibration(NEMOTRON_88K, calibration)
+    fs = filesystem("s3")
     rows = [r for r in read_manifest(manifest).to_dicts() if r["source"] == source]
     if not rows:
         raise ValueError(f"no manifest rows for source {source!r}")
@@ -1083,8 +1133,12 @@ def verify_source(manifest: str, source: str, calibration: str, verify_threads: 
     with ThreadPoolExecutor(max_workers=verify_threads) as pool:
         found = list(pool.map(lambda r: read_score_shard(r["output_path"], fs), rows))
 
-    missing = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is None]
-    empty = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is not None and not len(got.scores)]
+    missing = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is None and r["embed_rows"]]
+    empty = [
+        r["shard_index"]
+        for r, got in zip(rows, found, strict=True)
+        if got is not None and not len(got.scores) and r["embed_rows"]
+    ]
     short = [
         {"shard_index": r["shard_index"], "score_rows": len(got.scores), "embed_rows": r["embed_rows"]}
         for r, got in zip(rows, found, strict=True)
@@ -1135,11 +1189,12 @@ def verify_source(manifest: str, source: str, calibration: str, verify_threads: 
         "missing_shard_indices": missing[:20],
     }
     logger.info("verify %s", json.dumps(result, indent=2))
+    require_complete_scores(source, len(missing), len(short), len(scores), embed_rows, tags)
     return result
 
 
 def verify_mode(args) -> dict:
-    """CLI adapter for :func:`verify_source`."""
+    """Verify one source selected by CLI arguments."""
     return verify_source(args.manifest, args.source, args.calibration, args.verify_threads)
 
 
@@ -1159,18 +1214,19 @@ def node_placement(args) -> tuple[int, int]:
 
 
 def node_mode(args) -> dict:
-    """One ``score`` subprocess per visible GPU, each on its own device.
+    """Run independent score workers across the visible GPUs.
 
     Independent processes are the point: the pipeline is feed-bound and threaded
     readers contend on the GIL, so the per-node bandwidth only appears when the
-    readers are in separate address spaces.
+    readers are in separate address spaces. When workers outnumber GPUs they are
+    assigned round-robin and share device memory.
     """
     gpus = args.gpus_per_node
-    per_node = args.procs_per_node or gpus
+    per_node = args.processes_per_node or gpus
     node_index, num_nodes = node_placement(args)
     logger.info("node %d of %d, %d workers over %d GPUs", node_index, num_nodes, per_node, gpus)
     base = node_index * per_node
-    procs = []
+    processes = []
     for local in range(per_node):
         env = dict(os.environ)
         # More workers than GPUs on purpose. The forward is ~12% of a worker's
@@ -1190,6 +1246,8 @@ def node_mode(args) -> dict:
             args.manifest,
             "--model-dir",
             args.model_dir,
+            "--calibration",
+            args.calibration,
             "--worker",
             str(base + local),
             "--num-workers",
@@ -1206,8 +1264,8 @@ def node_mode(args) -> dict:
         if args.limit:
             argv += ["--limit", str(args.limit)]
         logger.info("launching worker %d on local GPU %d", base + local, local)
-        procs.append(subprocess.Popen(argv, env=env))
-    codes = [p.wait() for p in procs]
+        processes.append(subprocess.Popen(argv, env=env))
+    codes = [process.wait() for process in processes]
     failed = [i for i, c in enumerate(codes) if c != 0]
     if failed:
         raise RuntimeError(f"workers {failed} exited non-zero: {codes}")
@@ -1234,6 +1292,7 @@ def main() -> None:
     s = sub.add_parser("score", help="score this worker's slice of the manifest")
     s.add_argument("--manifest", default=DEFAULT_MANIFEST)
     s.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
+    s.add_argument("--calibration", default=DEFAULT_CALIBRATION)
     s.add_argument("--worker", type=int, required=True)
     s.add_argument("--num-workers", type=int, required=True)
     s.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
@@ -1242,13 +1301,14 @@ def main() -> None:
     s.add_argument("--source", default="", help="score only this source (default: all)")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
-    n = sub.add_parser("node", help="fan out one score subprocess per GPU on this node")
+    n = sub.add_parser("node", help="fan out score subprocesses across this node's GPUs")
     n.add_argument("--manifest", default=DEFAULT_MANIFEST)
     n.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
+    n.add_argument("--calibration", default=DEFAULT_CALIBRATION)
     n.add_argument("--node-index", type=int, default=None, help="default: this Iris replica's index")
     n.add_argument("--num-nodes", type=int, default=None, help="default: the Iris job's replica count")
     n.add_argument("--gpus-per-node", type=int, default=8)
-    n.add_argument("--procs-per-node", type=int, default=0, help="worker processes per node (default: one per GPU)")
+    n.add_argument("--processes-per-node", type=int, default=0, help="worker processes (default: one per GPU)")
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_BLOCKS)
     n.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)

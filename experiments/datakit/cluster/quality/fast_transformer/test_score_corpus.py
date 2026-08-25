@@ -12,6 +12,7 @@ the two identity checks: which shards pair with which, and which model's bytes a
 allowed to write under a path that names a scorer.
 """
 
+import hashlib
 import shutil
 from dataclasses import replace
 
@@ -25,15 +26,17 @@ from experiments.datakit import hero_data
 from experiments.datakit.cluster.quality.fast_transformer import score_corpus
 from experiments.datakit.cluster.quality.fast_transformer.score_corpus import (
     EMBED_DIM,
-    HOLD_SOURCES,
     Block,
     ShardTask,
+    calibration_sha256,
     join_shard,
     model_dir_sha256,
     pair_shards,
     read_embed_side,
+    require_complete_scores,
     require_containment,
     require_paired_shards,
+    require_pinned_calibration,
     require_pinned_model,
     with_retry,
 )
@@ -90,12 +93,6 @@ def join(task, fs, block_docs=1024):
         else:
             stats = item
     return blocks, stats
-
-
-def test_every_held_source_is_registered():
-    # A hold naming a source that no longer exists is a hold that silently stopped
-    # holding anything. Empty is fine; stale is not.
-    assert not set(HOLD_SOURCES) - set(hero_data.source_names())
 
 
 def test_read_embed_side_reads_a_shard(tmp_path, fs):
@@ -384,6 +381,26 @@ def test_the_model_digest_covers_contents_layout_and_nothing_else(tmp_path):
     (root / "extra.json").unlink()
     shutil.copytree(root, tmp_path / "elsewhere" / "model")
     assert model_dir_sha256(str(tmp_path / "elsewhere" / "model")) == base
+
+
+def test_calibration_digest_is_checked_before_scoring(tmp_path):
+    path = tmp_path / "calib.json"
+    path.write_bytes(b"knots")
+    content_digest = hashlib.sha256(b"knots").digest()
+    expected = hashlib.sha256(b"calib.json\0" + content_digest).hexdigest()
+    pin = replace(hero_data.NEMOTRON_88K, calibration_sha256=expected)
+
+    assert calibration_sha256(str(path)) == expected
+    assert require_pinned_calibration(pin, str(path)) == expected
+
+    path.write_bytes(b"different knots")
+    with pytest.raises(ValueError, match="score path claims a different calibration"):
+        require_pinned_calibration(pin, str(path))
+
+
+def test_verification_rejects_a_short_scored_source():
+    with pytest.raises(ValueError, match="99 score rows were written for 100 embed rows"):
+        require_complete_scores("source", 0, 1, 99, 100, [hero_data.NEMOTRON_88K.name])
 
 
 def test_scoring_refuses_a_checkpoint_that_is_not_the_pinned_one(tmp_path):

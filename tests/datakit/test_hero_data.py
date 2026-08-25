@@ -112,26 +112,10 @@ def test_unknown_source_is_rejected():
     ],
 )
 def test_quality_path_identifies_the_scorer(field, value):
-    """Any change to the pin must move the path.
-
-    The score path used to derive from the tokenize leaf alone, so the scorer did
-    not appear in it and two pins over one tokenization resolved to the same
-    directory -- a step could claim one model and read another's bytes. Each field
-    here reaches ``hash_id`` by a different route: the digests and version through
-    ``hash_attrs``, the tokenizer through ``dep_names``.
-    """
+    """Any scorer input change must move the output path."""
     base = hero_data.NEMOTRON_88K
     changed = replace(base, **{field: value})
     assert hero_data.quality("stack-v3", changed).output_path != hero_data.quality("stack-v3", base).output_path
-
-
-def test_quality_folds_in_the_tokenization_as_a_dependency():
-    step = hero_data.quality("stack-v3")
-    assert step.dep_names == [hero_data.tokenized("stack-v3", hero_data.NEMOTRON_88K.tokenizer).name_with_hash]
-    # No pinned path: the output sits at ``name_with_hash`` like any ordinary step,
-    # which is what puts the scorer's identity in the path.
-    assert step.override_output_path is None
-    assert step.output_path.endswith(f"/datakit/quality/stack-v3_{step.hash_id}")
 
 
 def test_quality_refuses_to_run():

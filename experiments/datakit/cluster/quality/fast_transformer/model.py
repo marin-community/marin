@@ -41,7 +41,15 @@ NEG_INF = -1e30
 COMPUTE_DTYPE = jnp.bfloat16
 # Dtypes a config may name for the residual stream and the embedding table. Both
 # default to f32, which is what every trained checkpoint was fit with.
-NAMED_DTYPES = {"float32": jnp.float32, "bfloat16": jnp.bfloat16}
+NAMED_DTYPES = ("float32", "bfloat16")
+
+
+def _named_dtype(name: str):
+    if name == "float32":
+        return jnp.float32
+    if name == "bfloat16":
+        return jnp.bfloat16
+    raise ValueError(f"unknown dtype {name!r}")
 
 
 @dataclass(frozen=True)
@@ -115,12 +123,12 @@ class FastTransformerConfig:
                 raise ValueError(f"{name}={value!r} not in {tuple(NAMED_DTYPES)}")
 
     @property
-    def stream(self):
-        return NAMED_DTYPES[self.stream_dtype]
+    def stream_dtype_value(self):
+        return _named_dtype(self.stream_dtype)
 
     @property
-    def table(self):
-        return NAMED_DTYPES[self.embed_dtype]
+    def embed_dtype_value(self):
+        return _named_dtype(self.embed_dtype)
 
     @property
     def num_super_tokens(self) -> int:
@@ -163,13 +171,9 @@ def _glorot(key: PRNGKeyArray, shape: tuple[int, ...]) -> Array:
 
 
 def _matmul(x: Array, w: Array, out_dtype=jnp.float32) -> Array:
-    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation, written out as ``out_dtype``.
-
-    The accumulator is f32 either way — ``out_dtype`` is the type the result is
-    *stored* as, so a bf16 stream costs one rounding at the write and no separate
-    convert pass over the largest tensor in the layer.
-    """
-    return jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=out_dtype)
+    """Multiply in bf16 with f32 accumulation, then cast to ``out_dtype``."""
+    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
+    return out.astype(out_dtype)
 
 
 def _layer_norm(x: Array, gamma: Array, beta: Array) -> Array:
@@ -282,7 +286,9 @@ class FastTransformer(eqx.Module):
             self.donor_embed = jnp.zeros((config.vocab_size, config.frozen_donor_dim))
             self.donor_proj = _glorot(jax.random.fold_in(key, 8), (config.frozen_donor_dim, config.embed_dim))
         else:
-            self.embed = (jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02).astype(config.table)
+            self.embed = (jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02).astype(
+                config.embed_dtype_value
+            )
             self.donor_embed = None
             self.donor_proj = None
         self.pool_query = jax.random.normal(kpq, (config.embed_dim,)) * 0.02
@@ -375,7 +381,7 @@ class FastTransformer(eqx.Module):
         else:
             emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
 
-        stream = cfg.stream
+        stream = cfg.stream_dtype_value
         pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
         h = _matmul(pooled, self.proj_w, stream) + self.proj_b.astype(stream) + self.pos_embed.astype(stream)
 

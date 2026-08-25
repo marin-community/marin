@@ -88,13 +88,9 @@ class PooledScorer:
 
 
 def _model_stem(model_dir: str) -> str:
-    """The artifact stem a model directory actually holds.
-
-    Training names its artifacts after the run, so a directory is not required to
-    hold the deployed stem — and a comparison between two models is exactly the case
-    where they differ. Read the stem from the directory rather than assuming it.
-    """
-    found = sorted(str(p).rsplit("/", 1)[-1] for p in StoragePath(f"{model_dir}/*.eqx").glob())
+    """Return the sole ``.eqx`` artifact stem under ``model_dir``."""
+    root = StoragePath(model_dir)
+    found = sorted(path.name for path in (root / "*.eqx").glob())
     if not found:
         raise ValueError(f"no .eqx artifact under {model_dir}")
     if len(found) > 1:
@@ -105,12 +101,12 @@ def _model_stem(model_dir: str) -> str:
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
     """Load a `PooledScorer` from a model dir (streams the .eqx to a local path,
     which eqx deserialisation requires)."""
-    model_dir = model_dir.rstrip("/")
+    root = StoragePath(model_dir)
     eqx_name, remap_name, meta_name = artifact_names(_model_stem(model_dir))
     fd, local_eqx = tempfile.mkstemp(suffix=".eqx")
-    with os.fdopen(fd, "wb") as out, open_url(f"{model_dir}/{eqx_name}", "rb") as fh:
+    with os.fdopen(fd, "wb") as out, (root / eqx_name).open("rb") as fh:
         out.write(fh.read())
-    return PooledScorer.load(local_eqx, f"{model_dir}/{remap_name}", f"{model_dir}/{meta_name}")
+    return PooledScorer.load(local_eqx, str(root / remap_name), str(root / meta_name))
 
 
 def bme_chunks(texts: list[str]) -> tuple[list[str], list[tuple[int, int]]]:

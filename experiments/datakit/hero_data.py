@@ -134,7 +134,7 @@ class QualityPin:
     about which model produced the scores under it is checked, not asserted."""
 
     calibration_sha256: str
-    """Digest over the calibration file, by the same recipe over one file."""
+    """Digest checked against the calibration file before scoring."""
 
     tokenizer: TokenizerPin
     """Which tokenization the scorer reads. Folded in structurally: :func:`quality`
@@ -214,20 +214,11 @@ def minhash(source: str) -> StepSpec:
 
 
 def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
-    """Return the quality scores for ``source`` under ``quality_model``.
+    """Return scorer-keyed quality scores for ``source``.
 
-    Unlike the other accessors this one takes no pinned path: its output sits at
-    ``name_with_hash`` like any ordinary step, so the scorer is *in* the path.
-    The scorer's identity reaches the hash two ways, and it needs both. The model
-    and calibration digests go in ``hash_attrs``, which covers the bytes the
-    scorer reads; the tokenization goes in as a dependency, so ``hash_id`` folds
-    it through ``dep_names`` rather than through string surgery on a leaf name.
-
-    The earlier layout derived the score path from the tokenize leaf alone, which
-    left the scorer invisible: two pins over one tokenization resolved to the same
-    directory, so a step could claim one model and read another's bytes. Here two
-    pins that differ anywhere -- model, calibration, tokenizer or version -- differ
-    in ``hash_id``, and so cannot collide.
+    Model and calibration digests are part of the step hash and are validated by
+    the corpus scorer. Tokenization is a dependency, so every scorer input moves
+    the output path when its identity changes.
     """
     return StepSpec(
         name=f"datakit/quality/{source}",
