@@ -744,7 +744,3 @@ def main() -> None:
         max_workers=MAX_WORKERS,
         shards_per_task=SHARDS_PER_TASK,
     )
-
-
-if __name__ == "__main__":
-    main()
