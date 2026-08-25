@@ -3,10 +3,10 @@
 
 """Stream The Stack v2 parquet shards from Hugging Face into blob-prefix partitions.
 
-The pipeline has one Zephyr source shard per Hugging Face parquet file. Each worker
-uses Polars' native ``hf://`` range reader and streaming parquet sink, so the source
-parquet is never materialized on worker disk. This deliberately avoids ``hf_xet``'s
-file downloader, which reconstructs a complete local file before a transform can run.
+The pipeline has one Zephyr source shard per Hugging Face parquet file. Each task
+resolves its gated ``hf://`` path to one signed CDN URL before Polars scans it, avoiding
+repeated Hugging Face API requests from the range reader. Polars then streams directly
+to the partitioned parquet sink, so the source parquet is never materialized on disk.
 """
 
 import hashlib
@@ -142,30 +142,36 @@ def list_stack_v2_tasks(cfg: StackV2DownloadConfig) -> list[StackV2ParquetTask]:
     return tasks
 
 
-def _assert_hf_access(task: StackV2ParquetTask) -> None:
+def _resolve_source_url(task: StackV2ParquetTask) -> str:
     if not task.source_url.startswith(HF_PROTOCOL_PREFIX):
-        return
+        return task.source_url
     resolve_url = hf_hub_url(
         repo_id=HF_DATASET_ID,
         filename=task.relative_source_path,
         repo_type="dataset",
         revision=task.revision,
     )
-    get_hf_file_metadata(resolve_url, token=_hf_token(), retry_on_errors=True)
+    metadata = get_hf_file_metadata(resolve_url, token=_hf_token(), retry_on_errors=True)
+    return metadata.location
+
+
+def _assert_hf_access(task: StackV2ParquetTask) -> None:
+    _resolve_source_url(task)
 
 
 def _input_storage_options(source_url: str) -> dict[str, object] | None:
-    if not source_url.startswith(HF_PROTOCOL_PREFIX):
-        return None
-    return {"token": _hf_token(), "max_retries": OBJECT_STORE_MAX_RETRIES}
+    if source_url.startswith(("http://", "https://")):
+        return {"max_retries": OBJECT_STORE_MAX_RETRIES}
+    return None
 
 
 def partition_stack_v2_parquet(task: StackV2ParquetTask) -> StackV2DownloadResult:
     """Stream one remote parquet file into partitions keyed by ``blob_id[:2]``."""
 
+    resolved_source_url = _resolve_source_url(task)
     source = pl.scan_parquet(
-        task.source_url,
-        storage_options=_input_storage_options(task.source_url),
+        resolved_source_url,
+        storage_options=_input_storage_options(resolved_source_url),
         cache=False,
         low_memory=True,
         parallel="row_groups",

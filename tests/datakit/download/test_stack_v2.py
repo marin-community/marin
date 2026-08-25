@@ -53,6 +53,50 @@ def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.M
     assert metadata_calls == 1
 
 
+def test_partition_resolves_hf_url_once_before_polars_scan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    source_path = tmp_path / "source.parquet"
+    pl.DataFrame({"blob_id": ["00abcdef"], "path": ["a.py"]}).write_parquet(source_path)
+    task = StackV2ParquetTask(
+        source_url=(
+            "hf://datasets/bigcode/the-stack-v2@" f"{stack_v2.HF_REVISION}/data/Python/train-00000-of-00001.parquet"
+        ),
+        relative_source_path="data/Python/train-00000-of-00001.parquet",
+        output_path=str(tmp_path / "partitioned"),
+    )
+    metadata_calls: list[tuple[str, dict[str, object]]] = []
+    scanned_paths: list[tuple[str, dict[str, object]]] = []
+    original_scan_parquet = pl.scan_parquet
+
+    class Metadata:
+        location = str(source_path)
+
+    def resolve_file(url: str, **kwargs):
+        metadata_calls.append((url, kwargs))
+        return Metadata()
+
+    def capture_scan(path: str, **kwargs):
+        scanned_paths.append((path, kwargs))
+        return original_scan_parquet(path, **kwargs)
+
+    monkeypatch.setattr(stack_v2, "get_hf_file_metadata", resolve_file)
+    monkeypatch.setattr(stack_v2, "_hf_token", lambda: "hf-test-token")
+    monkeypatch.setattr(stack_v2.pl, "scan_parquet", capture_scan)
+
+    partition_stack_v2_parquet(task)
+
+    assert metadata_calls == [
+        (
+            (
+                "https://huggingface.co/datasets/bigcode/the-stack-v2/"
+                f"resolve/{stack_v2.HF_REVISION}/data/Python/train-00000-of-00001.parquet"
+            ),
+            {"token": "hf-test-token", "retry_on_errors": True},
+        )
+    ]
+    assert scanned_paths[0][0] == str(source_path)
+    assert scanned_paths[0][1]["storage_options"] is None
+
+
 def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: Path):
     source_path = tmp_path / "source.parquet"
     source = pl.DataFrame(
