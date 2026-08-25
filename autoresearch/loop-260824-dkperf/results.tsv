@@ -29,3 +29,5 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 7	2026-08-25T04:4xZ	dkp-09-oneshot-6k	restore	same-night one-shot pairing (kmax128 wheel, s64)	-	-	running	rigorous adjacent A/B for the parity claim
 8	2026-08-25T07:05Z	dkp-09c-oneshot-6k	restore	same-night one-shot pairing (s64)	21.93	-0.53 vs bal-mean	KEY	one-shot BELOW its historical band tonight; balanced dk AHEAD same-night
 8	2026-08-25T07:1xZ	dkp-10-oneshot-6k-r2	restore	second one-shot draw	-	-	running	interleaved round 2
+9	2026-08-25T08:00Z	dkp-10-oneshot-6k-r2	restore	second one-shot draw	22.05	-	KEY	oneshot tonight: 21.93/22.05
+9	2026-08-25T08:15Z	dkp-11-bal-6k-r3	restore	third balanced draw, LATE window (drift control)	22.47	+0.47 vs oneshot-mean	KEEP-FINAL	bal: 22.34/22.58/22.47 vs oneshot 21.93/22.05 interleaved same-night. GOAL EXCEEDED.

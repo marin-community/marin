@@ -105,3 +105,28 @@ Not run: decomposer-off cell (expected inert inside one LSA domain), chunks=6.
 Measurement discipline: single bench cells vary 12.2-14.2 across jobs when co-tenants share
 the 72-GPU NVLink domain (we hold 64); the one-shot is much less sensitive. Verdicts came
 from interleaved same-night series and repeat draws only.
+
+## Final standings (2026-08-25, leg CLOSED)
+
+6k-restore MFU, five interleaved same-night draws (loss identical to 5 decimals across all
+arms; drops equal):
+
+| config | draws | mean |
+|---|---|---|
+| dk + balanced kernel, splits=1 | 22.34, 22.58, 22.47 | 22.46 |
+| one-shot, splits=64 (kmax128) | 21.93, 22.05 | 21.99 |
+| dk + balanced kernel, splits=64 | 21.12 | (mechanism null) |
+| stock dk best, splits=64 (leg-3) | 21.98 | |
+
+GOAL EXCEEDED: the device kernel with the work-proportional-assignment patch beats the
+one-shot by ~0.5 MFU in same-night pairing at splits=1, on stock XLA main + one small
+self-contained kernel patch (`mcwitt/xla` branch `ragged-a2a-dk-balanced`, 06df0ee8a6,
+wheel `pjrt-mainpatch-dkbal8-20260825`). The third balanced draw ran in the latest window,
+excluding within-night drift as the explanation. The one-shot's historical 22.46-22.60 band
+came from quieter nights; under tonight's co-tenancy it read 21.93-22.05 while the balanced
+dk held its level -- the dk path is also the less placement-sensitive of the two.
+
+Candidate follow-ups (not started): upstream the balanced-assignment patch (supersedes the
+g8x128-grid-only patch; needs user approval to file); re-tune expert chunks under the
+balanced kernel; port the leg-3 loader follow-up; NVIDIA thread update with the U-curve and
+the balanced-kernel result (user decision).
