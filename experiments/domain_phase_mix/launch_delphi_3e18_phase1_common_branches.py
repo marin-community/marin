@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 import fsspec
+import jax
 import numpy as np
 import pandas as pd
 from fray.cluster import ResourceConfig
@@ -37,7 +38,8 @@ from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_common_branches_20260824"
+V5P_EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_common_branches_20260824"
+V6E_EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_common_branches_v6e8_20260825"
 DEFAULT_CANDIDATE_WEIGHTS = candidates.DEFAULT_CANDIDATE_WEIGHTS
 DEFAULT_CONTINUATION_WEIGHTS = (
     Path(__file__).resolve().parent
@@ -47,7 +49,7 @@ DEFAULT_CONTINUATION_WEIGHTS = (
     / "delphi_phase1_common_branches_20260824"
     / "continuation_weights.csv"
 )
-LOCAL_ARTIFACT_DIR = (
+LOCAL_ARTIFACT_ROOT = (
     Path(__file__).resolve().parent
     / "exploratory"
     / "two_phase_many"
@@ -80,6 +82,58 @@ RUN_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_.-]+")
 BRANCH_PROVENANCE_FILENAME = "branch_provenance.json"
 WANDB_TAG_MAX_LENGTH = 64
 WANDB_HASH_TAG_LENGTH = 12
+EXPECTED_TPU_DEVICE_COUNTS = {"v5p-8": 4, "v6e-8": 8}
+EXPECTED_TPU_KIND_FRAGMENTS = {"v5p-8": "v5", "v6e-8": "v6"}
+CANONICAL_PANEL_HARDWARE_STATUS = "canonical_v5p_continuation"
+MIGRATED_PANEL_HARDWARE_STATUS = "selection_only_requires_v5p_finalist_confirmation"
+
+
+@dataclass(frozen=True)
+class TpuHardware:
+    tpu_type: str
+    region: str
+    zone: str
+
+
+@dataclass(frozen=True)
+class BranchDeployment:
+    hardware: TpuHardware
+    experiment_name: str
+
+
+@dataclass(frozen=True)
+class ObservedTpuHardware:
+    platform: str
+    device_kind: str
+    global_device_count: int
+    local_device_count: int
+
+
+@dataclass(frozen=True)
+class HardwareCanaryGate:
+    paired_run_order: int
+    noise_run_orders: tuple[int, ...]
+    terminal_primary_absolute_bpb_max: float
+    terminal_diagnostic_absolute_bpb_max: float
+    terminal_component_absolute_bpb_max: float
+    terminal_noise_range_fraction_max: float
+    boundary_train_loss_relative_max: float
+    first_50_logged_steps_train_loss_relative_max: float
+    provenance_comparison_mask: tuple[str, ...]
+    failure_action: str
+
+
+PREFIX_HARDWARE = TpuHardware(
+    tpu_type=base.TARGET_TPU_TYPE,
+    region=base.DEFAULT_TPU_REGION,
+    zone=base.DEFAULT_TPU_ZONE,
+)
+V5P_DEPLOYMENT = BranchDeployment(hardware=PREFIX_HARDWARE, experiment_name=V5P_EXPERIMENT_NAME)
+V6E_DEPLOYMENT = BranchDeployment(
+    hardware=TpuHardware(tpu_type="v6e-8", region="us-east5", zone="us-east5-b"),
+    experiment_name=V6E_EXPERIMENT_NAME,
+)
+SUPPORTED_BRANCH_DEPLOYMENTS = (V5P_DEPLOYMENT, V6E_DEPLOYMENT)
 
 
 @dataclass(frozen=True)
@@ -92,6 +146,7 @@ class PrefixCheckpoint:
 
 @dataclass(frozen=True)
 class BranchTrainingConfig:
+    experiment_name: str
     analysis_output_path: str
     output_path: str
     run_spec: base.DelphiSwarmRunSpec
@@ -102,10 +157,14 @@ class BranchTrainingConfig:
     continuation_weights_sha256: str
     continuation_id: str
     code_commit: str
+    prefix_hardware: TpuHardware
+    continuation_hardware: TpuHardware
+    continuation_hardware_version: VersionedValue[tuple[str, str, str]]
 
 
 @dataclass(frozen=True)
 class SaveBranchManifestConfig:
+    experiment_name: str
     output_path: str
     selected_prefixes_json: str
     selected_prefixes_sha256: str
@@ -115,6 +174,127 @@ class SaveBranchManifestConfig:
     code_commit: str
     branch_rows_json: str
     selected_run_orders: VersionedValue[tuple[int, ...]]
+    prefix_hardware: TpuHardware
+    continuation_hardware: TpuHardware
+    continuation_hardware_version: VersionedValue[tuple[str, str, str]]
+
+
+def hardware_identity(hardware: TpuHardware) -> tuple[str, str, str]:
+    return hardware.tpu_type, hardware.region, hardware.zone
+
+
+def hardware_from_run_spec(run_spec: base.DelphiSwarmRunSpec) -> TpuHardware:
+    return TpuHardware(tpu_type=run_spec.tpu_type, region=run_spec.tpu_region, zone=run_spec.tpu_zone)
+
+
+def resolve_branch_deployment(tpu_type: str, region: str, zone: str) -> BranchDeployment:
+    identity = (tpu_type, region, zone)
+    for deployment in SUPPORTED_BRANCH_DEPLOYMENTS:
+        if hardware_identity(deployment.hardware) == identity:
+            if deployment.hardware.region != PREFIX_HARDWARE.region:
+                raise ValueError("Prefix and continuation hardware must remain in the same GCS region")
+            return deployment
+    supported = [hardware_identity(deployment.hardware) for deployment in SUPPORTED_BRANCH_DEPLOYMENTS]
+    raise ValueError(f"Unsupported branch TPU deployment {identity}; expected one of {supported}")
+
+
+def move_run_spec_to_branch_hardware(
+    run_spec: base.DelphiSwarmRunSpec,
+    deployment: BranchDeployment,
+) -> base.DelphiSwarmRunSpec:
+    source_hardware = hardware_from_run_spec(run_spec)
+    if source_hardware != PREFIX_HARDWARE:
+        raise ValueError(f"Prefix run spec hardware changed: {source_hardware} != {PREFIX_HARDWARE}")
+    continuation_hardware = deployment.hardware
+    tensor_parallel_size = 1
+    device_count = EXPECTED_TPU_DEVICE_COUNTS[continuation_hardware.tpu_type]
+    while run_spec.model_hidden_dim % (device_count // tensor_parallel_size) != 0:
+        tensor_parallel_size *= 2
+        if tensor_parallel_size > device_count:
+            raise ValueError(
+                f"Could not resolve tensor parallelism for hidden_dim={run_spec.model_hidden_dim}, "
+                f"hardware={continuation_hardware}"
+            )
+    base_tensor_parallel_size = base._tensor_parallel_size(run_spec.model_hidden_dim, continuation_hardware.tpu_type)
+    if tensor_parallel_size != base_tensor_parallel_size:
+        raise ValueError(
+            "The base training builder and physical TPU topology resolve different tensor parallelism: "
+            f"{base_tensor_parallel_size} != {tensor_parallel_size}"
+        )
+    return replace(
+        run_spec,
+        tpu_type=continuation_hardware.tpu_type,
+        tpu_region=continuation_hardware.region,
+        tpu_zone=continuation_hardware.zone,
+        tensor_parallel_size=tensor_parallel_size,
+    )
+
+
+def panel_hardware_status(hardware: TpuHardware) -> str:
+    if hardware == PREFIX_HARDWARE:
+        return CANONICAL_PANEL_HARDWARE_STATUS
+    return MIGRATED_PANEL_HARDWARE_STATUS
+
+
+def hardware_canary_gate() -> HardwareCanaryGate:
+    return HardwareCanaryGate(
+        paired_run_order=0,
+        noise_run_orders=tuple(range(TOTAL_BRANCH_ROWS - BRANCH_NOISE_REPEAT_COUNT, TOTAL_BRANCH_ROWS)),
+        terminal_primary_absolute_bpb_max=0.0002,
+        terminal_diagnostic_absolute_bpb_max=0.0002,
+        terminal_component_absolute_bpb_max=0.0005,
+        terminal_noise_range_fraction_max=0.25,
+        boundary_train_loss_relative_max=0.001,
+        first_50_logged_steps_train_loss_relative_max=0.002,
+        provenance_comparison_mask=(
+            "experiment_name",
+            "prefix_hardware",
+            "continuation_hardware",
+            "observed_continuation_hardware",
+            "panel_hardware_status",
+            "terminal_checkpoint_uri",
+            "minimum_initial_step",
+            "branch_code_commit",
+        ),
+        failure_action="do_not_migrate_full_panel",
+    )
+
+
+def hardware_canary_gate_payload() -> dict[str, object]:
+    payload = asdict(hardware_canary_gate())
+    payload["noise_run_orders"] = list(hardware_canary_gate().noise_run_orders)
+    payload["provenance_comparison_mask"] = list(hardware_canary_gate().provenance_comparison_mask)
+    return payload
+
+
+def local_artifact_dir(deployment: BranchDeployment) -> Path:
+    hardware = deployment.hardware
+    return LOCAL_ARTIFACT_ROOT / f"{hardware.tpu_type}_{hardware.zone}"
+
+
+def observe_tpu_hardware(expected: TpuHardware) -> ObservedTpuHardware:
+    devices = jax.devices()
+    platforms = {device.platform for device in devices}
+    device_kinds = {device.device_kind for device in devices}
+    if platforms != {"tpu"}:
+        raise ValueError(f"Expected TPU devices for {expected.tpu_type}, observed platforms {sorted(platforms)}")
+    if len(device_kinds) != 1:
+        raise ValueError(f"Expected one TPU device kind, observed {sorted(device_kinds)}")
+    expected_count = EXPECTED_TPU_DEVICE_COUNTS[expected.tpu_type]
+    if len(devices) != expected_count or jax.local_device_count() != expected_count:
+        raise ValueError(
+            f"Expected {expected_count} devices for {expected.tpu_type}, observed "
+            f"global={len(devices)}, local={jax.local_device_count()}"
+        )
+    device_kind = next(iter(device_kinds))
+    if EXPECTED_TPU_KIND_FRAGMENTS[expected.tpu_type] not in device_kind.lower():
+        raise ValueError(f"Expected {expected.tpu_type}, observed JAX device kind {device_kind!r}")
+    return ObservedTpuHardware(
+        platform="tpu",
+        device_kind=device_kind,
+        global_device_count=len(devices),
+        local_device_count=jax.local_device_count(),
+    )
 
 
 def file_sha256(path: Path) -> str:
@@ -144,6 +324,9 @@ def branch_wandb_tags(config: BranchTrainingConfig) -> list[str]:
         f"continuation_sha={config.continuation_weights_sha256[:WANDB_HASH_TAG_LENGTH]}",
         f"data_seed={run_spec.data_seed}",
         f"trainer_seed={run_spec.trainer_seed}",
+        f"prefix_tpu={config.prefix_hardware.tpu_type}",
+        f"continuation_tpu={config.continuation_hardware.tpu_type}",
+        f"continuation_zone={config.continuation_hardware.zone}",
     ]
     oversized = [tag for tag in tags if len(tag) > WANDB_TAG_MAX_LENGTH]
     if oversized:
@@ -153,6 +336,13 @@ def branch_wandb_tags(config: BranchTrainingConfig) -> list[str]:
 
 def verify_prefix_checkpoint_on_worker(config: BranchTrainingConfig) -> None:
     """Re-verify the exact prefix state inside the TPU task before training."""
+    if config.prefix_hardware != PREFIX_HARDWARE:
+        raise ValueError(f"Prefix hardware changed: {config.prefix_hardware} != {PREFIX_HARDWARE}")
+    if hardware_from_run_spec(config.run_spec) != config.continuation_hardware:
+        raise ValueError(
+            "Branch run-spec hardware does not match its frozen continuation deployment: "
+            f"{hardware_from_run_spec(config.run_spec)} != {config.continuation_hardware}"
+        )
     prefix = config.prefix_checkpoint
     fs, checkpoint_path = fsspec.core.url_to_fs(prefix.checkpoint_uri)
     metadata_path = os.path.join(checkpoint_path, "metadata.json")
@@ -635,6 +825,7 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
             },
         )
     )
+    observed_hardware = observe_tpu_hardware(config.continuation_hardware)
     terminal_uri = os.path.join(config.output_path, "checkpoints", f"step-{replay.EXPECTED_FULL_TRAIN_STEPS - 1}")
     fs, terminal_path = fsspec.core.url_to_fs(terminal_uri)
     metadata_path = os.path.join(terminal_path, "metadata.json")
@@ -645,7 +836,7 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
     if metadata.get("step") != replay.EXPECTED_FULL_TRAIN_STEPS - 1 or metadata.get("is_temporary") is not False:
         raise ValueError(f"Branch terminal checkpoint is not permanent: {metadata}")
     provenance = {
-        "experiment_name": EXPERIMENT_NAME,
+        "experiment_name": config.experiment_name,
         "run_name": run_spec.run_name,
         "run_order": run_spec.run_order,
         "run_id": run_spec.run_id,
@@ -661,6 +852,11 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
         "continuation_id": config.continuation_id,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "branch_code_commit": config.code_commit,
+        "prefix_hardware": asdict(config.prefix_hardware),
+        "continuation_hardware": asdict(config.continuation_hardware),
+        "observed_continuation_hardware": asdict(observed_hardware),
+        "minimum_initial_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
+        "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
         "terminal_checkpoint_uri": terminal_uri,
         "terminal_checkpoint_step": replay.EXPECTED_FULL_TRAIN_STEPS - 1,
     }
@@ -682,13 +878,23 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
     branch_rows = json.loads(config.branch_rows_json)
     fit_budget_rows = sum(bool(row["fit_budget"]) for row in branch_rows)
     payload = {
-        "experiment_name": EXPERIMENT_NAME,
+        "experiment_name": config.experiment_name,
         "selected_prefixes": json.loads(config.selected_prefixes_json),
         "selected_prefixes_sha256": config.selected_prefixes_sha256,
         "candidate_weights_sha256": config.candidate_weights_sha256,
         "continuation_weights_sha256": config.continuation_weights_sha256,
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
+        "prefix_hardware": asdict(config.prefix_hardware),
+        "continuation_hardware": asdict(config.continuation_hardware),
+        "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
+        "hardware_canary_gate": hardware_canary_gate_payload(),
+        "panel_hardware_caveat": (
+            "The v6e continuation panel is valid for surrogate fitting and selection only. Any frontier finalist must "
+            "be confirmed on the canonical v5p continuation hardware before a performance claim."
+            if config.continuation_hardware != PREFIX_HARDWARE
+            else "The prefix and continuation use the canonical v5p hardware."
+        ),
         "prefix_completed_updates": replay.EXPECTED_PREFIX_TRAIN_STEPS,
         "prefix_checkpoint_step": replay.EXPECTED_PREFIX_HF_STEP,
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
@@ -726,8 +932,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--expected-selected-prefixes-sha256", required=True)
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--analysis-output-path", default=base.DEFAULT_ANALYSIS_OUTPUT_PATH)
-    parser.add_argument("--tpu-region", default=base.DEFAULT_TPU_REGION)
-    parser.add_argument("--tpu-zone", default=base.DEFAULT_TPU_ZONE)
+    parser.add_argument("--branch-tpu-type", required=True)
+    parser.add_argument("--branch-tpu-region", required=True)
+    parser.add_argument("--branch-tpu-zone", required=True)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
@@ -739,11 +946,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args, remaining = parse_args()
     sys.argv = [sys.argv[0], *remaining]
-    if args.tpu_region != base.DEFAULT_TPU_REGION or args.tpu_zone != base.DEFAULT_TPU_ZONE:
-        raise ValueError(f"This launcher is pinned to {base.DEFAULT_TPU_REGION}/{base.DEFAULT_TPU_ZONE}")
+    deployment = resolve_branch_deployment(args.branch_tpu_type, args.branch_tpu_region, args.branch_tpu_zone)
+    experiment_name = deployment.experiment_name
     if not 1 <= args.max_concurrent <= DEFAULT_MAX_CONCURRENT:
         raise ValueError(f"--max-concurrent must be in [1, {DEFAULT_MAX_CONCURRENT}]")
-    expected_prefix = marin_prefix_for_region(args.tpu_region)
+    expected_prefix = marin_prefix_for_region(deployment.hardware.region)
     if os.environ.get("MARIN_PREFIX", expected_prefix) != expected_prefix:
         raise ValueError(f"MARIN_PREFIX must be {expected_prefix}")
     os.environ["MARIN_PREFIX"] = expected_prefix
@@ -759,8 +966,8 @@ def main() -> None:
         candidate_weights_path=args.candidate_weights,
         candidate_weights_sha256=args.expected_candidate_sha256,
         analysis_output_path=args.analysis_output_path,
-        tpu_region=args.tpu_region,
-        tpu_zone=args.tpu_zone,
+        tpu_region=PREFIX_HARDWARE.region,
+        tpu_zone=PREFIX_HARDWARE.zone,
     )
     expected_phase_hashes = {
         identity: phase_weights_sha256(spec.phase_weights) for identity, spec in prefix_specs.items()
@@ -794,9 +1001,11 @@ def main() -> None:
         serializable_rows.append({**row, "prefix": asdict(prefix)})
 
     if args.dry_run:
+        dry_run_output = local_artifact_dir(deployment)
         save_branch_manifest(
             SaveBranchManifestConfig(
-                output_path=str(LOCAL_ARTIFACT_DIR),
+                experiment_name=experiment_name,
+                output_path=str(dry_run_output),
                 selected_prefixes_json=json.dumps([asdict(row) for row in prefixes], sort_keys=True),
                 selected_prefixes_sha256=args.expected_selected_prefixes_sha256,
                 candidate_weights_sha256=args.expected_candidate_sha256,
@@ -805,9 +1014,12 @@ def main() -> None:
                 code_commit=code_commit,
                 branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                 selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
+                prefix_hardware=PREFIX_HARDWARE,
+                continuation_hardware=deployment.hardware,
+                continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
             )
         )
-        logger.info("Wrote %d phase-1 branch specs under %s", len(rows), LOCAL_ARTIFACT_DIR)
+        logger.info("Wrote %d phase-1 branch specs under %s", len(rows), dry_run_output)
         return
 
     validation_steps = base._default_validation_sets(tokenizer=llama3_tokenizer)
@@ -821,20 +1033,23 @@ def main() -> None:
             source = prefix_specs[(prefix.candidate_id, prefix.repeat_seed)]
             run_order = int(row["run_order"])
             run_name = str(row["run_name"])
-            run_spec = replace(
-                source,
-                run_order=run_order,
-                run_id=int(row["run_id"]),
-                run_name=run_name,
-                source_run_name=run_name,
-                source_experiment=EXPERIMENT_NAME,
-                panel_source="sequential_phase1_common_branch",
-                data_seed=int(row["data_seed"]),
-                trainer_seed=int(row["trainer_seed"]),
-                max_simulated_epoch=float(row["max_simulated_epoch"]),
-                q95_simulated_epoch=float(row["q95_simulated_epoch"]),
-                mean_phase_tv_to_proportional=float(row["mean_phase_tv_to_proportional"]),
-                phase_weights=row["phase_weights"],
+            run_spec = move_run_spec_to_branch_hardware(
+                replace(
+                    source,
+                    run_order=run_order,
+                    run_id=int(row["run_id"]),
+                    run_name=run_name,
+                    source_run_name=run_name,
+                    source_experiment=experiment_name,
+                    panel_source="sequential_phase1_common_branch",
+                    data_seed=int(row["data_seed"]),
+                    trainer_seed=int(row["trainer_seed"]),
+                    max_simulated_epoch=float(row["max_simulated_epoch"]),
+                    q95_simulated_epoch=float(row["q95_simulated_epoch"]),
+                    mean_phase_tv_to_proportional=float(row["mean_phase_tv_to_proportional"]),
+                    phase_weights=row["phase_weights"],
+                ),
+                deployment,
             )
             resources = ResourceConfig.with_tpu(
                 run_spec.tpu_type,
@@ -843,7 +1058,7 @@ def main() -> None:
             )
             steps.append(
                 ExecutorStep(
-                    name=f"{EXPERIMENT_NAME}/{run_name}",
+                    name=f"{experiment_name}/{run_name}",
                     fn=remote(
                         run_phase_1_branch,
                         resources=resources,
@@ -851,6 +1066,7 @@ def main() -> None:
                     ),
                     resources=resources,
                     config=BranchTrainingConfig(
+                        experiment_name=experiment_name,
                         analysis_output_path=args.analysis_output_path,
                         output_path=this_output_path(),
                         run_spec=run_spec,
@@ -861,14 +1077,18 @@ def main() -> None:
                         continuation_weights_sha256=args.expected_continuation_sha256,
                         continuation_id=str(row["continuation_id"]),
                         code_commit=code_commit,
+                        prefix_hardware=PREFIX_HARDWARE,
+                        continuation_hardware=deployment.hardware,
+                        continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
                     ),
                 )
             )
         steps.append(
             ExecutorStep(
-                name=f"{EXPERIMENT_NAME}/manifest",
+                name=f"{experiment_name}/manifest",
                 fn=save_branch_manifest,
                 config=SaveBranchManifestConfig(
+                    experiment_name=experiment_name,
                     output_path=this_output_path(),
                     selected_prefixes_json=json.dumps([asdict(row) for row in prefixes], sort_keys=True),
                     selected_prefixes_sha256=args.expected_selected_prefixes_sha256,
@@ -878,6 +1098,9 @@ def main() -> None:
                     code_commit=code_commit,
                     branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                     selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
+                    prefix_hardware=PREFIX_HARDWARE,
+                    continuation_hardware=deployment.hardware,
+                    continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
                 ),
             )
         )
@@ -887,7 +1110,7 @@ def main() -> None:
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=steps,
-        description=f"{EXPERIMENT_NAME}: fully crossed state-conditioned phase-1 continuation panel",
+        description=f"{experiment_name}: fully crossed state-conditioned phase-1 continuation panel",
     )
 
 
