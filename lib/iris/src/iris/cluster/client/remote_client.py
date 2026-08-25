@@ -47,6 +47,9 @@ from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
+_JOB_RESOURCE_TYPE = "job"
+_TASK_RESOURCE_TYPE = "task"
+
 ReadResponse = TypeVar("ReadResponse", bound=Message)
 
 
@@ -54,6 +57,7 @@ def _resource_read_with_legacy_fallback(
     resource_read: Callable[[], ReadResponse],
     legacy_read: Callable[[], ReadResponse],
 ) -> ReadResponse:
+    # TODO(#7560): Remove this fallback when the two-week compatibility window ends on 2026-09-08.
     try:
         return resource_read()
     except ConnectError as error:
@@ -254,7 +258,9 @@ class RemoteClusterClient:
         def _call():
             request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
             response = _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.get("job", request, controller_pb2.Controller.GetJobStatusResponse),
+                lambda: self._resource_client.get(
+                    _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.GetJobStatusResponse
+                ),
                 lambda: self._client.get_job_status(request),
             )
             return response.job
@@ -269,7 +275,9 @@ class RemoteClusterClient:
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
             response = _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.batch_get("job", request, controller_pb2.Controller.GetJobStateResponse),
+                lambda: self._resource_client.batch_get(
+                    _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.GetJobStateResponse
+                ),
                 lambda: self._client.get_job_state(request),
             )
             return dict(response.states)
@@ -535,7 +543,9 @@ class RemoteClusterClient:
             def _call(q=page_query):
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
                 return _resource_read_with_legacy_fallback(
-                    lambda: self._resource_client.list("job", request, controller_pb2.Controller.ListJobsResponse),
+                    lambda: self._resource_client.list(
+                        _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.ListJobsResponse
+                    ),
                     lambda: self._client.list_jobs(request),
                 )
 
@@ -578,7 +588,7 @@ class RemoteClusterClient:
             timeout_ms = min(self._timeout_ms, max(1, deadline.remaining_ms())) if deadline is not None else None
             return _resource_read_with_legacy_fallback(
                 lambda: self._resource_client.get(
-                    "task",
+                    _TASK_RESOURCE_TYPE,
                     request,
                     controller_pb2.Controller.GetTaskStatusResponse,
                     timeout_ms=timeout_ms,
@@ -607,7 +617,9 @@ class RemoteClusterClient:
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
             response = _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.list("task", request, controller_pb2.Controller.ListTasksResponse),
+                lambda: self._resource_client.list(
+                    _TASK_RESOURCE_TYPE, request, controller_pb2.Controller.ListTasksResponse
+                ),
                 lambda: self._client.list_tasks(request),
             )
             return list(response.tasks)

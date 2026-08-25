@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generic Connect boundary for controller-registered resource reads."""
+"""Connect boundary for controller-registered resource operations."""
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -13,7 +13,7 @@ from iris.rpc.resource_registry import ResourceRegistry, ResourceVerb
 
 
 class ResourceServiceImpl:
-    """Dispatch read verbs without importing controller resource types."""
+    """Dispatch resource verbs through an immutable registry."""
 
     def __init__(self, registry: ResourceRegistry) -> None:
         self._registry = registry
