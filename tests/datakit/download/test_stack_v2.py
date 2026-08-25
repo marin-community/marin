@@ -3,12 +3,12 @@
 
 from pathlib import Path
 
-import marin.datakit.download.blob_id as blob_id
+import marin.datakit.download.blob_id_download as blob_download
 import marin.datakit.download.stack_v2 as stack_v2
 import polars as pl
 import pytest
 from fray.local_backend import LocalClient
-from marin.datakit.download.blob_id import (
+from marin.datakit.download.blob_id_download import (
     BlobIdParquetTask,
     build_blob_id_partition_pipeline,
     partition_parquet_by_blob_id,
@@ -54,10 +54,10 @@ def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.M
     def fail_if_workers_start(**_kwargs):
         pytest.fail("Zephyr workers started before gated content access was validated")
 
-    monkeypatch.setattr(blob_id, "list_hf_repo_files", lambda **_kwargs: listing)
-    monkeypatch.setattr(blob_id, "get_hf_file_metadata", reject_file_access)
-    monkeypatch.setattr(blob_id, "get_token", lambda: "hf-test-token")
-    monkeypatch.setattr(blob_id, "ZephyrContext", fail_if_workers_start)
+    monkeypatch.setattr(blob_download, "list_hf_repo_files", lambda **_kwargs: listing)
+    monkeypatch.setattr(blob_download, "get_hf_file_metadata", reject_file_access)
+    monkeypatch.setattr(blob_download, "get_token", lambda: "hf-test-token")
+    monkeypatch.setattr(blob_download, "ZephyrContext", fail_if_workers_start)
 
     with pytest.raises(PermissionError, match="gate not accepted"):
         stack_v2.download_stack_v2(cfg)
@@ -90,9 +90,9 @@ def test_partition_resolves_hf_url_once_before_polars_scan(monkeypatch: pytest.M
         scanned_paths.append((path, kwargs))
         return original_scan_parquet(path, **kwargs)
 
-    monkeypatch.setattr(blob_id, "get_hf_file_metadata", resolve_file)
-    monkeypatch.setattr(blob_id, "get_token", lambda: "hf-test-token")
-    monkeypatch.setattr(blob_id.pl, "scan_parquet", capture_scan)
+    monkeypatch.setattr(blob_download, "get_hf_file_metadata", resolve_file)
+    monkeypatch.setattr(blob_download, "get_token", lambda: "hf-test-token")
+    monkeypatch.setattr(blob_download.pl, "scan_parquet", capture_scan)
 
     partition_parquet_by_blob_id(task)
 

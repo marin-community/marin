@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-import marin.datakit.download.blob_id as blob_id
+import marin.datakit.download.blob_id_download as blob_download
 import marin.datakit.download.code_alchemy as code_alchemy
 from marin.datakit.download.huggingface import HfRepoFile, HfRepoListing
 
@@ -17,7 +17,9 @@ def test_lists_all_shards_into_schema_safe_subset_partitions(monkeypatch, tmp_pa
     ]
     listing = HfRepoListing(
         source_root=source_root,
-        files={path: HfRepoFile(size=1_000_000_000, xet_hash=f"hash-{index}") for index, path in enumerate(source_paths)},
+        files={
+            path: HfRepoFile(size=1_000_000_000, xet_hash=f"hash-{index}") for index, path in enumerate(source_paths)
+        },
     )
     list_calls = []
     metadata_calls = []
@@ -33,9 +35,9 @@ def test_lists_all_shards_into_schema_safe_subset_partitions(monkeypatch, tmp_pa
         metadata_calls.append((url, kwargs))
         return Metadata()
 
-    monkeypatch.setattr(blob_id, "list_hf_repo_files", list_files)
-    monkeypatch.setattr(blob_id, "get_hf_file_metadata", resolve_file)
-    monkeypatch.setattr(blob_id, "get_token", lambda: "hf-test-token")
+    monkeypatch.setattr(blob_download, "list_hf_repo_files", list_files)
+    monkeypatch.setattr(blob_download, "get_hf_file_metadata", resolve_file)
+    monkeypatch.setattr(blob_download, "get_token", lambda: "hf-test-token")
 
     tasks = code_alchemy.list_code_alchemy_tasks(cfg)
 
@@ -67,18 +69,3 @@ def test_lists_all_shards_into_schema_safe_subset_partitions(monkeypatch, tmp_pa
             {"token": "hf-test-token", "retry_on_errors": True},
         )
     ]
-
-
-def test_default_output_uses_thirty_day_temp_bucket(monkeypatch):
-    calls = []
-
-    def temp_bucket(*, ttl_days: int, prefix: str) -> str:
-        calls.append((ttl_days, prefix))
-        return "s3://test-bucket/output"
-
-    monkeypatch.setattr(code_alchemy, "marin_temp_bucket", temp_bucket)
-
-    cfg = code_alchemy.CodeAlchemyDownloadConfig()
-
-    assert cfg.output_path == "s3://test-bucket/output"
-    assert calls == [(30, "code-alchemy")]

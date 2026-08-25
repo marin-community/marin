@@ -11,8 +11,10 @@ from marin.datakit.download import huggingface as hf_download
 from marin.datakit.download.huggingface import (
     DownloadConfig,
     FileDownloadTask,
+    _list_source_files,
     _relative_path_in_source,
     download_hf,
+    list_hf_repo_files,
     stream_file_to_fsspec,
 )
 from requests import Response
@@ -22,6 +24,27 @@ def _write(root, relative_path: str, content: bytes) -> None:
     full = root / relative_path
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_bytes(content)
+
+
+def test_hf_listing_rejects_absolute_dataset_and_glob_keys():
+    class UnusedFileSystem:
+        def glob(self, *_args, **_kwargs):
+            raise AssertionError("absolute glob must fail before filesystem access")
+
+    with pytest.raises(ValueError, match="non-relative path"):
+        list_hf_repo_files(
+            hf_dataset_id="/escaped",
+            revision="abc123",
+        )
+
+    with pytest.raises(ValueError, match="non-relative path"):
+        _list_source_files(
+            source_fs=UnusedFileSystem(),
+            source_root="datasets/org/repo",
+            file_globs=["/escaped/*.parquet"],
+            source_name="org/repo",
+            revision="abc123",
+        )
 
 
 def test_download_hf_basic(tmp_path):

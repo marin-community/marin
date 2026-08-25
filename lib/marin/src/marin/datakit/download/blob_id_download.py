@@ -6,16 +6,16 @@
 import hashlib
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import polars as pl
 from fray.types import ResourceConfig
 from huggingface_hub import get_hf_file_metadata, get_token, hf_hub_url
 from polars.io.partition import FileProviderArgs
 from rigging.filesystem.storage_path import prefix_join
-from zephyr.dataset import Dataset
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.parquet_scan import storage_options_for_path
 
 from marin.datakit.download.huggingface import (
@@ -124,12 +124,6 @@ def resolve_source_url(task: BlobIdParquetTask) -> str:
     return metadata.location
 
 
-def assert_hf_access(task: BlobIdParquetTask) -> None:
-    """Validate content access before provisioning Zephyr workers."""
-
-    resolve_source_url(task)
-
-
 def _input_storage_options(source_url: str) -> dict[str, object] | None:
     if source_url.startswith(("http://", "https://")):
         return {"max_retries": OBJECT_STORE_MAX_RETRIES}
@@ -171,7 +165,7 @@ def list_blob_id_parquet_tasks(
                 require_token=require_token,
             )
         )
-    assert_hf_access(tasks[0])
+    resolve_source_url(tasks[0])
     return tasks
 
 

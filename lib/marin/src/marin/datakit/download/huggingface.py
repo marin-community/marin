@@ -168,7 +168,7 @@ def _list_source_files(
         raw_file_info.update(listing)
     else:
         for file_glob in file_globs:
-            listing = source_fs.glob(os.path.join(source_root, file_glob), detail=True, **list_kwargs)
+            listing = source_fs.glob(prefix_join(source_root, file_glob), detail=True, **list_kwargs)
             if not isinstance(listing, dict):
                 raise TypeError("filesystem glob(detail=True) returned paths without file metadata")
             raw_file_info.update(listing)
@@ -190,7 +190,7 @@ def list_hf_repo_files(
 ) -> HfRepoListing:
     """Return the resolved source root and selected file metadata for one repository."""
 
-    source_path = os.path.join(hf_repo_type_prefix, hf_dataset_id) if hf_repo_type_prefix else hf_dataset_id
+    source_path = prefix_join(hf_repo_type_prefix, hf_dataset_id) if hf_repo_type_prefix else hf_dataset_id
     source_path = _strip_hf_protocol(source_path)
     _assert_bucket_support_available(source_path)
     fs_kwargs = {"token": token} if token is not None else {}
@@ -396,8 +396,8 @@ def download_hf(cfg: DownloadConfig) -> None:
     output_path = prefix_join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
     ensure_fsspec_path_writable(output_path)
 
-    # Resolve source URL and filesystem. For production this is an hf:// URL backed
-    # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
+    # List source files through HfFileSystem in production or a local/fsspec
+    # filesystem when tests set source_url_override.
     logger.info("Identifying files to download...")
     if cfg.source_url_override is not None:
         source_fs, source_root = url_to_fs(cfg.source_url_override)

@@ -1,0 +1,40 @@
+[package]
+name = "swh_downloader"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+# arrow and parquet MUST stay on the same major version; bump together.
+#
+# TLS uses rustls + aws-lc-rs (fastest crypto, hardware AES on Ampere). aws-lc-rs
+# compiles native C, so the build host needs a C compiler + cmake (you have these
+# on the box). To avoid cmake entirely you can switch hyper-rustls + rustls to the
+# "ring" provider feature and call rustls::crypto::ring::default_provider() in main.
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+async-compression = { version = "0.4", features = ["tokio", "zstd"] }
+async-channel = "2"
+bytes = "1"
+anyhow = "1"
+rlimit = "0.10"
+
+# Hand-rolled pipelined HTTP/1.1 over raw TCP (optionally TLS): no AWS SDK
+# (signing/interceptor machinery is pure CPU overhead on 1 KB anonymous GETs),
+# no hyper pooled client (its checkout-vs-connect race opens a fresh TCP+TLS
+# connection for nearly every request at high concurrency, flooding the NAT),
+# and no hyper at all in the hot path (S3 honors pipelining; batching GETs in
+# one write and parsing back-to-back responses cuts syscalls ~10x).
+rustls = "0.23"
+tokio-rustls = "0.26"
+webpki-roots = "1"
+
+arrow = "59"
+parquet = { version = "59", features = ["arrow"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

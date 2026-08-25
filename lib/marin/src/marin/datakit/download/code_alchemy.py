@@ -11,7 +11,7 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
-from marin.datakit.download.blob_id import (
+from marin.datakit.download.blob_id_download import (
     BLOB_NULL_PARTITION,
     BLOB_PREFIX_HEX_WIDTH,
     BLOB_PREFIX_PARTITION_COUNT,
