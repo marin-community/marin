@@ -313,18 +313,26 @@ def test_resource_reads_return_workload_snapshots(smoke_cluster):
             controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire()),
             controller_pb2.Controller.GetJobStatusResponse,
         )
-        task_response = resources.list(
+        tasks, page = resources.list(
             "task",
             controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire()),
-            controller_pb2.Controller.ListTasksResponse,
+            job_pb2.TaskStatus,
+        )
+        states = resources.batch_get(
+            "job",
+            controller_pb2.Controller.GetJobStateRequest(job_ids=[job.job_id.to_wire()]),
+            job_pb2.JobStateSnapshot,
         )
     finally:
         resources.close()
 
     assert job_response.job.state == job_pb2.JOB_STATE_SUCCEEDED
-    assert [(task.task_id, task.state) for task in task_response.tasks] == [
+    assert [(task.task_id, task.state) for task in tasks] == [
         (job.job_id.task(0).to_wire(), job_pb2.TASK_STATE_SUCCEEDED)
     ]
+    assert page.total_count == 1
+    assert not page.has_more
+    assert [(state.job_id, state.state) for state in states] == [(job.job_id.to_wire(), job_pb2.JOB_STATE_SUCCEEDED)]
 
 
 # ============================================================================

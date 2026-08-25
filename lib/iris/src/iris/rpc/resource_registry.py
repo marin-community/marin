@@ -3,17 +3,19 @@
 
 """Immutable bindings for generic resource verbs."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TypeVar, cast
+from typing import Generic, TypeVar, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from google.protobuf.any_pb2 import Any as AnyMessage
 from google.protobuf.message import Message
+
+from iris.rpc import resource_pb2
 
 
 class ResourceVerb(StrEnum):
@@ -28,23 +30,83 @@ Handler = Callable[[Message, RequestContext], Message]
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceBinding:
-    request_type: type[Message]
-    response_type: type[Message]
-    handler: Handler
+class ResourceCodec(Generic[Request, Response]):
+    verb: ResourceVerb
+    request_type: type[Request]
+    response_type: type[Response]
+    wire_response_type: type[Message]
+    encoder: Callable[[Request, Response], Message]
 
-    def invoke(self, payload: AnyMessage, context: RequestContext) -> AnyMessage:
+    def decode(self, payload: AnyMessage) -> Request:
         request = self.request_type()
         if not payload.Unpack(request):
             raise ConnectError(Code.INVALID_ARGUMENT, f"expected {_type_url(self.request_type)}")
-        response = self.handler(request, context)
+        return request
+
+    def encode(self, request: Request, response: Message) -> Message:
         if not isinstance(response, self.response_type):
             raise TypeError(
                 f"resource handler returned {type(response).__name__}; expected {self.response_type.__name__}"
             )
-        packed = AnyMessage()
-        packed.Pack(response)
-        return packed
+        encoded = self.encoder(request, cast(Response, response))
+        if not isinstance(encoded, self.wire_response_type):
+            raise TypeError(
+                f"resource codec returned {type(encoded).__name__}; expected {self.wire_response_type.__name__}"
+            )
+        return encoded
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceBinding:
+    codec: ResourceCodec
+    handler: Handler
+
+    def invoke(self, payload: AnyMessage, context: RequestContext) -> Message:
+        request = self.codec.decode(payload)
+        response = self.handler(request, context)
+        return self.codec.encode(request, response)
+
+
+def get_codec(
+    request_type: type[Request],
+    response_type: type[Response],
+) -> ResourceCodec[Request, Response]:
+    def encode(_request: Request, response: Response) -> Message:
+        return resource_pb2.GetResponse(resource=_resource(response))
+
+    return ResourceCodec(ResourceVerb.GET, request_type, response_type, resource_pb2.GetResponse, encode)
+
+
+def list_codec(
+    request_type: type[Request],
+    response_type: type[Response],
+    resources: Callable[[Response], Iterable[Message]],
+    page: Callable[[Response], resource_pb2.PageInfo],
+) -> ResourceCodec[Request, Response]:
+    def encode(_request: Request, response: Response) -> Message:
+        return resource_pb2.ListResponse(
+            resources=[_resource(body) for body in resources(response)],
+            page=page(response),
+        )
+
+    return ResourceCodec(ResourceVerb.LIST, request_type, response_type, resource_pb2.ListResponse, encode)
+
+
+def batch_get_codec(
+    request_type: type[Request],
+    response_type: type[Response],
+    resources: Callable[[Request, Response], Iterable[Message]],
+) -> ResourceCodec[Request, Response]:
+    def encode(request: Request, response: Response) -> Message:
+        return resource_pb2.BatchGetResponse(resources=[_resource(body) for body in resources(request, response)])
+
+    return ResourceCodec(
+        ResourceVerb.BATCH_GET,
+        request_type,
+        response_type,
+        resource_pb2.BatchGetResponse,
+        encode,
+    )
 
 
 class ResourceRegistryBuilder:
@@ -56,17 +118,17 @@ class ResourceRegistryBuilder:
     def bind(
         self,
         path: str,
-        request_type: type[Request],
-        response_type: type[Response],
+        codec: ResourceCodec[Request, Response],
         handler: Callable[[Request, RequestContext], Response],
     ) -> None:
         resource_type, verb = _parse_path(path)
+        if codec.verb is not verb:
+            raise ValueError(f"resource binding {path} requires a {verb.value} codec")
         key = (resource_type, verb)
         if key in self._bindings:
             raise ValueError(f"duplicate resource binding: {path}")
         self._bindings[key] = ResourceBinding(
-            request_type=request_type,
-            response_type=response_type,
+            codec=codec,
             handler=cast(Handler, handler),
         )
 
@@ -104,3 +166,9 @@ def _parse_path(path: str) -> tuple[str, ResourceVerb]:
 
 def _type_url(message_type: type[Message]) -> str:
     return f"type.googleapis.com/{message_type.DESCRIPTOR.full_name}"
+
+
+def _resource(body: Message) -> resource_pb2.Resource:
+    packed = AnyMessage()
+    packed.Pack(body)
+    return resource_pb2.Resource(body=packed)

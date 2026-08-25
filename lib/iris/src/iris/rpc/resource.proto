@@ -25,12 +25,30 @@ message ResourceRequest {
   google.protobuf.Any input = 2;
 }
 
-message ResourceResponse {
-  google.protobuf.Any output = 1;
+message Resource {
+  google.protobuf.Any body = 1;
+}
+
+message PageInfo {
+  int64 total_count = 1;
+  bool has_more = 2;
+}
+
+message GetResponse {
+  Resource resource = 1;
+}
+
+message ListResponse {
+  repeated Resource resources = 1;
+  PageInfo page = 2;
+}
+
+message BatchGetResponse {
+  repeated Resource resources = 1;
 }
 
 service ResourceService {
-  rpc Get(ResourceRequest) returns (ResourceResponse);
-  rpc List(ResourceRequest) returns (ResourceResponse);
-  rpc BatchGet(ResourceRequest) returns (ResourceResponse);
+  rpc Get(ResourceRequest) returns (GetResponse);
+  rpc List(ResourceRequest) returns (ListResponse);
+  rpc BatchGet(ResourceRequest) returns (BatchGetResponse);
 }

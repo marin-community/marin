@@ -16,7 +16,6 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from google.protobuf.message import Message
 from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
@@ -50,13 +49,13 @@ logger = logging.getLogger(__name__)
 _JOB_RESOURCE_TYPE = "job"
 _TASK_RESOURCE_TYPE = "task"
 
-ReadResponse = TypeVar("ReadResponse", bound=Message)
+ReadResult = TypeVar("ReadResult")
 
 
 def _resource_read_with_legacy_fallback(
-    resource_read: Callable[[], ReadResponse],
-    legacy_read: Callable[[], ReadResponse],
-) -> ReadResponse:
+    resource_read: Callable[[], ReadResult],
+    legacy_read: Callable[[], ReadResult],
+) -> ReadResult:
     # TODO(#7560): Remove this fallback when the two-week compatibility window ends on 2026-09-08.
     try:
         return resource_read()
@@ -274,13 +273,17 @@ class RemoteClusterClient:
             request = controller_pb2.Controller.GetJobStateRequest(
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
-            response = _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.batch_get(
-                    _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.GetJobStateResponse
-                ),
-                lambda: self._client.get_job_state(request),
+            return _resource_read_with_legacy_fallback(
+                lambda: {
+                    snapshot.job_id: snapshot.state
+                    for snapshot in self._resource_client.batch_get(
+                        _JOB_RESOURCE_TYPE,
+                        request,
+                        job_pb2.JobStateSnapshot,
+                    )
+                },
+                lambda: dict(self._client.get_job_state(request).states),
             )
-            return dict(response.states)
 
         return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
@@ -542,18 +545,25 @@ class RemoteClusterClient:
 
             def _call(q=page_query):
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
+
+                def resource_page() -> tuple[list[job_pb2.JobStatus], bool]:
+                    page_jobs, page = self._resource_client.list(_JOB_RESOURCE_TYPE, request, job_pb2.JobStatus)
+                    return page_jobs, page.has_more
+
+                def legacy_page() -> tuple[list[job_pb2.JobStatus], bool]:
+                    response = self._client.list_jobs(request)
+                    return list(response.jobs), response.has_more
+
                 return _resource_read_with_legacy_fallback(
-                    lambda: self._resource_client.list(
-                        _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.ListJobsResponse
-                    ),
-                    lambda: self._client.list_jobs(request),
+                    resource_page,
+                    legacy_page,
                 )
 
-            response = call_with_retry("list_jobs", _call)
-            jobs.extend(response.jobs)
-            if not response.has_more or not response.jobs:
+            page_jobs, has_more = call_with_retry("list_jobs", _call)
+            jobs.extend(page_jobs)
+            if not has_more or not page_jobs:
                 break
-            offset += len(response.jobs)
+            offset += len(page_jobs)
         return jobs
 
     def shutdown(self, wait: bool = True) -> None:
@@ -616,13 +626,10 @@ class RemoteClusterClient:
 
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-            response = _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.list(
-                    _TASK_RESOURCE_TYPE, request, controller_pb2.Controller.ListTasksResponse
-                ),
-                lambda: self._client.list_tasks(request),
+            return _resource_read_with_legacy_fallback(
+                lambda: self._resource_client.list(_TASK_RESOURCE_TYPE, request, job_pb2.TaskStatus)[0],
+                lambda: list(self._client.list_tasks(request).tasks),
             )
-            return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)
 

@@ -17,13 +17,13 @@ from . import resource_pb2 as resource__pb2
 
 
 class ResourceService(Protocol):
-    async def get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    async def get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.GetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def list(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    async def list(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ListResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def batch_get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    async def batch_get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.BatchGetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -37,7 +37,7 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         name="Get",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.GetResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get,
@@ -47,7 +47,7 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         name="List",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.ListResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list,
@@ -57,7 +57,7 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         name="BatchGet",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.BatchGetResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.batch_get,
@@ -81,14 +81,14 @@ class ResourceServiceClient(ConnectClient):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.GetResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="Get",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.GetResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -101,14 +101,14 @@ class ResourceServiceClient(ConnectClient):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.ListResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="List",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.ListResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -121,14 +121,14 @@ class ResourceServiceClient(ConnectClient):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.BatchGetResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="BatchGet",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.BatchGetResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -137,11 +137,11 @@ class ResourceServiceClient(ConnectClient):
 
 
 class ResourceServiceSync(Protocol):
-    def get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    def get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.GetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    def list(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ListResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def batch_get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.ResourceResponse:
+    def batch_get(self, request: resource__pb2.ResourceRequest, ctx: RequestContext) -> resource__pb2.BatchGetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -154,7 +154,7 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         name="Get",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.GetResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get,
@@ -164,7 +164,7 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         name="List",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.ListResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list,
@@ -174,7 +174,7 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         name="BatchGet",
                         service_name="iris.resource.ResourceService",
                         input=resource__pb2.ResourceRequest,
-                        output=resource__pb2.ResourceResponse,
+                        output=resource__pb2.BatchGetResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.batch_get,
@@ -198,14 +198,14 @@ class ResourceServiceClientSync(ConnectClientSync):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.GetResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="Get",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.GetResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -218,14 +218,14 @@ class ResourceServiceClientSync(ConnectClientSync):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.ListResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="List",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.ListResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -238,14 +238,14 @@ class ResourceServiceClientSync(ConnectClientSync):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ResourceResponse:
+    ) -> resource__pb2.BatchGetResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="BatchGet",
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.ResourceRequest,
-                output=resource__pb2.ResourceResponse,
+                output=resource__pb2.BatchGetResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

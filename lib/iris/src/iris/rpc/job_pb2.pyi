@@ -304,6 +304,14 @@ class GetProcessStatusResponse(_message.Message):
     log_entries: _containers.RepeatedCompositeFieldContainer[_iris_logging_pb2.LogEntry]
     def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_iris_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
 
+class JobStateSnapshot(_message.Message):
+    __slots__ = ("job_id", "state")
+    JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    job_id: str
+    state: JobState
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ...) -> None: ...
+
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled", "container_id", "backend_id", "cluster", "submitted_at", "status_message")
     class PortsEntry(_message.Message):

@@ -3,6 +3,7 @@
 
 """Client for controller-registered resource operations."""
 
+import builtins
 from collections.abc import Callable
 from typing import TypeVar
 
@@ -12,7 +13,8 @@ from google.protobuf.message import Message
 from iris.rpc import resource_pb2
 from iris.rpc.resource_connect import ResourceServiceClientSync
 
-Response = TypeVar("Response", bound=Message)
+ResourceBody = TypeVar("ResourceBody", bound=Message)
+WireResponse = TypeVar("WireResponse", bound=Message)
 
 
 class ResourceClient:
@@ -25,45 +27,46 @@ class ResourceClient:
         self,
         resource_type: str,
         request: Message,
-        response_type: type[Response],
+        body_type: type[ResourceBody],
         *,
         timeout_ms: int | None = None,
-    ) -> Response:
-        return self._invoke(self._stub.get, resource_type, request, response_type, timeout_ms)
+    ) -> ResourceBody:
+        response = self._invoke(self._stub.get, resource_type, request, timeout_ms)
+        return _unpack(response.resource, body_type)
 
     def list(
         self,
         resource_type: str,
         request: Message,
-        response_type: type[Response],
+        body_type: type[ResourceBody],
         *,
         timeout_ms: int | None = None,
-    ) -> Response:
-        return self._invoke(self._stub.list, resource_type, request, response_type, timeout_ms)
+    ) -> tuple[list[ResourceBody], resource_pb2.PageInfo]:
+        response = self._invoke(self._stub.list, resource_type, request, timeout_ms)
+        return [_unpack(resource, body_type) for resource in response.resources], response.page
 
     def batch_get(
         self,
         resource_type: str,
         request: Message,
-        response_type: type[Response],
+        body_type: type[ResourceBody],
         *,
         timeout_ms: int | None = None,
-    ) -> Response:
-        return self._invoke(self._stub.batch_get, resource_type, request, response_type, timeout_ms)
+    ) -> builtins.list[ResourceBody]:
+        response = self._invoke(self._stub.batch_get, resource_type, request, timeout_ms)
+        return [_unpack(resource, body_type) for resource in response.resources]
 
     def _invoke(
         self,
-        rpc: Callable[..., resource_pb2.ResourceResponse],
+        rpc: Callable[..., WireResponse],
         resource_type: str,
         request: Message,
-        response_type: type[Response],
         timeout_ms: int | None,
-    ) -> Response:
-        response = rpc(
+    ) -> WireResponse:
+        return rpc(
             resource_pb2.ResourceRequest(resource_type=resource_type, input=_pack(request)),
             timeout_ms=timeout_ms,
         )
-        return _unpack(response.output, response_type)
 
     def close(self) -> None:
         self._stub.close()
@@ -75,8 +78,8 @@ def _pack(message: Message) -> AnyMessage:
     return packed
 
 
-def _unpack(payload: AnyMessage, response_type: type[Response]) -> Response:
-    response = response_type()
-    if not payload.Unpack(response):
-        raise TypeError(f"resource response is not type.googleapis.com/{response_type.DESCRIPTOR.full_name}")
-    return response
+def _unpack(resource: resource_pb2.Resource, body_type: type[ResourceBody]) -> ResourceBody:
+    body = body_type()
+    if not resource.body.Unpack(body):
+        raise TypeError(f"resource body is not type.googleapis.com/{body_type.DESCRIPTOR.full_name}")
+    return body

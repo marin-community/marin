@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import any_pb2 as google_dot_protobuf_dot_any__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eresource.proto\x12\riris.resource\x1a\x19google/protobuf/any.proto\"b\n\x0fResourceRequest\x12#\n\rresource_type\x18\x01 \x01(\tR\x0cresourceType\x12*\n\x05input\x18\x02 \x01(\x0b\x32\x14.google.protobuf.AnyR\x05input\"@\n\x10ResourceResponse\x12,\n\x06output\x18\x01 \x01(\x0b\x32\x14.google.protobuf.AnyR\x06output2\xef\x01\n\x0fResourceService\x12\x46\n\x03Get\x12\x1e.iris.resource.ResourceRequest\x1a\x1f.iris.resource.ResourceResponse\x12G\n\x04List\x12\x1e.iris.resource.ResourceRequest\x1a\x1f.iris.resource.ResourceResponse\x12K\n\x08\x42\x61tchGet\x12\x1e.iris.resource.ResourceRequest\x1a\x1f.iris.resource.ResourceResponseB|\n\x11\x63om.iris.resourceB\rResourceProtoP\x01\xa2\x02\x03IRX\xaa\x02\rIris.Resource\xca\x02\rIris\\Resource\xe2\x02\x19Iris\\Resource\\GPBMetadata\xea\x02\x0eIris::Resource\x92\x03\x02\x08\x01\x62\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eresource.proto\x12\riris.resource\x1a\x19google/protobuf/any.proto\"b\n\x0fResourceRequest\x12#\n\rresource_type\x18\x01 \x01(\tR\x0cresourceType\x12*\n\x05input\x18\x02 \x01(\x0b\x32\x14.google.protobuf.AnyR\x05input\"4\n\x08Resource\x12(\n\x04\x62ody\x18\x01 \x01(\x0b\x32\x14.google.protobuf.AnyR\x04\x62ody\"F\n\x08PageInfo\x12\x1f\n\x0btotal_count\x18\x01 \x01(\x03R\ntotalCount\x12\x19\n\x08has_more\x18\x02 \x01(\x08R\x07hasMore\"B\n\x0bGetResponse\x12\x33\n\x08resource\x18\x01 \x01(\x0b\x32\x17.iris.resource.ResourceR\x08resource\"r\n\x0cListResponse\x12\x35\n\tresources\x18\x01 \x03(\x0b\x32\x17.iris.resource.ResourceR\tresources\x12+\n\x04page\x18\x02 \x01(\x0b\x32\x17.iris.resource.PageInfoR\x04page\"I\n\x10\x42\x61tchGetResponse\x12\x35\n\tresources\x18\x01 \x03(\x0b\x32\x17.iris.resource.ResourceR\tresources2\xe6\x01\n\x0fResourceService\x12\x41\n\x03Get\x12\x1e.iris.resource.ResourceRequest\x1a\x1a.iris.resource.GetResponse\x12\x43\n\x04List\x12\x1e.iris.resource.ResourceRequest\x1a\x1b.iris.resource.ListResponse\x12K\n\x08\x42\x61tchGet\x12\x1e.iris.resource.ResourceRequest\x1a\x1f.iris.resource.BatchGetResponseB|\n\x11\x63om.iris.resourceB\rResourceProtoP\x01\xa2\x02\x03IRX\xaa\x02\rIris.Resource\xca\x02\rIris\\Resource\xe2\x02\x19Iris\\Resource\\GPBMetadata\xea\x02\x0eIris::Resource\x92\x03\x02\x08\x01\x62\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,8 +35,16 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'\n\021com.iris.resourceB\rResourceProtoP\001\242\002\003IRX\252\002\rIris.Resource\312\002\rIris\\Resource\342\002\031Iris\\Resource\\GPBMetadata\352\002\016Iris::Resource\222\003\002\010\001'
   _globals['_RESOURCEREQUEST']._serialized_start=60
   _globals['_RESOURCEREQUEST']._serialized_end=158
-  _globals['_RESOURCERESPONSE']._serialized_start=160
-  _globals['_RESOURCERESPONSE']._serialized_end=224
-  _globals['_RESOURCESERVICE']._serialized_start=227
-  _globals['_RESOURCESERVICE']._serialized_end=466
+  _globals['_RESOURCE']._serialized_start=160
+  _globals['_RESOURCE']._serialized_end=212
+  _globals['_PAGEINFO']._serialized_start=214
+  _globals['_PAGEINFO']._serialized_end=284
+  _globals['_GETRESPONSE']._serialized_start=286
+  _globals['_GETRESPONSE']._serialized_end=352
+  _globals['_LISTRESPONSE']._serialized_start=354
+  _globals['_LISTRESPONSE']._serialized_end=468
+  _globals['_BATCHGETRESPONSE']._serialized_start=470
+  _globals['_BATCHGETRESPONSE']._serialized_end=543
+  _globals['_RESOURCESERVICE']._serialized_start=546
+  _globals['_RESOURCESERVICE']._serialized_end=776
 # @@protoc_insertion_point(module_scope)

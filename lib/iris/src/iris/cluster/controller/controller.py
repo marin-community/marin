@@ -13,7 +13,7 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -127,9 +127,9 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.auth import SESSION_COOKIE
-from iris.rpc.resource_registry import ResourceRegistryBuilder
+from iris.rpc.resource_registry import ResourceRegistryBuilder, batch_get_codec, get_codec, list_codec
 from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
@@ -152,35 +152,64 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
     registry = ResourceRegistryBuilder()
     registry.bind(
         "/job/get",
-        controller_pb2.Controller.GetJobStatusRequest,
-        controller_pb2.Controller.GetJobStatusResponse,
+        get_codec(
+            controller_pb2.Controller.GetJobStatusRequest,
+            controller_pb2.Controller.GetJobStatusResponse,
+        ),
         service.get_job_status,
     )
     registry.bind(
         "/job/list",
-        controller_pb2.Controller.ListJobsRequest,
-        controller_pb2.Controller.ListJobsResponse,
+        list_codec(
+            controller_pb2.Controller.ListJobsRequest,
+            controller_pb2.Controller.ListJobsResponse,
+            resources=lambda response: response.jobs,
+            page=lambda response: resource_pb2.PageInfo(
+                total_count=response.total_count,
+                has_more=response.has_more,
+            ),
+        ),
         service.list_jobs,
     )
     registry.bind(
         "/job/batch-get",
-        controller_pb2.Controller.GetJobStateRequest,
-        controller_pb2.Controller.GetJobStateResponse,
+        batch_get_codec(
+            controller_pb2.Controller.GetJobStateRequest,
+            controller_pb2.Controller.GetJobStateResponse,
+            resources=_job_state_snapshots,
+        ),
         service.get_job_state,
     )
     registry.bind(
         "/task/get",
-        controller_pb2.Controller.GetTaskStatusRequest,
-        controller_pb2.Controller.GetTaskStatusResponse,
+        get_codec(
+            controller_pb2.Controller.GetTaskStatusRequest,
+            controller_pb2.Controller.GetTaskStatusResponse,
+        ),
         service.get_task_status,
     )
     registry.bind(
         "/task/list",
-        controller_pb2.Controller.ListTasksRequest,
-        controller_pb2.Controller.ListTasksResponse,
+        list_codec(
+            controller_pb2.Controller.ListTasksRequest,
+            controller_pb2.Controller.ListTasksResponse,
+            resources=lambda response: response.tasks,
+            page=lambda response: resource_pb2.PageInfo(total_count=len(response.tasks)),
+        ),
         service.list_tasks,
     )
     return ResourceServiceImpl(registry.freeze())
+
+
+def _job_state_snapshots(
+    request: controller_pb2.Controller.GetJobStateRequest,
+    response: controller_pb2.Controller.GetJobStateResponse,
+) -> Iterable[job_pb2.JobStateSnapshot]:
+    return (
+        job_pb2.JobStateSnapshot(job_id=job_id, state=response.states[job_id])
+        for job_id in request.job_ids
+        if job_id in response.states
+    )
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:

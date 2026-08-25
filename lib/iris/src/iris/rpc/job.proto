@@ -158,6 +158,11 @@ enum JobState {
   JOB_STATE_UNSCHEDULABLE = 8;  // Couldn't be scheduled within timeout
 }
 
+message JobStateSnapshot {
+  string job_id = 1;
+  JobState state = 2;
+}
+
 // Task state mirrors job state - a task is a single unit of execution within a job
 enum TaskState {
   TASK_STATE_UNSPECIFIED = 0;
