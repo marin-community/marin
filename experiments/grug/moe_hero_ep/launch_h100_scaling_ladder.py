@@ -3,13 +3,17 @@
 
 """H100 scaling ladder for the Grug MoE EP hero recipe.
 
-The two rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter
-scaling rules while mapping the expert and replica axes onto Hopper nodes. Every rung uses a global
-sequence batch of 1024.
+The rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter scaling
+rules while mapping the expert and replica axes onto Hopper nodes. d512 through d1536 use global
+batch 1024. d2048 uses batch 1536 so its 192 GPUs divide the batch evenly while retaining
+approximately the same per-GPU compute load measured by d1536 on 64 H100s at batch 1024.
 
     size   H100 GPUs  EP per task  global batch  steps  tokens
     d512       8           8           1024        3930    16B
     d768      16           8           1024       11420    48B
+    d1024     32           8           1024       30552   128B
+    d1536     64           8           1024       90767   381B
+    d2048    192           8           1536      147192   926B
 
 Use ``--batch-size`` for one-off batch comparisons. The step count and compute-scaled optimizer are
 recomputed from the override unless ``--num-steps`` is also set.
@@ -48,7 +52,12 @@ from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HeroThroughputResult,
     _validation_datasets,
 )
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import TENSORSTORE_CACHE_BYTES, TOKENS_PER_ACTIVE_PARAM
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
+    LADDER_MAX_RETRIES_FAILURE,
+    LADDER_MAX_TASK_FAILURES,
+    TENSORSTORE_CACHE_BYTES,
+    TOKENS_PER_ACTIVE_PARAM,
+)
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
@@ -67,7 +76,7 @@ from experiments.grug.moe_hero_ep.train import (
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
-H100_LADDER_SIZES = ("d512", "d768")
+H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1536", "d2048")
 GLOBAL_BATCH_SIZE = 1024
 QB_HIST_BINS = 10_000
 WATCH_INTERVAL = 10
@@ -84,6 +93,9 @@ class H100LadderRung:
     shape: SmallShape
     gpus_per_task: int
     task_count: int
+    batch_size: int
+    max_retries_failure: int
+    max_task_failures: int
 
     @property
     def global_device_count(self) -> int:
@@ -92,9 +104,50 @@ class H100LadderRung:
 
 def _h100_ladder_rung(size: str) -> H100LadderRung:
     if size == "d512":
-        return H100LadderRung(SmallShape(512, 6, 4, 1, 1), gpus_per_task=8, task_count=1)
+        return H100LadderRung(
+            SmallShape(512, 6, 4, 1, 1),
+            gpus_per_task=8,
+            task_count=1,
+            batch_size=GLOBAL_BATCH_SIZE,
+            max_retries_failure=MAX_RETRIES_FAILURE,
+            max_task_failures=MAX_TASK_FAILURES,
+        )
     if size == "d768":
-        return H100LadderRung(SmallShape(768, 8, 6, 1, 1), gpus_per_task=8, task_count=2)
+        return H100LadderRung(
+            SmallShape(768, 8, 6, 1, 1),
+            gpus_per_task=8,
+            task_count=2,
+            batch_size=GLOBAL_BATCH_SIZE,
+            max_retries_failure=MAX_RETRIES_FAILURE,
+            max_task_failures=MAX_TASK_FAILURES,
+        )
+    if size == "d1024":
+        return H100LadderRung(
+            SmallShape(1024, 12, 8, 2, 1),
+            gpus_per_task=8,
+            task_count=4,
+            batch_size=GLOBAL_BATCH_SIZE,
+            max_retries_failure=MAX_RETRIES_FAILURE,
+            max_task_failures=MAX_TASK_FAILURES,
+        )
+    if size == "d1536":
+        return H100LadderRung(
+            SmallShape(1536, 16, 12, 3, 1),
+            gpus_per_task=8,
+            task_count=8,
+            batch_size=GLOBAL_BATCH_SIZE,
+            max_retries_failure=MAX_RETRIES_FAILURE,
+            max_task_failures=MAX_TASK_FAILURES,
+        )
+    if size == "d2048":
+        return H100LadderRung(
+            SmallShape(2048, 22, 16, 4, 2),
+            gpus_per_task=8,
+            task_count=24,
+            batch_size=1536,
+            max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
+            max_task_failures=LADDER_MAX_TASK_FAILURES,
+        )
     raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
 
 
@@ -122,7 +175,7 @@ def build_h100_ladder_run(
     run_id: str,
     size: str,
     num_steps: int | None = None,
-    batch_size: int = GLOBAL_BATCH_SIZE,
+    batch_size: int | None = None,
     checkpoint_every: int | None = None,
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
@@ -143,6 +196,8 @@ def build_h100_ladder_run(
     rung = _h100_ladder_rung(size)
     model = _h100_ladder_model(rung)
     training_tokens = TOKENS_PER_ACTIVE_PARAM * _active_params(model)
+    if batch_size is None:
+        batch_size = rung.batch_size
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
         raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
 
@@ -268,8 +323,8 @@ def build_h100_ladder_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=rung.gpus_per_task,
-            max_retries_failure=MAX_RETRIES_FAILURE,
-            max_task_failures=MAX_TASK_FAILURES,
+            max_retries_failure=rung.max_retries_failure,
+            max_task_failures=rung.max_task_failures,
         )
 
     return ArtifactStep(
@@ -295,9 +350,8 @@ def build_h100_ladder_run(
 @click.option(
     "--batch-size",
     type=click.IntRange(min=1),
-    default=GLOBAL_BATCH_SIZE,
-    show_default=True,
-    help="Global sequence batch.",
+    default=None,
+    help="Global sequence batch. Defaults to the rung's configured batch.",
 )
 @click.option(
     "--checkpoint-every",
@@ -317,7 +371,7 @@ def main(
     run_id: str,
     size: str,
     num_steps: int | None,
-    batch_size: int,
+    batch_size: int | None,
     checkpoint_every: int | None,
     wandb_project: str,
 ) -> ArtifactStep[HeroThroughputResult]:
