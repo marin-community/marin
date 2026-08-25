@@ -714,48 +714,78 @@ def _serialize_arrays(
     gate = _HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
-    async def issue_write(num_bytes: int, stage):
-        """Admit ``num_bytes`` to the staging budget, then stage and issue one write."""
+    async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
         await gate.acquire(num_bytes)
         try:
-            write = await stage()
+            data = await stage()
         except BaseException:
             gate.release(num_bytes)
             raise
-        commit_futures.append(write.commit)
+
+        promise, commit_future = ts.Promise.new()
+        commit_futures.append(commit_future)
         # Fires on failure as well as success, so a failed commit cannot strand the budget.
-        write.commit.add_done_callback(lambda _: gate.release(num_bytes))
-        await write.copy
+        commit_future.add_done_callback(lambda _: gate.release(num_bytes))
 
-    async def write_host_array(store, array):
-        # Unsharded and identical everywhere, so process 0 writes all of it.
-        if jax.process_index() != 0:
-            return
+        def store_opened(future: ts.Future) -> None:
+            try:
+                store = future.result()
+                target = store if region is None else store[region.index]
+                write = target.write(data, can_reference_source_data_indefinitely=True)
+                write.commit.add_done_callback(write_finished)
+                write.commit.force()
+            except BaseException as error:
+                promise.set_exception(error)
 
+        def write_finished(future: ts.Future) -> None:
+            try:
+                future.result()
+            except BaseException as error:
+                promise.set_exception(error)
+            else:
+                promise.set_result(None)
+
+        store_future.add_done_callback(store_opened)
+
+    async def write_host_array(store_future, array):
         async def stage():
-            # The caller owns this buffer and may mutate it, so TensorStore must copy.
-            return store.write(np.asarray(array), can_reference_source_data_indefinitely=False)
+            # The caller owns this buffer and may mutate it after the save returns.
+            return np.array(array, copy=True)
 
-        await issue_write(_estimate_array_nbytes(array), stage)
+        await issue_write(_estimate_array_nbytes(array), stage, store_future, None)
 
-    async def write_shard(store, shard, plan):
-        region = _shard_write_region(shard, plan)
-        if region is None:
-            return
-
+    async def write_shard(store_future, shard, plan, region: _ShardWrite):
         async def stage():
-            data = await _transfer_shard_to_pageable_host(shard, region.local_slice)
-            # The snapshot is private and never mutated, so TensorStore may hold the reference.
-            return store[region.index].write(data, can_reference_source_data_indefinitely=True)
+            return await _transfer_shard_to_pageable_host(shard, region.local_slice)
 
-        await issue_write(_estimate_array_nbytes(shard.data) // plan.write_replicas, stage)
+        await issue_write(
+            _estimate_array_nbytes(shard.data) // plan.write_replicas,
+            stage,
+            store_future,
+            region,
+        )
 
     async def write_one(array, tspec, plan):
-        store = await ts.open(ts.Spec(tspec), create=True, open=True, context=context)
+        store_future = ts.open(ts.Spec(tspec), create=True, open=True, context=context)
+
         if not isinstance(array, jax.Array):
-            await write_host_array(store, array)
+            # Unsharded and identical everywhere, so process 0 writes all of it.
+            if jax.process_index() != 0:
+                return
+            # Start I/O without waiting; staging below never depends on open completion.
+            store_future.force()
+            await write_host_array(store_future, array)
             return
-        await asyncio.gather(*(write_shard(store, shard, plan) for shard in array.addressable_shards))
+
+        shard_writes = [
+            (shard, region)
+            for shard in array.addressable_shards
+            if (region := _shard_write_region(shard, plan)) is not None
+        ]
+        if not shard_writes:
+            return
+        store_future.force()
+        await asyncio.gather(*(write_shard(store_future, shard, plan, region) for shard, region in shard_writes))
 
     async def write_all():
         await asyncio.gather(*(write_one(a, s, p) for a, s, p in zip(arrays, tspecs, plans)))
