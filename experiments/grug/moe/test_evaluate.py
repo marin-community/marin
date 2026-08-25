@@ -26,6 +26,7 @@ from experiments.grug.moe.evaluate import (
     MrcrConditionLoss,
     MrcrExampleLoss,
     _canonical_67b_model,
+    _gather_flattened,
     _loss_sums,
     derive_mrcr_metrics,
     evaluate_grug_checkpoint,
@@ -197,6 +198,18 @@ def test_loss_sums_treats_model_parameters_as_dynamic_arguments():
         return jnp.sum(loss_sum)
 
     assert jax.grad(total_loss)(jnp.asarray(2.0)) == pytest.approx(2.0)
+
+
+def test_gather_flattened_uses_tiled_global_array_semantics(monkeypatch):
+    def process_allgather(_values, *, tiled):
+        assert tiled is True
+        return jnp.asarray([[3, 1], [4, 2]], dtype=jnp.int32)
+
+    monkeypatch.setattr("experiments.grug.moe.evaluate.multihost_utils.process_allgather", process_allgather)
+
+    gathered = _gather_flattened(jnp.asarray([0], dtype=jnp.int32))
+
+    assert gathered.tolist() == [3, 1, 4, 2]
 
 
 def test_validate_grug_checkpoint_eval_config_rejects_static_and_dataset_mismatches(tmp_path):

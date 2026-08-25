@@ -563,6 +563,11 @@ def _loss_sums(
     return summarize_per_example_losses(losses, weights, bytes_per_position)
 
 
+def _gather_flattened(values: jax.Array) -> np.ndarray:
+    gathered = multihost_utils.process_allgather(values, tiled=True)
+    return np.asarray(gathered).reshape(-1)
+
+
 def _evaluate_components(
     config: GrugCheckpointEvalConfig, model: Transformer, mesh: jax.sharding.Mesh
 ) -> list[MrcrConditionLoss]:
@@ -593,9 +598,9 @@ def _evaluate_components(
         ordinal = 0
         for batch in loader:
             batch_loss, batch_tokens, batch_bytes = loss_sums(model, batch, byte_lengths, sharding=sharding)
-            gathered_loss = np.asarray(multihost_utils.process_allgather(batch_loss)).reshape(-1)
-            gathered_tokens = np.asarray(multihost_utils.process_allgather(batch_tokens)).reshape(-1)
-            gathered_bytes = np.asarray(multihost_utils.process_allgather(batch_bytes)).reshape(-1)
+            gathered_loss = _gather_flattened(batch_loss)
+            gathered_tokens = _gather_flattened(batch_tokens)
+            gathered_bytes = _gather_flattened(batch_bytes)
             if jax.process_index() != 0:
                 continue
             for loss_sum, scored_tokens, scored_bytes in zip(
