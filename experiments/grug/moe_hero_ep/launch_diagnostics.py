@@ -362,7 +362,7 @@ def build_diagnostic_run(
     "--checkpoint-debug/--no-checkpoint-debug",
     default=False,
     show_default=True,
-    help="Publish low-cost checkpoint phase and memory telemetry. Use with --save-checkpoints.",
+    help="Publish checkpoint phase and memory telemetry. Use with --save-checkpoints.",
 )
 @click.option(
     "--eval-every",

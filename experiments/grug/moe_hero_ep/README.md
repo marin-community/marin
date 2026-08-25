@@ -104,7 +104,7 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--save-checkpoints` | writes periodic and final checkpoints |
 | `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
 | `--checkpoint-path` | places checkpoints at an explicit storage prefix |
-| `--checkpoint-debug` | publishes low-cost checkpoint phase and memory telemetry |
+| `--checkpoint-debug` | publishes checkpoint phase and memory telemetry |
 | `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
 | `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |

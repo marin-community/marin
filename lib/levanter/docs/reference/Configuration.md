@@ -184,7 +184,7 @@ rolls through it.
 
 #### Checkpoint Telemetry
 
-Checkpoint debug mode publishes numeric data from each JAX process to Finelog. Use this low-cost configuration for a long run:
+Checkpoint debug mode publishes numeric data from each JAX process to Finelog. This configuration disables allocation tracing and forced garbage collection:
 
 ```yaml
 checkpointer:
