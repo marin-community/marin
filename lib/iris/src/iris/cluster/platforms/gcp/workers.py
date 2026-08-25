@@ -551,7 +551,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, handle),
             )
 
         return handle
@@ -610,7 +610,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
+                lambda: _run_tpu_bootstrap(self._gcp, handle),
             )
 
         return handle
@@ -862,7 +862,6 @@ def _raise_if_create_failed(gcp_service: GcpService, handle: GcpSliceHandle) -> 
 
 def _run_tpu_bootstrap(
     gcp_service: GcpService,
-    project_id: str,
     handle: GcpSliceHandle,
     poll_interval: float = 10.0,
     ip_wait_timeout: float | None = None,

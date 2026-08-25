@@ -300,7 +300,7 @@ class CloudK8sService:
         with slow_log(logger, f"apply {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 if res is K8sResource.PODS:
-                    self._apply_pod(res, name, ns, manifest)
+                    self._apply_pod(res, ns, manifest)
                 else:
                     self._dyn.server_side_apply(
                         resource=self._resource_api(res),
@@ -316,7 +316,7 @@ class CloudK8sService:
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
 
-    def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
+    def _apply_pod(self, res: K8sResource, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
 
         The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
