@@ -542,6 +542,27 @@ def summarize_per_example_losses(
     )
 
 
+def _loss_sums(
+    model: Transformer,
+    batch: GrugLmExample,
+    byte_lengths: jax.Array,
+    *,
+    sharding: NamedSharding,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    losses = model.next_token_loss(
+        batch.tokens,
+        batch.loss_weight,
+        mask=batch.attn_mask,
+        reduction="none",
+        logsumexp_weight=None,
+    )
+    losses = jax.sharding.reshard(losses, sharding)
+    weights = jax.sharding.reshard(batch.loss_weight, sharding)
+    target_ids = jnp.roll(batch.tokens, -1, axis=-1)
+    bytes_per_position = byte_lengths.at[target_ids].get(out_sharding=sharding)
+    return summarize_per_example_losses(losses, weights, bytes_per_position)
+
+
 def _evaluate_components(
     config: GrugCheckpointEvalConfig, model: Transformer, mesh: jax.sharding.Mesh
 ) -> list[MrcrConditionLoss]:
@@ -551,21 +572,7 @@ def _evaluate_components(
     if byte_lengths is None:
         raise ValueError("MRCR BPB evaluation requires a tokenizer")
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-
-    @jax.jit
-    def loss_sums(batch: GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
-        losses = model.next_token_loss(
-            batch.tokens,
-            batch.loss_weight,
-            mask=batch.attn_mask,
-            reduction="none",
-            logsumexp_weight=None,
-        )
-        losses = jax.sharding.reshard(losses, sharding)
-        weights = jax.sharding.reshard(batch.loss_weight, sharding)
-        target_ids = jnp.roll(batch.tokens, -1, axis=-1)
-        bytes_per_position = byte_lengths.at[target_ids].get(out_sharding=sharding)
-        return summarize_per_example_losses(losses, weights, bytes_per_position)
+    loss_sums = jax.jit(_loss_sums, static_argnames="sharding")
 
     output: list[MrcrConditionLoss] = []
     for dataset, tags in eval_sets:
@@ -585,7 +592,7 @@ def _evaluate_components(
         )
         ordinal = 0
         for batch in loader:
-            batch_loss, batch_tokens, batch_bytes = loss_sums(batch)
+            batch_loss, batch_tokens, batch_bytes = loss_sums(model, batch, byte_lengths, sharding=sharding)
             gathered_loss = np.asarray(multihost_utils.process_allgather(batch_loss)).reshape(-1)
             gathered_tokens = np.asarray(multihost_utils.process_allgather(batch_tokens)).reshape(-1)
             gathered_bytes = np.asarray(multihost_utils.process_allgather(batch_bytes)).reshape(-1)

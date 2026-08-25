@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from typing import cast
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
+from levanter.data.text import GrugLmExample
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.distributed import DistributedConfig
 from levanter.tracker import NoopConfig
@@ -21,6 +26,7 @@ from experiments.grug.moe.evaluate import (
     MrcrConditionLoss,
     MrcrExampleLoss,
     _canonical_67b_model,
+    _loss_sums,
     derive_mrcr_metrics,
     evaluate_grug_checkpoint,
     load_grug_checkpoint_params,
@@ -38,6 +44,15 @@ class _TrackerInitialized(Exception):
 
 class _ShapeExemplarObserved(Exception):
     pass
+
+
+@jax.tree_util.register_dataclass
+@dataclasses.dataclass(frozen=True)
+class _LossModel:
+    weight: jax.Array
+
+    def next_token_loss(self, tokens, loss_weight, **_kwargs):
+        return self.weight * jnp.ones_like(loss_weight)
 
 
 @jax.tree_util.register_dataclass
@@ -162,6 +177,26 @@ def test_summarize_per_example_losses_scores_only_response_body_tokens():
     assert loss_sum.tolist() == [5.0]
     assert token_count.tolist() == [2.0]
     assert byte_count.tolist() == [10.0]
+
+
+def test_loss_sums_treats_model_parameters_as_dynamic_arguments():
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape((1, 1, 1)),
+        ("replica_dcn", "data", "expert"),
+        axis_types=(AxisType.Explicit,) * 3,
+    )
+    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+    example = GrugLmExample.causal(jnp.asarray([0, 1, 2], dtype=jnp.int32))
+    batch = dataclasses.replace(example, tokens=example.tokens[None, :], loss_weight=example.loss_weight[None, :])
+    byte_lengths = jnp.asarray([1, 2, 3], dtype=jnp.int32)
+    compiled_loss_sums = jax.jit(_loss_sums, static_argnames="sharding")
+
+    def total_loss(weight):
+        model = cast(Transformer, _LossModel(weight))
+        loss_sum, _, _ = compiled_loss_sums(model, batch, byte_lengths, sharding=sharding)
+        return jnp.sum(loss_sum)
+
+    assert jax.grad(total_loss)(jnp.asarray(2.0)) == pytest.approx(2.0)
 
 
 def test_validate_grug_checkpoint_eval_config_rejects_static_and_dataset_mismatches(tmp_path):
