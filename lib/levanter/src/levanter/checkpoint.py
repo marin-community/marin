@@ -47,6 +47,7 @@ from levanter.utils.types import FilterSpec
 logger = logging.getLogger(__name__)
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
 PathLike = Union[str, pathlib.Path]
 
@@ -312,13 +313,20 @@ class _CheckpointProgressLogger:
             previous_phase_elapsed,
             total_elapsed,
         )
-        self._publish("checkpoint_phase_duration_seconds", previous_phase_elapsed, phase=previous_phase)
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, previous_phase_elapsed, phase=previous_phase)
         self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
 
     def publish_staged_host_bytes(self, staged_host_bytes: int) -> None:
         self._publish("checkpoint_staged_host_bytes", staged_host_bytes)
 
-    def finish(self, status: str, *, publish_total: bool = True) -> None:
+    def finish(self, status: str) -> None:
+        elapsed = self._finish_local(status)
+        self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
+
+    def finish_local(self, status: str) -> None:
+        self._finish_local(status)
+
+    def _finish_local(self, status: str) -> float:
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
@@ -326,9 +334,7 @@ class _CheckpointProgressLogger:
         now = time.time()
         elapsed = now - self.started_at
         phase_elapsed = now - self.phase_started_at
-        self._publish("checkpoint_phase_duration_seconds", phase_elapsed, phase=self.phase)
-        if publish_total:
-            self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, phase_elapsed, phase=self.phase)
         self._log_memory_state(f"checkpoint_{status}", include_top_allocations=True)
         self._log(
             logging.INFO,
@@ -338,6 +344,7 @@ class _CheckpointProgressLogger:
             self.checkpoint_path,
             elapsed,
         )
+        return elapsed
 
     def _run(self) -> None:
         while not self._stop_event.wait(self.interval):
@@ -850,7 +857,7 @@ def save_checkpoint(
 
     def on_local_commit(status: str) -> None:
         if progress_logger is not None and jax.process_index() != 0:
-            progress_logger.finish(status, publish_total=False)
+            progress_logger.finish_local(status)
 
     try:
         if progress_logger is not None:
