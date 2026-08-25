@@ -274,6 +274,7 @@ def test_local_response_is_tied_anchored_and_recovers_nonnegative_damage() -> No
     assert np.linalg.matrix_rank(design_matrix) == len(center)
     folds = fit.geometric_fold_ids(weights, center, folds=5, seed=20260825)
     assert set(folds) == set(range(5))
+    assert np.bincount(folds).tolist() == [16] * 5
     fold_predictions, selections = fit.fold_ensemble_predictions(weights, effects, center, weights[:4])
     assert fold_predictions.shape == (fit.OUTER_FOLDS, 4)
     assert len(selections) == fit.OUTER_FOLDS

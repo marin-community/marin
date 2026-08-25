@@ -131,12 +131,17 @@ def geometric_fold_ids(weights: np.ndarray, center: np.ndarray, folds: int, seed
         )
         distances[centers] = -np.inf
         centers.append(int(np.argmax(distances)))
-    labels = np.argmin(
-        np.linalg.norm(features[:, None, :] - features[np.asarray(centers)][None, :, :], axis=2),
-        axis=1,
-    )
+    capacities = np.full(folds, len(weights) // folds, dtype=int)
+    capacities[: len(weights) % folds] += 1
+    slots = np.repeat(np.arange(folds), capacities)
+    costs = np.linalg.norm(features[:, None, :] - features[np.asarray(centers)][slots][None, :, :], axis=2)
+    row_indices, slot_indices = optimize.linear_sum_assignment(costs)
+    labels = np.empty(len(weights), dtype=int)
+    labels[row_indices] = slots[slot_indices]
     if set(labels) != set(range(folds)):
         raise ValueError("Geometric fold construction lost a held-out region")
+    if not np.array_equal(np.bincount(labels, minlength=folds), capacities):
+        raise ValueError("Geometric fold construction violated balanced capacities")
     return labels
 
 
