@@ -38,7 +38,9 @@ from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
+    MoEExpertMlpPspecs,
     MoeImplementation,
+    PspecAxis,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -119,6 +121,13 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    expert_weight_hidden_axis: PspecAxis = "data"
+    """Mesh axis used to shard the hidden dimension of routed-expert weights.
+
+    Expert ownership and routing remain on ``expert``. The selected axis only
+    controls persistent weight storage; each EP shard gathers the hidden
+    dimension before applying its local experts.
+    """
     ce_implementation: str | None = None
     """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
     backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
@@ -534,6 +543,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                pspecs=MoEExpertMlpPspecs(hidden=cfg.expert_weight_hidden_axis),
             ),
             cfg=cfg,
         )

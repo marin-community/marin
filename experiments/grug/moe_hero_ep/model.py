@@ -44,7 +44,9 @@ from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
+    MoEExpertMlpPspecs,
     MoeImplementation,
+    PspecAxis,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -187,6 +189,12 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    expert_weight_hidden_axis: PspecAxis = "data"
+    """Mesh axis used to shard routed-expert hidden dimensions for storage.
+
+    This does not change expert ownership or the EP collective group, which
+    remain on ``expert``.
+    """
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
@@ -955,6 +963,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                pspecs=MoEExpertMlpPspecs(hidden=cfg.expert_weight_hidden_axis),
             ),
             cfg=cfg,
         )

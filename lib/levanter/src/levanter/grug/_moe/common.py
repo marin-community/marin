@@ -76,7 +76,13 @@ class CapacityOverflow(NamedTuple):
 
 @dataclass(frozen=True)
 class MoEExpertMlpPspecs:
-    """Logical sharding axes for local MoE expert MLP weights."""
+    """Persistent sharding axes for MoE expert MLP weights.
+
+    ``expert`` controls expert ownership. ``hidden`` may name an independent
+    FSDP-style axis (for example ``data`` or ``context``); EP execution gathers
+    that hidden shard within each expert owner without adding the axis to the
+    expert-routing collective group.
+    """
 
     expert: PspecAxis = "expert"
     hidden: PspecAxis = "data"
