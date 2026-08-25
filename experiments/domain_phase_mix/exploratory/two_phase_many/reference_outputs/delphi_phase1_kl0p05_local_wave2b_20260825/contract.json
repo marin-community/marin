@@ -1,0 +1,62 @@
+{
+  "artifacts": {
+    "continuation_summary.csv": "5f03f4f13676ed49227cb54059954d8c981a76b451b463a10ffe62f6d083c583",
+    "continuation_weights.csv": "de2e979a14208b9dd3fa4e2a1b7163eb04732844f32c470d8d932210d9cb0582",
+    "directions.csv": "7bf6a6cbc17c975171cfb7cf23ac911371118f1221faa7329eeb8e12bda8b1e3"
+  },
+  "contract_version": "delphi_phase1_kl0p05_local_wave2b_20260825_v1",
+  "controls": {
+    "fit_budget": false,
+    "seed0_fresh_data_repeats": 4,
+    "seed1_fresh_data_repeats": 4
+  },
+  "directions": {
+    "dense_fit_geometry": 18,
+    "historical": 2,
+    "minimum_projective_line_distance": 0.9058236905689774,
+    "sealed_referee_geometry": 4,
+    "sparse_geometry": 8
+  },
+  "provenance": {
+    "design_seed": 20260825,
+    "historical_frontier_sha256": "57a2aa39a5b0e07d40fc6f55f14aaa86327c332e9ef86738b1cca547924c4a59",
+    "historical_frontier_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_decoupled_phase_information_validation_20260712/mixtures/dphase_unch05_eff_e0p005.csv",
+    "prefix_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "wave1_fit_matrix_sha256": "399ec79150a4f88de6d31917ac7fc1807410804f69c84400611a9eeaa6636e3c",
+    "wave1_materialization_manifest_sha256": "0d3f239002637768f696decb095877591bd7406193ba7573ffa6fc0e87ed5ebc"
+  },
+  "radii": {
+    "construction": "antithetic centered-log-ratio rays, then 1/2048 runtime materialization",
+    "dense": 0.15,
+    "historical": [
+      0.08,
+      0.15,
+      0.23
+    ],
+    "metric": "Hellinger distance from the runtime-exact tied continuation",
+    "sparse": [
+      0.08,
+      0.15
+    ],
+    "tolerance": 0.003
+  },
+  "rows": {
+    "fit": 80,
+    "referee": 8,
+    "tied_control": 8,
+    "total": 96
+  },
+  "selection_mode": "post_wave1_local_redesign",
+  "superseded_wave2_contract_sha256": "0ba8d66e1b58e351f747cdfa8fd037ecd60d20ea315965ed732c4466d6d61b91",
+  "support": {
+    "historical_per_bucket_phase1_and_total_envelopes": true,
+    "minimum_hellinger_to_wave1_fit_support": 0.18321324526985372,
+    "per_bucket_slack_epochs": 1.0,
+    "tied_continuation_included_in_envelope": true
+  },
+  "target_metric": "uncheatable_bpb",
+  "target_prefix": "shared_bounded_ensemble_kl0p05",
+  "wave1_endpoint_outcomes_used": true,
+  "wave1_outcome_use": "Wave-1 outcomes established the local-support failure and motivated replacing the broad fallback. They do not rank the deterministic sparse or dense geometry rays.",
+  "wave2_endpoint_outcomes_used": false
+}

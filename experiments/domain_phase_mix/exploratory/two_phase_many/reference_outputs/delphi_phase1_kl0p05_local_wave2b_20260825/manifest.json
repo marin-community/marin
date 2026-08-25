@@ -1,0 +1,17 @@
+{
+  "artifacts": {
+    "continuation_summary.csv": "5f03f4f13676ed49227cb54059954d8c981a76b451b463a10ffe62f6d083c583",
+    "continuation_weights.csv": "de2e979a14208b9dd3fa4e2a1b7163eb04732844f32c470d8d932210d9cb0582",
+    "directions.csv": "7bf6a6cbc17c975171cfb7cf23ac911371118f1221faa7329eeb8e12bda8b1e3"
+  },
+  "contract_sha256": "f89166981aafbf6dc5f6c78051f98b78426b01bb6b5536a8c661e0e0236c3e9c",
+  "contract_version": "delphi_phase1_kl0p05_local_wave2b_20260825_v1",
+  "rows": {
+    "fit": 80,
+    "referee": 8,
+    "tied_control": 8,
+    "total": 96
+  },
+  "selection_mode": "post_wave1_local_redesign",
+  "target_prefix": "shared_bounded_ensemble_kl0p05"
+}
