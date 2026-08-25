@@ -1,0 +1,60 @@
+{
+  "artifacts": {
+    "continuation_summary.csv": "37680979a135027fefcfae289be5facc11e951f48d1667340fd44bad34a3f8db",
+    "continuation_weights.csv": "1c195a5fe27c56c1273f68aa54f26e49c8bdb9e45d6f76f6d5fc2894822c0008"
+  },
+  "contract_version": "delphi_phase1_harsh_cap_branches_20260825_v1",
+  "design": {
+    "anchor_row_budget": 12,
+    "boundary_behavior": "one-sided full-rank coverage is allowed when tied has zero-weight buckets",
+    "common_random_number_data_seed": 970000,
+    "fit_anchors": [
+      "historical_uncheatable_frontier",
+      "proportional",
+      "uniform"
+    ],
+    "fresh_tied_data_seeds": [
+      971000,
+      971001,
+      971002
+    ],
+    "geometry": "fixed deployment anchors followed by outcome-blind D-optimal and maximin coverage in square-root simplex coordinates",
+    "historical_frontier_is_prior_outcome_selected": true,
+    "local_hellinger_max": 0.12,
+    "local_rows": 48,
+    "mid_hellinger_max": 0.3,
+    "mid_rows": 20,
+    "old_prefix_model_candidate_used": false,
+    "total_materialized_epoch_cap": 10.0
+  },
+  "diagnostics": {
+    "cap4_shared_bounded_ensemble_kl0": {
+      "direct_feature_rank": 38,
+      "pool_rows": 66959,
+      "selected_anchor_rows": 2,
+      "selected_hellinger_max": 0.22256305450303818,
+      "selected_hellinger_median": 0.11833391987982768,
+      "selected_hellinger_min": 0.01624862955178451,
+      "selected_rows": 80,
+      "selected_zero_center_buckets": 19,
+      "sqrt_feature_rank": 39
+    }
+  },
+  "provenance": {
+    "candidate_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
+    "design_seed": 20260825,
+    "historical_frontier_sha256": "57a2aa39a5b0e07d40fc6f55f14aaa86327c332e9ef86738b1cca547924c4a59",
+    "historical_frontier_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_decoupled_phase_information_validation_20260712/mixtures/dphase_unch05_eff_e0p005.csv",
+    "selected_prefixes_sha256": "c8c6b1a69f077644822edb06057e29383d9bff4b6943360c3d21e466c035d4d8"
+  },
+  "rows": {
+    "controls_per_prefix": 8,
+    "fit_per_prefix": 80,
+    "sealed_referees_per_prefix": 8,
+    "total": 96
+  },
+  "selected_candidate_ids": [
+    "cap4_shared_bounded_ensemble_kl0"
+  ],
+  "target_metric": "uncheatable_bpb"
+}

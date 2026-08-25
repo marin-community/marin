@@ -146,7 +146,7 @@ def _write_design(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
     weights_path = tmp_path / "continuation_weights.csv"
     manifest_path = tmp_path / "manifest.json"
     summary.to_csv(summary_path, index=False)
-    weights.to_csv(weights_path, index=False)
+    weights.loc[:, list(design.WEIGHT_ARTIFACT_COLUMNS)].to_csv(weights_path, index=False)
     manifest_path.write_text(json.dumps(manifest, sort_keys=True))
     return summary_path, weights_path, manifest_path
 

@@ -1,0 +1,97 @@
+{
+  "all_alias_results": [
+    {
+      "alias_id": "cap4_shared_bounded_ensemble_kl0",
+      "candidate_id": "shared_bounded_ensemble_kl0",
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "cap_epochs": 4,
+      "github_cpp_mean": 0.8549269636472067,
+      "github_cpp_sd": 0.004329764989195037,
+      "kl_penalty": 0.0,
+      "selection_eligible": true,
+      "uncheatable_mean": 1.075417121251424,
+      "uncheatable_sd": 0.0032049037747116796,
+      "uncheatable_sem": 0.001850352057056636
+    },
+    {
+      "alias_id": "cap4_shared_bounded_ensemble_kl0p05",
+      "candidate_id": "shared_bounded_ensemble_kl0p05",
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0p05",
+      "cap_epochs": 4,
+      "github_cpp_mean": 0.8632182876269022,
+      "github_cpp_sd": 0.0028723039228003805,
+      "kl_penalty": 0.05,
+      "selection_eligible": true,
+      "uncheatable_mean": 1.0775196552276611,
+      "uncheatable_sd": 0.0013722386266261399,
+      "uncheatable_sem": 0.0007922623404750043
+    },
+    {
+      "alias_id": "cap4_shared_bounded_ensemble_kl0p2",
+      "candidate_id": "shared_bounded_ensemble_kl0p2",
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0p2",
+      "cap_epochs": 4,
+      "github_cpp_mean": 0.8885045250256857,
+      "github_cpp_sd": 0.006680370625126192,
+      "kl_penalty": 0.2,
+      "selection_eligible": true,
+      "uncheatable_mean": 1.0871005455652873,
+      "uncheatable_sd": 0.0024818148790382855,
+      "uncheatable_sem": 0.0014328764884915727
+    },
+    {
+      "alias_id": "cap4_shared_bounded_ensemble_kl0p5",
+      "candidate_id": "shared_bounded_ensemble_kl0p5",
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0p5",
+      "cap_epochs": 4,
+      "github_cpp_mean": 0.9222465356191,
+      "github_cpp_sd": 0.013920320680018946,
+      "kl_penalty": 0.5,
+      "selection_eligible": true,
+      "uncheatable_mean": 1.0980028708775837,
+      "uncheatable_sd": 0.004526847894033186,
+      "uncheatable_sem": 0.0026135768502005504
+    }
+  ],
+  "candidate_aliases_sha256": "a518d943eb1784524e96353010811d3951e077848e907f908c754d788727e299",
+  "candidate_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
+  "frontier_claim_requirement": "confirm the selected final policy with fresh v6e-8 repeats",
+  "panel_hardware_status": "v6e_only",
+  "prefix_hardware": {
+    "region": "us-east5",
+    "tpu_type": "v6e-8",
+    "zone": "us-east5-b"
+  },
+  "prefix_replay_code_commit": "62ecbfec3c2e59a647b103f4eb9953667cbeffb0",
+  "prefixes": [
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825/prefix_cap4_shared_bounded_ensemble_kl0_seed0-856708/checkpoints/step-2399",
+      "provenance_sha256": "c946e9d1d6eab50cc1bf43c67eeeaff0fad6fd4390ca4d76978aee3e21e8e18e",
+      "repeat_seed": 0
+    },
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825/prefix_cap4_shared_bounded_ensemble_kl0_seed1-32684b/checkpoints/step-2399",
+      "provenance_sha256": "91c89caa41f857586ec4f222e4105e2549b33a3f57364b3e8357a2a2111d345b",
+      "repeat_seed": 1
+    }
+  ],
+  "selected_aliases": [
+    {
+      "alias_id": "cap4_shared_bounded_ensemble_kl0",
+      "candidate_id": "shared_bounded_ensemble_kl0",
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "cap_epochs": 4,
+      "github_cpp_mean": 0.8549269636472067,
+      "github_cpp_sd": 0.004329764989195037,
+      "kl_penalty": 0.0,
+      "selection_eligible": true,
+      "uncheatable_mean": 1.075417121251424,
+      "uncheatable_sd": 0.0032049037747116796,
+      "uncheatable_sem": 0.001850352057056636
+    }
+  ],
+  "selection_rule": "Within each cap, select the eligible KL candidate with the lowest three-seed mean boundary Uncheatable BPB; break an exact tie by the lower KL penalty. Controls are diagnostic only.",
+  "selection_target": "mean exact-boundary Uncheatable BPB over paired seeds 0, 1, and 2"
+}

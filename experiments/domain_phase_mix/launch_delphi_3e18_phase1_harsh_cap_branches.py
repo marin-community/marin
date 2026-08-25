@@ -54,6 +54,15 @@ CONTROL_ROWS_PER_PREFIX = 8
 ROWS_PER_PREFIX = FIT_ROWS_PER_PREFIX + REFEREE_ROWS_PER_PREFIX + CONTROL_ROWS_PER_PREFIX
 DEFAULT_MAX_CONCURRENT = ROWS_PER_PREFIX
 TOTAL_MATERIALIZED_EPOCH_CAP = 10.0
+WEIGHT_ARTIFACT_COLUMNS = (
+    "prefix_candidate_id",
+    "continuation_id",
+    "bucket",
+    "phase_1_count",
+    "phase_1_weight",
+    "phase_1_materialized_epochs",
+    "total_materialized_epochs",
+)
 RUN_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_.-]+")
 WANDB_TAG_MAX_LENGTH = 64
 WANDB_HASH_TAG_LENGTH = 12
@@ -307,6 +316,8 @@ def load_design(
         raise ValueError("Frozen branch allocation changed")
     summary = pd.read_csv(summary_path)
     weights = pd.read_csv(weights_path)
+    if tuple(weights.columns) != WEIGHT_ARTIFACT_COLUMNS:
+        raise ValueError(f"Branch weight columns changed: {tuple(weights.columns)}")
     if len(summary) != len(candidate_ids) * ROWS_PER_PREFIX:
         raise ValueError("Branch summary row count changed")
     rows: list[dict[str, object]] = []
@@ -322,9 +333,6 @@ def load_design(
             raise ValueError(f"Continuation weights are not runtime-exact for {candidate_id}/{continuation_id}")
         if float(group.total_materialized_epochs.max()) > TOTAL_MATERIALIZED_EPOCH_CAP + 1e-12:
             raise ValueError(f"Total materialized epoch cap exceeded by {candidate_id}/{continuation_id}")
-        for column in ("role", "fit_budget", "prefix_repeat_seed", "data_seed", "source"):
-            if group[column].nunique(dropna=False) != 1 or group[column].iloc[0] != getattr(summary_row, column):
-                raise ValueError(f"Summary/weight design mismatch for {candidate_id}/{continuation_id}: {column}")
         rows.append(
             {
                 "prefix_candidate_id": candidate_id,

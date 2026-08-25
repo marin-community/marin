@@ -66,6 +66,15 @@ TRANSFER_DRAWS = 20_000
 FIT_DATA_SEED = 970_000
 FRESH_TIED_DATA_SEEDS = (971_000, 971_001, 971_002)
 MIXTURE_BLOCK_SIZE = common_design.MIXTURE_BLOCK_SIZE
+WEIGHT_ARTIFACT_COLUMNS = (
+    "prefix_candidate_id",
+    "continuation_id",
+    "bucket",
+    "phase_1_count",
+    "phase_1_weight",
+    "phase_1_materialized_epochs",
+    "total_materialized_epochs",
+)
 
 
 @dataclass(frozen=True)
@@ -555,7 +564,7 @@ def main() -> None:
     summary_path = args.output_dir / "continuation_summary.csv"
     weights_path = args.output_dir / "continuation_weights.csv"
     summary.to_csv(summary_path, index=False)
-    weights.to_csv(weights_path, index=False)
+    weights.loc[:, list(WEIGHT_ARTIFACT_COLUMNS)].to_csv(weights_path, index=False)
     payload = {
         **manifest,
         "artifacts": {
