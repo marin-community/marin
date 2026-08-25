@@ -21,6 +21,7 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 """
 
 import functools
+import hashlib
 import json
 import logging
 import re
@@ -187,6 +188,17 @@ CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 def is_mutable_version(version: str) -> bool:
     """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
     return version == "dev" or version.endswith("-dev")
+
+
+def run_id_for_address(address: str) -> str:
+    """``address`` as a run id, unique because the address is.
+
+    A run id names a W&B run and a checkpoint directory, so it cannot keep the separator, and
+    flattening ``/`` to ``-`` on its own is not injective: ``a-b/c`` and ``a/b-c`` both read
+    ``a-b-c``. The digest keeps distinct addresses on distinct ids.
+    """
+    digest = hashlib.sha256(address.encode()).hexdigest()[:8]
+    return f"{address.replace('/', '-')}-{digest}"
 
 
 def validate_path_segment(label: str, value: str) -> None:

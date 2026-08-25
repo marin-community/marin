@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import hashlib
 import importlib
 import json
 import logging
@@ -27,7 +26,7 @@ from rigging.filesystem.cluster_config import check_gcs_paths_same_region, marin
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, run_id_for_address
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
@@ -245,11 +244,7 @@ def _address_run_id(output_path: str | None, prefix: str | None) -> str | None:
     if not address:
         logger.warning("Output path %s has no address under prefix %s; cannot derive a run ID", output_path, prefix)
         return None
-    # A run id names a W&B run and a checkpoint directory, so it cannot keep the separator, and
-    # flattening it to "-" is not injective -- "a-b/c" and "a/b-c" both read "a-b-c". The digest
-    # keeps distinct addresses on distinct ids.
-    digest = hashlib.sha256(address.encode()).hexdigest()[:8]
-    return f"{address.replace('/', '-')}-{digest}"
+    return run_id_for_address(address)
 
 
 def _resolve_run_id(
