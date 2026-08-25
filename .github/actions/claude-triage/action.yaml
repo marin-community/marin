@@ -53,6 +53,20 @@ runs:
         claude_code_oauth_token: ${{ inputs.oauth-token }}
         prompt: |
           Read .agents/skills/triage-canary/SKILL.md and follow it.
+
+          The CI invocation context is:
+          - CANARY_LANE: ${{ inputs.lane }}
+          - CANARY_JOB_ID: ${{ inputs.job-id }}
+          - CANARY_RUN_ID: ${{ inputs.run-id }}
+          - IRIS_CONFIG: ${{ inputs.iris-config }}
+          - IRIS_NAMESPACE: ${{ inputs.iris-namespace }}
+          - WANDB_ENTITY: ${{ inputs.wandb-entity }}
+          - WANDB_PROJECT: ${{ inputs.wandb-project }}
+          - GHA_RUN_URL: ${{ inputs.gha-run-url }}
+
+          Use these values directly. Do not inspect the process environment to
+          rediscover them. The matching environment variables remain available
+          to commands invoked during triage.
         claude_args: |
           --model claude-opus-4-8
           --max-turns ${{ inputs.max-turns }}
