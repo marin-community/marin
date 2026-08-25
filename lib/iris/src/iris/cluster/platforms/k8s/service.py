@@ -300,7 +300,7 @@ class CloudK8sService:
         with slow_log(logger, f"apply {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
                 if res is K8sResource.PODS:
-                    self._apply_pod(res, name, ns, manifest)
+                    self._apply_pod(res, ns, manifest)
                 else:
                     self._dyn.server_side_apply(
                         resource=self._resource_api(res),
@@ -316,7 +316,7 @@ class CloudK8sService:
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
 
-    def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
+    def _apply_pod(self, res: K8sResource, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
 
         The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
@@ -776,11 +776,13 @@ class CloudK8sService:
         logger.debug("k8s: node resource metrics node=%s", node_name)
         with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                return self._core_v1.connect_get_node_proxy_with_path(
+                response = self._core_v1.connect_get_node_proxy_with_path(
                     name=node_name,
                     path="metrics/resource",
+                    _preload_content=False,
                     **self._request_timeout_kwargs(),
                 )
+                return response.data.decode("utf-8")
             except ApiException as error:
                 raise KubectlError(
                     f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"

@@ -17,11 +17,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
-from zephyr.memory_store import MemoryStore
+from zephyr.memory_store import MemoryStore, MemoryStoreUnavailable
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -55,11 +55,17 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
 _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
+_MEMORY_STORE_STATS_TIMEOUT = 30
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
 ANCHOR_SCAN_RECORDS = 64
 ANCHOR_SCAN_CHARS = 2_000_000
+# The reduce spills to /tmp through zephyr's external sort, and the run files live
+# until the merge finishes. One shard was measured holding 8 GiB, and a worker runs
+# several shards at once, so scratch is sized well above worker RAM. On Kubernetes
+# this becomes the pod's ephemeral-storage limit, and exceeding it evicts the pod.
+VERIFICATION_WORKER_SCRATCH = "256g"
 
 
 class RepresentativeKind(StrEnum):
@@ -804,7 +810,7 @@ def verify_fuzzy_dups(
     if not shards:
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
 
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk=VERIFICATION_WORKER_SCRATCH)
     # The document store loads onto the worker pool, which must know its size,
     # so an unset worker count falls back to one worker per shard.
     if max_workers is None:
@@ -858,7 +864,11 @@ def verify_fuzzy_dups(
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
         )
-        store_stats = document_store.stats()
+        try:
+            store_stats = document_store.stats(timeout=_MEMORY_STORE_STATS_TIMEOUT)
+        except MemoryStoreUnavailable:
+            logger.warning("Memory-store stats unavailable after fuzzy verification; omitting telemetry", exc_info=True)
+            store_stats = ()
     finally:
         ctx.shutdown()
 
@@ -866,12 +876,15 @@ def verify_fuzzy_dups(
 
     verified = sum(result["verified_duplicates"] for result in outcome.results)
     output_counters = dict(outcome.counters)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(stat.load_cpu_time for stat in store_stats)
-    output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
-        stat.load_elapsed for stat in store_stats
-    )
+    if store_stats:
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/actors"] = len(store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/items"] = sum(stat.num_items for stat in store_stats)
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/load_cpu_time"] = sum(
+            stat.load_cpu_time for stat in store_stats
+        )
+        output_counters[f"{_COUNTER_PREFIX}/memory_store/max_actor_load_elapsed"] = max(
+            stat.load_elapsed for stat in store_stats
+        )
     logger.info(
         "Verified %d fuzzy duplicates from %d candidate members across %d shards",
         verified,

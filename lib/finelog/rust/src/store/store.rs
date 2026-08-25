@@ -10,7 +10,7 @@
 //! - re-register with an EMPTY policy KEEPS the existing policy.
 //! - `log` is privileged and undroppable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -24,12 +24,14 @@ use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, RegisteredNamespace};
+use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, stored_form, validate_index_policies, AlignedBatch, Column,
-    Schema,
+    merge_schemas, resolve_key_column, stamp_cluster_column, stored_form, validate_and_align_batch,
+    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
+    MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
 
@@ -44,6 +46,19 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// this window is aborted rather than wedging the worker. Distinct from the
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy)]
+enum WriteSchemaPolicy {
+    Strict,
+    IgnoreUnknownNullable,
+}
+
+/// Result of appending one schema-compatible federated batch.
+pub struct ForwardedWrite {
+    pub rows_written: i64,
+    pub last_seq: i64,
+    pub ignored_columns: Vec<String>,
+}
 
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
 ///
@@ -70,13 +85,15 @@ pub fn log_registered_schema() -> Schema {
     )
 }
 
-/// One consistent view of a namespace's sealed local segments: the arrow schema to
-/// read them with, their paths, and the lowest `seq` they hold (`None` when there is
-/// no local segment). Captured under a single hold of the engine's insertion lock, so
-/// `min_seq` always describes exactly the segments in `paths`.
+/// One consistent view of a namespace's sealed local segments: the Arrow schema,
+/// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
+/// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
     pub schema: SchemaRef,
+    pub exact_postings_policy: BTreeMap<String, Vec<String>>,
+    pub key_column: String,
     pub paths: Vec<String>,
+    pub key_bounds: BTreeMap<String, (i64, i64)>,
     pub min_seq: Option<i64>,
     pub index_cache: Arc<IndexCache>,
 }
@@ -437,12 +454,40 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        use crate::store::ipc::decode_one_record_batch;
-        use crate::store::schema::{
-            stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
-            MAX_WRITE_ROWS_ROWS,
-        };
+        let outcome = self.write_rows_with_policy(
+            name,
+            arrow_ipc,
+            origin_cluster,
+            WriteSchemaPolicy::Strict,
+        )?;
+        debug_assert!(outcome.ignored_columns.is_empty());
+        Ok((outcome.rows_written, outcome.last_seq))
+    }
 
+    /// Append telemetry forwarded by another Finelog while preserving the hub's
+    /// server-owned schema. Unknown nullable columns are omitted and returned for
+    /// observability; all other validation remains strict.
+    pub fn write_forwarded_telemetry_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: &str,
+    ) -> Result<ForwardedWrite, StatsError> {
+        self.write_rows_with_policy(
+            name,
+            arrow_ipc,
+            Some(origin_cluster),
+            WriteSchemaPolicy::IgnoreUnknownNullable,
+        )
+    }
+
+    fn write_rows_with_policy(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+        schema_policy: WriteSchemaPolicy,
+    ) -> Result<ForwardedWrite, StatsError> {
         if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
             return Err(StatsError::SchemaValidation(format!(
                 "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
@@ -457,13 +502,25 @@ impl Store {
             )));
         }
         let engine = self.require_engine(name)?;
-        let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
+        let (mut aligned, ignored_columns): (AlignedBatch, Vec<String>) = match schema_policy {
+            WriteSchemaPolicy::Strict => (
+                validate_and_align_batch(&batch, engine.schema())?,
+                Vec::new(),
+            ),
+            WriteSchemaPolicy::IgnoreUnknownNullable => {
+                validate_and_align_forwarded_batch(&batch, engine.schema())?
+            }
+        };
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
         let last_seq = engine.append_aligned_batch(&aligned);
-        Ok((n, last_seq))
+        Ok(ForwardedWrite {
+            rows_written: n,
+            last_seq,
+            ignored_columns,
+        })
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last
@@ -522,12 +579,17 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
-            let paths = engine.query_snapshot().paths;
-            let provider =
-                NamespaceProvider::build(arrow_schema, &paths, Arc::clone(&self.index_cache))
-                    .map_err(|e| {
-                        StatsError::Internal(format!("build provider {:?}: {e}", ns.name))
-                    })?;
+            let exact_postings_policy = engine.schema().exact_postings_policy();
+            let key_column = engine.key_column().to_string();
+            let segments = engine.query_snapshot();
+            let provider = NamespaceProvider::build(
+                arrow_schema,
+                &segments.paths,
+                Arc::clone(&self.index_cache),
+            )
+            .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
+            .with_exact_postings_policy(exact_postings_policy)
+            .with_segment_key_bounds(key_column, segments.key_bounds);
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -545,7 +607,10 @@ impl Store {
         let segments = engine.query_snapshot();
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
+            exact_postings_policy: engine.schema().exact_postings_policy(),
+            key_column: engine.key_column().to_string(),
             paths: segments.paths,
+            key_bounds: segments.key_bounds,
             min_seq: segments.min_seq,
             index_cache: Arc::clone(&self.index_cache),
         })

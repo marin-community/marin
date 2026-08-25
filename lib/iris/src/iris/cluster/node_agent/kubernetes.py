@@ -25,7 +25,9 @@ from rigging import telemetry
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -765,29 +767,55 @@ def collect_once(
     telemetry.record_runtime_health()
 
 
-def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
-    """Collect telemetry until the process receives a shutdown signal."""
-    config = load_config(config_path)
+def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_name: str, stop: threading.Event) -> None:
     log_service_endpoint = _log_service_endpoint(config)
     endpoint = log_service_endpoint + TELEMETRY_ENDPOINT_PATH
-    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
     target = _node_target(k8s, node_name)
     log_client = LogClient.connect(log_service_endpoint)
-    task_stats_collector = TaskStatsCollector(
-        k8s,
-        node_name,
-        log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-    )
-    telemetry.configure(
-        endpoint=endpoint,
-        service=SERVICE_NAME,
-        attributes={"node_name": target.name, "node_uid": target.node_uid, "role": str(telemetry.TelemetryRole.WORKER)},
-    )
-    scraper = NodeStatsScraper(k8s)
     try:
+        task_stats_collector = TaskStatsCollector(
+            k8s,
+            node_name,
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+        )
+        telemetry.configure(
+            endpoint=endpoint,
+            service=SERVICE_NAME,
+            attributes={
+                "node_name": target.name,
+                "node_uid": target.node_uid,
+                "role": str(telemetry.TelemetryRole.WORKER),
+            },
+        )
+        scraper = NodeStatsScraper(k8s)
         while not stop.is_set():
             collect_once(scraper, target, task_stats_collector)
             stop.wait(DEFAULT_COLLECTION_INTERVAL)
     finally:
         log_client.close()
         telemetry.shutdown(5.0)
+
+
+def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
+    """Run configured node maintenance and telemetry until shutdown."""
+    config = load_config(config_path)
+    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+    cache_reclaimer: threading.Thread | None = None
+    if config.kubernetes_provider.cache_max_age is not None:
+        cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
+        cache_reclaimer = threading.Thread(
+            target=run_cache_reclaimer,
+            args=(cache_dir, config.kubernetes_provider.cache_max_age, stop),
+            name="cache-reclaimer",
+            daemon=True,
+        )
+        cache_reclaimer.start()
+    try:
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            _collect_telemetry(config, k8s, node_name, stop)
+        else:
+            stop.wait()
+    finally:
+        stop.set()
+        if cache_reclaimer is not None:
+            cache_reclaimer.join(timeout=10.0)

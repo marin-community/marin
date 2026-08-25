@@ -30,7 +30,6 @@ from iris.cluster.config import (
     IrisClusterConfig,
     ScaleGroupConfig,
     ScaleGroupResources,
-    WorkerConfig,
     make_local_config,
 )
 from iris.cluster.constraints import worker_attributes_from_resources
@@ -146,9 +145,7 @@ def create_local_autoscaler(
 
     # Build base_worker_config from defaults so auth_token (and other fields)
     # flow through the autoscaler to locally-spawned workers.
-    base_worker_config: WorkerConfig | None = None
-    if config.defaults.worker.auth_token:
-        base_worker_config = config.defaults.worker.model_copy(deep=True)
+    base_worker_config = config.defaults.worker.model_copy(deep=True)
 
     autoscaler = Autoscaler.from_config(
         scale_groups=scale_groups,

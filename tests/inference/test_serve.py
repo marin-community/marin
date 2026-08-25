@@ -22,6 +22,9 @@ import pytest
 import requests
 from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -42,7 +45,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import _resolved_model
+from marin.inference.iris import IrisServiceConfig, _resolved_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -57,6 +60,7 @@ from marin.inference.levanter_backend import (
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
+from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
@@ -444,6 +448,70 @@ def test_resolve_serving_plan_rejects_multihost_slices():
         _plan(tpu="v6e-16")
 
 
+def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
+    plan = _plan(tpu="v6e-4,v5litepod-4,v5p-8,v4-8")
+
+    assert plan.tpu_types == ("v6e-4", "v5litepod-4", "v5p-8", "v4-8")
+
+
+def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatch):
+    registered_metadata: dict[str, str] = {}
+    model_id = "Qwen/Qwen3-0.6B"
+
+    @contextmanager
+    def prepared_local_inference(*_args, **_kwargs):
+        yield SimpleNamespace(
+            model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
+            backend_name="vllm",
+            tensor_parallel_size=1,
+            check_alive=lambda: None,
+        )
+
+    @contextmanager
+    def registered(_name, _address, metadata, **_kwargs):
+        registered_metadata.update(metadata)
+        yield
+
+    @contextmanager
+    def serve_dashboard(*_args, **_kwargs):
+        yield
+
+    monkeypatch.setattr("marin.inference.iris._prepared_local_inference", prepared_local_inference)
+    monkeypatch.setattr("marin.inference.iris.serve_app_background", serve_dashboard)
+    monkeypatch.setattr(
+        "marin.inference.iris.iris_ctx",
+        lambda: SimpleNamespace(registry=SimpleNamespace(registered=registered)),
+    )
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/serve/0")))
+    service = IrisServiceConfig(
+        model=ServedModelConfig(
+            weights=model_id,
+            tensor_parallel_size=1,
+            chat_template_content="{{ messages }}",
+        ),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_tpu(("v6e-4", "v4-8")),
+            worker_environment=create_environment(docker_image="test"),
+        ),
+        endpoint_name="/serve/test",
+        timeout_hours=0,
+        port_name=None,
+    )
+
+    try:
+        run_iris_service(service)
+    finally:
+        set_job_info(None)
+
+    assert "accelerator" not in registered_metadata
+
+
+def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
+    with pytest.raises(click.ClickException, match="chips_per_vm"):
+        _plan(tpu="v6e-4,v6e-8")
+
+
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
     expires = Timestamp.from_ms(int(time.time() * 1000) + int(ttl_hours * 3_600_000))
     return controller_pb2.Controller.MintEndpointTokenResponse(token=token, expires_at=timestamp_to_proto(expires))
@@ -538,6 +606,21 @@ def test_iris_serve_configures_region_placement(
     assert services[0].iris.worker_resources.regions == expected_worker_regions
 
 
+def test_iris_serve_submits_compatible_tpu_alternatives(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--tpu",
+        "v6e-4,v5litepod-4,v5p-8,v4-8",
+    )
+
+    assert result.exit_code == 0, result.output
+    constraint = next(
+        item for item in client.submit.call_args.kwargs["constraints"] if item.key == WellKnownAttribute.DEVICE_VARIANT
+    )
+    assert [value.value for value in constraint.values] == ["v6e-4", "v5litepod-4", "v5p-8", "v4-8"]
+    assert services[0].iris.worker_resources.device_alternatives == ["v5litepod-4", "v5p-8", "v4-8"]
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -615,7 +698,6 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
         max_model_len=4096,
         dtype="bfloat16",
         has_chat_template=True,
-        tpu_type="v6e-8",
         endpoint="/serve/fake",
     )
 
@@ -661,7 +743,6 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         max_model_len=None,
         dtype="bfloat16",
         has_chat_template=False,
-        tpu_type="v6e-8",
         endpoint="/serve/fake",
     )
     # Point at a closed port so the upstream health probe fails fast.

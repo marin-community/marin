@@ -41,10 +41,10 @@ from collections.abc import Iterator
 
 import click
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)

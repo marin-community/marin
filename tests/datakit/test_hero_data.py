@@ -15,6 +15,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from marin.datakit.sources import all_sources
 
 from experiments.datakit import hero_data
 
@@ -28,6 +29,10 @@ def _marin_prefix(monkeypatch):
     # Hero data has one CoreWeave location. Pin it instead of inheriting the test
     # process's prefix because some step hashes include resolved paths.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
+    # The registry caches prefix-resolved GHALogs steps for the life of the process.
+    all_sources.cache_clear()
+    yield
+    all_sources.cache_clear()
 
 
 def _relative_paths() -> dict[str, str]:
@@ -71,6 +76,8 @@ def test_steps_refuse_to_run():
         hero_data.minhash("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
+        hero_data.domain_cluster_assignment(),
+        hero_data.assigned_clusters("stack-v3"),
     ]
     for step in steps:
         with pytest.raises(AssertionError, match="must never execute"):

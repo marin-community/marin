@@ -150,3 +150,18 @@ def test_loom_placeholder_text_from_human_remains_significant() -> None:
     body = "Working on this in loom: https://loom.oa.dev/s/qhb71pit"
 
     assert wait_for.classify_significance(body, "human-reviewer") is wait_for.Significance.CONCERN
+
+
+def test_authenticated_author_uses_loom_bot_for_installation_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        wait_for.subprocess,
+        "run",
+        lambda *_args, **_kwargs: wait_for.subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="gh: Resource not accessible by integration (HTTP 403)\n",
+        ),
+    )
+
+    assert wait_for.authenticated_author(in_loom_session=True) == wait_for.LOOM_BOT

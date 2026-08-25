@@ -23,7 +23,6 @@ inputs:
   config-map:
     description: 'Optional config to apply before preview, as JSON: {"key": {"value": "v", "secret": false}}.'
     default: ""
-
 runs:
   using: composite
   steps:

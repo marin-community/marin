@@ -11,14 +11,15 @@ import operator
 import os
 import threading
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple, TypeVar, Union, cast
 
 import deepdiff
 import jax
 import jax.tree_util as jtu
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
@@ -29,9 +30,9 @@ from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr import counters as zephyr_counters
-from rigging.filesystem import atomic_rename
+from rigging.filesystem.atomic import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
@@ -45,6 +46,8 @@ from .tree_store import TreeStore, heuristic_is_leaf
 T = TypeVar("T")
 U = TypeVar("U")
 T_co = TypeVar("T_co", covariant=True)
+_OpenKey = TypeVar("_OpenKey", bound=Hashable)
+_OpenValue = TypeVar("_OpenValue")
 
 logger = pylogging.getLogger(__name__)
 
@@ -156,8 +159,13 @@ class TreeCache(AsyncDataset[T_co]):
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
+        self._pending_shard_stores: Dict[Tuple[asyncio.AbstractEventLoop, str], "asyncio.Task[TreeStore[T_co]]"] = {}
         self._shard_row_offsets: Optional[np.ndarray] = None
-        self._shard_field_stores: Dict[Tuple[str, str], Any] = {}
+        self._shard_field_stores: Dict[Tuple[str, str], JaggedArrayStore] = {}
+        self._pending_shard_field_stores: Dict[
+            Tuple[asyncio.AbstractEventLoop, Tuple[str, str]], "asyncio.Task[JaggedArrayStore]"
+        ] = {}
+        self._shard_stores_lock = threading.Lock()
         self._shard_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offsets: Dict[str, np.ndarray] = {}
         self._flat_field_offset_futures: Dict[str, concurrent.futures.Future[np.ndarray]] = {}
@@ -199,8 +207,8 @@ class TreeCache(AsyncDataset[T_co]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         return await self._reader.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
-        return self._reader.get_batch_sync(indices_or_slice, timeout=timeout)
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
+        return self._reader.get_batch_sync(indices_or_slice)
 
     def flat_field_length(self, field: str) -> int:
         return self._reader.flat_field_length(field)
@@ -321,44 +329,48 @@ class TreeCache(AsyncDataset[T_co]):
         return blocking_wait(self._read_sharded_flat_field_slice(field, item))
 
     def _shard_store(self, shard_name: str) -> TreeStore[T_co]:
-        store = self._shard_stores.get(shard_name)
-        if store is None:
-            store = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
-            self._shard_stores[shard_name] = store
-        return store
+        with self._shard_stores_lock:
+            store = self._shard_stores.get(shard_name)
+        if store is not None:
+            return store
 
-    def _shard_field_store(self, shard_name: str, field: str):
-        key = (shard_name, field)
-        store = self._shard_field_stores.get(key)
-        if store is None:
-            tree_store = TreeStore.open(
-                _field_exemplar(self._exemplar, field),
-                self._layout.shard(shard_name),
-                mode="r",
-                cache_metadata=True,
-            )
-            store = _tree_field(tree_store.tree, field)
-            self._shard_field_stores[key] = store
-        return store
+        opened = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
+        with self._shard_stores_lock:
+            return self._shard_stores.setdefault(shard_name, opened)
 
-    async def _shard_field_store_async(self, shard_name: str, field: str):
+    async def _shard_store_async(self, shard_name: str) -> TreeStore[T_co]:
+        return await _await_shared_open(
+            self._shard_stores,
+            self._pending_shard_stores,
+            self._shard_stores_lock,
+            shard_name,
+            lambda: TreeStore.open_async(
+                self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True
+            ),
+        )
+
+    async def _shard_field_store_async(self, shard_name: str, field: str) -> JaggedArrayStore:
         key = (shard_name, field)
-        store = self._shard_field_stores.get(key)
-        if store is None:
+
+        async def open_field_store() -> JaggedArrayStore:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
                 self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
-            store = _tree_field(tree_store.tree, field)
-            self._shard_field_stores[key] = store
-        return store
+            return cast(JaggedArrayStore, _tree_field(tree_store.tree, field))
 
-    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
-        if len(indices) == 0:
-            return []
+        return await _await_shared_open(
+            self._shard_field_stores,
+            self._pending_shard_field_stores,
+            self._shard_stores_lock,
+            key,
+            open_field_store,
+        )
 
+    def _group_indices_by_shard(self, indices: Sequence[int]) -> Tuple[List[str], Dict[int, List[Tuple[int, int]]]]:
+        """Map global row indices onto ``(output position, row within shard)`` pairs per shard."""
         shard_names, shard_offsets = self._ensure_shard_row_offsets()
         shard_batches: Dict[int, List[Tuple[int, int]]] = {}
         for output_index, index in enumerate(indices):
@@ -370,11 +382,20 @@ class TreeCache(AsyncDataset[T_co]):
             shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
             shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
 
+        return shard_names, shard_batches
+
+    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
+        if len(indices) == 0:
+            return []
+
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
+
         output: List[Optional[T_co]] = [None] * len(indices)
 
         async def read_shard(shard_index: int, batch: List[Tuple[int, int]]) -> None:
             local_indices = [local_index for _, local_index in batch]
-            shard_batch = await self._shard_store(shard_names[shard_index]).get_batch(local_indices)
+            store = await self._shard_store_async(shard_names[shard_index])
+            shard_batch = await store.get_batch(local_indices)
             for (output_index, _), row in zip(batch, shard_batch, strict=True):
                 output[output_index] = row
 
@@ -389,16 +410,7 @@ class TreeCache(AsyncDataset[T_co]):
         if len(indices) == 0:
             return []
 
-        shard_names, shard_offsets = self._ensure_shard_row_offsets()
-        shard_batches: Dict[int, List[Tuple[int, int]]] = {}
-        for output_index, index in enumerate(indices):
-            index = int(index)
-            if index < 0 or index >= self.ledger.total_num_rows:
-                raise ValueError("Requested indices beyond the end of the dataset")
-
-            shard_index = int(np.searchsorted(shard_offsets, index, side="right"))
-            shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
-            shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
 
         output: List[Optional[T_co]] = [None] * len(indices)
         for shard_index, batch in shard_batches.items():
@@ -420,7 +432,7 @@ class TreeCache(AsyncDataset[T_co]):
         shard_names, shard_offsets = self._ensure_shard_field_offsets(field)
         remaining = length
         position = offset
-        reads = []
+        slices = []
 
         while remaining > 0:
             shard_index = int(np.searchsorted(shard_offsets, position, side="right"))
@@ -431,12 +443,15 @@ class TreeCache(AsyncDataset[T_co]):
             local_start = position - shard_start
             available = int(shard_offsets[shard_index] - position)
             take = min(remaining, available)
-            field_store = self._shard_field_store(shard_names[shard_index], field)
-            reads.append(field_store.data[local_start : local_start + take].read())
+            slices.append((shard_names[shard_index], local_start, take))
             position += take
             remaining -= take
 
-        chunks = await asyncio.gather(*reads)
+        async def read_slice(shard_name: str, local_start: int, take: int) -> np.ndarray:
+            field_store = await self._shard_field_store_async(shard_name, field)
+            return await field_store.data[local_start : local_start + take].read()
+
+        chunks = await asyncio.gather(*[read_slice(*shard_slice) for shard_slice in slices])
         if len(chunks) == 1:
             return chunks[0]
         return np.concatenate(chunks)
@@ -480,7 +495,7 @@ class _TreeCacheReader(Protocol[T_co]):
 
     async def get_batch(self, indices: Union[Sequence[int], slice]) -> Sequence[T_co]: ...
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]: ...
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]: ...
 
     def flat_field_length(self, field: str) -> int: ...
 
@@ -520,7 +535,7 @@ class _MaterializedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._store.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
@@ -578,7 +593,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._cache._get_sharded_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
@@ -690,6 +705,50 @@ def _validate_sharded_ledger(ledger: CacheLedger) -> None:
             "Sharded cache ledger field count mismatch: "
             f"sum(finished shard field counts)={field_counts}, field_counts={ledger.field_counts}"
         )
+
+
+async def _await_shared_open(
+    resolved: Dict[_OpenKey, _OpenValue],
+    pending: Dict[Tuple[asyncio.AbstractEventLoop, _OpenKey], "asyncio.Task[_OpenValue]"],
+    lock: threading.Lock,
+    key: _OpenKey,
+    open_value: Callable[[], Awaitable[_OpenValue]],
+) -> _OpenValue:
+    loop = asyncio.get_running_loop()
+    pending_key = (loop, key)
+
+    async def open_and_publish() -> _OpenValue:
+        try:
+            opened = await open_value()
+            with lock:
+                return resolved.setdefault(key, opened)
+        finally:
+            task = asyncio.current_task()
+            with lock:
+                if pending.get(pending_key) is task:
+                    del pending[pending_key]
+
+    with lock:
+        value = resolved.get(key)
+        if value is not None:
+            return value
+
+        task = pending.get(pending_key)
+        if task is None or task.done():
+            task = loop.create_task(open_and_publish())
+            task.add_done_callback(_log_task_exception)
+            pending[pending_key] = task
+
+    return await asyncio.shield(task)
+
+
+def _log_task_exception(task: "asyncio.Task") -> None:
+    """Retrieve failures from shared opens whose shielded waiters were all cancelled."""
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        logger.debug("Shared shard open failed; a later reader may retry it.", exc_info=exception)
 
 
 def _tree_field(tree, field: str):

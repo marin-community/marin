@@ -16,8 +16,13 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
+    GET /finelog/marin/alerts/loss_spikes        active hero runs + loss-spike value(0|1)
+    GET /finelog/marin/alerts/training_telemetry watched hero runs + silent-telemetry value(0|1)
+    GET /finelog/marin/alerts/training_optimizer watched hero runs + optimizer-fault value(0|1)
+    GET /finelog/marin/alerts/training_health    watched hero runs + degraded-signal value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
-    GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/job_counts               root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/jobs?cluster=             recent jobs visible through one federation peer
     GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
     GET /iris/{cluster}/health                   controller reachability + latency
     GET /iris/{cluster}/peers                    federation reachability from the controller heartbeat
@@ -25,11 +30,13 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
-    GET /wandb/{chart}                           sampled public hero-report series by chart key
-    GET /overview/provisioning                   latest fleet and resource-pool provisioning cycle
+    GET /wandb/report/{chart}                    sampled public hero-report series by chart key
+    GET /wandb/history?run=&metric=&project=     one run's full logged history for one metric
+    GET /wandb/activity?run=&project=            one run's active/wall/downtime seconds and progress efficiency
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/workloads                           live Iris jobs, placement, and requested resources
     GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
@@ -63,9 +70,9 @@ Loom one also exchanges tokens and creates a run over HTTP.
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pyarrow as pa
 import uvicorn
@@ -85,6 +92,19 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
+from hero_health import (
+    Signals,
+    WatchedRun,
+    health_alert_rows,
+    optimizer_alert_rows,
+    retry_event_query,
+    selected_executions,
+    signal_query,
+    signals_by_run,
+    telemetry_alert_rows,
+    watched_runs,
+)
+from hero_runs import HeroRun, RunIdentity, active_hero_runs, phase_enrollment_query, task_state_query
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import (
@@ -94,13 +114,13 @@ from loom_alerts import (
     SlackAlertClient,
     SlackAnnouncementError,
 )
+from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
-from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from training_stalls import task_state_query, telemetry_query, training_stall_alert_rows
+from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
     VLLM_MAX_RESULT_ROWS,
     VLLM_OVERVIEW_SECTIONS,
@@ -117,8 +137,8 @@ logger = logging.getLogger(__name__)
 FROM_MACRO = "{{from}}"
 TO_MACRO = "{{to}}"
 
-# infra/probes writes its label set as a JSON object string. The bridge expands
-# it into columns under this prefix so a panel can select one as a series.
+# EAV metrics store labels as a JSON object string. The bridge expands it into
+# columns under this prefix so a panel can select one as a series.
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
 _K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
@@ -197,8 +217,8 @@ def _json_safe(value: object) -> object:
 def _labels_as_dict(raw: object) -> dict | None:
     """Coerce a labels cell to a ``{key: value}`` dict, or None if it isn't one.
 
-    Handles both label encodings finelog serves: a JSON-string column (the probes
-    EAV convention) and a native ``Map<Utf8,Utf8>`` column, which arrives from
+    Handles both label encodings finelog serves: a JSON-string EAV column and a
+    native ``Map<Utf8,Utf8>`` column, which arrives from
     ``Table.to_pylist()`` as a ``list[(key, value)]`` (or a dict).
     """
     if isinstance(raw, dict):
@@ -438,40 +458,112 @@ def create_app(
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
-    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+    def hero_query(name: str, now: datetime, target: ClusterTarget, sql) -> pa.Table:
+        """Run one hero alert query per cache interval, however many rules read it."""
+        source = finelog_sources[target.name]
+        return finelog_cache.get_or_compute(
+            (name, _bucket(now, config.cache_ttl)),
+            lambda: source.query(sql(), max_rows=config.max_rows),
+        )
+
+    def hero_task_states(target: ClusterTarget, now: datetime) -> pa.Table:
+        """The newest `iris.task_state` row for every hero root, fresh or stale."""
+        return hero_query("hero_task_states", now, target, lambda: task_state_query(now))
+
+    def hero_runs(target: ClusterTarget, now: datetime) -> tuple[HeroRun, ...]:
+        """Hero roots Iris reports running, for the progress and loss-spike rules."""
+        return active_hero_runs(hero_task_states(target, now), now)
+
+    def hero_watched_runs(target: ClusterTarget, now: datetime) -> tuple[WatchedRun, ...]:
+        """Hero roots either Iris or Levanter still reports, for the run-health rules."""
+        phase_runs = hero_query("hero_phase_enrollment", now, target, lambda: phase_enrollment_query(now))
+        return watched_runs(hero_task_states(target, now), phase_runs, now)
+
+    def hero_signals(target: ClusterTarget, now: datetime, runs: tuple[WatchedRun, ...]) -> Signals:
+        """One telemetry scan behind every run-health rule."""
+        if not runs:
+            return {}
+        rows = hero_query("hero_signals", now, target, lambda: signal_query(now, runs))
+        return signals_by_run(rows)
+
+    def hero_loss_windows(
+        target: ClusterTarget, now: datetime, runs: Sequence[RunIdentity], executions: tuple[str, ...] = ()
+    ) -> pa.Table:
+        """Loss windows for one run set, optionally narrowed to the given attempts."""
+        run_ids = tuple(sorted({run.run_id for run in runs}))
+        if not run_ids:
+            return pa.table({})
+        source = finelog_sources[target.name]
+        return finelog_cache.get_or_compute(
+            ("hero_loss_windows", run_ids, executions, _bucket(now, config.cache_ttl)),
+            lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
+        )
+
+    def finelog_alert_endpoint(name: str, project) -> JSONResponse:
+        """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         try:
             target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
             now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                task_states = source.query(task_state_query(now), max_rows=config.max_rows)
-                telemetry_metrics = source.query(telemetry_query(now), max_rows=config.max_rows)
-                return training_stall_alert_rows(task_states, telemetry_metrics, now)
-
-            key = ("training_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
+            key = (name, _bucket(now, config.cache_ttl))
+            return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+
+    def finelog_alerts_training_stalls(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            telemetry_metrics = (
+                finelog_sources[target.name].query(telemetry_query(now, runs), max_rows=config.max_rows)
+                if runs
+                else pa.table({})
+            )
+            return training_stall_alert_rows(runs, telemetry_metrics, now)
+
+        return finelog_alert_endpoint("training_stalls", project)
+
+    def finelog_alerts_loss_spikes(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_runs(target, now)
+            return loss_spike_alert_rows(runs, hero_loss_windows(target, now, runs))
+
+        return finelog_alert_endpoint("loss_spikes", project)
+
+    def finelog_alerts_training_telemetry(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            return telemetry_alert_rows(runs, hero_signals(target, now, runs), now)
+
+        return finelog_alert_endpoint("training_telemetry", project)
+
+    def finelog_alerts_training_optimizer(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            signals = hero_signals(target, now, runs)
+            # The loss-jump check reads the two windows against each other, so
+            # both have to describe the attempt the signal scan selected.
+            loss_windows = hero_loss_windows(target, now, runs, selected_executions(signals))
+            return optimizer_alert_rows(runs, signals, loss_windows, now)
+
+        return finelog_alert_endpoint("training_optimizer", project)
+
+    def finelog_alerts_training_health(_: Request) -> JSONResponse:
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            runs = hero_watched_runs(target, now)
+            retry_events = (
+                hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
+            )
+            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
+
+        return finelog_alert_endpoint("training_health", project)
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
-        try:
-            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
-            now = datetime.now(UTC)
+        def project(target: ClusterTarget, now: datetime) -> list[dict]:
+            progress_metrics = finelog_sources[target.name].query(zephyr_progress_query(now), max_rows=config.max_rows)
+            return zephyr_stall_alert_rows(progress_metrics, now)
 
-            def run() -> list[dict]:
-                source = finelog_sources[target.name]
-                progress_metrics = source.query(zephyr_progress_query(now), max_rows=config.max_rows)
-                return zephyr_stall_alert_rows(progress_metrics, now)
-
-            key = ("zephyr_stalls", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
-        except _BadRequest as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the alert query lookback"}, status_code=400)
+        return finelog_alert_endpoint("zephyr_stalls", project)
 
     def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
         try:
@@ -482,8 +574,15 @@ def create_app(
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
+    def iris_job_counts(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "job_counts", lambda s: s.job_counts())
+
     def iris_jobs(request: Request) -> JSONResponse:
-        return iris_endpoint(request, "jobs", lambda s: s.jobs())
+        try:
+            cluster = _require(request.query_params, "cluster")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        return iris_endpoint(request, f"jobs:{cluster}", lambda s: s.jobs(cluster))
 
     def iris_workers(request: Request) -> JSONResponse:
         return iris_endpoint(request, "workers", lambda s: s.workers())
@@ -520,31 +619,40 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
-    def wandb_chart(request: Request) -> JSONResponse:
-        chart = request.path_params["chart"]
+    def wandb_endpoint(key: Hashable, run) -> JSONResponse:
         try:
-            return JSONResponse(wandb_cache.get_or_compute(chart, lambda: wandb_source.points(chart)))
+            return JSONResponse(wandb_cache.get_or_compute(key, run))
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except UpstreamError as err:
             return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
 
-    def overview_provisioning(_: Request) -> JSONResponse:
+    def wandb_report_chart(request: Request) -> JSONResponse:
+        chart = request.path_params["chart"]
+        return wandb_endpoint(("report", chart), lambda: wandb_source.points(chart))
+
+    def wandb_run_history(request: Request) -> JSONResponse:
         try:
-            now = datetime.now(UTC)
-
-            def run() -> list[dict]:
-                source = finelog_sources[_target_for(_FINELOG_HUB_CLUSTER, finelog_sources).name]
-                cutoff = now - timedelta(hours=PROVISIONING_LOOKBACK_HOURS)
-                table = source.query(provisioning_query(cutoff), max_rows=config.max_rows)
-                return [asdict(row) for row in provisioning_rows(rows_to_json(table))]
-
-            key = ("overview_provisioning", _bucket(now, config.cache_ttl))
-            return JSONResponse(finelog_cache.get_or_compute(key, run))
+            run = _require(request.query_params, "run")
+            metric = _require(request.query_params, "metric")
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; reduce the provisioning lookback"}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("history", run, metric, project),
+            lambda: wandb_source.run_history(run, metric=metric, project=project),
+        )
+
+    def wandb_run_activity(request: Request) -> JSONResponse:
+        try:
+            run = _require(request.query_params, "run")
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        project = request.query_params.get("project") or None
+        return wandb_endpoint(
+            ("activity", run, project),
+            lambda: wandb_source.run_activity(run, project=project),
+        )
 
     def k8s_endpoint(key: str, run) -> JSONResponse:
         # Per-cluster failures are labeled rows inside the response; only a bridge
@@ -567,6 +675,9 @@ def create_app(
 
     def k8s_pending(_: Request) -> JSONResponse:
         return k8s_endpoint("pending", k8s_fleet.pending)
+
+    def k8s_workloads(request: Request) -> JSONResponse:
+        return filtered_k8s_endpoint("workloads", k8s_fleet.workload_allocations, request, ("cluster", "job"))
 
     def k8s_termination_candidates(_: Request) -> JSONResponse:
         rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
@@ -693,14 +804,20 @@ def create_app(
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
             Route("/github/nightlies", github_nightlies),
-            Route("/wandb/{chart}", wandb_chart),
-            Route("/overview/provisioning", overview_provisioning),
+            Route("/wandb/history", wandb_run_history),
+            Route("/wandb/activity", wandb_run_activity),
+            Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", query),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
+            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
@@ -709,6 +826,7 @@ def create_app(
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
             Route("/k8s/pending", k8s_pending),
+            Route("/k8s/workloads", k8s_workloads),
             Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),

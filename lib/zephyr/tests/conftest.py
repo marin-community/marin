@@ -17,7 +17,7 @@ from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from rigging.timing import ExponentialBackoff
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.readers import load_file
 from zephyr.testing.coordinator import make_test_coordinator
 

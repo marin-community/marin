@@ -7,11 +7,8 @@ Renders the cluster's NodePools as `compute.coreweave.com/v1alpha1 NodePool` cus
 resources, the objects Iris applies today, and targets an existing CKS cluster and its
 kubeconfig.
 
-The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi. Managing or
-adopting it would need the CoreWeave Terraform provider bridged into Pulumi
-(`pulumi package add terraform-provider coreweave/coreweave`) and CoreWeave API credentials,
-neither of which exists here (design.md Open Questions; README.md's "Future work").
-`CksClusterSpec` (`args.cluster`, exported below) records that externally-provisioned cluster
+The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi.
+`CksClusterSpec` (`args.cluster`, exported below) records that externally provisioned cluster
 as in-tree config.
 """
 

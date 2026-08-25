@@ -27,7 +27,6 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
@@ -36,6 +35,8 @@ from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topolog
 from iris.cluster.types import (
     AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
+    DEFAULT_USER_BUDGET_LIMIT,
+    DEFAULT_USER_BUDGET_MAX_BAND,
     LOCAL_CLUSTER,
     AcceleratorType,
     CapacityType,
@@ -48,8 +49,6 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SSH_PORT = 22
-DEFAULT_SSH_CONNECT_TIMEOUT = Duration.from_seconds(30)
 DEFAULT_PRIORITY = 100
 DOCKER_WORKER_RUNTIME = "docker"
 KUBERNETES_WORKER_RUNTIME = "kubernetes"
@@ -371,6 +370,32 @@ class WorkerSettings(_Config):
     cache_dir: str = ""
 
 
+class TaskOutputPolicy(_Config):
+    """Cluster-owned policy for per-attempt temporary output archives.
+
+    ``destination`` is an fsspec URL prefix. When omitted, the execution
+    cluster resolves its region-local lifecycle-managed temporary prefix.
+    """
+
+    destination: str | None = None
+    ttl_days: int = 7
+    max_bytes: int = 2 * 1024**3
+    max_entries: int = 10_000
+    finalization_timeout: DurationField = Field(default_factory=lambda: Duration.from_seconds(300))
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> TaskOutputPolicy:
+        if self.destination != "file://" and self.ttl_days <= 0:
+            raise ValueError("task_outputs.ttl_days must be positive for object storage")
+        if self.max_bytes <= 0:
+            raise ValueError("task_outputs.max_bytes must be positive")
+        if self.max_entries <= 0:
+            raise ValueError("task_outputs.max_entries must be positive")
+        if self.finalization_timeout.to_ms() <= 0:
+            raise ValueError("task_outputs.finalization_timeout must be positive")
+        return self
+
+
 class ScaleGroupConfig(_Config):
     name: str = ""
     # Extra slices to keep warm beyond demand: target = min(demand + buffer, max).
@@ -444,6 +469,7 @@ class WorkerConfig(_Config):
     heartbeat_timeout: DurationField | None = None
     platform: PlatformConfig | None = None
     storage_prefix: str = ""  # task-artifact prefix; empty disables profile upload
+    task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""  # worker→controller bearer token; empty when auth disabled
 
 
@@ -629,10 +655,18 @@ class KubernetesProviderConfig(_Config):
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
+    cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("cache_max_age")
+    @classmethod
+    def _positive_cache_max_age(cls, value: Duration | None) -> Duration | None:
+        if value is not None and value.to_ms() <= 0:
+            raise ValueError("cache_max_age must be positive")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +678,11 @@ class UserBudgetTier(_Config):
     user_ids: list[str] = Field(default_factory=list)
     budget_limit: int = 0  # resource-value spend before downgrade to BATCH (0 = unlimited)
     max_band: PriorityBandField = 0  # highest band these users may submit to
+
+
+class UserBudgetDefaultsConfig(_Config):
+    budget_limit: int = DEFAULT_USER_BUDGET_LIMIT
+    max_band: PriorityBandField = DEFAULT_USER_BUDGET_MAX_BAND
 
 
 class EndpointSpec(_Config):
@@ -755,6 +794,7 @@ class IrisClusterConfig(_OneofConfig):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    task_outputs: TaskOutputPolicy | None = Field(default_factory=TaskOutputPolicy)
     controller: ControllerVmConfig = Field(default_factory=ControllerVmConfig)
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
     auth: AuthConfig | None = None
@@ -764,6 +804,7 @@ class IrisClusterConfig(_OneofConfig):
     # synthesized from the top-level platform/scale_groups/provider fields by
     # resolve_backends. Mixing the two is rejected by validate_config.
     backends: dict[str, BackendConfig] | None = None
+    user_budget_defaults: UserBudgetDefaultsConfig = Field(default_factory=UserBudgetDefaultsConfig)
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
     # Federation peers (peer id -> declaration): remote Iris controllers this
@@ -1567,6 +1608,9 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
     config.platform.local = LocalPlatformConfig()
     config.controller = ControllerVmConfig(image=config.controller.image, local=LocalControllerConfig(port=0))
     config.storage.remote_state_dir = ""  # LocalCluster sets a temp path
+    if config.task_outputs is not None:
+        config.task_outputs = config.task_outputs.model_copy(update={"destination": "file://", "ttl_days": 0})
+        config.defaults.worker.task_outputs = config.task_outputs.model_copy(deep=True)
     # Fast timings for local dev (override any production timings).
     config.defaults.autoscaler = AutoscalerConfig(
         evaluation_interval=Duration.from_seconds(0.5),
@@ -1574,37 +1618,3 @@ def make_local_config(base_config: IrisClusterConfig) -> IrisClusterConfig:
         scale_down_delay=Duration.from_seconds(1),
     )
     return config
-
-
-def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None = None) -> SshConfig:
-    """Resolve SSH config: cluster defaults merged with per-group manual overrides."""
-    ssh = config.defaults.ssh
-    user = ssh.user or "root"
-    key_file = ssh.key_file or ""
-    port = ssh.port if ssh.port and ssh.port > 0 else DEFAULT_SSH_PORT
-    impersonate = ssh.impersonate_service_account or ""
-    connect_timeout = ssh.connect_timeout if ssh.connect_timeout is not None else DEFAULT_SSH_CONNECT_TIMEOUT
-
-    if group_name and group_name in config.scale_groups:
-        group = config.scale_groups[group_name]
-        if group.slice_template is not None and group.slice_template.manual is not None:
-            manual = group.slice_template.manual
-            if manual.ssh_user:
-                user = manual.ssh_user
-            if manual.ssh_key_file:
-                key_file = manual.ssh_key_file
-
-    return SshConfig(
-        user=user,
-        key_file=key_file,
-        port=port,
-        impersonate_service_account=impersonate,
-        connect_timeout=connect_timeout,
-    )
-
-
-def clear_remote_state(remote_state_dir: str) -> None:
-    """Remove all files under the remote state dir so the controller starts fresh."""
-    path = StoragePath(remote_state_dir)
-    if path.exists():
-        path.rmtree()

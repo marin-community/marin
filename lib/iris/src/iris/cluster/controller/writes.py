@@ -21,6 +21,7 @@ Areas covered:
 import secrets
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from itertools import batched
 
 from rigging.timing import Timestamp
 from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
@@ -44,6 +45,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     meta_table,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -56,6 +58,10 @@ from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
+
+# Ids bound into a single ``IN`` predicate. SQLite caps the bound parameters per
+# statement, so batched writes chunk their id lists at this width.
+_ID_CHUNK_SIZE = 900
 
 
 class ConfigurationError(RuntimeError):
@@ -241,9 +247,13 @@ def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
     meta-scheduler. Recording the pin lets later ticks skip routing the job; the
     same id propagates to the job's tasks.
     """
+    by_backend: dict[str, list[JobName]] = {}
     for job_id, backend_id in pins:
-        tx.execute(update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id=backend_id))
-        tx.execute(update(tasks_table).where(tasks_table.c.job_id == job_id).values(backend_id=backend_id))
+        by_backend.setdefault(backend_id, []).append(job_id)
+    for backend_id, job_ids in by_backend.items():
+        for chunk in batched(job_ids, _ID_CHUNK_SIZE):
+            tx.execute(update(jobs_table).where(jobs_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
+            tx.execute(update(tasks_table).where(tasks_table.c.job_id.in_(chunk)).values(backend_id=backend_id))
 
 
 @writes_to(job_config_table)
@@ -308,12 +318,15 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
+@writes_to(
+    jobs_table,
+    cascades_into=(task_attempts_table, task_attempt_outputs_table, job_config_table, job_workdir_files_table),
+)
 def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
-    ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
-    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, output metadata,
+    config, and workdir files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
     explicitly through the projection, which keeps the in-memory endpoint cache in
     sync as well as the row.
 
@@ -498,10 +511,10 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
 
     Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
     """
-    for job_id in job_ids:
+    for chunk in batched(job_ids, _ID_CHUNK_SIZE):
         tx.execute(
             update(jobs_table)
-            .where(jobs_table.c.job_id == job_id)
+            .where(jobs_table.c.job_id.in_(chunk))
             .values(
                 state=case(
                     (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
@@ -1028,7 +1041,7 @@ def mirror_federated_task(
     )
 
 
-@writes_to(task_attempts_table)
+@writes_to(task_attempts_table, task_attempt_outputs_table)
 def mirror_federated_attempts(
     tx: Tx,
     *,
@@ -1061,6 +1074,10 @@ def mirror_federated_attempts(
                 error=attempt.error or None,
                 attempt_uid=attempt_uid,
                 backend_id="",
+                pod_name=attempt.pod_name,
+                pod_uid=attempt.pod_uid,
+                node_name=attempt.node_name,
+                terminal_reason=attempt.terminal_reason,
             )
             .on_conflict_do_update(
                 index_elements=["task_id", "attempt_id"],
@@ -1070,9 +1087,23 @@ def mirror_federated_attempts(
                     "finished_at_ms": finished,
                     "exit_code": attempt.exit_code or None,
                     "error": attempt.error or None,
+                    "pod_name": attempt.pod_name,
+                    "pod_uid": attempt.pod_uid,
+                    "node_name": attempt.node_name,
+                    "terminal_reason": attempt.terminal_reason,
                 },
             )
         )
+        if attempt.HasField("output_archive"):
+            tx.execute(
+                sqlite_insert(task_attempt_outputs_table)
+                .values(
+                    task_id=task_id,
+                    attempt_id=attempt.attempt_id,
+                    archive_json=proto_to_json(attempt.output_archive),
+                )
+                .on_conflict_do_nothing(index_elements=["task_id", "attempt_id"])
+            )
 
 
 @writes_to(federation_sync_state_table)

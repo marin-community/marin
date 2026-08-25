@@ -20,6 +20,12 @@ from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from rigging import telemetry
 from zephyr import counters
+from zephyr.context import (
+    _NON_RETRYABLE_ERRORS,
+    MAX_IRIS_WORKER_REPLICAS,
+    ZephyrContext,
+    _distributed_worker_limit,
+)
 from zephyr.coordinator import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
@@ -30,12 +36,6 @@ from zephyr.coordinator import (
     ZephyrCoordinator,
 )
 from zephyr.dataset import Dataset
-from zephyr.execution import (
-    _NON_RETRYABLE_ERRORS,
-    MAX_IRIS_WORKER_REPLICAS,
-    ZephyrContext,
-    _distributed_worker_limit,
-)
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
@@ -1571,7 +1571,7 @@ def test_heartbeat_failures_fail_actor_context():
     worker = ZephyrWorker.__new__(ZephyrWorker)
     worker._actor_ctx = actor_ctx
     worker._shutdown_event = threading.Event()
-    worker._active_runners = []
+    worker._active_shards = []
     worker._resources_lock = threading.Lock()
     worker._last_reported_counters = {}
     worker._counter_generation = 0

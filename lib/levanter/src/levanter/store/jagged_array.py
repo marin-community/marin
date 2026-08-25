@@ -13,7 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
+from rigging.filesystem.cross_region import is_cross_region_url, record_transfer
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tensorstore_serialization import build_kvstore_spec
 
@@ -29,6 +31,16 @@ DEFAULT_WRITE_CHUNK_SIZE = DEFAULT_CHUNK_SIZE * 512
 _READ_CONTEXT: ts.Context | None = None
 _READ_CONTEXT_LOCK = threading.Lock()
 _READ_CACHE_SETTINGS = {"total_bytes_limit": CACHE_BYTES_LIMIT}
+
+
+def set_jagged_array_read_cache_bytes(total_bytes_limit: int) -> None:
+    """Set the shared TensorStore read cache size before opening any stores."""
+    if total_bytes_limit <= 0:
+        raise ValueError("total_bytes_limit must be positive")
+    with _READ_CONTEXT_LOCK:
+        if _READ_CONTEXT is not None:
+            raise RuntimeError("Jagged array read cache is already initialized")
+        _READ_CACHE_SETTINGS["total_bytes_limit"] = total_bytes_limit
 
 
 def _read_context() -> ts.Context:
@@ -204,20 +216,18 @@ class JaggedArrayStore:
         path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False
     ) -> "JaggedArrayStore":
         offset_path = _extend_path(path, "offsets")
-        offsets = _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
+        offsets = await _ts_open_async(offset_path, jnp.int64, [1], mode=mode)
 
         data_path = _extend_path(path, "data")
-        data = _ts_open_async(data_path, dtype, [0], mode=mode)
+        data = await _ts_open_async(data_path, dtype, [0], mode=mode)
 
         if item_rank > 1:
             shape_path = _extend_path(path, "shapes")
-            shapes = _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
+            shapes = await _ts_open_async(shape_path, jnp.int64, [0, item_rank - 1], mode=mode)
         else:
             shapes = None
 
-        return JaggedArrayStore(
-            await offsets, await data, await shapes if shapes is not None else None, item_rank, cache_metadata
-        )
+        return JaggedArrayStore(offsets, data, shapes, item_rank, cache_metadata)
 
     @staticmethod
     def open(path: Optional[str], *, mode="a", item_rank=1, dtype, cache_metadata: bool = False) -> "JaggedArrayStore":
@@ -598,12 +608,17 @@ def _ts_open_kwargs(mode: str) -> dict:
 
 
 def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
+    spec = _get_spec(path, shape)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
             return ts.open(spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
@@ -630,12 +645,17 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
 
 async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
-    spec = _get_spec(path, shape)
     mode_config = _mode_to_open_mode(mode)
+    spec = _get_spec(path, shape)
+
+    if path is not None and mode != "r":
+        StoragePath(path).parent.mkdirs()
+
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
             return await ts.open(spec, **open_kwargs, **mode_config)
         except FileNotFoundError:
@@ -644,13 +664,18 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    return await ts.open(
-        spec,
-        dtype=jnp.dtype(dtype).name,
-        shape=[2**54, *shape[1:]],
-        **open_kwargs,
-        **mode_config,
-    )
+    try:
+        return await ts.open(
+            spec,
+            dtype=jnp.dtype(dtype).name,
+            shape=[2**54, *shape[1:]],
+            **open_kwargs,
+            **mode_config,
+        )
+    except ValueError as e:
+        if "NOT_FOUND" in str(e):
+            raise FileNotFoundError(f"File not found: {path}") from e
+        raise
 
 
 def _get_spec(path, shape):
@@ -660,7 +685,6 @@ def _get_spec(path, shape):
     else:
         kvstore = build_kvstore_spec(path)
         spec = {"driver": "zarr3", "kvstore": kvstore}
-        StoragePath(os.path.dirname(path)).mkdirs()
         spec["metadata"] = {
             "chunk_grid": {
                 "name": "regular",

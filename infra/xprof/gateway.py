@@ -22,7 +22,7 @@ from typing import Protocol
 from urllib.parse import parse_qs, urlencode
 
 from fsspec.callbacks import Callback
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from infra.xprof.config import HEALTH_PATH
 

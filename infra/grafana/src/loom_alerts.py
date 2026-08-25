@@ -5,9 +5,10 @@
 
 Every alert group arrives as a Grafana webhook and is announced with
 `chat.postMessage`, which returns the `channel`/`ts` naming a thread. One alert
-keeps one thread for its whole life: re-notifications and the resolution are
-posted under the original announcement, so a webhook retry adds nothing and a
-still-firing note appears only after the thread has been quiet.
+group keeps one thread while it is tracked: re-notifications, resolutions, and
+replacement alert instances are posted under the original announcement. Thus,
+a webhook retry adds nothing and a still-firing note appears only after the
+thread has been quiet.
 
 Two receivers share that behavior through `SlackAnnouncer` and differ in what
 follows. `LoomAlertClient` opens a Loom triage run naming the thread it just
@@ -79,10 +80,11 @@ class _Tracked:
     # alert creates a run, and Loom dedupes them to one session, so linking on
     # each would repeat the same line per retry and per re-notification.
     linked_session: str | None = None
+    resolved: bool = False
 
 
 class ThreadLog:
-    """Which Slack thread announced an alert, for the life of that alert.
+    """Which Slack thread announced a notification group while it is tracked.
 
     Entries expire after `ttl` and are capped at `max_entries`. Not safe for
     concurrent use from threads; callers are on one event loop.
@@ -115,19 +117,30 @@ class ThreadLog:
     def mark_posted(self, key: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
-            tracked.posted_at = time.monotonic()
+            now = time.monotonic()
+            tracked.posted_at = now
+            tracked.expires_at = now + self._ttl
+
+    def mark_firing(self, key: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.resolved = False
+            self.mark_posted(key)
+
+    def mark_resolved(self, key: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.resolved = True
+            self.mark_posted(key)
 
     def mark_linked(self, key: str, session_id: str) -> None:
         tracked = self._threads.get(key)
         if tracked is not None:
             tracked.linked_session = session_id
 
-    def discard(self, key: str) -> None:
-        self._threads.pop(key, None)
-
 
 class SlackAnnouncer:
-    """Announce Grafana alert groups in one Slack channel, a thread per alert.
+    """Announce Grafana alert groups in one Slack channel, one thread per group.
 
     Owns the channel, the bot credential, and which thread announced which alert.
     One instance serves one receiver; two receivers keep separate thread logs
@@ -136,8 +149,8 @@ class SlackAnnouncer:
 
     def __init__(self, slack: SlackAlertConfig) -> None:
         self._slack = slack
-        # Alert identity to the thread announcing it. Keyed on identity rather
-        # than firing state so a resolution threads under the alert it resolves.
+        # A notification group maps to one thread through firing and resolved
+        # states, including a new alert instance from a replacement job.
         self._threads = ThreadLog(ttl=THREAD_TTL, max_entries=MAX_TRACKED_THREADS)
 
     async def announce(
@@ -155,6 +168,10 @@ class SlackAnnouncer:
         """
         tracked = self._threads.peek(thread_key)
         if tracked is not None:
+            if tracked.resolved:
+                await self.post(client, "Firing again after resolution.", thread=tracked.thread)
+                self._threads.mark_firing(thread_key)
+                return tracked.thread
             # Grafana retries a failed webhook within seconds, and re-notifies an
             # unresolved alert on its repeat_interval. Both land here; only the
             # second is news, so a quiet period separates them.
@@ -195,14 +212,17 @@ class SlackAnnouncer:
         "resolved" in the channel reads as noise.
         """
         tracked = self._threads.peek(thread_key)
-        if tracked is None:
+        if tracked is None or tracked.resolved:
             return
         await self.post(
             client,
             f"Resolved — {_alert_title(payload, _all_alerts(payload))}.",
             thread=tracked.thread,
         )
-        self._threads.discard(thread_key)
+        # A replacement job can remain pending after this alert instance
+        # resolves. Keep the group thread until its normal TTL so the new alert
+        # instance joins the same operator conversation.
+        self._threads.mark_resolved(thread_key)
 
     async def post(
         self,
@@ -447,20 +467,9 @@ def _idempotency_key(payload: object, alerts: list[Mapping[str, object]]) -> str
 
 
 def _thread_key(payload: object) -> str:
-    """Identify the alert group across its whole life, resolution included.
-
-    Names the thread every notification for the group shares, so it must not
-    depend on firing state. Grafana holds `fingerprint` and `startsAt` fixed for
-    as long as one alert instance lives, which is exactly that span.
-    """
+    """Identify the Grafana notification group, including replacement alerts."""
     assert isinstance(payload, Mapping)
-    identities = sorted(f"{alert.get('fingerprint', '')}@{alert.get('startsAt', '')}" for alert in _all_alerts(payload))
-    seed = json.dumps(
-        {"groupKey": str(payload.get("groupKey", "")), "alerts": identities},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(seed.encode()).hexdigest()
+    return hashlib.sha256(str(payload.get("groupKey", "")).encode()).hexdigest()
 
 
 def _slack_escape(text: str) -> str:

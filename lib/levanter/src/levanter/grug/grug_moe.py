@@ -29,6 +29,7 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
+    CapacityOverflow,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
@@ -45,6 +46,7 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -70,7 +72,9 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
+    num_expert_waves: int = eqx.field(static=True, default=1)
 
     @staticmethod
     def init(
@@ -84,7 +88,9 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
+        num_expert_waves: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -105,7 +111,9 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
+            num_expert_waves=num_expert_waves,
         )
 
     @named_call
@@ -117,7 +125,7 @@ class MoEExpertMlp(eqx.Module):
         *,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -129,8 +137,10 @@ class MoEExpertMlp(eqx.Module):
             implementation=self.implementation,
             mesh=mesh,
             capacity_factor=self.capacity_factor,
+            pooled_transport_capacity_factor=self.pooled_transport_capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
+            num_expert_waves=self.num_expert_waves,
         )
 
 
@@ -146,20 +156,26 @@ def moe_mlp(
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    pooled_transport_capacity_factor: float | None = None,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
-) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+    num_expert_waves: int = 1,
+) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
     precomputed token-to-expert assignments. Routing logits/top-k selection
     stays in the caller (e.g. model MLP block).
 
-    Set `report_capacity_overflow=True` to also return a scalar count of
-    dropped expert assignments from EP capacity clipping.
+    Set `report_capacity_overflow=True` to also return sender and receiver
+    counts for expert assignments dropped by EP capacity clipping.
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
+
+    `pooled_transport_capacity_factor` sets the sender capacity for each
+    destination pool. `num_expert_waves` sets the static wave count for the
+    fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -208,7 +224,7 @@ def moe_mlp(
             expert_chunks=expert_chunks,
         )
         if report_capacity_overflow:
-            return out, dropped
+            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
@@ -231,6 +247,14 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
+        elif resolved_implementation == "fixed_pooled_wave_all_to_all":
+            if pooled_transport_capacity_factor is None:
+                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+            shard_local_fn = partial(
+                _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+                transport_capacity_factor=pooled_transport_capacity_factor,
+                num_expert_waves=num_expert_waves,
+            )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:
@@ -260,12 +284,12 @@ def moe_mlp(
                 w_up_gate_spec,
                 w_down_spec,
             ),
-            out_specs=(batch_spec, P()),
+            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
             check_vma=False,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         if report_capacity_overflow:
-            return out, dropped
+            return out, overflow
         return out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
@@ -330,11 +354,12 @@ def moe_mlp(
     )
     out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
     if report_capacity_overflow:
-        return out, dropped
+        return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
     return out
 
 
 __all__ = [
+    "CapacityOverflow",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",

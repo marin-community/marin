@@ -38,7 +38,7 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.auth import IapCredentialsUnavailable
-from rigging.filesystem import load_cluster_config, use_data_config
+from rigging.filesystem.cluster_config import load_cluster_config, use_data_config
 from rigging.timing import Duration
 
 # kubernetes ships with iris[controller]. A kube-fronted cluster (CoreWeave) needs it to discover

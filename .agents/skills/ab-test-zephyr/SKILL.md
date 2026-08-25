@@ -1,18 +1,9 @@
 ---
 name: ab-test-zephyr
-description: Run a Zephyr control and treatment on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates; add named treatments only when requested.
+description: Run an explicitly requested Zephyr control/treatment benchmark on the same pre-normalized sample and compare Finelog stage metrics.
 ---
 
-# A/B Test Zephyr Changes
-
-Use one workflow for ad hoc comparisons and PR performance gates:
-
-1. Run one control and one treatment with
-   `experiments.datakit.zephyr_benchmark` on the same pre-normalized sample.
-2. Collect every execution's `zephyr.stage` rows from Finelog.
-3. Compare CPU, elapsed time, and memory per stage.
-4. Publish the workload fingerprint, data-equivalence checks, infrastructure
-   noise, and result in one report.
+# A/B test Zephyr changes
 
 ## Signals
 
@@ -30,16 +21,12 @@ The coordinator writes one `zephyr.stage` row per completed stage and
 | `cpu_pct_avg` | weighted interpretation only | CPU saturation context |
 | `item_rate`, `byte_rate` | do not aggregate | Derived from noisy elapsed time |
 
-`cpu_time_total` is the sum of process user and system CPU-seconds across
-completed shards. It is the default signal for code efficiency because worker
-count and queue delay do not directly change it. Normalize it as CPU-seconds
-per item or byte when a control and treatment processed slightly different
-amounts of data.
-
-`elapsed` measures a stage barrier. It captures startup, I/O, concurrency, and
-straggler behavior that CPU time misses. It also moves with worker availability,
-preemption, retries, autoscaling, and data skew. Report it, but repeat a result
-when elapsed time is the only signal that changed.
+`cpu_time_total` sums process user and system CPU-seconds across completed
+shards, so worker count and queue delay do not directly change it. Use it as the
+primary efficiency signal and normalize per item or byte when accepted workload
+sizes differ. `elapsed` measures the stage barrier and includes startup, I/O,
+concurrency, queueing, and stragglers; repeat an elapsed-only result under
+comparable scheduling conditions.
 
 Keep CPU and elapsed time as separate outcomes:
 
@@ -47,15 +34,13 @@ Keep CPU and elapsed time as separate outcomes:
   compute cost.
 - CPU higher and elapsed lower: faster and more expensive.
 - CPU lower and elapsed higher: cheaper and slower.
-- Wall-only change from one control/treatment comparison: inconclusive until
-  repeated under comparable scheduling conditions.
+- Wall-only change from one comparison: inconclusive until repeated.
 - Topology or batching change: report the latency/compute tradeoff; do not
   describe wall-time gains as equivalent per-core efficiency gains.
 
-Do not apply fixed wall-time thresholds to every benchmark. Calibrate CPU/item
-and elapsed thresholds from same-code repeats for the selected sample and pool
+Calibrate thresholds from same-code repeats for the selected sample and pool
 shape. A new OOM, application failure, or memory peak above the worker limit is
-a regression regardless of CPU time.
+a regression regardless of CPU.
 
 ## Choose the comparison
 
@@ -77,6 +62,12 @@ Default to one control at the branch/PR merge base and one treatment at the
 branch/PR head. Add treatments only when the requester explicitly names each
 additional commit or configuration. Record a stable name plus the exact SHA and
 configuration difference for every extra arm; do not infer or invent arms.
+
+Run on GCP in `europe-west4` with
+`gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` unless the requester
+selects another sample or backend. The us-central1 GCS sample is available for
+us-central1 runs. CoreWeave remains available for S3-local runs; select it
+explicitly with the matching S3 sample and target cluster.
 
 For a PR, read the diff and select the smallest stage range that exercises the
 changed behavior:
@@ -106,35 +97,36 @@ git worktree add --detach "$WORKTREE_ROOT/control" "$BASELINE_SHA"
 git worktree add --detach "$WORKTREE_ROOT/treatment" "$TREATMENT_SHA"
 ```
 
-Record both SHAs. If the experiment changes configuration without changing
-code, use two worktrees or commits that preserve the exact control and
-treatment configurations. Add one detached worktree per additional treatment
-SHA or configuration explicitly requested.
+Record both SHAs. Preserve configuration-only arms in separate worktrees or
+commits. Add arms only when explicitly requested.
 
 ## Launch the download-free benchmark
 
 `experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
 and routes outputs to a seven-day temporary prefix. Use an immutable,
-region-local sample. All arguments except `--run-tag` must match across the
-control and treatments.
+region-local sample. Its default input is the GCS 100B sample in `europe-west4`.
+All arguments except `--run-tag` must match across the control and treatments.
 
 Set exactly one data-locality argument before launching:
 
 ```bash
-# For s3://marin-us-east-02a/...:
-COREWEAVE_CLUSTER=cw-us-east-02a
-DATA_LOCALITY_ARGS=(--target-cluster "$COREWEAVE_CLUSTER")
+# Default: GCS input and GCP compute in europe-west4.
+SAMPLE_PREFIX=gs://marin-eu-west4/datakit/sample_100b_8ae7a94f
+DATA_LOCALITY_ARGS=(--region europe-west4)
 
-# For gs://marin-us-central2/..., replace the two lines above with:
-# GCP_REGION=us-central2
-# DATA_LOCALITY_ARGS=(--region "$GCP_REGION")
+# GCP opt-in: use the existing us-central1 sample with us-central1 compute.
+# SAMPLE_PREFIX=gs://marin-us-central1/datakit/sample_100b_8ae7a94f
+# DATA_LOCALITY_ARGS=(--region us-central1)
+
+# CoreWeave opt-in: S3 input and CoreWeave compute in cw-us-east-02a.
+# SAMPLE_PREFIX=s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f
+# DATA_LOCALITY_ARGS=(--target-cluster cw-us-east-02a)
 ```
 
-Set the cluster or region from the actual sample prefix; the values above are
-examples. If the mapping is unknown, stop before launching. The benchmark
-passes `source_prefix` to `marin_temp_bucket`, which keeps temporary outputs
-with the sample. Do not override the output location or launch compute in a
-different region.
+Set the cluster or region from the actual sample prefix. If the mapping is
+unknown, stop before launching. The benchmark passes `source_prefix` to
+`marin_temp_bucket`, which keeps temporary outputs with the sample. Do not
+override the output location or launch compute in a different region.
 
 Launch each arm from its worktree:
 
@@ -145,7 +137,7 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
   "${DATA_LOCALITY_ARGS[@]}" --memory=2G --disk=5G --cpu=1 --extra=cpu \
   --priority batch \
   -- python -m experiments.datakit.zephyr_benchmark \
-    --sample-prefix <NORMALIZED_SAMPLE_PREFIX> \
+    --sample-prefix "$SAMPLE_PREFIX" \
     --sources <COMMA_SEPARATED_SOURCES_OR_ALL> \
     --run-tag <FRESH_RUN_TAG>-<ARM> \
     --pool-workers <WORKERS> \
@@ -173,9 +165,9 @@ explicitly requested treatments launched in the same scheduling window. If the
 decision depends on elapsed time, interleave additional control trials among
 the treatments to measure scheduling noise.
 
-Delegate monitoring to `babysit-zephyr`. A failed or preempted arm is evidence
-about infrastructure reliability, not a performance verdict. Diagnose repeated
-failures with `debug`.
+If the request includes continuous monitoring, use `babysit-zephyr`. A failed
+or preempted arm measures infrastructure reliability and carries no performance
+result. Use `debug` only for a stated repeated fault.
 
 ## Collect execution IDs
 
@@ -267,7 +259,7 @@ Before interpreting deltas:
    fraction of a percent. Explain and normalize any accepted mismatch.
 3. Confirm the control and treatment completed the same execution and stage
    set.
-4. Inspect `iris job summary <IRIS_JOB_ID>` for OOMs and peak task memory.
+4. Inspect `iris job describe <IRIS_JOB_ID>` for OOMs and peak task memory.
 5. Check job logs for retries, preemptions, hardware faults, and stragglers.
 6. Run the change's semantic validation separately. Matching item counts do not
    prove output equivalence.
@@ -299,11 +291,9 @@ Infrastructure: <preemptions, retries, failures, stragglers, or none>
 Interpretation: <efficiency result, latency result, and any tradeoff>
 ```
 
-Lead with CPU change, then elapsed time and memory. State whether elapsed time
-came from one control/treatment comparison or repeated interleaved trials.
-Label summed stage elapsed as such. Iris launcher duration and summed task wall
-time may help diagnose queueing or topology, but they do not replace the
-Finelog stage metrics.
+Lead with CPU change, then elapsed time and memory. State whether elapsed came
+from one comparison or repeated interleaved trials and label summed stage
+elapsed. Launcher duration and task wall time do not replace stage metrics.
 
 ## Clean up
 

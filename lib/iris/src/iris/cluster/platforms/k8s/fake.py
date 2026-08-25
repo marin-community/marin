@@ -770,6 +770,8 @@ class InMemoryK8sService:
             return self._exec_responses[pod_name].pop(0)
         if not any(name == pod_name for (_, name) in self._resources):
             return ExecResult(returncode=1, stdout="", stderr=f"pod {pod_name!r} not found")
+        if len(cmd) == 2 and cmd[0] == "touch":
+            self._file_contents[(pod_name, cmd[1])] = b""
         return ExecResult(returncode=0, stdout="", stderr="")
 
     def set_image(self, resource: K8sResource, name: str, container: str, image: str) -> None:

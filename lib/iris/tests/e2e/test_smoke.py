@@ -8,12 +8,14 @@ submits its own jobs and is independently runnable. In local mode the cluster
 has workers across CPU, TPU coscheduling, and multi-region scale groups.
 """
 
+import contextlib
 import logging
 import os
 import uuid
 from pathlib import Path
 
 import pytest
+from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
@@ -29,6 +31,7 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -45,7 +48,7 @@ from iris.testing.e2e import (
 )
 from iris.testing.e2e_helpers import TestJobs
 from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +201,26 @@ def smoke_screenshot(smoke_page, tmp_path_factory):
         return path
 
     return capture
+
+
+def _wait_for_rows(page, text: str, *, present: bool) -> None:
+    """Wait until `text` is or is not among the log viewer's rows.
+
+    Both directions require at least one row. Re-querying the viewer empties the
+    list until the response lands, and a bare "the text is gone" check is also
+    true of that empty list, so anything asserted after it would race the fetch.
+    """
+    page.wait_for_function(
+        """
+        ({ text, present }) => {
+            const rows = [...document.querySelectorAll("[data-row]")];
+            if (rows.length === 0) return false;
+            return rows.some((row) => row.innerText.includes(text)) === present;
+        }
+        """,
+        arg={"text": text, "present": present},
+        timeout=15000,
+    )
 
 
 def _await_stable_screenshot(page, check: str, *, arg=None) -> None:
@@ -419,6 +442,61 @@ def _wait_for_task_log_marker(
     )
 
 
+def test_dashboard_task_events_exclude_prior_incarnations(smoke_cluster, smoke_page):
+    """The task timeline excludes retained events from a prior run with reused IDs."""
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-event-incarnation")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    task_status = smoke_cluster.task_status(job)
+    task_id = task_status.task_id
+    job_id = job.job_id.to_wire()
+    current_attempt = next(
+        attempt for attempt in task_status.attempts if attempt.attempt_id == task_status.current_attempt_id
+    )
+
+    log_server_url = f"{smoke_cluster.url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url)) as log_client:
+        table = log_client.get_table(
+            TASK_EVENT_NAMESPACE,
+            TaskEventRow,
+            storage_policy=TASK_EVENT_STORAGE_POLICY,
+        )
+        now = Timestamp.now()
+        event_source = "iris/controller"
+        table.write(
+            [
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid="prior-incarnation",
+                    ts=now.add_ms(-1_000).as_naive_utc(),
+                    type="Warning",
+                    reason="PriorIncarnationEvent",
+                    message="This retained event belongs to an earlier run.",
+                    source=event_source,
+                    count=1,
+                ),
+                TaskEventRow(
+                    task_id=task_id,
+                    attempt_id=current_attempt.attempt_id,
+                    attempt_uid=current_attempt.attempt_uid,
+                    ts=now.as_naive_utc(),
+                    type="Normal",
+                    reason="CurrentIncarnationEvent",
+                    message="This event belongs to the task shown by the controller.",
+                    source=event_source,
+                    count=1,
+                ),
+            ]
+        )
+        assert table.flush(timeout=5) == FlushResult.SUCCEEDED
+
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}/task/{task_id}")
+    wait_for_dashboard_ready(smoke_page)
+    smoke_page.get_by_text("CurrentIncarnationEvent", exact=True).wait_for(timeout=10_000)
+
+    assert smoke_page.get_by_text("PriorIncarnationEvent", exact=True).count() == 0
+
+
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
     """Task logs show search, filter, permalink, and time-bound controls."""
     task_status = smoke_cluster.task_status(verbose_job)
@@ -451,7 +529,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     # Search marks matching lines in place. "validation failed" only appears in
     # ERROR lines, so the INFO lines around them must survive — that is the whole
     # point of search being distinct from filter.
-    search_input = "input[placeholder^='Search loaded lines']"
+    search_input = "[data-log-search]"
     smoke_page.fill(search_input, "validation failed")
     smoke_page.wait_for_function(
         "() => document.querySelectorAll('mark').length > 0 && "
@@ -464,22 +542,41 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
-    # The regex filter re-queries the server and drops non-matching lines entirely. It
-    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
-    # because CI runs Iris smoke tests against the latest published Finelog server;
-    # the Rust test covers regex metacharacters against this branch's server source.
-    filter_input = "input[placeholder^='Filter regex']"
-    smoke_page.fill(filter_input, "validation failed")
-    smoke_page.press(filter_input, "Enter")
+    # The pager moves a window through the stream: paging back leaves the newest
+    # line behind, and Follow returns to it. A 100-line page gives the verbose
+    # job's few hundred lines somewhere to step back to.
+    page_size = "[data-log-page-size]"
+    smoke_page.select_option(page_size, "100")
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('validation failed') && "
-        "!document.body.textContent.includes('processing data batch')",
-        timeout=5000,
+        "() => document.querySelectorAll('[data-row]').length === 100",
+        timeout=10000,
     )
+    smoke_page.get_by_role("button", name="← Older").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
+    smoke_page.get_by_role("button", name="Follow").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
+    smoke_page.select_option(page_size, "500")
+
+    # The regex filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke. The alternation is deliberate: a
+    # server that ignores FetchLogs.regex (anything below the pinned floor) returns
+    # every line, and one that treats the pattern literally returns none, so this
+    # fails on either rather than passing on a filter that never ran.
+    filter_input = "[data-log-filter]"
+    smoke_page.fill(filter_input, "validation (failed|skipped)")
+    smoke_page.press(filter_input, "Enter")
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
     smoke_screenshot(
         "task-logs-filtered",
         "Task detail page with log filter input populated and filtered log lines visible in the log viewer.",
     )
+
+    # Expanding context brings back the lines the filter hides, around every
+    # loaded hit at once, and collapsing puts them away again.
+    smoke_page.get_by_role("button", name="Expand all").click()
+    _wait_for_rows(smoke_page, "processing data batch", present=True)
+    smoke_page.get_by_role("button", name="Collapse").click()
+    _wait_for_rows(smoke_page, "processing data batch", present=False)
 
     # The timestamp action still makes a permalink. The next control sets an
     # exact start time. The start time stays set after the string filter clears.
@@ -489,22 +586,48 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     selected_message = filtered_row.locator(":scope > span").last.inner_text()
     filtered_row.locator("[data-log-start]").click()
-    since_input = "input[type='datetime-local']"
+    # The time control collapses to a trigger labelled with the bound in force,
+    # so the bound is readable without opening the menu.
+    since_trigger = smoke_page.locator("[data-log-since]")
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[type='datetime-local']\")?.value.length > 0",
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('Since')",
         timeout=5000,
     )
-    locked_since = smoke_page.input_value(since_input)
-    assert locked_since
+    locked_since = since_trigger.inner_text()
     smoke_page.locator("[data-row]").filter(has_text=selected_message).wait_for(timeout=5000)
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
+        "() => document.querySelector('[data-log-filter]')?.value === '' && "
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )
-    assert smoke_page.input_value(since_input) == locked_since
+    assert since_trigger.inner_text() == locked_since
+
+    # A start time can also be typed or pasted, which the native date input this
+    # replaced could not accept at all. An unreadable value is refused in place,
+    # and so is a date that reads cleanly but does not exist.
+    since_trigger.click()
+    smoke_page.fill("[data-log-since-field]", "not a time")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    smoke_page.fill("[data-log-since-field]", "2026-02-31 12:00")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    assert_visible(smoke_page, "text=Unrecognized time")
+    smoke_page.fill("[data-log-since-field]", "1970-01-01 00:00:00.000")
+    smoke_page.press("[data-log-since-field]", "Enter")
+    smoke_page.wait_for_function(
+        "() => document.querySelector('[data-log-since]')?.textContent.includes('1970-01-01')",
+        timeout=5000,
+    )
+
+    # A start time is only a lower bound, so the stream still has a live end.
+    # With more lines than fit one page the window opens on the oldest of them,
+    # and Follow has to cross the rest of the stream to reach the newest line.
+    smoke_page.select_option(page_size, "100")
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=False)
+    smoke_page.get_by_role("button", name="Follow").click()
+    _wait_for_rows(smoke_page, "DONE: all lines emitted", present=True)
 
 
 def test_dashboard_jump_to_exception(smoke_cluster, smoke_page, smoke_screenshot):

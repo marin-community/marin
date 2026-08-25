@@ -109,7 +109,9 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "marin-buckets",
     "marin-core",
+    "marin-deploy",
     "marin-ducky",
     "marin-dupekit",
     "marin-finelog",
@@ -3129,9 +3131,10 @@ wheels = [
 
 [[package]]
 name = "kubernetes"
-version = "35.0.0"
+version = "36.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "certifi" },
     { name = "durationpy" },
     { name = "python-dateutil" },
@@ -3142,9 +3145,9 @@ dependencies = [
     { name = "urllib3" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/8f/85bf51ad4150f64e8c665daf0d9dfe9787ae92005efb9a4d1cba592bd79d/kubernetes-35.0.0.tar.gz", hash = "sha256:3d00d344944239821458b9efd484d6df9f011da367ecb155dadf9513f05f09ee", size = 1094642, upload-time = "2026-01-16T01:05:27.76Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/57/b07b96353f902aa1bdbe00e878e3a12a137977d03a962479785576aa8ec9/kubernetes-36.0.3.tar.gz", hash = "sha256:36993ed25ce59b789c9341473a228fcf268504a2fec7c2b2b1531d73072e5ce7", size = 2337528, upload-time = "2026-07-13T20:38:12.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/70/05b685ea2dffcb2adbf3cdcea5d8865b7bc66f67249084cf845012a0ff13/kubernetes-35.0.0-py2.py3-none-any.whl", hash = "sha256:39e2b33b46e5834ef6c3985ebfe2047ab39135d41de51ce7641a7ca5b372a13d", size = 2017602, upload-time = "2026-01-16T01:05:25.991Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/30/a96d47df739689ac0001ade0afefc16e3b477fc2fb426b568515fdc8afce/kubernetes-36.0.3-py2.py3-none-any.whl", hash = "sha256:8fde9241c4b298e6374a069dcf728359b4e72c2fb29489a975ba4e1c047cf10f", size = 4618066, upload-time = "2026-07-13T20:38:10.172Z" },
 ]
 
 [[package]]
@@ -3336,6 +3339,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/63/981401c5680c1eb30893f00a19641ac80db5d1e7086c62cb4b13ed813038/lxml-6.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:4a1503c56e4e2b38dc76f2f2da7bae69670c0f1933e27cfa34b2fa5876410b16", size = 3995728, upload-time = "2026-04-18T04:31:58.763Z" },
     { url = "https://files.pythonhosted.org/packages/e7/e8/c358a38ac3e541d16a1b527e4e9cb78c0419b0506a070ace11777e5e8404/lxml-6.1.0-cp313-cp313-win_arm64.whl", hash = "sha256:e0af85773850417d994d019741239b901b22c6680206f46a34766926e466141d", size = 3658372, upload-time = "2026-04-18T04:32:03.629Z" },
 ]
+
+[[package]]
+name = "marin-buckets"
+version = "0.0.0"
+source = { virtual = "infra/buckets" }
+dependencies = [
+    { name = "marin-iac", extra = ["deploy"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "marin-iac", extras = ["deploy"], editable = "infra/pulumi" }]
 
 [[package]]
 name = "marin-core"
@@ -3600,6 +3614,35 @@ test = [
 ]
 
 [[package]]
+name = "marin-deploy"
+version = "0.0.0"
+source = { editable = "infra/deploy" }
+dependencies = [
+    { name = "click" },
+    { name = "marin-finelog" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "marin-finelog", editable = "lib/finelog" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[[package]]
 name = "marin-ducky"
 version = "0.1.0"
 source = { editable = "lib/ducky" }
@@ -3772,14 +3815,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.28.dev31271949117"
+version = "0.2.31.dev32323413989"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/26/9b/d5c6becc54bc9ce6e72a11802c308bda851a7fe4f86baf4508b5dc3c2dc3/marin_finelog_server-0.2.28.dev31271949117.tar.gz", hash = "sha256:003e5a6b0c18cc92db88fb75c573987c2232d93f895f02af8478fd54307b473f", size = 368596, upload-time = "2026-08-08T18:59:45.536Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/39/6c11af6d0dea2abc141e961003df8d195775c6932a2d6747d35d856e874c/marin_finelog_server-0.2.31.dev32323413989.tar.gz", hash = "sha256:ee54541b4ce83d562a184fc7674e5eda137235fef4b42e758161d807361b7a6d", size = 381784, upload-time = "2026-08-20T02:35:13.777Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/bc/2ae76d392fce8462cac62a38cfc9656b7672616ffcac97da5eb32810c177/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9eccaefb62233c6b2647947af7866058ea821582105348fac72d622cfdebd6d3", size = 41056093, upload-time = "2026-08-08T18:59:27.942Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/4b/d0731ad1d2169f6063d190496d8f5cc5b10a0de7d66af9ac5eb8a4b12ede/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e79242cc1ed8e2ce6d096a9f4453e46873427ce504853b8f5bfb830560b2ac43", size = 38874492, upload-time = "2026-08-08T18:59:32.342Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/af/cfe41d20517eedbf0cd87d291d6ae99ddad460ed28a285ec7633a54b5c4f/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b297c63782ed08644d0b573db3160fb75527f2562e579846e213a86bf9297ddd", size = 40470543, upload-time = "2026-08-08T18:59:37.006Z" },
-    { url = "https://files.pythonhosted.org/packages/60/1d/da5142a5c8e447d167f02ddd3bf6113a336699153ffc34cfc11bcb568335/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:09242c474b5dcc4bae076ee96c1e858755bffd8754c3065373e27443f8dc20b5", size = 43019653, upload-time = "2026-08-08T18:59:41.898Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/81/12c2bbe3b339947d45b9b87302da934d8f2bceaee224c7a7c70d3b09b51c/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:79173dd1841e8afcd5805670903f9891d7b7845d8a339cfcab46857bff38b306", size = 40998434, upload-time = "2026-08-20T02:35:01.482Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/c5/ca898e02bf0dba81103a2a05afe0d8042d96fdc4f9540b7ca8a17b001afe/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:63316be55078066abd66e3ac28090292d2dcd2d8bc483cee6282f223c5df3f84", size = 38830490, upload-time = "2026-08-20T02:35:04.638Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/dd/cb6721fccc3bb5297e9c1d3784012eeddc32554e751513bf021515a64969/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:269a8893a751ada5a2f3ee77e6e71be6b2dfec3cb436fb15b0986bd3240f5569", size = 40419920, upload-time = "2026-08-20T02:35:07.419Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/3e/9381ab5739f5930456699b4ff0ee616a127bf2af75fadf8695f8a0c23b3d/marin_finelog_server-0.2.31.dev32323413989-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:21512ee308c3eaa265fb7d59382143e2040fa4a4c3c853e5e41d2a694befb29b", size = 42988429, upload-time = "2026-08-20T02:35:10.065Z" },
 ]
 
 [[package]]
@@ -3980,6 +4023,7 @@ deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-command" },
+    { name = "pulumi-coreweave" },
     { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
     { name = "pulumi-github" },
@@ -4003,6 +4047,7 @@ requires-dist = [
     { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.226,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
+    { name = "pulumi-coreweave", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
@@ -4036,6 +4081,7 @@ dependencies = [
     { name = "humanfriendly" },
     { name = "marin-finelog" },
     { name = "marin-finelog-server" },
+    { name = "marin-finestore" },
     { name = "marin-iris-native" },
     { name = "marin-rigging" },
     { name = "pydantic" },
@@ -4108,9 +4154,10 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
+    { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.28.dev31271949117" },
+    { name = "marin-finelog-server", specifier = ">=0.2.31.dev32323413989" },
+    { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
@@ -4134,7 +4181,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = "==0.11.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "kubernetes", specifier = ">=31.0.0,<36" },
+    { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
@@ -4154,7 +4201,7 @@ examples = [
 ]
 test = [
     { name = "jax", specifier = "==0.11.0" },
-    { name = "kubernetes", specifier = ">=31.0.0,<36" },
+    { name = "kubernetes", specifier = ">=31.0.0,!=36.0.0,<37" },
     { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },
@@ -4202,6 +4249,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "jmp" },
     { name = "lenses" },
+    { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
     { name = "marin-iris" },
@@ -4337,6 +4385,7 @@ requires-dist = [
     { name = "lenses" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.44.*" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -4503,6 +4552,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "marin-core" },
+    { name = "marin-deploy" },
     { name = "marin-ducky" },
     { name = "marin-dupekit" },
     { name = "marin-finelog" },
@@ -4518,6 +4568,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-deploy", editable = "infra/deploy" },
     { name = "marin-ducky", editable = "lib/ducky" },
     { name = "marin-dupekit", editable = "lib/dupekit" },
     { name = "marin-finelog", editable = "lib/finelog" },
@@ -6776,6 +6827,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cf/56/b7f66c9d2e4536b24a5bbe4e743093c7cdd689343d86f020419f4897a88d/pulumi_command-1.2.1.tar.gz", hash = "sha256:cbc9281a6571701ac5db598dac0246a058875b62f28c40c7cc0fcdc36898918d", size = 33022, upload-time = "2026-03-04T00:23:25.84Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/ce/1e5f30f868ba0827ca3311b0b171b12606e30c05e864714764d8d943fef1/pulumi_command-1.2.1-py3-none-any.whl", hash = "sha256:c7e465338e4363f114ddff99ee249260c7770ef4451b970ab51f7e8a37c9b030", size = 36861, upload-time = "2026-03-04T00:23:24.571Z" },
+]
+
+[[package]]
+name = "pulumi-coreweave"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b7/18/f4b2c2f80f675c7faa7120ef97318f3735322e1026225b57b0a89023dd70/pulumi_coreweave-1.0.2.tar.gz", hash = "sha256:bddc3618963dbaa1ec822a22532998bf7c9d4249f92aeb4e406941e2023986c0", size = 40678, upload-time = "2026-08-06T11:31:10.985Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/42/847c895d8be4e4ece25161b3473e91f5571e0d544450cfff5fcaee617546/pulumi_coreweave-1.0.2-py3-none-any.whl", hash = "sha256:f226788dd45b11c8da96f9053676cca871174e77488555b799ef70fb21f89450", size = 56153, upload-time = "2026-08-06T11:31:09.646Z" },
 ]
 
 [[package]]

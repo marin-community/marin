@@ -14,9 +14,11 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 import cloudpickle
+import fsspec
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
+from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
@@ -30,6 +32,7 @@ from zephyr.shuffle import (
     ScatterWriter,
     _dataframe_to_items,
     _items_to_dataframe,
+    _Sidecar,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -125,7 +128,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
-    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    reader = ScatterReader(chunk_paths=[path], target_shard=0, avg_item_bytes=1.0)
     rows = reader.get_frames()[0].collect().to_dicts()
 
     assert len(rows) == 1
@@ -412,7 +415,7 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    reader = ScatterReader(chunk_paths=[f"{data_path}c0000.parquet"], target_shard=513, avg_item_bytes=1)
     assert _read_shard(reader) == [{"k": 513}]
 
 
@@ -579,3 +582,42 @@ def test_external_sort_merge_across_source_shards(tmp_path):
         shard=0,
     )
     assert [r["k"] for r in rows] == [1, 2, 3]
+
+
+class _CountingFileSystem(LocalFileSystem):
+    """Counts how many filesystem instances a read builds."""
+
+    protocol = "counting"
+    clients_built = 0
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        type(self).clients_built += 1
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return super()._strip_protocol(str(path).removeprefix("counting://"))
+
+
+def test_sidecar_reads_build_one_client(tmp_path):
+    """Reading many sidecars concurrently builds one client (#8402).
+
+    fsspec keys its instance cache on the calling thread, so resolving inside
+    a pool worker builds a client, and a connection pool, per thread.
+    """
+    fsspec.register_implementation("counting", _CountingFileSystem, clobber=True)
+    paths = []
+    for shard_idx in range(8):
+        data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer.write(_items_to_dataframe([{"k": shard_idx}], _key, None, 1))
+        writer.close()
+        paths.append(f"counting://{data_path}")
+
+    _CountingFileSystem.clear_instance_cache()
+    _CountingFileSystem.clients_built = 0
+
+    sidecars = _Sidecar.read_all(paths)
+
+    assert [sidecar.path for sidecar in sidecars] == paths
+    assert _CountingFileSystem.clients_built == 1

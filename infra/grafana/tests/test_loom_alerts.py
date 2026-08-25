@@ -136,6 +136,32 @@ def alert_payload(status: str = "firing") -> dict:
     }
 
 
+def hero_stall_payload(
+    status: str = "firing",
+    *,
+    job: str = "/root/hero-run-coord",
+    fingerprint: str = "hero123",
+    starts_at: str = "2026-07-23T12:00:00Z",
+) -> dict:
+    payload = alert_payload(status)
+    labels = {
+        "alertname": "TrainingProgressStalled",
+        "cluster": "cw-a",
+        "job": job,
+        "reason": "training_stalled",
+        "run": "hero-run",
+        "severity": "critical",
+    }
+    payload["groupKey"] = '{}:{alertname="TrainingProgressStalled", run="hero-run"}'
+    payload["commonLabels"] = labels
+    payload["commonAnnotations"] = {"summary": f"cw-a: {job} has training_stalled"}
+    payload["alerts"][0]["labels"] = labels
+    payload["alerts"][0]["annotations"]["summary"] = f"cw-a: {job} has training_stalled"
+    payload["alerts"][0]["fingerprint"] = fingerprint
+    payload["alerts"][0]["startsAt"] = starts_at
+    return payload
+
+
 def test_firing_alert_is_announced_then_delivered_on_that_thread():
     """The announcement comes first, and its thread is what the run carries."""
     runs: list[dict] = []
@@ -226,6 +252,56 @@ def test_a_resolution_is_noted_on_the_alert_thread_and_creates_no_run():
 
     assert len(slack.roots) == 1, "a resolution joins the alert's thread"
     assert any("Resolved" in text for text in slack.reply_texts)
+
+
+def test_hero_stall_repeats_keep_one_thread_until_resolution(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    slack = FakeSlack()
+    client = client_for(slack)
+
+    asyncio.run(client.submit(hero_stall_payload()))
+    clock[0] = 4 * 60 * 60 + 1
+    asyncio.run(client.submit(hero_stall_payload()))
+    clock[0] = 7 * 60 * 60
+    assert asyncio.run(client.submit(hero_stall_payload(status="resolved"))) is None
+
+    assert len(slack.roots) == 1
+    assert "TrainingProgressStalled on cw-a" in slack.roots[0]["text"]
+    assert "/root/hero-run-coord" in slack.roots[0]["text"]
+    assert len(slack.replies) == 3
+    assert any("Resolved" in text for text in slack.reply_texts)
+    assert all(reply["thread_ts"] == "1700000000.000001" for reply in slack.replies)
+
+
+def test_hero_retry_replacement_reuses_thread_after_old_job_resolves(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(loom_alerts.time, "monotonic", lambda: clock[0])
+    runs: list[dict] = []
+    slack = FakeSlack()
+    client = client_for(slack, runs=runs)
+
+    old_job = hero_stall_payload()
+    asyncio.run(client.submit(old_job))
+    clock[0] = 60
+    asyncio.run(client.submit(hero_stall_payload(status="resolved")))
+    clock[0] = 6 * 60
+    asyncio.run(
+        client.submit(
+            hero_stall_payload(
+                job="/root/hero-run-coord-1",
+                fingerprint="hero456",
+                starts_at="2026-07-23T12:06:00Z",
+            )
+        )
+    )
+
+    assert len(slack.roots) == 1
+    assert any("Resolved" in text for text in slack.reply_texts)
+    assert "Firing again after resolution." in slack.reply_texts
+    assert all(reply["thread_ts"] == "1700000000.000001" for reply in slack.replies)
+    assert runs[1]["slack"] == runs[0]["slack"]
+    assert runs[1]["idempotency_key"] != runs[0]["idempotency_key"]
 
 
 def test_a_resolution_for_an_unannounced_alert_says_nothing():

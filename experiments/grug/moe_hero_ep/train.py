@@ -3,10 +3,13 @@
 
 import dataclasses
 import functools
+import gc
+import itertools
 import logging
 import os
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -16,6 +19,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -37,7 +41,9 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -54,10 +60,31 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
-    "JAX_ENABLE_PGLE": "true",
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
+    "JAX_ENABLE_PGLE": "false",
+    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    # `cuda_async` reads this fraction as the mempool release threshold, and PJRT sizes the
+    # collective pool at the remaining `(1 - fraction) x 184.3 GiB`. 0.75 sets a 138.2 GiB
+    # threshold and leaves ~46 GiB for collectives, above the ~28.5 GiB NCCL, cuBLAS, and the
+    # CUDA context hold outside the allocator. A higher fraction strands memory the step never
+    # uses, because the startup preallocation probe commits the whole threshold at once: 0.83
+    # pins 153.0 GiB in the pool and leaves under 3 GiB free on the device, so the arena
+    # allocation below has no room to remap into.
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
-_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+# The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
+# memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
+# occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
+# forces a fresh mapping against the ~17 GiB of physical memory outside the pool. The default 95
+# asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
+# for per-node variation in fragmentation. A lower percentage costs throughput, because a
+# smaller arena makes `HloRematerialization` recompute more of the step.
+_XLA_FLAG_DEFAULTS = (
+    "--xla_gpu_enable_latency_hiding_scheduler=true",
+    "--xla_gpu_memory_limit_slop_factor=85",
+)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
@@ -65,6 +92,7 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
 class WatchMode(StrEnum):
@@ -72,6 +100,38 @@ class WatchMode(StrEnum):
 
     INLINE = "inline"
     DIAGNOSTIC = "diagnostic"
+
+
+class MasterParamMode(StrEnum):
+    """Storage mode for optimizer master parameters."""
+
+    DISABLED = "disabled"
+    FP32_PINNED_HOST = "fp32_pinned_host"
+
+
+class TrainingDataMode(StrEnum):
+    """Source of training batches."""
+
+    MIXTURE = "mixture"
+    SYNTHETIC = "synthetic"
+
+
+def restore_template_from(state):
+    """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
+
+    `jax.eval_shape` drops the `pinned_host` memory kind that `initial_state` puts on
+    offloaded optimizer state, which is most of a hero checkpoint. Reading the sharding off a
+    built state keeps it.
+    """
+    template = jax.tree.map(
+        lambda leaf: (
+            jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
+        ),
+        state,
+    )
+    jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
+    gc.collect()
+    return template
 
 
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
@@ -107,6 +167,8 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
@@ -143,6 +205,9 @@ class GrugEvalConfig:
     # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
     # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
+    # Run the evals once after the first optimization step, for a baseline at the start of the loss
+    # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
+    eval_at_first_step: bool = False
 
 
 @dataclass(frozen=True)
@@ -152,6 +217,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    tensorstore_cache_bytes: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -162,6 +228,12 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # Retry budgets for the training job. The two are separate gates and the job fails when either
+    # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
+    # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
+    # restores checkpoints benefits from a deep budget.
+    max_retries_failure: int = 0
+    max_task_failures: int = 10
 
 
 def build_train_dataset(
@@ -189,6 +261,47 @@ def build_train_dataset(
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_TRAIN_LOADER_BUFFER_SIZE = 512
+# On one GB200 tray, four-batch requests delivered the first data in 3.7s and sustained 3.4 batches/s.
+_TRAIN_LOADER_FETCH_BATCH_SIZE = 4
+
+
+def _make_synthetic_batch(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    vocab_size: int,
+    seed: int,
+    mesh: Mesh,
+) -> GrugLmExample:
+    """Build one deterministic batch directly on the global batch sharding."""
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+
+    def tokens_for_slice(index):
+        batch_slice, position_slice = index
+        batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
+        position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
+        if batch_stride != 1 or position_stride != 1:
+            raise ValueError("synthetic batch sharding requires contiguous slices")
+        batch_indices = np.arange(batch_start, batch_stop, dtype=np.int64)[:, None]
+        position_indices = np.arange(position_start, position_stop, dtype=np.int64)[None, :]
+        return ((batch_indices * max_seq_len + position_indices + seed) % vocab_size).astype(np.int32)
+
+    def loss_weight_for_slice(index):
+        batch_slice, position_slice = index
+        batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
+        position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
+        if batch_stride != 1 or position_stride != 1:
+            raise ValueError("synthetic batch sharding requires contiguous slices")
+        loss_weight = np.ones((batch_stop - batch_start, position_stop - position_start), dtype=np.float32)
+        if position_start <= max_seq_len - 1 < position_stop:
+            loss_weight[:, max_seq_len - 1 - position_start] = 0
+        return loss_weight
+
+    shape = (batch_size, max_seq_len)
+    tokens = jax.make_array_from_callback(shape, sharding, tokens_for_slice)
+    loss_weight = jax.make_array_from_callback(shape, sharding, loss_weight_for_slice)
+    return GrugLmExample(tokens=tokens, loss_weight=loss_weight)
 
 
 def build_train_loader(
@@ -203,8 +316,10 @@ def build_train_loader(
     return DataLoader(
         dataset,
         batch_schedule.schedule,
+        max_buffered_batches=_TRAIN_LOADER_BUFFER_SIZE,
         mesh=mesh,
         axis_resources={"__BATCH__": _BATCH_AXES},
+        fetch_batch_size=_TRAIN_LOADER_FETCH_BATCH_SIZE,
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -239,6 +354,25 @@ def _to_dropless_local(model: Transformer) -> Transformer:
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
     dropless = dataclasses.replace(expert_mlp, implementation="sonic_cute", expert_chunks=1)
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
+
+
+def _first_step_only(hook: Callable[..., None]) -> Callable[..., None]:
+    """Wrap ``hook`` so that it runs one time only, after the first optimization step.
+
+    ``StateCallbackRunner`` dispatches on ``next_step % every``, thus ``every=1`` is the only
+    interval that covers the first step. The gate makes that registration one-shot. A resumed run
+    starts above step 1 and never fires it.
+    """
+
+    # `LambdaCallback` reads the signature to decide whether to pass `force`, and the `**kwargs`
+    # below would otherwise advertise a `force` parameter that the wrapped hook can lack.
+    @functools.wraps(hook)
+    def gated(step, *args, **kwargs):
+        if step.next_step != 1:
+            return
+        hook(step, *args, **kwargs)
+
+    return gated
 
 
 def build_tagged_evaluator(
@@ -343,6 +477,30 @@ def _compute_flops(
     return flops_per_example, flops_summary
 
 
+def log_device_memory(step_info) -> None:
+    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB.
+
+    The EP hero had no peak-HBM telemetry, which makes a whole class of result unreadable: XLA's
+    ``HloRematerialization`` engages only when peak crosses the allocator limit, so a config change
+    that moves peak across that boundary produces an MFU step change that has nothing to do with the
+    change itself. Issue #8054 traced its own +9.08% headline to exactly this -- 3.69 GiB of peak
+    took it under the limit and switched remat off -- and the win fell to +3.31% once one process
+    per GPU put 8.79 GiB back. Any ablation that moves activation memory needs this logged, or its
+    rungs cannot be told apart from allocator-limit crossings.
+
+    Ported from ``experiments/grug/moe_hero_fsdp/train.py``.
+    """
+    stats = jax.local_devices()[0].memory_stats()
+    levanter.tracker.log(
+        {
+            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
+            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
+            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
+        },
+        step=step_info.step,
+    )
+
+
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
     last_mixture_stage = -1
 
@@ -368,6 +526,7 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
+    master_params: Transformer | None
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
@@ -380,8 +539,8 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind."""
+def _tree_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded arrays to a JAX memory kind."""
 
     def _move(leaf):
         if not isinstance(leaf, jax.Array):
@@ -389,8 +548,13 @@ def _optimizer_state_to_memory_kind(tree, memory_kind: str):
         sharding = jax.typeof(leaf).sharding
         mesh = getattr(sharding, "mesh", None)
         if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
-            # Scalar optimizer metadata carries no named mesh and is negligible in HBM.
-            return leaf
+            if jax.sharding.get_abstract_mesh().empty:
+                return leaf
+            # Scalar optimizer metadata has no operand from which to inherit the active mesh.
+            # Bind it before changing memory kind so the initial and updated states have the
+            # same JIT input signature.
+            leaf = jax.sharding.reshard(leaf, P())
+            sharding = jax.typeof(leaf).sharding
         return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
     return jax.tree.map(_move, tree)
@@ -404,15 +568,25 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ) -> GrugTrainState:
-    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
-    opt_state = optimizer.init(params)
+    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+        master_params = _FP32_POLICY.cast_to_param(initialized_params)
+        params = mp.cast_to_param(master_params)
+        opt_state = optimizer.init(master_params)
+        master_params = _tree_to_memory_kind(master_params, "pinned_host")
+    else:
+        params = mp.cast_to_param(initialized_params)
+        master_params = None
+        opt_state = optimizer.init(params)
     if offload_opt_state:
-        opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=master_params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
@@ -421,18 +595,34 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    sender_dropped_assignments: jax.Array,
+    receiver_dropped_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
     top_k: int,
     num_layers: int,
 ) -> dict[str, int | float]:
-    # Global assignment totals can exceed int32; float32 would also round large drop counts.
-    dropped_assignments_host = int(dropped_assignments)
+    # Per-layer int32 counts summed over layers in int64 on the host: the global totals exceed int32 at
+    # large batch (jax_enable_x64 is off, so an in-device sum would overflow), and float32 would round them.
+    def _sum_int64(per_layer: jax.Array) -> int:
+        return int(np.asarray(per_layer).astype(np.int64).sum())
+
+    dropped_assignments_host = _sum_int64(dropped_assignments)
+    sender_dropped_assignments_host = _sum_int64(sender_dropped_assignments)
+    receiver_dropped_assignments_host = _sum_int64(receiver_dropped_assignments)
+    if dropped_assignments_host != sender_dropped_assignments_host + receiver_dropped_assignments_host:
+        raise ValueError("total dropped assignments must equal sender plus receiver dropped assignments")
     total_assignments = batch_size * sequence_length * top_k * num_layers
+    receiver_assignments = total_assignments - sender_dropped_assignments_host
     return {
         "moe/dropped_assignments": dropped_assignments_host,
         "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        "moe/sender_dropped_assignments": sender_dropped_assignments_host,
+        "moe/sender_drop_fraction": sender_dropped_assignments_host / total_assignments,
+        "moe/receiver_dropped_assignments": receiver_dropped_assignments_host,
+        "moe/receiver_drop_fraction": receiver_dropped_assignments_host / total_assignments,
+        "moe/receiver_drop_fraction_of_received": receiver_dropped_assignments_host / max(receiver_assignments, 1),
     }
 
 
@@ -493,6 +683,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -516,11 +707,21 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = (
-            _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        )
-        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+            if state.master_params is None:
+                raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
+            master_params_in = _tree_to_memory_kind(state.master_params, "device")
+            master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
+            master_grads = _FP32_POLICY.cast_to_param(grads)
+            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+            master_params = optax.apply_updates(master_params_in, updates)
+            params = mp.cast_to_param(master_params)
+            master_params = _tree_to_memory_kind(master_params, "pinned_host")
+        else:
+            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+            params = optax.apply_updates(qb_params, updates)
+            master_params = None
 
         if ema_beta is None:
             ema_params = None
@@ -549,12 +750,13 @@ def _make_train_step(
             )
 
         if offload_opt_state:
-            opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
+            master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
@@ -567,6 +769,9 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.tensorstore_cache_bytes is not None:
+        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
+
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -593,6 +798,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
+        master_param_mode=config.trainer.master_param_mode,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -607,20 +813,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
-        batch_schedule = trainer.batch_schedule
+    # Armed before the state is built or restored. The watchdog's step and process deadlines only
+    # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
+    # in initialization, checkpoint restore, cache construction or compilation.
+    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
 
-        train_dataset = build_train_dataset(
-            config.data,
-            max_seq_len=config.model.max_seq_len,
-            batch_schedule=batch_schedule,
-            key=data_key,
-        )
-        train_loader = build_train_loader(
-            train_dataset,
-            batch_schedule=batch_schedule,
-            mesh=mesh,
-        )
+    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    dashboard = (
+        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    )
+    with set_mesh(mesh), dashboard:
+        batch_schedule = trainer.batch_schedule
 
         @jax.jit
         def _init_state(model_rng):
@@ -631,11 +834,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
             )
 
         state = _init_state(model_key)
+        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+        if released_initial_state:
+            state = restore_template_from(state)
 
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -643,6 +849,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -651,6 +859,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+
+        train_dataset = None
+        train_loader = None
+        if config.trainer.training_data_mode == TrainingDataMode.MIXTURE:
+            train_dataset = build_train_dataset(
+                config.data,
+                max_seq_len=config.model.max_seq_len,
+                batch_schedule=batch_schedule,
+                key=data_key,
+            )
+            train_loader = build_train_loader(
+                train_dataset,
+                batch_schedule=batch_schedule,
+                mesh=mesh,
+            )
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
@@ -700,7 +923,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
+        if config.trainer.training_data_mode == TrainingDataMode.SYNTHETIC:
+            synthetic_batch = _make_synthetic_batch(
+                batch_size=batch_schedule.batch_size_at_step(int(state.step)),
+                max_seq_len=config.model.max_seq_len,
+                vocab_size=config.model.vocab_size,
+                seed=trainer.seed + 1 if config.trainer.data_seed is None else config.trainer.data_seed,
+                mesh=mesh,
+            )
+            batch_source = itertools.repeat(synthetic_batch)
+        else:
+            assert train_loader is not None
+            batch_source = train_loader.iter_from_step(int(state.step))
+        iterator = LoadingTimeTrackerIterator(batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
@@ -708,6 +943,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
+        if progress_watchdog is not None:
+            state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
             callbacks.log_performance_stats(config.model.max_seq_len, batch_schedule, flops_per_example),
             every=log_every,
@@ -723,20 +960,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ),
                 every=1,
             )
-        state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        if train_dataset is not None:
+            state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        state_callbacks.add_hook(log_device_memory, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
-            if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
-                state_callbacks.add_hook(
-                    cb_tagged_evaluate(
-                        evaluator,
-                        prefix=eval_cfg.prefix,
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    ),
-                    every=interval,
+            if eval_cfg.eval_current or eval_ema:
+                tagged_eval_hook = cb_tagged_evaluate(
+                    evaluator,
+                    prefix=eval_cfg.prefix,
+                    eval_current=eval_cfg.eval_current,
+                    eval_ema=eval_ema,
                 )
+                eval_hooks: list[Callable[..., None]] = [tagged_eval_hook]
                 if dropless_evaluator is not None and dropless_eval_mesh is not None:
                     # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
                     # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
@@ -751,13 +988,33 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         step_count = int(step.step)
                         if step_count < 0:
                             return
+                        # `model` must stay a local. The eval mesh has expert=1, so a leaf sharded on
+                        # the expert axis lands replicated, and the copy is much larger than the
+                        # train-mesh params. The train step needs almost the whole device budget for
+                        # its temporary buffer, thus this copy must die before the next step.
                         with set_mesh(_mesh):
                             model = _reshard_tree_to_mesh(step.model, _mesh)
                             with jax_config.enable_pgle(False):
                                 log_dict = eval_model(_ev, model, prefix=_prefix)
                             levanter.tracker.log(log_dict, step=step_count)
 
-                    state_callbacks.add_hook(dropless_eval_hook, every=interval)
+                    eval_hooks.append(dropless_eval_hook)
+
+                if interval is not None and interval > 0:
+                    for hook in eval_hooks:
+                        state_callbacks.add_hook(hook, every=interval)
+
+                # Baseline point at the start of the loss curve. The periodic cadence first fires at
+                # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+                # These run after the first optimization step, not before it: the first train step
+                # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+                # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+                # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+                # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+                # is 0 there, so the point lands at step 0 on the curve.
+                if eval_cfg.eval_at_first_step:
+                    for hook in eval_hooks:
+                        state_callbacks.add_hook(_first_step_only(hook), every=1)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
@@ -777,12 +1034,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 else:
                     watch_stats = None
                 step_start = time.perf_counter()
+                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
@@ -810,6 +1069,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if "moe/dropped_assignments" in metrics:
                         drop_metrics = _drop_metrics(
                             metrics["moe/dropped_assignments"],
+                            metrics["moe/sender_dropped_assignments"],
+                            metrics["moe/receiver_dropped_assignments"],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,
@@ -867,6 +1128,8 @@ def run_grug(config: GrugRunConfig) -> None:
         local_entrypoint=_run_grug_local,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
+        max_retries_failure=config.max_retries_failure,
+        max_task_failures=config.max_task_failures,
     )
 
 
@@ -875,6 +1138,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "MasterParamMode",
     "initial_state",
     "run_grug",
 ]

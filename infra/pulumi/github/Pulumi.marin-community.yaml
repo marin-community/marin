@@ -4,6 +4,7 @@ config:
   marin-github:organization: marin-community
   marin-github:repositories:
     - marin-community/marin
+  marin-github:forkFerryRepository: marin-community/marin
   marin-github:dependencyUpdater:
     repository: marin-community/marin
     appId: 4563866
@@ -61,11 +62,14 @@ config:
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present
+      management: sealed
       visibility: all
-      source_kind: manual
-      source_ref: owner-recovery:slack-webhook
+      key_id: "3380204578043523366"
+      value_encrypted: Bn8tmYyhY6dqEM+JVYC6vOS6D0ZQEY5fhviyarZDViCnl/Rr82WxHfIk624aJJ02zZ3rawmDNDuUuPL37BzoDGj05e10DuLZkW78xcEqAdj3AFpa0PFAQ/01KDGKccpD/BTQD0Drts/DvGvBa7OlcPLvX0BtmhCsGTMGMCTwl04B
+      source_kind: gcp-secret
+      source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
       disposition: keep
-      note: Shadowed in marin by the repository secret of the same name.
+      note: Routes GitHub Actions alerts to #marin-alerts.
     - name: CW_KUBECONFIG
       scope: repository
       repository: marin-community/marin
@@ -259,14 +263,6 @@ config:
       source_kind: gcp-secret
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/RAY_AUTH_TOKEN/versions/1
       disposition: remove-candidate
-    - name: SLACK_WEBHOOK_URL
-      scope: repository
-      repository: marin-community/marin
-      presence: present
-      source_kind: manual
-      source_ref: owner-recovery:slack-webhook
-      disposition: keep
-      note: Overrides the organization secret of the same name.
     - name: SPEEDRUN_LEADERBOARD_PAT
       scope: repository
       repository: marin-community/marin
@@ -304,7 +300,7 @@ config:
       source_kind: current-environment
       source_ref: env:COREWEAVE_API_TOKEN
       disposition: review
-      note: Optional cost-report provider credential; distinct from CoreWeave object-storage keys.
+      note: Used by the hourly CoreWeave storage collector; requires Observability Viewer and differs from storage and Grafana read keys.
     - name: OPENAI_ADMIN_KEY
       scope: repository
       repository: marin-community/marin

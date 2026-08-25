@@ -47,7 +47,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets

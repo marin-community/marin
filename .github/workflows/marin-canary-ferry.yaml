@@ -10,7 +10,7 @@ on:
         type: number
         required: false
       tpu_type:
-        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v4-8)'
+        description: 'Override TPU slice type(s), comma-separated, primary first (e.g. v5p-8,v6e-4,v4-8)'
         type: string
         required: false
 
@@ -29,7 +29,7 @@ jobs:
     env:
       RUN_ID: canary-tpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: tpu
-      CANARY_TPU_TYPE: "v5p-8,v4-8"
+      CANARY_TPU_TYPE: ${{ inputs.tpu_type || '' }}
       CANARY_BATCH_SIZE: "128"
       CANARY_TARGET_TOKENS: "250000000"
       CANARY_MIN_STEPS: "200"
@@ -83,10 +83,13 @@ jobs:
         shell: bash -l {0}
         run: |
           set -euo pipefail
+          RESERVE_TPU_TYPE=$(.venv/bin/python -c \
+            'from experiments.ferries.canary_ferry import _tpu_types_from_env; print(_tpu_types_from_env()[0])')
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
+            --reserve "$RESERVE_TPU_TYPE" \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_TPU_TYPE "$CANARY_TPU_TYPE" \
@@ -143,7 +146,8 @@ jobs:
         # from gcsfs off-GCP), and the read raises FileNotFoundError. The
         # google-github-actions/auth step above provides the credentials
         # gcsfs needs to actually scan the remote buckets. The canary lands on
-        # v5p (us-central1/us-east5) or its v4 fallback (us-central2); mirror://
+        # v5p (us-central1/us-east5), v6e (us-east1/us-east5/europe-west4), or
+        # v4 (us-central2); mirror://
         # scans all marin-* regions, and us-central1 keeps the hit rate high.
         env:
           MARIN_PREFIX: gs://marin-us-central1

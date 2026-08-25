@@ -12,8 +12,8 @@ import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
+from zephyr.context import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
@@ -128,7 +128,7 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
             store.get((1, "missing"))
         assert exc_info.value.args == ((1, "missing"),)
 
-        stats = store.stats()
+        stats = store.stats(timeout=10)
         assert [(stat.actor_index, stat.source_partitions, stat.num_items) for stat in stats] == [
             (0, (0, 2), 5),
             (1, (1, 3), 2),

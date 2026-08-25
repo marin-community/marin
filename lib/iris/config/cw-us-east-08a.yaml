@@ -36,7 +36,7 @@ name: cw-us-east-08a
 # finelog log forwarding: this cluster's server (lib/finelog/config/cw-us-east-08a.yaml)
 # relays its rows to the marin hub, signed by finelog-cw-us-east-08a-signing-key whose public
 # half is registered in the hub's jwt layer (lib/finelog/config/marin.yaml). Deploy it with
-# `finelog deploy up cw-us-east-08a`.
+# the `infra/finelog` Pulumi stack; see `infra/finelog/README.md`.
 finelog:
   config: cw-us-east-08a
 
@@ -124,18 +124,19 @@ auth:
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   # GitHub GPU workflows submit through the marin hub as github-iris; the
-  # remaining non-openathena identities are interactive or probe principals.
+  # remaining non-openathena identities are interactive principals.
   allowed_submitters:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - wg0420@princeton.edu
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
@@ -166,11 +167,11 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
-    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
-    # data under s3://marin-na/ is not reachable from jobs unless they override
-    # AWS_ENDPOINT_URL and credentials themselves.
+    # Durable outputs remain in 02A. All lifecycle-managed temporary writes use
+    # the region-local 08A bucket; rigging adds the tmp/ttl=Nd prefixes.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
+    MARIN_TEMP_PREFIX: s3://hero-checkpoints
+    # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name
@@ -184,13 +185,17 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
+user_budget_defaults:
+  budget_limit: 400000
+  max_band: interactive
+
 scale_groups:
   cpu-erapids:
     num_vms: 1
     resources:
       cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
       ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
-      disk: 15.36TB  # 15.36 TB local NVMe
+      disk: 6.98TiB   # 7.68 TB local NVMe (2x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -210,7 +215,7 @@ scale_groups:
     resources:
       cpu: 144       # gb200-4x: 144 vCPUs (2x NVIDIA Grace Arm v9)
       ram: 960GB     # 960 GB system (LPDDR5X) RAM
-      disk: 30.72TB  # 30.72 TB local NVMe
+      disk: 13.97TiB  # 15.36 TB local NVMe (4x 3.84 TB)
       device_type: gpu
       device_variant: GB200
       device_count: 4        # 4 Blackwell GPUs per gb200-4x node

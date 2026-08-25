@@ -43,19 +43,16 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
 logger = logging.getLogger(__name__)
 
 # Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
-_PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
-}
+_PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALUES}
 
 
 def make_task_backend(
@@ -126,10 +123,11 @@ def make_task_backend(
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 host_network=kp.host_network,
-                cache_dir=kp.cache_dir or "/cache",
+                cache_dir=kp.cache_dir or DEFAULT_TASK_CACHE_DIR,
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
+                task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
@@ -182,6 +180,7 @@ def build_base_worker_config(
     worker_config.controller_address = controller_address
     worker_config.platform = config.platform.model_copy(deep=True)
     worker_config.storage_prefix = storage_prefix
+    worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config

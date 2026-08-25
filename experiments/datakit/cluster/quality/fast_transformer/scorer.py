@@ -19,7 +19,8 @@ from dataclasses import dataclass
 import equinox as eqx
 import jax.random as jr
 import numpy as np
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict

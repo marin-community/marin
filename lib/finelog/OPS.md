@@ -38,6 +38,30 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+`query` prints JSONL by default. Pass a short query as one shell-quoted
+argument. Feed multiline SQL on stdin so SQL quotes do not need shell escaping:
+
+```bash
+uv run finelog query cw-us-east-08a <<'SQL'
+SELECT task_id, attempt_id, max(memory_peak_mb) AS peak_mib
+FROM "iris.task"
+WHERE task_id LIKE '/power/example/%'
+GROUP BY task_id, attempt_id
+ORDER BY peak_mib DESC
+SQL
+```
+
+List every namespace with its schema, index policy, retention overrides, and
+current storage statistics as JSONL. Fetch one schema as formatted JSON:
+
+```bash
+uv run finelog namespaces cw-us-east-08a
+uv run finelog schema cw-us-east-08a iris.task
+```
+
+Schema output includes `seq` under `implicit_columns`. Finelog assigns this
+column to every row; producers do not declare it, but SQL queries can select it.
+
 ## Diagnosing query latency
 
 Inspect the namespace before changing its policy or resetting it. Record its row
@@ -79,6 +103,16 @@ tens of minutes rather than at once. Enabling a column supersedes the whole
 `.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
 one core across the namespace's full segment count.
 
+That escaping rule is specific to `LIKE`. Equality already treats underscores
+as ordinary characters, so use the stored metric name without backslashes:
+
+```sql
+WHERE name = 'grad_norm_layers_0_ln2_b'
+```
+
+`name = 'grad\_norm\_layers\_0\_ln2\_b'` asks for a different string and cannot
+use postings declared for the unescaped name.
+
 An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
 IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
 namespace's row count. Read both.
@@ -87,14 +121,20 @@ For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
 segment's `.fidx` bundle. The planner attaches them for `=` and same-column
 `IN`/`OR` predicates when they retain at most 25% of the segment; denser matches
-keep the contiguous source scan.
+keep the contiguous source scan. The bundle header records the values covered by
+each exact section, so a query for an undeclared value skips the postings payload
+instead of opening and decoding it. Bundles written before this coverage header
+remain queryable by scan and are rebuilt by the normal index backfill.
 
 Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
 explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
-backfill is useful. `telemetry_v1` has one `training-status` projection for the
-three dashboard metric names.
+backfill is useful. `telemetry_v1` has a `training-status` projection for three
+dashboard metric names and a `training-process-zero` projection for rows whose
+`process_index` is `0`. The latter covers the structured columns used by the
+training loss window query. `process_index = '0'` and `name = 'train_loss'`
+also have exact postings when a segment has not completed projection backfill.
 
 Change a projection in place; do not version its name. Re-registering a name
 with a different predicate or column list supersedes the registered definition:
@@ -114,6 +154,15 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
+`telemetry_v1` exposes stable resource dimensions as nullable columns:
+`run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
+Producers may send them directly in the request's `resource`
+object. When omitted, Finelog infers them from same-named resource attributes.
+An explicit field wins over an attribute and replaces the same key in
+`resource_attributes_json`; the JSON map is canonicalized rather than retaining
+both conflicting values. Selectors and groupings should use the structured
+columns.
+
 `GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
@@ -132,15 +181,27 @@ than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
 against a log line's hundreds, so an in-memory target under-sizes worst exactly
 where the fix is needed.
 
-Each segment's footer carries the layout revision it was written with. Since the
-terminal level is never re-compacted, a maintenance pass re-encodes segments
+A schema can impose a `max_row_group_rows` bound from 16,384 through 1,048,576
+and a multi-column `sort_columns` order. The compactor appends `seq` as the final deterministic
+tie-breaker. `telemetry_v1` uses 128K-row groups and sorts by
+`(service, run_id, name, timestamp_ms, seq)`, which clusters the common service,
+run, metric-name, and time predicates while keeping `timestamp_ms` as the
+retention key. Existing compacted telemetry files are not immediately rewritten
+for this schema-only policy change. New flushes use the row ceiling, multi-input
+compactions use the sort order, and single-input promotions preserve their input
+layout. The share of old-layout files declines through normal compaction and
+retention; complete convergence is not guaranteed without a layout-version bump.
+
+Separately, each segment's footer carries the global layout revision it was
+written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
 namespace's bulk would keep its old row groups until eviction aged it out, which
 for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
 rewrite keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
-while holding the same rows.
+while holding the same rows. Schema-level sort-policy changes do not bump this
+revision and therefore do not schedule that rewrite.
 
 Watch it with the `rewrote segment layout` events, which report the before and
 after byte size per segment. Confirm the era split before concluding a layout
@@ -210,15 +271,29 @@ push. `forwarding.cluster` is the origin name the sender stamps on every forward
 row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
-then the sender. `deploy up` resolves `signing_key` from Secret Manager on the
-operator's machine and projects it into the pod's `<name>-env` Secret, so whoever
-runs it needs `roles/secretmanager.secretAccessor` on that secret.
+then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
+on the operator's machine and updates the pod's `<name>-env` Secret, so whoever
+runs it needs `roles/secretmanager.secretAccessor` on that secret. The Pulumi
+stack references that existing Kubernetes Secret without reading its values.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
+export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
-uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
+uv run finelog deploy sync-secret "$CLUSTER"
+uv run marin-deploy finelog rollout "$CLUSTER"
 ```
+
+`marin-deploy finelog rollout` captures the active Deployment revision, runs the matching
+Pulumi stack, and restores the captured ReplicaSet if the update or ingest
+verification fails. Its rollout identity and image build stamp come from the
+checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
+the pod using `kube_context`, `namespace`, and `name` from
+`lib/finelog/config/$CLUSTER.yaml`, wait for the Deployment, then run `uv run
+--frozen --package marin-finelog finelog deploy verify "$CLUSTER"`. See
+[`infra/finelog/README.md`](../../infra/finelog/README.md) for preview, manual
+rollback, and first-time stack adoption. Do not run the first update without the
+import flag: the live PVC must be adopted, not recreated.
 
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
@@ -268,7 +343,9 @@ Interpret the pair as follows:
 The forwarder gives every live namespace one batch-sized turn per round and
 starts another round immediately while work remains. A large telemetry backlog
 therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures can still delay a turn because forwarding is best effort.
+failures get three attempts, then leave the affected cursor in place and yield to
+the next namespace. The same batch is retried on the next sweep; exhaustion does
+not discard it.
 
 Inspect the sender's forwarder messages without changing the deployment. Read
 the deployment name and Kubernetes connection details from
@@ -284,13 +361,16 @@ Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
 draining every locally retained row. `rows evicted before they were forwarded`
 means that local retention has already made source sequence positions unreadable.
-The cumulative `skipped_seqs` progress counter also includes permanently rejected
-malformed batches and does not by itself prove that `log` rows were dropped.
+`hub rejected the batch; preserving the cursor` means the sender will re-register
+the namespace's current schema on the next sweep and retry the same rows. The
+cumulative `skipped_seqs` progress counter reports only sequence positions lost to
+local retention; filtered foreign-origin rows may make it an upper bound on lost rows.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
-hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
-drop the old public key and roll the hub again.
+hub, re-pin the sender's `signing_key` to the new version, run `deploy
+sync-secret`, update the sender's Pulumi stack, then drop the old public key and
+roll the hub again.
 
 ## Checking that a server is ingesting
 
@@ -312,9 +392,10 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
-System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
-`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
-back.
+System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
+restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
+failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
+ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
 ## Serving a copy of a store
 

@@ -9,8 +9,10 @@ import numpy as np
 import pytest
 from haliax.partitioning import ResourceAxis
 
+import levanter.utils.jax_utils as jax_utils
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
+    barrier_sync,
     best_effort_sharding,
     move_tree_to_memory_kind,
     sharded_tree_size,
@@ -272,3 +274,28 @@ def test_move_tree_to_memory_kind_is_noop_inside_jit():
     y = move_inside_jit(x)
     np.testing.assert_array_equal(np.asarray(y), np.asarray(x))
     assert y.sharding.memory_kind == x.sharding.memory_kind
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.calls = []
+
+    def wait_at_barrier(self, barrier_id, timeout_in_ms):
+        self.calls.append((barrier_id, timeout_in_ms))
+
+
+@pytest.fixture
+def multiprocess_client(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(jax_utils.jax_distributed.global_state, "client", client, raising=False)
+    return client
+
+
+def test_barrier_sync_does_not_reuse_a_barrier_id(multiprocess_client):
+    """Barriers are one-shot, so repeated calls must not collide on an id."""
+    barrier_sync(timeout=1.0)
+    barrier_sync(timeout=1.0)
+
+    first, second = (barrier_id for barrier_id, _ in multiprocess_client.calls)
+    assert first != second

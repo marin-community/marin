@@ -42,6 +42,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFICATION_WORKER_SCRATCH,
     FuzzyVerificationStoreConfig,
     LocalRepresentativeParams,
     VerifiedFuzzyDupsAttrData,
@@ -49,7 +50,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups_step,
 )
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources
@@ -61,8 +62,8 @@ DEFAULT_MAX_WORKERS = 64
 DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk="8g")
-VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk="8g")
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk=VERIFICATION_WORKER_SCRATCH)
+VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk=VERIFICATION_WORKER_SCRATCH)
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,

@@ -33,8 +33,9 @@ federation_public_parent: https://iris.oa.dev
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
-# restart). Deploy the server first: `uv run finelog deploy up cw-rno2a`. Forwarding
-# to the hub lives in that server's own `forwarding:` block.
+# restart). Deploy the server first with the `infra/finelog` Pulumi stack; see
+# `infra/finelog/README.md`. Forwarding to the hub lives in that server's own
+# `forwarding:` block.
 finelog:
   config: cw-rno2a
 
@@ -103,18 +104,18 @@ auth:
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   # *@openathena.ai covers human operators. Machine submitters are admitted
-  # explicitly: github-iris runs CI workloads, while infra-probes submits the
-  # tiny scheduling canary through the marin hub.
+  # explicitly; github-iris runs CI workloads through the marin hub.
   allowed_submitters:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
@@ -161,13 +162,17 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
+user_budget_defaults:
+  budget_limit: 400000
+  max_band: interactive
+
 scale_groups:
   cpu-turin:
     num_vms: 1
     resources:
       cpu: 192        # turin-gp-l: AMD Turin 9655P (96 cores / 192 vCPUs), high storage
       ram: 1536GB     # ~1.5 TiB allocatable on the live node
-      disk: 29TB      # allocatable ephemeral-storage on the live node
+      disk: 27.94TiB   # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -187,7 +192,7 @@ scale_groups:
     resources:
       cpu: 128
       ram: 2048GB
-      disk: 1TB
+      disk: 27.94TiB  # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: gpu
       device_variant: H100
       device_count: 8

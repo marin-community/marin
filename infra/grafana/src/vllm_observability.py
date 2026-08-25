@@ -31,10 +31,10 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
 
 
 class VllmIdentityField(StrEnum):
-    """Canonical resource attributes accepted by the dashboard query."""
+    """Structured resource dimensions accepted by the dashboard query."""
 
     JOB_ID = "job_id"
-    ROOT_RUN_UID = "root_run_uid"
+    RUN_ID = "run_id"
     EXECUTION_UID = "execution_uid"
 
 
@@ -67,8 +67,8 @@ _GAUGES = (
 )
 _HISTOGRAM_FAMILIES = (
     ("time_to_first_token_seconds", "ttft"),
-    ("inter_token_latency_seconds", "tpot"),
-    ("time_per_output_token_seconds", "tpot"),
+    ("request_time_per_output_token_seconds", "tpot"),
+    ("inter_token_latency_seconds", "inter_token_latency"),
     ("request_queue_time_seconds", "queue"),
     ("e2e_request_latency_seconds", "e2e"),
 )
@@ -79,16 +79,16 @@ _HISTOGRAM_NAMES = tuple(
 _METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
 
 
-def _sql_string(value: str) -> str:
+def sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
 def _sql_values(values: tuple[str, ...]) -> str:
-    return ", ".join(_sql_string(value) for value in values)
+    return ", ".join(sql_string(value) for value in values)
 
 
 def _case_for(mapping: tuple[tuple[str, str], ...], expression: str) -> str:
-    cases = " ".join(f"WHEN {_sql_string(source)} THEN {_sql_string(target)}" for source, target in mapping)
+    cases = " ".join(f"WHEN {sql_string(source)} THEN {sql_string(target)}" for source, target in mapping)
     return f"CASE {expression} {cases} END"
 
 
@@ -144,7 +144,7 @@ def vllm_overview_query(
 
     bucket_ms = _bounded_bucket_ms(start_ms, end_ms, requested_bucket_ms)
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
-    identity_literal = _sql_string(identity)
+    identity_literal = sql_string(identity)
     metric_names = _sql_values(_METRIC_NAMES)
     token_counters = _sql_values(_TOKEN_COUNTERS)
     preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
@@ -168,7 +168,7 @@ WITH base AS (
            seq
     FROM "telemetry_v1"
     WHERE service = 'vllm'
-      AND json_get(resource_attributes_json, '{identity_field.value}') = {identity_literal}
+      AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})
       AND timestamp_ms >= {scan_start_ms}
       AND timestamp_ms < {end_ms}

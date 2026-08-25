@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 import dashboard as echo_dashboard
 import hybrid_search
+import repository_identity
 import reranking
 import schema
 import search_config
@@ -82,23 +83,17 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class EchoConfig:
     public_url: str
-    github_repository: str
-    github_branch: str
     service_revision: str | None = None
 
 
 DEFAULT_CONFIG = EchoConfig(
     public_url=search_config.PUBLIC_URL,
-    github_repository=search_config.INDEXED_REPOSITORY,
-    github_branch=search_config.INDEXED_BRANCH,
 )
 
 
 def environment_config() -> EchoConfig:
     return EchoConfig(
         public_url=os.environ.get("ECHO_PUBLIC_URL", DEFAULT_CONFIG.public_url).rstrip("/"),
-        github_repository=os.environ.get("GITHUB_REPOSITORY", DEFAULT_CONFIG.github_repository),
-        github_branch=os.environ.get("GITHUB_BRANCH", DEFAULT_CONFIG.github_branch),
         service_revision=os.environ.get("K_REVISION"),
     )
 
@@ -183,6 +178,7 @@ class SearchReference(BaseModel):
 
 
 class SearchResult(BaseModel):
+    key: str | None = Field(default=None, description="Execution-specific key for grading this returned row.")
     id: str
     domain: search_config.SearchDomain
     title: str
@@ -219,13 +215,13 @@ class SearchConfiguration(BaseModel):
 
 
 class SearchFeedbackGrade(BaseModel):
-    result_id: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_ID_CHARACTERS)
+    key: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_KEY_CHARACTERS)
     grade: int = Field(ge=search_feedback.MIN_GRADE, le=search_feedback.MAX_GRADE)
 
-    @field_validator("result_id")
+    @field_validator("key")
     @classmethod
-    def validate_result_id(cls, result_id: str) -> str:
-        return search_feedback.checked_result_id(result_id)
+    def validate_key(cls, key: str) -> str:
+        return search_feedback.checked_result_key(key)
 
 
 class SearchFeedbackCreate(BaseModel):
@@ -245,8 +241,8 @@ class SearchFeedbackCreate(BaseModel):
     @field_validator("grades")
     @classmethod
     def reject_duplicate_results(cls, grades: list[SearchFeedbackGrade]) -> list[SearchFeedbackGrade]:
-        result_ids = [grade.result_id for grade in grades]
-        if len(result_ids) != len(set(result_ids)):
+        keys = [grade.key for grade in grades]
+        if len(keys) != len(set(keys)):
             raise ValueError("each result may be graded once per feedback submission")
         return grades
 
@@ -265,7 +261,26 @@ class SearchFeedbackEntry(SearchFeedbackCreate):
     author: str
 
 
+class SearchFeedbackResultGrade(BaseModel):
+    key: str | None
+    source_id: str
+    grade: int
+    title: str
+    url: str
+
+
+class SearchFeedbackListEntry(BaseModel):
+    id: int
+    created_at: datetime
+    author: str
+    query: str
+    note: str
+    execution_id: int | None
+    grades: list[SearchFeedbackResultGrade]
+
+
 class SearchExecutionResultEntry(BaseModel):
+    id: int
     rank: int
     result_id: str
     domain: search_config.SearchDomain
@@ -275,6 +290,7 @@ class SearchExecutionResultEntry(BaseModel):
     score: float
     distance: float | None
     lexical_score: float | None
+    rerank_score: float | None
 
 
 class SearchExecutionEntry(BaseModel):
@@ -360,6 +376,7 @@ class WikiCreate(BaseModel):
 
 @dataclass(frozen=True)
 class RepositoryIndexState:
+    target: search_config.RepositoryTarget
     commit_sha: str
     completed_files: int | None
     total_files: int | None
@@ -375,6 +392,28 @@ class RepositoryIndexState:
 class SearchCandidate:
     result: SearchResult
     text: str
+
+
+@dataclass(frozen=True)
+class FeedbackResultMetadata:
+    title: str
+    url: str
+
+
+@dataclass(frozen=True)
+class StoredFeedbackResult:
+    id: int
+    execution_id: int
+    source_id: str
+    domain: str
+    title: str | None
+    url: str
+
+
+@dataclass(frozen=True)
+class StoredFeedbackGrade:
+    result: StoredFeedbackResult
+    grade: int
 
 
 class RerankerModel(Protocol):
@@ -528,6 +567,7 @@ def recorded_search_result(result: SearchResult) -> search_history.SearchResultR
         score=result.score,
         distance=result.distance,
         lexical_score=result.lexical_score,
+        rerank_score=result.rerank_score,
     )
 
 
@@ -542,17 +582,8 @@ def recorded_hit(result: Hit) -> search_history.SearchResultRecord:
         score=result.score,
         distance=result.distance,
         lexical_score=result.lexical_score,
+        rerank_score=None,
     )
-
-
-def result_repository_commit(results: Iterable[SearchResult]) -> str | None:
-    for result in results:
-        if result.domain != "file":
-            continue
-        match = re.search(r"/blob/([^/]+)/", result.url)
-        if match is not None:
-            return match.group(1)
-    return None
 
 
 def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
@@ -566,7 +597,9 @@ def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
     return None
 
 
-def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord) -> int | None:
+def record_live_search(
+    engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord
+) -> search_history.StoredSearchExecution | None:
     """Persist a search, returning ``None`` only while its additive schema is unavailable."""
     try:
         with engine.begin() as conn:
@@ -582,10 +615,11 @@ def attach_search_execution(
     response: Response,
     engine: sqlalchemy.Engine,
     record: search_history.SearchExecutionRecord,
-) -> None:
-    execution_id = record_live_search(engine, record)
-    if execution_id is not None:
-        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
+) -> search_history.StoredSearchExecution | None:
+    execution = record_live_search(engine, record)
+    if execution is not None:
+        response.headers[SEARCH_EXECUTION_HEADER] = str(execution.id)
+    return execution
 
 
 def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
@@ -602,10 +636,7 @@ def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
     )
 
 
-def repository_index_state(
-    conn: sqlalchemy.Connection,
-    config: EchoConfig,
-) -> RepositoryIndexState | None:
+def repository_index_states(conn: sqlalchemy.Connection) -> dict[search_config.RepositoryTarget, RepositoryIndexState]:
     join_condition = sqlalchemy.and_(
         schema.repository_index_state.c.repository == schema.repository_index_builds.c.repository,
         schema.repository_index_state.c.branch == schema.repository_index_builds.c.branch,
@@ -618,8 +649,10 @@ def repository_index_state(
         schema.repository_index_builds.c.branch,
         schema.repository_index_state.c.branch,
     )
-    row = conn.execute(
+    rows = conn.execute(
         sqlalchemy.select(
+            repository.label("repository"),
+            branch.label("branch"),
             sqlalchemy.func.coalesce(
                 schema.repository_index_builds.c.commit_sha,
                 schema.repository_index_state.c.commit_sha,
@@ -628,19 +661,22 @@ def repository_index_state(
             schema.repository_index_builds.c.total_files,
             schema.repository_index_builds.c.started_at,
             schema.repository_index_state.c.indexed_at,
-        )
-        .select_from(schema.repository_index_state.outerjoin(schema.repository_index_builds, join_condition, full=True))
-        .where(repository == config.github_repository, branch == config.github_branch)
-    ).first()
-    if row is None:
-        return None
-    return RepositoryIndexState(
-        row.commit_sha,
-        row.completed_files,
-        row.total_files,
-        row.started_at,
-        row.indexed_at,
+        ).select_from(schema.repository_index_state.outerjoin(schema.repository_index_builds, join_condition, full=True))
     )
+    targets = {(target.repository, target.branch): target for target in search_config.REPOSITORY_TARGETS}
+    states = {}
+    for row in rows:
+        target = targets.get((row.repository, row.branch))
+        if target is not None:
+            states[target] = RepositoryIndexState(
+                target,
+                row.commit_sha,
+                row.completed_files,
+                row.total_files,
+                row.started_at,
+                row.indexed_at,
+            )
+    return states
 
 
 def query_line_terms(query: str) -> frozenset[str]:
@@ -691,17 +727,145 @@ def repository_freshness(state: RepositoryIndexState) -> str:
     return f"indexed {state.indexed_at.isoformat()}"
 
 
-def repository_blob_url(config: EchoConfig, commit_sha: str, path: str) -> str:
-    return f"https://github.com/{config.github_repository}/blob/{commit_sha}/{quote(path, safe='/')}"
+def repository_blob_url(target: search_config.RepositoryTarget, commit_sha: str, path: str) -> str:
+    return f"https://github.com/{target.repository}/blob/{commit_sha}/{quote(path, safe='/')}"
+
+
+def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> FeedbackResultMetadata:
+    domain, _, value = result_id.partition(":")
+    if domain == "wiki":
+        return FeedbackResultMetadata(title=f"Wiki note #{value}", url=f"{config.public_url}/wiki/{value}")
+    if domain == "file":
+        reference = repository_identity.stored_repository_file_reference(result_id)
+        return FeedbackResultMetadata(
+            title=PurePosixPath(reference.path).name,
+            url=repository_blob_url(reference.target, reference.target.branch, reference.path),
+        )
+    labels = {"discord": "Discord message", "pr": "Pull request result", "issue": "Issue result"}
+    return FeedbackResultMetadata(
+        title=f"{labels[domain]} #{value}",
+        url=f"{config.public_url}/chunk/{value}",
+    )
+
+
+def stored_feedback_results(conn: sqlalchemy.Connection, search_result_ids: set[int]) -> dict[int, StoredFeedbackResult]:
+    if not search_result_ids:
+        return {}
+    rows = conn.execute(
+        sqlalchemy.select(
+            schema.search_execution_results.c.id,
+            schema.search_execution_results.c.execution_id,
+            schema.search_execution_results.c.result_id,
+            schema.search_execution_results.c.domain,
+            schema.search_execution_results.c.title,
+            schema.search_execution_results.c.url,
+        ).where(schema.search_execution_results.c.id.in_(search_result_ids))
+    )
+    return {
+        row.id: StoredFeedbackResult(
+            id=row.id,
+            execution_id=row.execution_id,
+            source_id=row.result_id,
+            domain=row.domain,
+            title=row.title,
+            url=row.url,
+        )
+        for row in rows
+    }
+
+
+def resolve_feedback_grades(
+    conn: sqlalchemy.Connection,
+    grades: list[SearchFeedbackGrade],
+    execution_id: int | None,
+) -> tuple[tuple[StoredFeedbackGrade, ...], int | None]:
+    parsed = [(grade, *search_feedback.result_key_parts(grade.key)) for grade in grades]
+    stored_results = stored_feedback_results(conn, {result_id for _, _, result_id in parsed})
+    invalid_keys = [
+        grade.key
+        for grade, domain, result_id in parsed
+        if result_id not in stored_results or stored_results[result_id].domain != domain
+    ]
+    if invalid_keys:
+        raise HTTPException(422, "unknown search result keys: " + ", ".join(sorted(invalid_keys)))
+
+    resolved = tuple(StoredFeedbackGrade(stored_results[result_id], grade.grade) for grade, _, result_id in parsed)
+    graded_execution_ids = {grade.result.execution_id for grade in resolved}
+    if len(graded_execution_ids) > 1:
+        raise HTTPException(422, "graded search results must come from one execution")
+    if not graded_execution_ids:
+        return resolved, execution_id
+
+    graded_execution_id = graded_execution_ids.pop()
+    if execution_id is not None and execution_id != graded_execution_id:
+        raise HTTPException(422, "graded search results were not returned by the linked search execution")
+    return resolved, graded_execution_id
+
+
+def validate_feedback_execution(
+    conn: sqlalchemy.Connection,
+    execution_id: int | None,
+    author: str,
+    query: str,
+) -> None:
+    if execution_id is None:
+        return
+    execution = conn.execute(
+        sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
+            schema.search_executions.c.id == execution_id
+        )
+    ).first()
+    if execution is None:
+        raise HTTPException(422, f"no search execution {execution_id}")
+    if execution.author != author or execution.query != query:
+        raise HTTPException(422, "execution_id must identify this caller's exact query")
+
+
+def current_feedback_result_metadata(
+    conn: sqlalchemy.Connection, result_ids: set[str], config: EchoConfig
+) -> dict[str, FeedbackResultMetadata]:
+    metadata = {result_id: default_feedback_result_metadata(result_id, config) for result_id in result_ids}
+    wiki_ids = [
+        int(value)
+        for result_id in result_ids
+        for domain, _, value in [result_id.partition(":")]
+        if domain == "wiki" and int(value) <= search_feedback.MAX_NUMERIC_RESULT_ID
+    ]
+    if wiki_ids:
+        for row in conn.execute(
+            sqlalchemy.select(schema.wiki_entries.c.id, schema.wiki_entries.c.title).where(
+                schema.wiki_entries.c.id.in_(wiki_ids)
+            )
+        ):
+            result_id = f"wiki:{row.id}"
+            metadata[result_id] = FeedbackResultMetadata(row.title, f"{config.public_url}/wiki/{row.id}")
+
+    activity_result_ids = {
+        int(value): result_id
+        for result_id in result_ids
+        for domain, _, value in [result_id.partition(":")]
+        if domain in {"discord", "pr", "issue"} and int(value) <= search_feedback.MAX_NUMERIC_RESULT_ID
+    }
+    if activity_result_ids:
+        for row in conn.execute(
+            sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.title, schema.chunks.c.url, schema.chunks.c.text)
+            .where(schema.chunks.c.id.in_(activity_result_ids))
+            .order_by(schema.chunks.c.id)
+        ):
+            result_id = activity_result_ids[row.id]
+            fallback = metadata[result_id]
+            title = row.title or " ".join((row.text or "").split())[: search_config.FEDERATED_SUMMARY_CHARACTERS]
+            metadata[result_id] = FeedbackResultMetadata(title or fallback.title, row.url)
+    return metadata
 
 
 def repository_file_search_result(
     row: sqlalchemy.Row,
     state: RepositoryIndexState,
     query: str,
-    config: EchoConfig,
 ) -> SearchResult:
-    source_url = repository_blob_url(config, state.commit_sha, row.path)
+    reference = repository_identity.repository_file_reference(state.target, row.path)
+    source_url = repository_blob_url(state.target, state.commit_sha, row.path)
     lines = representative_file_lines(row.text, query, row.start_line)
     references = [
         SearchReference(
@@ -712,16 +876,19 @@ def repository_file_search_result(
         for line, text in lines
     ]
     return SearchResult(
-        id=f"file:{row.path}",
+        id=reference.result_id,
         domain="file",
         title=row.title,
         subtitle=(
-            f"{row.path}:{references[0].line} · "
-            f"{config.github_branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
+            f"{state.target.repository} · {row.path}:{references[0].line} · "
+            f"{state.target.branch}@{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · "
             f"{repository_freshness(state)}"
         ),
         url=references[0].url,
-        snippet=" · ".join(f"{row.path}:{reference.line} {reference.text}" for reference in references),
+        snippet=" · ".join(
+            f"{state.target.repository}:{row.path}:{line_reference.line} {line_reference.text}"
+            for line_reference in references
+        ),
         score=row.score,
         distance=row.distance,
         lexical_score=row.lexical_score,
@@ -733,7 +900,10 @@ def query_oriented_result(result: SearchResult, query: str) -> SearchResult:
     """Apply a small source-quality prior to prose queries over repository files."""
     if result.domain != "file" or search_config.is_identifier_query(query):
         return result
-    path = result.id.removeprefix("file:")
+    try:
+        path = repository_identity.parse_repository_file_id(result.id).path
+    except ValueError:
+        path = result.id.removeprefix("file:")
     filename = PurePosixPath(path).name
     score = result.score
     if path.lower().endswith(search_config.PROSE_FILE_SUFFIXES):
@@ -782,7 +952,8 @@ def rerank_candidates(
     reranked = [
         result
         for result in reranked
-        if result.rerank_score is not None and result.rerank_score >= search_config.MIN_RERANK_SCORE
+        if result.rerank_score is not None
+        and result.rerank_score >= search_config.MIN_RERANK_SCORE_BY_DOMAIN[result.domain]
     ]
     reranked.sort(key=lambda result: (-result.score, result.domain, result.id))
     return reranked[:limit]
@@ -807,28 +978,37 @@ def repository_file_candidates(
     params: dict[str, object],
     retrieval_limit: int,
     query: str,
-    config: EchoConfig,
+    targets: tuple[search_config.RepositoryTarget, ...],
 ) -> list[SearchCandidate]:
-    state = repository_index_state(conn, config)
-    if state is None:
+    states = repository_index_states(conn)
+    if not states:
         return []
-    file_params = {
-        **params,
-        "candidate_limit": (
-            search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
-        ),
-        "repository": config.github_repository,
-        "branch": config.github_branch,
-        "exact": escape_like(query),
-        "substring": f"%{escape_like(query)}%",
-    }
-    return [
-        SearchCandidate(
-            repository_file_search_result(row, state, query, config),
-            f"{row.path}\n{row.title}\n\n{row.text}",
-        )
-        for row in conn.execute(hybrid_search.repository_file_search_statement(), file_params)
-    ]
+    candidates = []
+    for target in targets:
+        state = states.get(target)
+        if state is None:
+            continue
+        # Rank inside each repository before merging. A large fork must not consume the
+        # bounded HNSW and lexical pools before smaller repositories get a candidate.
+        file_params = {
+            **params,
+            "candidate_limit": (
+                search_config.candidate_limit(retrieval_limit) * search_config.FILE_CHUNK_CANDIDATE_MULTIPLIER
+            ),
+            "exact": escape_like(query),
+            "substring": f"%{escape_like(query)}%",
+            "repository_0": target.repository,
+            "branch_0": target.branch,
+        }
+        for row in conn.execute(hybrid_search.repository_file_search_statement((target,)), file_params):
+            result = repository_file_search_result(row, state, query)
+            candidates.append(
+                SearchCandidate(
+                    result,
+                    f"{result.snippet}\n\n{row.path}\n{row.title}\n\n{row.text}",
+                )
+            )
+    return candidates
 
 
 def activity_candidates(
@@ -884,32 +1064,27 @@ def search_configuration() -> SearchConfiguration:
     )
 
 
-@api.get("/repository-index", response_model=RepositoryIndexStatus)
-def repository_index_status(engine: Engine, config: Config) -> RepositoryIndexStatus:
-    """Return repository index freshness and current build progress."""
+@api.get("/repository-index", response_model=list[RepositoryIndexStatus])
+def repository_index_status(engine: Engine) -> list[RepositoryIndexStatus]:
+    """Return freshness or build progress for every configured repository."""
     with engine.connect() as conn:
-        state = repository_index_state(conn, config)
-    if state is None:
-        return RepositoryIndexStatus(
-            repository=config.github_repository,
-            branch=config.github_branch,
-            status="empty",
-            commit_sha=None,
-            completed_files=None,
-            total_files=None,
-            started_at=None,
-            indexed_at=None,
+        states = repository_index_states(conn)
+    statuses = []
+    for target in search_config.REPOSITORY_TARGETS:
+        state = states.get(target)
+        statuses.append(
+            RepositoryIndexStatus(
+                repository=target.repository,
+                branch=target.branch,
+                status="empty" if state is None else "building" if state.building else "ready",
+                commit_sha=state.commit_sha if state is not None else None,
+                completed_files=state.completed_files if state is not None else None,
+                total_files=state.total_files if state is not None else None,
+                started_at=state.started_at if state is not None else None,
+                indexed_at=state.indexed_at if state is not None else None,
+            )
         )
-    return RepositoryIndexStatus(
-        repository=config.github_repository,
-        branch=config.github_branch,
-        status="building" if state.building else "ready",
-        commit_sha=state.commit_sha,
-        completed_files=state.completed_files,
-        total_files=state.total_files,
-        started_at=state.started_at,
-        indexed_at=state.indexed_at,
-    )
+    return statuses
 
 
 @api.get("/search", response_model=list[Hit])
@@ -970,6 +1145,7 @@ def federated_search(
     config: EchoConfig,
     query: str,
     domains: list[search_config.SearchDomain],
+    repository_targets: tuple[search_config.RepositoryTarget, ...],
     limit: int,
 ) -> list[SearchResult]:
     """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
@@ -981,7 +1157,7 @@ def federated_search(
         if "wiki" in domains:
             candidates.extend(wiki_candidates(conn, params, config))
         if "file" in domains:
-            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, config))
+            candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, repository_targets))
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
             candidates.extend(activity_candidates(conn, params, activity_domains))
@@ -999,6 +1175,10 @@ def federated_search_endpoint(
     domain: list[search_config.SearchDomain] | None = Query(
         None, description="Search this domain; repeat to select several."
     ),
+    repository: str | None = Query(
+        None,
+        description="Repository-file scope: one configured owner/repository or all. Omission selects Marin.",
+    ),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
     x_goog_authenticated_user_email: str | None = Header(None),
 ) -> list[SearchResult]:
@@ -1006,9 +1186,17 @@ def federated_search_endpoint(
     if not query:
         raise HTTPException(422, "q must not be blank")
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
+    repository_scope = search_config.LEGACY_REPOSITORY_TARGET.repository if repository is None else repository
+    if repository_scope == search_config.ALL_REPOSITORIES:
+        repository_targets = search_config.REPOSITORY_TARGETS
+    else:
+        try:
+            repository_targets = (repository_identity.configured_repository_target(repository_scope),)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
     started_at = time.perf_counter()
-    results = federated_search(engine, model, reranker, config, query, domains, limit)
-    attach_search_execution(
+    results = federated_search(engine, model, reranker, config, query, domains, repository_targets, limit)
+    execution = attach_search_execution(
         response,
         engine,
         search_history.SearchExecutionRecord(
@@ -1016,16 +1204,24 @@ def federated_search_endpoint(
             query=query,
             mode="federated",
             domains=tuple(domains),
-            filters={},
+            filters={"repository": repository_scope} if "file" in domains else {},
             requested_limit=limit,
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
-            repository_commit=result_repository_commit(results),
+            # A federated file result set may span several commits. Per-result pinned URLs
+            # carry the exact provenance; the legacy scalar remains nullable.
+            repository_commit=None,
             service_revision=config.service_revision,
             results=tuple(recorded_search_result(result) for result in results),
         ),
     )
-    return results
+    if execution is None:
+        return results
+    assert len(execution.search_result_ids) == len(results)
+    return [
+        result.model_copy(update={"key": f"{result.domain}:{result_id}"})
+        for result, result_id in zip(results, execution.search_result_ids, strict=True)
+    ]
 
 
 @api.get("/grep", response_model=list[Hit])
@@ -1091,30 +1287,34 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
 
 
-@api.get("/repository-files/{path:path}", response_model=RepositoryFileDetail)
-def repository_file(path: str, engine: Engine, config: Config) -> RepositoryFileDetail:
-    """Return the complete indexed text and pinned URL for one repository path."""
+@api.get("/repository-files/{reference_value:path}", response_model=RepositoryFileDetail)
+def repository_file(reference_value: str, engine: Engine) -> RepositoryFileDetail:
+    """Return complete indexed text for one qualified repository-file identity."""
+    try:
+        reference = repository_identity.parse_repository_file_id(f"file:{reference_value}")
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     with engine.connect() as conn:
-        state = repository_index_state(conn, config)
+        state = repository_index_states(conn).get(reference.target)
         rows = conn.execute(
             sqlalchemy.select(schema.repository_file_chunks)
             .where(
-                schema.repository_file_chunks.c.repository == config.github_repository,
-                schema.repository_file_chunks.c.branch == config.github_branch,
-                schema.repository_file_chunks.c.path == path,
+                schema.repository_file_chunks.c.repository == reference.target.repository,
+                schema.repository_file_chunks.c.branch == reference.target.branch,
+                schema.repository_file_chunks.c.path == reference.path,
             )
             .order_by(schema.repository_file_chunks.c.chunk_index)
         ).all()
     if state is None or not rows:
-        raise HTTPException(404, f"no indexed repository file {path}")
+        raise HTTPException(404, f"no indexed repository file {reference.result_id}")
     return RepositoryFileDetail(
-        id=f"file:{path}",
+        id=reference.result_id,
         title=rows[0].title,
         subtitle=(
-            f"{path} · {config.github_branch}@"
+            f"{reference.target.repository} · {reference.path} · {reference.target.branch}@"
             f"{state.commit_sha[: search_config.DISPLAY_SHA_CHARACTERS]} · {repository_freshness(state)}"
         ),
-        url=repository_blob_url(config, state.commit_sha, path),
+        url=repository_blob_url(reference.target, state.commit_sha, reference.path),
         text=indexed_file_text(rows),
     )
 
@@ -1209,6 +1409,72 @@ def search_executions(
     ]
 
 
+@api.get("/feedback", response_model=list[SearchFeedbackListEntry])
+def list_search_feedback(
+    engine: Engine,
+    config: Config,
+    days: int = Query(30, ge=1, description="Look back this many days."),
+    limit: int = Query(200, ge=1, le=500),
+) -> list[SearchFeedbackListEntry]:
+    """Return recent feedback with browseable metadata for each graded result."""
+    cutoff = sqlalchemy.func.now() - sqlalchemy.func.make_interval(0, 0, 0, days)
+    statement = (
+        sqlalchemy.select(schema.search_feedback)
+        .where(schema.search_feedback.c.created_at > cutoff)
+        .order_by(schema.search_feedback.c.created_at.desc(), schema.search_feedback.c.id.desc())
+        .limit(limit)
+    )
+    with engine.connect() as conn:
+        feedback_rows = list(conn.execute(statement))
+        if not feedback_rows:
+            return []
+
+        feedback_ids = [row.id for row in feedback_rows]
+        grade_rows = list(
+            conn.execute(
+                sqlalchemy.select(schema.search_feedback_grades)
+                .where(schema.search_feedback_grades.c.feedback_id.in_(feedback_ids))
+                .order_by(
+                    schema.search_feedback_grades.c.feedback_id,
+                    schema.search_feedback_grades.c.grade.desc(),
+                    schema.search_feedback_grades.c.result_id,
+                )
+            )
+        )
+
+        search_result_ids = {row.search_result_id for row in grade_rows if row.search_result_id is not None}
+        stored_results = stored_feedback_results(conn, search_result_ids)
+        missing_result_ids: set[str] = set()
+        for grade in grade_rows:
+            stored = stored_results.get(grade.search_result_id)
+            if stored is None or not stored.title:
+                missing_result_ids.add(grade.result_id)
+        current_metadata = current_feedback_result_metadata(conn, missing_result_ids, config)
+
+    grades_by_feedback: dict[int, list[SearchFeedbackResultGrade]] = {}
+    for grade in grade_rows:
+        stored = stored_results.get(grade.search_result_id)
+        current = current_metadata.get(grade.result_id) or default_feedback_result_metadata(grade.result_id, config)
+        metadata = FeedbackResultMetadata(stored.title or current.title, stored.url) if stored else current
+        grades_by_feedback.setdefault(grade.feedback_id, []).append(
+            SearchFeedbackResultGrade(
+                key=f"{stored.domain}:{stored.id}" if stored else None,
+                source_id=grade.result_id,
+                grade=grade.grade,
+                title=metadata.title,
+                url=metadata.url,
+            )
+        )
+
+    return [
+        SearchFeedbackListEntry(
+            **{field: getattr(row, field) for field in SearchFeedbackListEntry.model_fields if field != "grades"},
+            grades=grades_by_feedback.get(row.id, []),
+        )
+        for row in feedback_rows
+    ]
+
+
 @api.post("/feedback", response_model=SearchFeedbackEntry, status_code=201)
 def add_search_feedback(
     feedback: SearchFeedbackCreate,
@@ -1217,50 +1483,33 @@ def add_search_feedback(
 ) -> SearchFeedbackEntry:
     """Store one query's optional note and per-result relevance grades."""
     author = iap_caller(x_goog_authenticated_user_email)
-    statement = (
-        schema.search_feedback.insert()
-        .values(
-            author=author,
-            query=feedback.query,
-            note=feedback.note,
-            execution_id=feedback.execution_id,
-        )
-        .returning(schema.search_feedback)
-    )
     with engine.begin() as conn:
-        if feedback.execution_id is not None:
-            execution = conn.execute(
-                sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
-                    schema.search_executions.c.id == feedback.execution_id
-                )
-            ).first()
-            if execution is None:
-                raise HTTPException(422, f"no search execution {feedback.execution_id}")
-            if execution.author != author or execution.query != feedback.query:
-                raise HTTPException(422, "execution_id must identify this caller's exact query")
-            if feedback.grades:
-                recorded_result_ids = set(
-                    conn.execute(
-                        sqlalchemy.select(schema.search_execution_results.c.result_id).where(
-                            schema.search_execution_results.c.execution_id == feedback.execution_id
-                        )
-                    ).scalars()
-                )
-                unrecorded_result_ids = {grade.result_id for grade in feedback.grades} - recorded_result_ids
-                if unrecorded_result_ids:
-                    raise HTTPException(
-                        422,
-                        "graded results were not returned by the linked search execution: "
-                        + ", ".join(sorted(unrecorded_result_ids)),
-                    )
+        resolved_grades, execution_id = resolve_feedback_grades(conn, feedback.grades, feedback.execution_id)
+        validate_feedback_execution(conn, execution_id, author, feedback.query)
+
+        statement = (
+            schema.search_feedback.insert()
+            .values(
+                author=author,
+                query=feedback.query,
+                note=feedback.note,
+                execution_id=execution_id,
+            )
+            .returning(schema.search_feedback)
+        )
         row = conn.execute(statement).first()
         assert row is not None
-        if feedback.grades:
+        if resolved_grades:
             conn.execute(
                 schema.search_feedback_grades.insert().values(
                     [
-                        {"feedback_id": row.id, "result_id": grade.result_id, "grade": grade.grade}
-                        for grade in feedback.grades
+                        {
+                            "feedback_id": row.id,
+                            "result_id": grade.result.source_id,
+                            "search_result_id": grade.result.id,
+                            "grade": grade.grade,
+                        }
+                        for grade in resolved_grades
                     ]
                 )
             )
@@ -1271,7 +1520,7 @@ def add_search_feedback(
         query=feedback.query,
         grades=feedback.grades,
         note=feedback.note,
-        execution_id=feedback.execution_id,
+        execution_id=execution_id,
     )
 
 

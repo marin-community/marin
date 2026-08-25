@@ -41,15 +41,17 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFICATION_WORKER_SCRATCH,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import check_path_in_region, marin_prefix, prefix_join
+from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
-from zephyr.execution import ZephyrExecutionResult
+from zephyr.coordinator import ZephyrExecutionResult
 
 from experiments.datakit.global_exact_dedup import (
     GLOBAL_EXACT_DEDUP_DATA_VERSION,
@@ -74,7 +76,7 @@ _FUZZY_DUPS_MAX_PARALLELISM = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
-_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk=VERIFICATION_WORKER_SCRATCH)
 _FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,

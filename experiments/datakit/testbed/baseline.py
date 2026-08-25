@@ -29,7 +29,7 @@ import logging
 import os
 
 from marin.execution.step_runner import StepRunner
-from rigging.filesystem import check_path_in_region, marin_prefix
+from rigging.filesystem.cluster_config import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step

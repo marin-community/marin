@@ -28,7 +28,8 @@ import pathlib
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache, combined_content_hash, directory_content_hash, workspace_lock_hash
+from finestore.cache import PersistentKvCache
+from rigging.cache import combined_content_hash, directory_content_hash, workspace_lock_hash
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,13 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
-    """The standard cache for compiled CuTeDSL kernel object code, one object per key.
+    """The standard cache for compiled CuTeDSL kernel object code, addressed by key.
 
     Memory over region-local temp object storage, assembled by
-    :meth:`PersistentKvCache.for_prefix`. An unreachable store degrades to a compile.
+    :meth:`PersistentKvCache.for_prefix`. Every process reads the shared cache, while
+    only global process 0 publishes misses. An unreachable store degrades to a compile.
     """
-    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX)
+    return PersistentKvCache.for_prefix(_KERNEL_CACHE_PREFIX, is_writer=lambda: jax.process_index() == 0)
 
 
 def install(cache: PersistentKvCache) -> None:

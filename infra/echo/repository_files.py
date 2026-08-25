@@ -28,6 +28,7 @@ INDEXED_SUFFIXES = frozenset(
         ".js",
         ".json",
         ".md",
+        ".mdx",
         ".proto",
         ".py",
         ".rs",
@@ -150,7 +151,7 @@ def indexed_file(path: PurePosixPath, data: bytes) -> IndexedFile | None:
 
 
 def file_title(path: PurePosixPath, text: str) -> str:
-    if path.suffix.lower() in {".md", ".rst"}:
+    if path.suffix.lower() in {".md", ".mdx", ".rst"}:
         for line in text.splitlines()[:80]:
             heading = line.lstrip("#").strip() if line.startswith("#") else ""
             if heading:

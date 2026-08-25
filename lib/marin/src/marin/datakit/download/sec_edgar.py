@@ -14,11 +14,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from huggingface_hub import HfFileSystem
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.writers import atomic_rename, ensure_parent_dir, parquet_sink
 
 from marin.datakit.normalize import normalize_step

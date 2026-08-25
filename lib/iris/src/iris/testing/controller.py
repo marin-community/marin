@@ -77,7 +77,11 @@ from iris.cluster.controller.schema import (
     tasks_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import (
+    ACTIVE_TASK_STATES,
+    task_is_finished_row,
+    task_row_can_be_scheduled,
+)
 from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
@@ -110,16 +114,7 @@ from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from iris.time_proto import duration_to_proto
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
-
-
-def check_task_is_finished(task) -> bool:
-    return task_is_finished(
-        task.state,
-        task.failure_count,
-        task.max_retries_failure,
-        task.preemption_count,
-        task.max_retries_preemption,
-    )
+check_task_is_finished = task_is_finished_row
 
 
 def run_worker_daemon_schedule(
@@ -543,7 +538,7 @@ def query_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int)
     """Return the SA Row for the given attempt or None."""
     with state._db.read_snapshot() as tx:
         return tx.execute(
-            select(*reads.ATTEMPT_COLS).where(
+            reads.attempt_select().where(
                 task_attempts_table.c.task_id == task_id,
                 task_attempts_table.c.attempt_id == attempt_id,
             )

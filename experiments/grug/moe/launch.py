@@ -198,11 +198,6 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
     target_steps=_BASELINE_TARGET_STEPS,
 )
 
-# Public alias for the heuristic-derived baseline GrugModelConfig. Kept
-# because consumers (e.g. experiments/ferries/canary_ferry.py) import it by
-# name.
-GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
-
 
 def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.

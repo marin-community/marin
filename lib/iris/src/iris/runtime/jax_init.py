@@ -17,9 +17,10 @@ import time
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.cache import fetch_kv_cache, sync_kv_cache
-from rigging.filesystem import marin_prefix, prefix_join
-from rigging.provenance import LAUNCH_PROVENANCE_ENV
+from finestore.fileset import FineStoreDirectory, fetch_file_set
+from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -39,8 +40,9 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
-# Object-store home (per build) that sync_kv_cache mirrors the node-local dir against.
+# Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
+_XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -51,6 +53,9 @@ _JAX_DIST_INIT_TIMEOUT = 1800
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
 _JAX_DIST_HEARTBEAT_TIMEOUT = 100
+# Rank 0 can spend up to 60 seconds in tracker teardown before joining peers.
+# Leave the same margin again while bounding a rank stuck below Python.
+_JAX_DIST_SHUTDOWN_TIMEOUT = 120
 
 
 class _AutotuneCacheRole(enum.StrEnum):
@@ -145,7 +150,7 @@ def _enable_xla_autotune_cache() -> None:
     cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
     so it stays out of the compilation cache key. XLA opens the directory from C++
     through ``tsl::Env``, which cannot read an object store, so the live directory
-    is always node-local and :func:`rigging.cache.sync_kv_cache` mirrors it.
+    is always node-local and FineStore publishes its files as transaction batches.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
@@ -180,9 +185,38 @@ def _enable_xla_autotune_cache() -> None:
     if os.environ.get(LAUNCH_PROVENANCE_ENV):
         role = _autotune_cache_role()
         if role is _AutotuneCacheRole.UPLOADER:
-            sync_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+            sync_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
         elif role is _AutotuneCacheRole.FETCHER:
-            fetch_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+            fetch_file_set_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
+
+
+def _file_set_cache_root(prefix: str) -> str | None:
+    tree_hash = launch_provenance().tree_hash
+    if not tree_hash:
+        return None
+    return prefix_join(marin_temp_bucket(_XLA_AUTOTUNE_CACHE_TTL_DAYS, prefix), tree_hash)
+
+
+def sync_file_set_cache(prefix: str, local: str) -> FineStoreDirectory | None:
+    """Start a file-set synchronizer, or return ``None`` when remote caching is unavailable."""
+    root = _file_set_cache_root(prefix)
+    if root is None:
+        return None
+    try:
+        return FineStoreDirectory(root, local)
+    except OSError as exc:
+        logger.warning("XLA autotune cache is unavailable; continuing with the node-local cache: %s", exc)
+        return None
+
+
+def fetch_file_set_cache(prefix: str, local: str) -> None:
+    """Fetch one build's committed file set without starting an uploader."""
+    root = _file_set_cache_root(prefix)
+    if root is not None:
+        try:
+            fetch_file_set(root, local)
+        except OSError as exc:
+            logger.warning("XLA autotune cache fetch failed; starting cold: %s", exc)
 
 
 def _autotune_cache_role() -> _AutotuneCacheRole:
@@ -300,6 +334,7 @@ def _initialize_supervised_jax(
             num_processes=1,
             process_id=0,
             local_device_ids=device_ids,
+            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
         return
 
@@ -326,6 +361,7 @@ def _initialize_supervised_jax(
         local_device_ids=device_ids,
         initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
         heartbeat_timeout_seconds=heartbeat_timeout,
+        shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
     )
 
 
@@ -411,6 +447,7 @@ def initialize_jax(
             coordinator,
             num_processes=1,
             process_id=0,
+            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
         return
 
@@ -429,6 +466,7 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
+            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
     else:
         ctx = iris_ctx()
@@ -439,4 +477,5 @@ def initialize_jax(
             task_index,
             initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
             heartbeat_timeout_seconds=heartbeat_timeout,
+            shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )

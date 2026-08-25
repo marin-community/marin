@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
+from jax.typing import DTypeLike
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -153,6 +154,14 @@ def _require_sonic_deps() -> None:
         os.environ["TRITON_CACHE_DIR"] = _DEFAULT_TRITON_CACHE_DIR
 
 
+def sonic_gather_sum_available() -> bool:
+    return (
+        jt is not None
+        and _sonic_token_gather_sum_kernel is not None
+        and _sonic_token_gather_sum_bwd_kernel is not None
+    )
+
+
 def _next_power_of_2(value: int) -> int:
     if value < 1:
         raise ValueError(f"value must be positive, got {value}")
@@ -178,11 +187,15 @@ def _sonic_gather_sum_impl(
     *,
     tokens: int,
     topk: int,
+    output_dtype: DTypeLike | None = None,
 ) -> Float[Array, "T H"]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
-    out_shape = jax.ShapeDtypeStruct((tokens, hidden_dim), dispatch_output.dtype)
+    out_shape = jax.ShapeDtypeStruct(
+        (tokens, hidden_dim),
+        dispatch_output.dtype if output_dtype is None else output_dtype,
+    )
     return jt.triton_call(
         dispatch_output,
         weights_flat,
@@ -204,6 +217,30 @@ def _sonic_gather_sum_impl(
         block_k=block_k,
         w_is_none=False,
         is_varlen_k=False,
+    )
+
+
+def sonic_gather_sum_masked(
+    dispatch_output: Float[Array, "M H"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    *,
+    output_dtype: DTypeLike | None = None,
+) -> Float[Array, "T H"]:
+    """Gather weighted rows and ignore positions outside ``dispatch_output``."""
+    tokens, topk = combine_weights.shape
+    valid = (dispatch_positions >= 0) & (dispatch_positions < dispatch_output.shape[0])
+    positions_flat = jnp.clip(dispatch_positions, 0, dispatch_output.shape[0] - 1).reshape(tokens * topk)
+    weights_flat = jnp.where(valid, combine_weights, 0).reshape(tokens * topk).astype(jnp.float32)
+    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+    return _sonic_gather_sum_impl(
+        dispatch_output,
+        weights_flat,
+        positions_flat,
+        offsets,
+        tokens=tokens,
+        topk=topk,
+        output_dtype=output_dtype,
     )
 
 

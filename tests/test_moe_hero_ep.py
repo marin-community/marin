@@ -19,10 +19,12 @@ import optax
 import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import launch_mfu_test as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
@@ -38,9 +40,33 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.num_experts_per_token,
         config.model.latent_dim,
         config.model.capacity_factor,
+        config.model.pooled_transport_capacity_factor,
+        config.model.num_expert_waves,
+        config.model.moe_implementation,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
-    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
+        config.processes_per_task,
+        config.trainer.trainer.mp.param_dtype,
+        config.trainer.trainer.mp.compute_dtype,
+        config.trainer.master_param_mode,
+    ) == (
+        6144,
+        48,
+        384,
+        3072,
+        8,
+        3072,
+        1.15,
+        1.15,
+        3,
+        "fixed_pooled_wave_all_to_all",
+        1024,
+        4096,
+        1,
+        jnp.bfloat16,
+        jnp.bfloat16,
+        train.MasterParamMode.FP32_PINNED_HOST,
+    )
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -132,11 +158,51 @@ def test_schedule_steps_do_not_extend_the_run():
     assert config.stop_after_steps == 5
 
 
-def test_expert_bank_override_must_divide_the_expert_axis():
+def test_synthetic_training_data_builds_a_reusable_global_batch():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+    batch = train._make_synthetic_batch(
+        batch_size=device_count,
+        max_seq_len=8,
+        vocab_size=11,
+        seed=3,
+        mesh=mesh,
+    )
+
+    expected_tokens = (np.arange(device_count * 8).reshape(device_count, 8) + 3) % 11
+    np.testing.assert_array_equal(batch.tokens, expected_tokens)
+    np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
+    np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
+    assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
-    with pytest.raises(ValueError, match="must divide the expert axis"):
+    with pytest.raises(ValueError, match="must be divisible by 64"):
         launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+
+
+def test_expert_bank_override_must_support_three_waves():
+    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
+        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+
+
+def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+    """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
+    return SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        resources=object(),
+        processes_per_task=processes_per_task,
+        max_retries_failure=0,
+        max_task_failures=10,
+    )
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
@@ -144,14 +210,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -161,8 +220,11 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
-    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+    assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
@@ -173,14 +235,7 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=4,
-    )
+    config = _runtime_env_config(processes_per_task=4)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -196,21 +251,18 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+    monkeypatch.setenv("MALLOC_CONF", "narenas:8")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
-            watch_mode=train.WatchMode.INLINE,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
 
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+    assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+    assert os.environ["MALLOC_CONF"] == "narenas:8"
 
 
 @pytest.mark.parametrize(
@@ -225,14 +277,7 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
     monkeypatch, watch_mode, watch_interval, expected_overlap_limit
 ):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
-            watch_mode=watch_mode,
-        ),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config(watch_mode=watch_mode, watch_interval=watch_interval)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -414,9 +459,15 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
-    # The EP rung is a downsized hero: latent = hidden/2, capacity 1.33, top-k QB (the hero default).
+    # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and top-k QB (the hero default).
+    assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
+    assert (m.num_experts, m.num_experts_per_token) == (384, 8)
+    assert m.intermediate_dim == m.hidden_dim // 2
     assert m.latent_dim == m.hidden_dim // 2
-    assert m.capacity_factor == 1.33
+    assert m.capacity_factor == 1.15
+    assert m.pooled_transport_capacity_factor == 1.15
+    assert m.num_expert_waves == 3
     assert m.qb_estimator == model.QbEstimator.TOPK
     assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
     # The histogram QB estimator is selectable on through the builder.
@@ -702,6 +753,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     state = train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=None,
         opt_state=optimizer.init(params),
         ema_params=None,
         pending_qb_betas=jnp.zeros((1, 1)),
@@ -731,3 +783,175 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+    with use_abstract_mesh(mesh):
+        state = eqx.filter_eval_shape(
+            lambda: train.initial_state(
+                _latent_config(),
+                optimizer=optax.adam(0.1),
+                mp=jmp.get_policy("f32"),
+                key=jax.random.key(0),
+                ema_beta=None,
+                offload_opt_state=True,
+            )
+        )
+
+    count_sharding = state.opt_state[0].count.sharding
+    assert isinstance(count_sharding, NamedSharding)
+    assert count_sharding.mesh == mesh
+    assert count_sharding.spec == P()
+
+
+def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=optimizer.init(master_params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del current_params, batch, mp, z_loss
+        loss = jnp.array(0.0)
+        grads = _TinyWatchModel(weight=jnp.array(0.01, dtype=jnp.bfloat16))
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+        z_loss_weight=0,
+        ema_beta=None,
+        master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+    )
+
+    for _ in range(10):
+        state, _, _ = train_step(state, jnp.array(0))
+
+    assert state.master_params is not None
+    assert state.master_params.weight.dtype == jnp.float32
+    assert state.params.weight.dtype == jnp.bfloat16
+    expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
+    np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
+    np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))
+
+
+def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
+    config = _latent_config()
+    key = jax.random.key(17)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    with set_mesh(mesh):
+        expected = model.Transformer.init(config, key=key)
+        state = train.initial_state(
+            config,
+            optimizer=optax.sgd(0.1),
+            mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+            key=key,
+            ema_beta=None,
+            master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    assert state.master_params is not None
+    expected_leaves = jax.tree.leaves(expected)
+    master_leaves = jax.tree.leaves(state.master_params)
+    param_leaves = jax.tree.leaves(state.params)
+    for expected_leaf, master_leaf, param_leaf in zip(expected_leaves, master_leaves, param_leaves, strict=True):
+        np.testing.assert_array_equal(master_leaf, expected_leaf)
+        np.testing.assert_array_equal(param_leaf, expected_leaf.astype(jnp.bfloat16))
+    assert any(
+        not np.array_equal(master_leaf, param_leaf.astype(jnp.float32))
+        for master_leaf, param_leaf in zip(master_leaves, param_leaves, strict=True)
+    )
+
+
+def test_drop_metrics_reports_sender_and_receiver_fractions():
+    metrics = train._drop_metrics(
+        jnp.array(5, dtype=jnp.int32),
+        jnp.array(2, dtype=jnp.int32),
+        jnp.array(3, dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        "moe/dropped_assignments": 5,
+        "moe/drop_fraction": 5 / 16,
+        "moe/sender_dropped_assignments": 2,
+        "moe/sender_drop_fraction": 2 / 16,
+        "moe/receiver_dropped_assignments": 3,
+        "moe/receiver_drop_fraction": 3 / 16,
+        "moe/receiver_drop_fraction_of_received": 3 / 14,
+    }
+
+
+def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
+    # Per-layer int32 counts whose 48-layer sum exceeds int32 (jax_enable_x64 is off, so an in-device
+    # jnp.sum would wrap and break the total==sender+receiver check). The host sum must stay exact.
+    num_layers = 48
+    per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
+    per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
+    per_layer_total = per_layer_sender + per_layer_receiver
+    sender_total = 48 * 40_000_000
+    receiver_total = 48 * 60_000_000
+
+    metrics = train._drop_metrics(
+        per_layer_total,
+        per_layer_sender,
+        per_layer_receiver,
+        batch_size=4096,
+        sequence_length=4096,
+        top_k=8,
+        num_layers=num_layers,
+    )
+
+    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
+    assert metrics["moe/sender_dropped_assignments"] == sender_total
+    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+
+
+def test_baseline_eval_hook_runs_once_after_the_first_step():
+    # The baseline eval must fire on the first completed step and never again: it reshards the
+    # params onto the expert-collapsed mesh, and that copy competes with the train step's temporary
+    # buffer. A resumed run starts above step 1 and must skip it.
+    fired = []
+    runner = StateCallbackRunner[SimpleNamespace](
+        step_getter=lambda s: s.step,
+        model_getter=lambda s: s.params,
+        eval_model_getter=lambda s: s.params,
+        opt_state_getter=lambda s: s.opt_state,
+    )
+    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step)), every=1)
+
+    def run_steps(next_steps):
+        for next_step in next_steps:
+            runner.run(
+                SimpleNamespace(step=jnp.int32(next_step), params=None, opt_state=None),
+                loss=0.0,
+                step_duration=0.0,
+            )
+
+    run_steps([1, 2, 3, 3000])
+    assert fired == [0]  # StepInfo.step is next_step - 1, so the point lands at 0 on the curve
+
+    fired.clear()
+    run_steps([5001, 5002])  # a resumed run
+    assert fired == []

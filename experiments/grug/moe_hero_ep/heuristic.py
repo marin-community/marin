@@ -8,11 +8,9 @@ Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
 
-The hero model is d6144 with 48 layers, 192 routed latent experts of width 6,144 (hidden-wide) at
-top-4, and two shared experts. The routed experts use a latent width of 3,072 (half the hidden dim)
-and capacity factor 1.33. This gives 535.420 B total parameters and 24.454 B active per token. The
-launcher can override the expert count, expert width, routed top-k, latent width, and capacity
-factor from this spec.
+The hero model is d6144 with 48 layers and 384 routed experts. Each expert has width 3,072, and
+the router selects eight experts per token. The pooled transport uses three static waves. The
+receiver and sender capacity factors are both 1.15.
 """
 
 import math
@@ -42,7 +40,7 @@ class MoeHeuristic:
     lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
-    beta1: float = 0.9062
+    beta1: float = 0.90
     beta2_base: float = 0.999
     beta2_reference_tpb: int = 131_072
     min_lr_ratio: float = 0.05
@@ -88,13 +86,11 @@ _HERO_HIDDEN = 6144
 HERO_MODEL = GrugModelConfig(
     vocab_size=128_256,
     hidden_dim=_HERO_HIDDEN,
-    # Routed experts are hidden-wide; the LatentMoE latent is half that. Deriving both from the
-    # hidden dim keeps the relationship fixed as the launcher resizes the shape.
-    intermediate_dim=_HERO_HIDDEN,
+    intermediate_dim=_HERO_HIDDEN // 2,
     shared_expert_intermediate_dim=_HERO_HIDDEN // 2,
     num_shared_experts=2,
-    num_experts=192,
-    num_experts_per_token=4,
+    num_experts=384,
+    num_experts_per_token=8,
     num_layers=48,
     num_heads=48,
     num_kv_heads=12,
@@ -104,12 +100,14 @@ HERO_MODEL = GrugModelConfig(
     max_seq_len=4096,
     sliding_window=2048,
     global_every=4,
-    capacity_factor=1.33,
+    capacity_factor=1.15,
     initializer_std=0.5 / math.sqrt(_HERO_HIDDEN),
     qk_mult=1.3,
     sconv=True,
     attention_implementation="gpu_fa4_cute",
-    moe_implementation="fixed_all_to_all",
+    moe_implementation="fixed_pooled_wave_all_to_all",
+    pooled_transport_capacity_factor=1.15,
+    num_expert_waves=3,
     expert_chunks=1,
     report_capacity_overflow=True,
     rope_fused=True,

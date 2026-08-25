@@ -12,8 +12,6 @@ from typing import Literal
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 INFERENCE_THREADS = 1
-INDEXED_REPOSITORY = "marin-community/marin"
-INDEXED_BRANCH = "main"
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
 SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
@@ -48,12 +46,20 @@ RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2-int8"
 RERANK_MODEL_SOURCE = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANK_MODEL_FILE = "onnx/model_int8.onnx"
 RERANK_MIN_RESULTS_PER_DOMAIN = 20
-RERANK_MAX_CANDIDATES = 20
+RERANK_MAX_CANDIDATES = 24
 RERANK_BATCH_SIZE = 4
 RERANK_BASE_WEIGHT = 0.2
 RERANK_MODEL_WEIGHT = 0.8
-MIN_RERANK_SCORE = -2.0
-PROSE_FILE_SUFFIXES = (".md", ".rst")
+MIN_RERANK_SCORE_BY_DOMAIN: Mapping[SearchDomain, float] = MappingProxyType(
+    {
+        "wiki": -1.0,
+        "file": -2.0,
+        "discord": -2.0,
+        "pr": -2.0,
+        "issue": -2.0,
+    }
+)
+PROSE_FILE_SUFFIXES = (".md", ".mdx", ".rst")
 IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
 QUERY_WORD_PATTERN = re.compile(r"[a-z0-9]+")
 LOG_QUERY_TERMS = frozenset({"log", "logging", "logs"})
@@ -63,6 +69,25 @@ KV_QUERY_TERMS = frozenset({"kv"})
 KV_CACHE_TERMS = frozenset({"cache", "caches", "caching"})
 KV_QUERY_EXPANSION = "Levanter inference KvPageCache kv_cache"
 PROSE_QUERY_MIN_WORDS = 3
+
+
+@dataclass(frozen=True)
+class RepositoryTarget:
+    repository: str
+    branch: str
+
+
+REPOSITORY_TARGETS = (
+    RepositoryTarget("marin-community/marin", "main"),
+    RepositoryTarget("marin-community/vllm", "main"),
+    RepositoryTarget("marin-community/tpu-inference", "main"),
+    RepositoryTarget("marin-community/evalchemy", "main"),
+    RepositoryTarget("marin-community/harbor", "main"),
+    RepositoryTarget("marin-community/MarinSkyRL", "main"),
+)
+ALL_REPOSITORIES = "all"
+# Path-only file IDs created before repository federation always referred to Marin.
+LEGACY_REPOSITORY_TARGET = REPOSITORY_TARGETS[0]
 
 
 @dataclass(frozen=True)

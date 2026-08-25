@@ -47,7 +47,9 @@ from jax._src.partition_spec import PartitionSpec
 from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
+from rigging.filesystem.atomic import fetch_file_atomic
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -63,8 +65,6 @@ from levanter.utils.py_utils import dataclass_with_default_init
 silence_transformer_nag()
 from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
-    AutoModel,
-    AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     PreTrainedTokenizerBase,
@@ -72,7 +72,6 @@ from transformers import (  # noqa: E402  # noqa: E402
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
-from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 if TYPE_CHECKING:
     # transformers is an optional dep; keep guard to avoid import at type-check time only
@@ -315,9 +314,6 @@ MConfig = TypeVar("MConfig", bound=HFCompatConfig)
 
 
 class ModelWithHfSerializationMixin(Generic[MConfig]):
-    def get_hf_config(self):
-        return self.config.to_hf_config(self.Vocab.size)
-
     @property
     @abc.abstractmethod
     def config(self) -> MConfig:
@@ -735,31 +731,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def default_config(self) -> LevConfig:
         return self.config_from_hf_config(self.default_hf_config)
 
-    def HFAutoModelClass(self, auto_class: Type[AutoModel] = AutoModelForCausalLM) -> Type[AutoModel]:
-        # first, see if it's a built-in model
-        try:
-            return auto_class._model_mapping[self.HfConfigClass]
-        except KeyError:
-            pass
-
-        config = self.default_hf_config
-        cls_name = auto_class.__name__
-        if hasattr(config, "auto_map") and cls_name in config.auto_map:
-            class_ref = config.auto_map[cls_name]
-            path, rev = self._get_ref(None)
-            model_class = get_class_from_dynamic_module(
-                class_ref,
-                path,
-                revision=rev,
-                local_files_only=not self.trust_remote_code,
-            )
-            return model_class  # type: ignore
-        elif type(config) in auto_class._model_mapping.keys():
-            model_class = _get_model_class(config, auto_class._model_mapping)
-            return model_class
-
-        raise ValueError(f"Could not find model class {auto_class} for {config}")
-
     @cached_property
     def Vocab(self) -> Axis:
         if self.tokenizer is None:
@@ -771,11 +742,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if overrides is not None:
             config = dataclasses.replace(config, **overrides)  # type: ignore
         return config
-
-    def hf_config_from_config(self, config: LevConfig, vocab_size: Optional[int] = None) -> HfConfig:
-        if vocab_size is None:
-            vocab_size = self.Vocab.size
-        return config.to_hf_config(vocab_size=vocab_size)
 
     def config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> LevConfig:
         config = self.hf_config_from_hf_checkpoint(ref)

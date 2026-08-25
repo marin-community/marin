@@ -9,7 +9,9 @@ See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and `
 Pull-based coordinator/worker model. Coordinator queues tasks per stage; workers poll `pull_task()`, execute shards, report results. Stages are sequential barriers — all shards in a stage must complete before the next starts (`_wait_for_stage`).
 
 Key files:
-- `src/zephyr/execution.py` — coordinator loop, worker poll loop, shard execution
+- `src/zephyr/context.py` — worker-pool lifecycle and pipeline submission
+- `src/zephyr/coordinator.py` — coordinator loop and stage scheduling
+- `src/zephyr/worker.py` — worker polling and shard execution
 - `src/zephyr/plan.py` — pipeline plan, scatter/reduce, k-way merge
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the latest attempt.
@@ -99,7 +101,7 @@ uv run iris --cluster marin job logs <WORKER_JOB_ID> --level error | \
   rg 'Generic S3 HEAD|400 Bad Request'
 ```
 
-Zephyr qualifies the endpoint in `zephyr.shuffle._scan_scatter_parquet` before
+Zephyr qualifies the endpoint in `zephyr.parquet_scan.scan_parquet` before
 calling Polars. Check `AWS_ENDPOINT_URL_S3` and `AWS_ENDPOINT_URL` if the bad
 URL persists. `FSSPEC_S3` does not configure Polars' Rust `object_store`
 client, so changing fsspec retries, credentials, or worker RAM does not repair

@@ -10,13 +10,15 @@ without a GPU by spawning ``levanter.recovery.fake_trainer.fake_trainer``.
 
 from __future__ import annotations
 
+import signal
+
 import pytest
 
 from levanter.recovery import supervisor as sup
 from levanter.recovery.fake_trainer import ENV_BEHAVIOR, fake_trainer
 from levanter.recovery.detection import DetectionConfig
 from levanter.recovery.supervisor import GPUHangSupervisor
-from levanter.recovery.types import FaultClass, RunOutcome
+from levanter.recovery.types import FaultClass, RunOutcome, classify_returncode
 
 
 def _make_supervisor(tmp_path, **overrides):
@@ -62,6 +64,11 @@ def test_recovers_from_one_off_fault(tmp_path, behavior, expected_class):
     assert result.attempts == 2
     assert [f.fault_class for f in result.faults] == [expected_class]
     assert result.restored_from_snapshot
+
+
+def test_deadman_does_not_override_a_concurrent_child_crash():
+    assert classify_returncode(-signal.SIGABRT, deadman=True) is FaultClass.CRASH
+    assert classify_returncode(-signal.SIGTERM, deadman=True) is FaultClass.STALL
 
 
 def test_hard_failure_is_not_restarted(tmp_path):

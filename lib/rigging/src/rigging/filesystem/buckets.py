@@ -9,7 +9,7 @@ task pinned to one cluster and wrong for anything that spans backends — a brow
 listing GCS and CoreWeave side by side, or a copy from CoreWeave to GCS.
 
 :func:`filesystem_for` routes instead on the bucket's declared backend
-(``config/*.yaml`` via :func:`rigging.filesystem.data_buckets`), building each
+(``config/*.yaml`` via :func:`rigging.filesystem.cluster_config.data_buckets`), building each
 S3-compatible filesystem with explicit endpoint, signing region, and credentials
 rather than reading or writing environment variables. GCS and unregistered buckets
 fall through to the guarded factory, so cross-region metering and ``mirror://``
@@ -21,8 +21,10 @@ from typing import Any
 
 import s3fs
 
+from rigging.filesystem.bulk_deletion import with_bulk_deletion
 from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_buckets
 from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.paged_listing import with_listing
 from rigging.filesystem.s3_compat import (
     credentials_hint,
     fsspec_s3_conf,
@@ -47,20 +49,28 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     signing region, and credentials; instances are shared through s3fs's own
     kwargs-keyed cache. Everything else — GCS, local paths, ``mirror://``, and
     ``s3://`` buckets no config declares — goes through the guarded
-    :func:`rigging.filesystem.url_to_fs`, which reads the ambient environment.
+    :func:`rigging.filesystem.factory.url_to_fs`, which reads the ambient environment.
+    S3 and GCS results expose paged listing and bulk deletion through
+    ``fs.listing`` and ``fs.deletion``.
 
     Raises:
         MissingCredentials: if the routed backend has no credentials configured.
     """
     parsed = StoragePath(url)
     if parsed.scheme != "s3":
-        return url_to_fs(url)
+        fs, path = url_to_fs(url)
+        return _with_object_store_operations(fs), path
 
     spec = data_buckets().get(parsed.bucket)
     if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
-        return url_to_fs(url)
+        fs, path = url_to_fs(url)
+        return _with_object_store_operations(fs), path
 
-    return _s3_filesystem(spec), _s3_path(parsed)
+    return _with_object_store_operations(_s3_filesystem(spec)), _s3_path(parsed)
+
+
+def _with_object_store_operations(fs: Any) -> Any:
+    return with_bulk_deletion(with_listing(fs))
 
 
 def _s3_path(parsed: StoragePath) -> str:

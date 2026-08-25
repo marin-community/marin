@@ -1,18 +1,9 @@
 ---
 name: profile-training
-description: Profile JAX training and analyze hotspots. Use when profiling or optimizing training throughput.
+description: Profile a named JAX, Levanter, or Marin run, or investigate a measured startup, compilation, initialization, or throughput bottleneck.
 ---
 
-# Skill: Agent-Driven Profiling (XPlane/xprof/TensorBoard/Perfetto)
-
-## Overview
-Turn a Levanter profile directory into a deterministic, agent-consumable
-summary and a concrete optimization workflow:
-1. capture a representative profile,
-2. ingest to `profile_summary.v1`,
-3. query hotspots and bottlenecks,
-4. patch/configure,
-5. re-profile and compare.
+# Profile JAX training
 
 ## Scope
 Ingestion sources:
@@ -73,7 +64,7 @@ Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
 `jax.named_scope` / `named_call` regions in TensorBoard for
 `GM2560-MAY-120S4096-W2048-B8-R1-E8M1-FA4PROFILE-S3B-N1-cw-20260617-2353`.
 Leave `device_tracer_level` unset unless device timelines are specifically
-needed; this profile still had useful hierarchical host/XLA metadata.
+needed; this profile retained useful hierarchical host/XLA metadata without it.
 
 On GPU, command buffers can collapse or suppress the visible name stack in
 TensorBoard/Perfetto. For profile-readability runs, disable command buffers:
@@ -104,8 +95,8 @@ Reference:
   <https://docs.jax.dev/en/latest/gpu_performance_tips.html>
 
 ## Ingest to Structured Summary
-Pick a download location for pulled profile artifacts: `/tmp` for
-ephemeral/local, `scratch/` for an in-repo working area.
+Use `/tmp` for ephemeral downloads. Use `scratch/` only when the working tree
+must retain an uncommitted analysis artifact.
 
 ```bash
 # /tmp (ephemeral)
@@ -115,13 +106,6 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --breakdown-mode exclusive_global \
   --output /tmp/profile_summary.json
 
-# in-repo scratch (kept with your workspace)
-mkdir -p scratch/profiles
-uv run python lib/marin/tools/profile_summary.py summarize \
-  --run-target marin-community/marin/<run_id> \
-  --download-root scratch/profiles \
-  --breakdown-mode exclusive_global \
-  --output scratch/profile_summary.json
 ```
 
 ### Option A: From a W&B artifact reference
@@ -133,20 +117,11 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-### Option B: From a W&B run target
-
-```bash
-uv run python lib/marin/tools/profile_summary.py summarize \
-  --run-target marin-community/marin/grug-125m-profile-apples-pallas_tpu-20260217-225239-055ab2 \
-  --download-root /tmp/marin-profiles \
-  --output /tmp/profile_summary.json
-```
-
 `--run-target` accepts: a bare run id (requires `--entity` and `--project`),
 `entity/project/run_id`, or a full W&B run URL. The profiler directory is
 resolved from `trainer.log_dir` in the run config.
 
-### Option C: From a local artifact directory
+### Option B: From a local artifact directory
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
@@ -159,7 +134,7 @@ automatically. When both `*.xplane.pb` and Perfetto trace JSON are present,
 `--profile-dir` reads the XPlane protobuf by default (Perfetto exports are often
 capped). Use `--trace-file` to force a specific Perfetto JSON file.
 
-### Option D: From a specific trace file
+### Option C: From a specific trace file
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
@@ -167,7 +142,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-### Option E: From a specific XPlane protobuf
+### Option D: From a specific XPlane protobuf
 
 Direct XPlane timeline parsing uses `protobuf` and does not require
 TensorFlow-generated `xplane_pb2` modules. If `xprof` is installed, ingestion
@@ -206,59 +181,31 @@ Trace quality checks are surfaced in `trace_overview`:
 - `suspected_truncation`: `true` when event counts match a known export cap.
 - `quality_warnings`: warnings to treat hotspot/gap attribution with caution.
 
-## Agent Queries
-Top ops:
+## Query the summary
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py query \
   --summary /tmp/profile_summary.json \
-  --question "What are the top 10 ops by exclusive time?"
+  --question "<top ops, compute vs communication, gap, region, or op context>"
 ```
 
-Compute vs comm and collective bottlenecks:
+Query top exclusive-time ops, compute/communication balance and collectives,
+specific pre-op gaps, hierarchical regions, noisy-op context, and suggested
+optimizations.
 
-```bash
-uv run python lib/marin/tools/profile_summary.py query \
-  --summary /tmp/profile_summary.json \
-  --question "Is comm or compute dominating? Which collective is worst?"
-```
+Useful query forms include:
 
-Specific pre-op gap lookup:
-
-```bash
-uv run python lib/marin/tools/profile_summary.py query \
-  --summary /tmp/profile_summary.json \
-  --question "gap before _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1"
-```
+- `What are the top 10 ops by exclusive time?`
+- `Is comm or compute dominating? Which collective is worst?`
+- `gap before _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined.1`
+- `show hierarchical regions`
+- `show context for op copy.564`
+- `What should we try next?`
 
 Pre-op gap attribution is marker-aware:
 - `gap_before_ops[].payload_op`: op where useful work starts after the idle period.
 - `gap_before_ops[].marker_op`: first op observed after the gap (often
   lightweight setup like `iota.*`).
-
-Hierarchical semantic regions (derived from `tf_op` paths when available):
-
-```bash
-uv run python lib/marin/tools/profile_summary.py query \
-  --summary /tmp/profile_summary.json \
-  --question "show hierarchical regions"
-```
-
-Contextualize a noisy op:
-
-```bash
-uv run python lib/marin/tools/profile_summary.py query \
-  --summary /tmp/profile_summary.json \
-  --question "show context for op copy.564"
-```
-
-Suggested optimizations from evidence:
-
-```bash
-uv run python lib/marin/tools/profile_summary.py query \
-  --summary /tmp/profile_summary.json \
-  --question "What should we try next?"
-```
 
 ## Optimization Workflow
 Use a strict workflow:
@@ -315,13 +262,3 @@ The comparison reports: steady-state step-time delta, step class deltas
 (light/heavy when detected), compute/comm/host/stall share deltas, semantic
 family deltas with workload-normalized metrics, provenance checks (trace
 hash/run identity), and regressed/improved ops by exclusive duration.
-
-## Success Metrics
-MVP is successful when:
-- one representative profile is summarized reproducibly into `profile_summary.v1`,
-- queries produce deterministic structured answers for top ops and comm/compute
-  breakdown,
-- one end-to-end before/after comparison bundle is completed and either
-  throughput improves measurably or a clear root-cause report is produced with
-  profile evidence.
-</content>

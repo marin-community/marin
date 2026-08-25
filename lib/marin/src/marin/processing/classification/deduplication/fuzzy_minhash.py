@@ -23,10 +23,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key

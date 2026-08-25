@@ -67,14 +67,7 @@
   },
   "links": [
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Accelerators",
-      "type": "link",
-      "url": "/d/marin-accel"
+      "linkRef": "fleet_accelerators"
     },
     {
       "asDropdown": false,
@@ -117,14 +110,10 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
+    },
+    {
+      "linkRef": "cluster_capacity"
     },
     {
       "asDropdown": false,
@@ -132,9 +121,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -145,6 +134,16 @@
       "title": "Inference",
       "type": "link",
       "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Storage",
+      "type": "link",
+      "url": "/d/marin-storage"
     },
     {
       "asDropdown": false,

@@ -41,7 +41,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from rigging.config_discovery import resolve_cluster_config
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.evals import (

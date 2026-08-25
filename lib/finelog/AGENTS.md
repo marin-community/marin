@@ -18,7 +18,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
   `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
-- `deploy/` — Dockerfile, k8s manifests, GCP snippets
+- `deploy/` — Docker image definition; deployment helpers live under `src/finelog/deploy/`,
+  the shared operator CLI lives in `infra/deploy/`, and the Kubernetes Pulumi project
+  lives in `infra/finelog/`
 
 ## Boundaries
 
@@ -61,14 +63,24 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
+`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+If the sender is ahead by an optional column, the hub reports the ignored column once,
+drops that column from forwarded batches, and appends the compatible fields. Required
+unknown columns and shared-column type changes remain errors. Other namespaces retain
+ordinary additive registration.
+
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an
 age or row-count cap. Non-log chunks from one read turn may wait for hub durability
 concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable or the hub permanently rejects a malformed
-batch. A hub outage therefore cannot consume extra sender memory, but a long enough
-outage can still outlive local retention.
+after local eviction makes them unreadable. A rejected write preserves its cursor and
+invalidates the cached hub registration; the next sweep re-registers the current source
+schema and retries while other namespaces continue forwarding. Transient failures get
+three attempts before the namespace yields for the sweep, without advancing its cursor.
+A hub outage therefore cannot consume extra sender memory, but a long enough outage can
+still outlive local retention.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable
@@ -119,7 +131,9 @@ layout, and per-query `EXPLAIN ANALYZE` metrics.
 - `log_query_bench` — the operator query corpus for `log`: job substring
   scoping, task tails, first-error lookups, body search. `generate` builds a
   corpus; `measure` runs it over a directory that already holds segments.
-- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `grafana_dashboard_bench` — every Finelog query in one or more checked-in
+  Grafana dashboards, with fixed values supplied through repeatable
+  `--variable NAME=VALUE` arguments.
 - `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
 
 Point `--log-dir` at a **disposable copy**: starting Finelog activates
@@ -169,9 +183,9 @@ each namespace this process registers for itself that is not registered.
 carries the per-namespace error, first-failure time, and attempt count, and the
 dashboard's System page renders it.
 
-The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
-(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
-`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+The deploy paths gate on the body: the VM bootstrap loop and `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), plus the `infra/finelog`
+Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
 ## Changing a server-owned schema
@@ -294,8 +308,10 @@ No segment carries a parquet bloom filter. Writing them for every column cost 15
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
 KiB that compaction consumes within a tick or two, against a write cost on every
-flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
-statistics; substring queries prune from the trigram bundle section.
+flush. L1+ is sorted by the schema's configured columns plus `seq`; schemas
+without an explicit order retain `(key, seq)`. Min/max statistics prune the
+clustered dimensions and key band, while substring queries prune from the
+trigram bundle section.
 
 A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
 `regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the

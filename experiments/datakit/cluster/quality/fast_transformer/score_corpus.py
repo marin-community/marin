@@ -82,8 +82,9 @@ import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 

@@ -22,13 +22,14 @@ from time import sleep
 from typing import TypeVar
 
 from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem import prefix_join, url_to_fs
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
     create_lock,
     default_worker_id,
 )
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)

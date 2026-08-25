@@ -16,7 +16,7 @@ canonical copy lives on CoreWeave at
 (4,573 Parquet shards, 89.4 GB, 36,327,068 documents).
 """
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
