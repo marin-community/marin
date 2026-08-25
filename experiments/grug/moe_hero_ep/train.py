@@ -163,6 +163,18 @@ def _apply_hero_ep_runtime_defaults(
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
+    if ragged:
+        # The ragged transport runs on the device-initiated kernel. Engagement needs both
+        # flags: the kernel switch, and symmetric-buffer registration for the ragged op's
+        # operands. The scoped list registers only ragged-all-to-all buffers, so every other
+        # collective keeps NCCL's host-launched kernels. An explicit XLA_FLAGS entry for the
+        # kernel switch selects the one-shot transport instead. Both flags require the pinned
+        # jax/XLA build: jaxlib vintages that predate them abort at import on unknown
+        # XLA_FLAGS entries.
+        flag_defaults += (
+            "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+            "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+        )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)

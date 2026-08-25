@@ -49,10 +49,11 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
-# Updates per peer for the ragged transport at the hero shape. The backend spreads these over
-# its expert-granular updates, and chunking leaves half of them zero-sized, so the useful CTA
-# count is what matters: the 64/128 bracket both measured ~+0.1 MFU over 32 with 64 == 128.
-HERO_RAGGED_SPLITS_PER_PEER = 64
+# Updates per peer for the ragged transport at the hero shape. The device kernel partitions
+# copy work across CTAs by bytes rather than by update, so splitting buys no load balance and
+# only adds per-update granularity cost: 1 measured 22.34-22.58 MFU at the trained-router
+# restore vs 21.12 with 64 splits.
+HERO_RAGGED_SPLITS_PER_PEER = 1
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
 # pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
@@ -457,10 +458,10 @@ def build_hero_run(
     type=click.IntRange(min=1),
     default=None,
     help=(
-        "Split each peer transfer into this many ragged updates. Ragged backend only. The one-shot "
-        "kernel launches num_ranks x splits CTAs, so this also sets the transport's grid. Defaults "
-        f"to {HERO_RAGGED_SPLITS_PER_PEER} on the ragged backend, the measured best at EP64, and to "
-        "1 elsewhere."
+        "Split each peer transfer into this many ragged updates. Ragged backend only. The "
+        "device kernel balances CTAs by bytes, so splits only add granularity overhead there; "
+        "the one-shot kernel scales its grid with the update count and wants 64 at EP64. "
+        f"Defaults to {HERO_RAGGED_SPLITS_PER_PEER}."
     ),
 )
 @click.option(
