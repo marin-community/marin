@@ -385,6 +385,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
     all_opens_started = threading.Event()
     open_count = 0
     open_count_lock = threading.Lock()
+    writes = []
 
     class ObservedFuture:
         def __init__(self, future):
@@ -411,6 +412,8 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
 
     class FakeStore:
         def write(self, data, *, can_reference_source_data_indefinitely):
+            assert can_reference_source_data_indefinitely
+            writes.append(np.array(data, copy=True))
             return SimpleNamespace(commit=commit_future)
 
     open_futures = iter(ObservedFuture(future) for _, future in open_promises_and_futures)
@@ -443,6 +446,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
 
     assert not serializer.is_alive()
     assert errors == []
+    assert {int(value[0]) for value in writes} == {0, 100}
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
