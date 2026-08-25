@@ -49,8 +49,11 @@ from experiments.grug.moe.moe_67b_a2b_d2560_ctxext_step156k_seq262k_bs256_ctx4_m
 
 SOURCE_STEP = 156_000
 FINAL_STEP = 157_000
+PRE_EXTENSION_STEP = 141_000
 TRAINING_OFFSETS = (250, 500, 750, 1_000)
 SENSITIVITY_CONTEXT_CAPS = (8_192, 32_768)
+AGGREGATE_CONTEXT_CAP = 262_144
+CONTEXT_PARALLEL_TPU_SHAPE = "v4-128-cp4"
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,13 @@ class MrcrCheckpointPackage:
 
 SOURCE_QK157 = MrcrCheckpointPackage("step-156000-source-qk157", 1.57, SOURCE_STEP, 0, None)
 SOURCE_QK175 = MrcrCheckpointPackage("step-156000-source-qk175", 1.75, SOURCE_STEP, 0, None)
+PRE_EXTENSION_QK157 = MrcrCheckpointPackage(
+    "step-141000-pre-extension-qk157",
+    1.57,
+    PRE_EXTENSION_STEP,
+    PRE_EXTENSION_STEP - SOURCE_STEP,
+    None,
+)
 
 PRIMARY_CHECKPOINT_PACKAGES: tuple[MrcrCheckpointPackage, ...] = (
     SOURCE_QK157,
@@ -91,7 +101,7 @@ PRIMARY_CHECKPOINT_PACKAGES: tuple[MrcrCheckpointPackage, ...] = (
         for offset in TRAINING_OFFSETS
     ),
 )
-PACKAGE_BY_NAME = {package.name: package for package in PRIMARY_CHECKPOINT_PACKAGES}
+PACKAGE_BY_NAME = {package.name: package for package in (*PRIMARY_CHECKPOINT_PACKAGES, PRE_EXTENSION_QK157)}
 FINAL_PACKAGE_NAMES = ("qk157-step157000", "qk175-step157000")
 SENSITIVITY_PACKAGE_NAMES = (SOURCE_QK157.name, SOURCE_QK175.name, *FINAL_PACKAGE_NAMES)
 
@@ -130,6 +140,9 @@ DEFAULT_TPU_VARIANT = "v4-2048"
 CANONICAL_CONTEXT_MODEL = QK175_TRAINING_STEP.config.model.value
 SOURCE_CHECKPOINT = InputName.hardcoded(
     "grug/moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step141k-a30ef8/checkpoints/step-156000"
+)
+PRE_EXTENSION_CHECKPOINT = InputName.hardcoded(
+    "grug/moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T-9fcc1f/checkpoints/step-141000"
 )
 
 
@@ -178,11 +191,20 @@ def smoke_evaluation_cells() -> tuple[MrcrEvaluationCell, ...]:
     )
 
 
+def aggregate_262k_evaluation_cells() -> tuple[MrcrEvaluationCell, ...]:
+    """Return the matched-qk pre-extension, 64K, and 262K training trajectory."""
+
+    packages = (PRE_EXTENSION_QK157, SOURCE_QK157, PACKAGE_BY_NAME["qk157-step157000"])
+    return tuple(MrcrEvaluationCell(package, AGGREGATE_CONTEXT_CAP, MrcrPromptVariant.TWO_SHOT) for package in packages)
+
+
 def evaluation_cells(selection: str) -> tuple[MrcrEvaluationCell, ...]:
     """Select an explicit launch matrix without silently expanding the smoke."""
 
     if selection == "smoke":
         return smoke_evaluation_cells()
+    if selection == "aggregate_262k":
+        return aggregate_262k_evaluation_cells()
     if selection == "primary":
         return primary_evaluation_cells()
     if selection == "sensitivity":
@@ -201,6 +223,7 @@ class _MrcrDispatchStepConfig:
 @dataclass(frozen=True)
 class _MrcrEvaluationShape:
     tpu_variant: str
+    output_suffix: str
     eval_batch_size: int
     data_axis_size: int
     context_axis_size: int
@@ -215,6 +238,7 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
     if tpu_variant == DEFAULT_TPU_VARIANT:
         return _MrcrEvaluationShape(
             tpu_variant,
+            output_suffix="",
             eval_batch_size=256,
             data_axis_size=256,
             context_axis_size=4,
@@ -223,6 +247,7 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
     if tpu_variant == "v4-64":
         return _MrcrEvaluationShape(
             tpu_variant,
+            output_suffix="v464",
             eval_batch_size=32,
             data_axis_size=32,
             context_axis_size=1,
@@ -231,9 +256,19 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
     if tpu_variant == "v4-32":
         return _MrcrEvaluationShape(
             tpu_variant,
+            output_suffix="v432",
             eval_batch_size=16,
             data_axis_size=16,
             context_axis_size=1,
+            preemptible=True,
+        )
+    if tpu_variant == CONTEXT_PARALLEL_TPU_SHAPE:
+        return _MrcrEvaluationShape(
+            "v4-128",
+            output_suffix="v4128cp4",
+            eval_batch_size=16,
+            data_axis_size=16,
+            context_axis_size=4,
             preemptible=True,
         )
     raise ValueError(f"Unsupported MRCR evaluation TPU shape: {tpu_variant}")
@@ -247,6 +282,7 @@ def default_checkpoint_paths() -> dict[str, InputName]:
     """Return source and nonblocking extension checkpoint dependencies."""
 
     paths = {
+        PRE_EXTENSION_QK157.name: PRE_EXTENSION_CHECKPOINT,
         SOURCE_QK157.name: SOURCE_CHECKPOINT,
         SOURCE_QK175.name: SOURCE_CHECKPOINT,
     }
@@ -298,7 +334,7 @@ def build_evaluation_steps(
             max_seq_len=cell.context_cap,
             qk_mult=cell.package.qk_mult,
         )
-        resource_suffix = "" if tpu_variant == DEFAULT_TPU_VARIANT else f"-{tpu_variant.replace('-', '')}"
+        resource_suffix = f"-{shape.output_suffix}" if shape.output_suffix else ""
         run_id = f"{cell.run_id}{resource_suffix}"
         evaluation = GrugCheckpointEvalConfig(
             run_id=run_id,
@@ -344,7 +380,9 @@ def build_default_steps(
     """Build the selected checked-in matrix without submitting any other cells."""
 
     cells = evaluation_cells(selection)
-    if tpu_variant != DEFAULT_TPU_VARIANT and selection != "smoke":
+    if selection == "aggregate_262k" and tpu_variant != CONTEXT_PARALLEL_TPU_SHAPE:
+        raise ValueError(f"aggregate_262k requires {CONTEXT_PARALLEL_TPU_SHAPE}")
+    if tpu_variant != DEFAULT_TPU_VARIANT and selection not in ("smoke", "aggregate_262k"):
         raise ValueError("Noncanonical TPU shapes are limited to the bounded smoke selection")
     variants = tuple(dict.fromkeys(cell.prompt_variant for cell in cells))
     bundle = mrcr_datasets(prompt_variants=variants)
@@ -750,7 +788,7 @@ if __name__ == "__main__":
     selection = os.environ.get("MRCR_MATRIX_SELECTION")
     if selection is None:
         raise ValueError(
-            "Set MRCR_MATRIX_SELECTION explicitly to smoke, primary, sensitivity, or complete; "
+            "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k, primary, sensitivity, or complete; "
             "the launcher does not default to an expensive matrix"
         )
     tpu_variant = os.environ.get("MRCR_EVAL_TPU", DEFAULT_TPU_VARIANT)

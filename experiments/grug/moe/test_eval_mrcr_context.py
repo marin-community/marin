@@ -11,6 +11,7 @@ from experiments.grug.moe.eval_mrcr_context import (
     PACKAGE_BY_NAME,
     MrcrEvaluationArtifact,
     MrcrEvaluationKey,
+    aggregate_262k_evaluation_cells,
     build_default_steps,
     expected_evaluations_for_stage,
     matrix_cell_count,
@@ -123,6 +124,29 @@ def test_v4_64_smoke_builder_uses_full_data_sharding_without_context_parallelism
 
     with pytest.raises(ValueError, match="bounded smoke"):
         build_default_steps("primary", tpu_variant="v4-64")
+
+
+def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_parallelism():
+    steps = build_default_steps("aggregate_262k", tpu_variant="v4-128-cp4")
+
+    assert len(aggregate_262k_evaluation_cells()) == 3
+    assert len(steps) == 3
+    assert {step.config.evaluation.context_cap for step in steps} == {262_144}
+    assert {step.config.evaluation.qk_mult for step in steps} == {1.57}
+    assert {step.config.evaluation.run_id.split("-qk", 1)[0] for step in steps} == {
+        "mrcr-67b-step141000",
+        "mrcr-67b-step156000",
+        "mrcr-67b-step157000",
+    }
+    assert all(step.config.resources.value.device.variant == "v4-128" for step in steps)
+    assert all(step.config.resources.value.preemptible is True for step in steps)
+    assert all(step.config.evaluation.runtime.value.eval_batch_size == 16 for step in steps)
+    assert all(step.config.evaluation.runtime.value.data_axis_size == 16 for step in steps)
+    assert all(step.config.evaluation.runtime.value.context_axis_size == 4 for step in steps)
+    assert all(step.name.endswith("-v4128cp4") for step in steps)
+
+    with pytest.raises(ValueError, match="aggregate_262k requires v4-128-cp4"):
+        build_default_steps("aggregate_262k")
 
 
 def test_summary_computes_adaptation_arm_qk_and_difference_in_differences(tmp_path: Path):
