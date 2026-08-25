@@ -108,6 +108,20 @@ def test_v4_32_smoke_builder_uses_full_data_sharding_and_distinct_outputs():
         build_default_steps("primary", tpu_variant="v4-32")
 
 
+def test_v4_64_smoke_builder_uses_full_data_sharding_without_context_parallelism():
+    steps = build_default_steps("smoke", tpu_variant="v4-64")
+
+    assert len(steps) == 4
+    assert all(step.config.resources.value.device.variant == "v4-64" for step in steps)
+    assert all(step.config.evaluation.runtime.value.eval_batch_size == 32 for step in steps)
+    assert all(step.config.evaluation.runtime.value.data_axis_size == 32 for step in steps)
+    assert all(step.config.evaluation.runtime.value.context_axis_size == 1 for step in steps)
+    assert all(step.name.endswith("-v464") for step in steps)
+
+    with pytest.raises(ValueError, match="bounded smoke"):
+        build_default_steps("primary", tpu_variant="v4-64")
+
+
 def test_summary_computes_adaptation_arm_qk_and_difference_in_differences(tmp_path: Path):
     artifacts = (
         _artifact(tmp_path, "step-156000-source-qk157", MrcrPromptVariant.TWO_SHOT, (0.0, 0.0)),

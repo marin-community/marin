@@ -213,6 +213,8 @@ class _MrcrEvaluationShape:
 def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
     if tpu_variant == DEFAULT_TPU_VARIANT:
         return _MrcrEvaluationShape(tpu_variant, eval_batch_size=256, data_axis_size=256, context_axis_size=4)
+    if tpu_variant == "v4-64":
+        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=32, data_axis_size=32, context_axis_size=1)
     if tpu_variant == "v4-32":
         return _MrcrEvaluationShape(tpu_variant, eval_batch_size=16, data_axis_size=16, context_axis_size=1)
     raise ValueError(f"Unsupported MRCR evaluation TPU shape: {tpu_variant}")
