@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import pytest
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.distributed import DistributedConfig
 from levanter.tracker import NoopConfig
 
 from experiments.datasets.mrcr import MrcrPromptVariant
@@ -21,12 +22,17 @@ from experiments.grug.moe.evaluate import (
     MrcrExampleLoss,
     _canonical_67b_model,
     derive_mrcr_metrics,
+    evaluate_grug_checkpoint,
     load_grug_checkpoint_params,
     pair_mrcr_condition_losses,
     persist_grug_checkpoint_eval,
     summarize_per_example_losses,
     validate_grug_checkpoint_eval_config,
 )
+
+
+class _TrackerInitialized(Exception):
+    pass
 
 
 @jax.tree_util.register_dataclass
@@ -201,6 +207,25 @@ def test_load_grug_checkpoint_params_restores_only_step_and_params(tmp_path):
 
     assert step == 157_000
     assert params.tolist() == [1.0, 2.0]
+
+
+def test_evaluate_grug_checkpoint_initializes_distributed_before_tracker(monkeypatch, tmp_path):
+    events = []
+
+    def initialize_distributed(_self):
+        events.append("distributed")
+
+    def initialize_tracker(_self, _run_id):
+        events.append("tracker")
+        raise _TrackerInitialized
+
+    monkeypatch.setattr(DistributedConfig, "initialize", initialize_distributed)
+    monkeypatch.setattr(NoopConfig, "init", initialize_tracker)
+
+    with pytest.raises(_TrackerInitialized):
+        evaluate_grug_checkpoint(_config(tmp_path))
+
+    assert events == ["distributed", "tracker"]
 
 
 def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(tmp_path):

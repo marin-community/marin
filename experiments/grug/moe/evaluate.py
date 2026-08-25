@@ -31,6 +31,7 @@ from levanter.checkpoint import load_checkpoint
 from levanter.data import DataLoader
 from levanter.data.text import GrugLmExample
 from levanter.data.text.datasets import LmDataConfig
+from levanter.distributed import DistributedConfig
 from levanter.eval import _calculate_bytes_per_token_type
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tracker import TrackerConfig
@@ -636,6 +637,7 @@ def load_grug_checkpoint_params(
 def evaluate_grug_checkpoint(config: GrugCheckpointEvalConfig) -> dict[str, float]:
     """Evaluate one Grug checkpoint without constructing training state."""
     validate_grug_checkpoint_eval_config(config)
+    DistributedConfig().initialize()
     tracker = config.runtime.tracker.init(config.run_id)
     levanter.tracker.set_global_tracker(tracker)
     mesh = compact_grug_mesh(
