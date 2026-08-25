@@ -86,6 +86,14 @@ def candidate_run_order(candidate_id: str, seed: int, all_candidate_ids: tuple[s
     return all_candidate_ids.index(candidate_id) * len(EXPECTED_SEEDS) + EXPECTED_SEEDS.index(seed)
 
 
+def unique_terminal_metric(records: list[dict[str, object]], identity: tuple[str, int]) -> dict[str, object]:
+    if not records:
+        raise ValueError(f"Expected a step-{EXPECTED_CHECKPOINT_STEP} metric row for {identity}")
+    if any(record != records[0] for record in records[1:]):
+        raise ValueError(f"Conflicting step-{EXPECTED_CHECKPOINT_STEP} metric rows for {identity}")
+    return records[0]
+
+
 def materialize_rows(
     *,
     experiment_root: str,
@@ -112,10 +120,7 @@ def materialize_rows(
         records = [
             row for row in read_json_lines(fs, metric_path) if int(row.get("step", -1)) == EXPECTED_CHECKPOINT_STEP
         ]
-        if len(records) != 1:
-            raise ValueError(
-                f"Expected one step-{EXPECTED_CHECKPOINT_STEP} metric row for {identity}; found {len(records)}"
-            )
+        record = unique_terminal_metric(records, identity)
         output_root = experiment_root.rstrip("/") + "/" + leaf
         checkpoint_uri = output_root + f"/checkpoints/step-{EXPECTED_CHECKPOINT_STEP}"
         hf_checkpoint_uri = output_root + f"/hf/step-{EXPECTED_CHECKPOINT_STEP}"
@@ -125,7 +130,6 @@ def materialize_rows(
         hf_path = f"{PurePosixPath(metric_path).parents[1]}/hf/step-{EXPECTED_CHECKPOINT_STEP}"
         if not fs.exists(f"{hf_path}/config.json"):
             raise FileNotFoundError(f"HF boundary checkpoint is incomplete: {hf_checkpoint_uri}")
-        record = records[0]
         if PRIMARY_METRIC not in record or DIAGNOSTIC_METRIC not in record:
             raise ValueError(f"Required boundary metrics are missing for {identity}")
         provenance_path = f"{PurePosixPath(metric_path).parents[1]}/prefix_provenance.json"

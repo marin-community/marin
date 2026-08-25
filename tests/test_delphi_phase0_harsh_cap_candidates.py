@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     materialize_delphi_phase0_harsh_cap_validation_20260825 as materialize,
@@ -115,3 +116,12 @@ def test_select_aliases_can_freeze_one_completed_cap(tmp_path: Path) -> None:
     assert selected[["cap_epochs", "candidate_id"]].to_dict("records") == [
         {"cap_epochs": 4, "candidate_id": "shared_bounded_ensemble_kl0p05"}
     ]
+
+
+def test_terminal_metric_accepts_identical_retries_and_rejects_conflicts() -> None:
+    identity = ("cap4_shared_bounded_ensemble_kl0", 0)
+    row = {"step": materialize.EXPECTED_CHECKPOINT_STEP, materialize.PRIMARY_METRIC: 1.0}
+
+    assert materialize.unique_terminal_metric([row, row.copy()], identity) == row
+    with pytest.raises(ValueError, match="Conflicting"):
+        materialize.unique_terminal_metric([row, {**row, materialize.PRIMARY_METRIC: 1.1}], identity)

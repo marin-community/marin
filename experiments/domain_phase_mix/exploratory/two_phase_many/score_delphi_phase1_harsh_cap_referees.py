@@ -69,6 +69,8 @@ def validate_opened_inputs(
     sealed = cast(dict[str, object], contract.get("seal"))
     if sealed.get("referee_outcomes_present_in_fit_input") is not False:
         raise ValueError("Frozen contract does not certify a referee-free fit input")
+    if coverage.get("manifest_sha256") != sealed.get("manifest_sha256"):
+        raise ValueError("Opened referee results come from a different branch manifest than the sealed fit")
     inputs = cast(dict[str, object], contract.get("inputs"))
     if inputs.get("design_weights_sha256") != file_sha256(design_weights_path):
         raise ValueError("Design weights changed after model freeze")
@@ -87,8 +89,10 @@ def score_candidate(
     referee = results[
         results.prefix_candidate_id.eq(candidate_id) & results.role.eq("sealed_geometry_referee")
     ].sort_values("run_order")
-    if len(referee) != 8:
-        raise ValueError(f"Expected eight opened referees for {candidate_id}, got {len(referee)}")
+    if len(referee) != fitting.design.REFEREE_ROWS_PER_PREFIX:
+        raise ValueError(
+            f"Expected {fitting.design.REFEREE_ROWS_PER_PREFIX} opened referees for {candidate_id}, got {len(referee)}"
+        )
     continuation_ids = tuple(referee.continuation_id)
     buckets, weights = fitting.load_weights(design_weights_path, candidate_id, continuation_ids)
     center = fitting.tied_center(candidate_weights_path, candidate_id, buckets)
@@ -164,7 +168,7 @@ def main() -> None:
         "frozen_contract_sha256": args.expected_frozen_contract_sha256,
         "opened_coverage_sha256": file_sha256(args.coverage),
         "opened_referee_rows": int(coverage["sealed_referee_rows"]),
-        "selection_changed_after_opening": False,
+        "selection_source": "SHA-pinned frozen model contract; no post-opening refit",
         "candidates": summaries,
     }
     (args.output_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

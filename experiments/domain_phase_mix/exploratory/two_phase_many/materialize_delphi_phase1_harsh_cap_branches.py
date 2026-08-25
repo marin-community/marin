@@ -33,10 +33,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-root", required=True)
     parser.add_argument("--expected-manifest-sha256", required=True)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--allow-incomplete", action="store_true")
     parser.add_argument("--open-referee", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.output_dir is None:
+        if args.open_referee:
+            parser.error("--output-dir is required with --open-referee to preserve the sealed materialization")
+        args.output_dir = DEFAULT_OUTPUT_DIR
+    return args
 
 
 def read_json_lines(fs: fsspec.AbstractFileSystem, path: str) -> list[dict[str, object]]:
@@ -108,7 +113,12 @@ def validate_provenance(
     if provenance.get("terminal_checkpoint_uri") != terminal_uri:
         raise ValueError(f"Terminal checkpoint URI changed for {row['run_name']}")
     observed = provenance.get("observed_continuation_hardware")
-    if not isinstance(observed, dict) or "v6" not in str(observed.get("device_kind", "")).lower():
+    if (
+        not isinstance(observed, dict)
+        or "v6" not in str(observed.get("device_kind", "")).lower()
+        or observed.get("global_device_count") != launch.EXPECTED_TPU_DEVICE_COUNT
+        or observed.get("local_device_count") != launch.EXPECTED_TPU_DEVICE_COUNT
+    ):
         raise ValueError(f"Branch did not report v6 hardware for {row['run_name']}: {observed}")
 
 

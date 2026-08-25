@@ -10,6 +10,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 import pytest
+from marin.execution.executor import instantiate_config
 
 from experiments.domain_phase_mix import launch_delphi_3e18_phase0_harsh_cap_candidates as prefix_launch
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_harsh_cap_branches as launch
@@ -253,11 +254,37 @@ def test_manifest_write_is_idempotent(tmp_path: Path) -> None:
         manifest_identity=launch.versioned("test-manifest"),
     )
 
-    launch.save_manifest(config)
+    runtime_config = instantiate_config(config, output_path=None, output_paths={}, prefix="")
+    launch.save_manifest(runtime_config)
     first = (tmp_path / "manifest.json").read_bytes()
-    launch.save_manifest(config)
+    launch.save_manifest(runtime_config)
 
     assert (tmp_path / "manifest.json").read_bytes() == first
+
+
+def test_hardware_observation_initializes_distributed_jax_before_device_discovery(monkeypatch) -> None:
+    events = []
+
+    class Device:
+        platform = "tpu"
+        device_kind = "TPU v6 lite"
+
+    def initialize() -> None:
+        events.append("initialize")
+
+    def devices() -> list[Device]:
+        assert events == ["initialize"]
+        events.append("devices")
+        return [Device() for _ in range(launch.EXPECTED_TPU_DEVICE_COUNT)]
+
+    monkeypatch.setattr(launch, "initialize_jax", initialize)
+    monkeypatch.setattr(launch.jax, "devices", devices)
+    monkeypatch.setattr(launch.jax, "local_device_count", lambda: launch.EXPECTED_TPU_DEVICE_COUNT)
+
+    observed = launch.observe_tpu_hardware()
+
+    assert events == ["initialize", "devices"]
+    assert observed.global_device_count == launch.EXPECTED_TPU_DEVICE_COUNT
 
 
 def test_default_materialization_does_not_open_referee_metrics() -> None:

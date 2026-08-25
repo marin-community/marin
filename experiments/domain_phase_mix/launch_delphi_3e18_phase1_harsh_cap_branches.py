@@ -20,10 +20,11 @@ import fsspec
 import jax
 import pandas as pd
 from fray.cluster import ResourceConfig
+from iris.runtime.jax_init import initialize_jax
 from levanter.data.text.datasets import DatasetComponent
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.context import executor_context
-from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_commit
+from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_commit, unwrap_versioned_value
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import step_to_lm_mixture_component
@@ -100,6 +101,7 @@ class HarshBranchTrainingConfig:
     design_manifest_sha256: str
     continuation_id: str
     code_commit: str
+    panel_identity: VersionedValue[str]
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ def hardware_from_run_spec(run_spec: base.DelphiSwarmRunSpec) -> TpuHardware:
 
 
 def observe_tpu_hardware() -> ObservedTpuHardware:
+    initialize_jax()
     devices = jax.devices()
     platforms = {device.platform for device in devices}
     kinds = {device.device_kind for device in devices}
@@ -550,12 +553,12 @@ def save_manifest(config: SaveManifestConfig) -> None:
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
         "optimizer_schedule_num_train_steps": replay.EXPECTED_FULL_TRAIN_STEPS,
         "full_design_rows": config.full_design_rows,
-        "selected_design_rows": len(rows),
+        "manifest_rows": len(rows),
         "fit_budget_rows": sum(bool(row["fit_budget"]) for row in rows),
         "sealed_referee_rows": sum(row["role"] == "sealed_geometry_referee" for row in rows),
         "control_rows": sum("control" in row["role"] for row in rows),
         "branch_rows": rows,
-        "manifest_identity": config.manifest_identity.value,
+        "manifest_identity": unwrap_versioned_value(config.manifest_identity),
     }
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     path = os.path.join(config.output_path, "manifest.json")
@@ -615,7 +618,7 @@ def main() -> None:
     if not isinstance(selected_aliases, list) or not all(isinstance(row, dict) for row in selected_aliases):
         raise ValueError("Selected-prefix aliases are malformed")
     candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in selected_aliases)
-    panel_label = "_".join(candidate_id.split("_", maxsplit=1)[0] for candidate_id in candidate_ids)
+    panel_label = "_".join(candidate_ids)
     experiment_name = f"{EXPERIMENT_PREFIX}_{panel_label}"
     specs = source_prefix_specs(args.candidate_weights, args.expected_candidate_sha256, args.analysis_output_path)
     validate_selected_prefixes(
@@ -733,6 +736,7 @@ def main() -> None:
                         design_manifest_sha256=args.expected_design_manifest_sha256,
                         continuation_id=str(row["continuation_id"]),
                         code_commit=code_commit,
+                        panel_identity=manifest_config.manifest_identity,
                     ),
                 )
             )

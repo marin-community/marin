@@ -74,6 +74,15 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def write_json_exact(path: Path, payload: dict[str, object]) -> None:
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    if path.exists():
+        if path.read_bytes() != encoded:
+            raise ValueError(f"Refusing to replace a different frozen artifact: {path}")
+        return
+    path.write_bytes(encoded)
+
+
 def validate_sealed_input(results: pd.DataFrame, coverage_path: Path) -> dict[str, object]:
     coverage = json.loads(coverage_path.read_text())
     expected_rows = int(coverage.get("expected_rows", -1))
@@ -506,6 +515,7 @@ def main() -> None:
             "referee_outcomes_present_in_fit_input": bool(results.role.eq("sealed_geometry_referee").any()),
             "materialization_referee_outcomes_opened": coverage["referee_outcomes_opened"],
             "sealed_referee_rows": coverage["sealed_referee_rows"],
+            "manifest_sha256": coverage["manifest_sha256"],
             "sealed_coordinates_excluded_from_candidate_pool": True,
         },
     }
@@ -520,7 +530,7 @@ def main() -> None:
         )
         candidate_dir = args.output_dir / candidate_id
         candidate_dir.mkdir(exist_ok=True)
-        (candidate_dir / "predicted_optimum.json").write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
+        write_json_exact(candidate_dir / "predicted_optimum.json", candidate)
         for name, frame in artifacts.items():
             frame.to_csv(candidate_dir / f"{name}.csv", index=False)
         status["candidates"][candidate_id] = {
@@ -528,7 +538,7 @@ def main() -> None:
         }
         frozen_candidates[candidate_id] = candidate
     status_path = args.output_dir / "status.json"
-    status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
+    write_json_exact(status_path, status)
     contract = {
         **status,
         "status_sha256": file_sha256(status_path),
@@ -539,7 +549,7 @@ def main() -> None:
         "referee_scoring_entrypoint": "score_delphi_phase1_harsh_cap_referees.py",
     }
     contract_path = args.output_dir / "frozen_model_contract.json"
-    contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
+    write_json_exact(contract_path, contract)
     print(json.dumps(status, indent=2, sort_keys=True))
 
 
