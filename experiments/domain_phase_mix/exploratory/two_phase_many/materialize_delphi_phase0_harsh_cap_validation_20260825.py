@@ -80,10 +80,17 @@ def read_json_lines(fs: fsspec.AbstractFileSystem, path: str) -> list[dict[str, 
         return [json.loads(line) for line in handle if line.strip()]
 
 
+def candidate_run_order(candidate_id: str, seed: int, all_candidate_ids: tuple[str, ...]) -> int:
+    if candidate_id not in all_candidate_ids or seed not in EXPECTED_SEEDS:
+        raise ValueError(f"Unknown candidate identity: {candidate_id}/seed{seed}")
+    return all_candidate_ids.index(candidate_id) * len(EXPECTED_SEEDS) + EXPECTED_SEEDS.index(seed)
+
+
 def materialize_rows(
     *,
     experiment_root: str,
     candidate_ids: tuple[str, ...],
+    all_candidate_ids: tuple[str, ...],
     candidate_weights_sha256: str,
     candidate_aliases_sha256: str,
     prefix_replay_code_commit: str,
@@ -127,8 +134,7 @@ def materialize_rows(
         with fs.open(provenance_path, "rb") as handle:
             provenance_bytes = handle.read()
         provenance = json.loads(provenance_bytes)
-        position = candidate_ids.index(candidate_id)
-        run_order = position * len(EXPECTED_SEEDS) + EXPECTED_SEEDS.index(seed)
+        run_order = candidate_run_order(candidate_id, seed, all_candidate_ids)
         expected_provenance = {
             "experiment_name": EXPERIMENT_NAME,
             "candidate_id": candidate_id,
@@ -297,6 +303,7 @@ def main() -> None:
         aliases.cap_epochs.astype(int).isin(caps) & aliases.selection_eligible.astype(bool)
     ].copy()
     candidate_ids = tuple(selected_aliases.canonical_candidate_id.drop_duplicates())
+    all_candidate_ids = tuple(weights.candidate_id.drop_duplicates())
     if not candidate_ids:
         raise ValueError(f"No selection-eligible candidates for caps {caps}")
     if not set(candidate_ids).issubset(set(weights.candidate_id)):
@@ -306,6 +313,7 @@ def main() -> None:
     results = materialize_rows(
         experiment_root=args.experiment_root,
         candidate_ids=candidate_ids,
+        all_candidate_ids=all_candidate_ids,
         candidate_weights_sha256=candidate_weights_sha256,
         candidate_aliases_sha256=candidate_aliases_sha256,
         prefix_replay_code_commit=args.prefix_replay_code_commit,

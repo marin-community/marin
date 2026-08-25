@@ -27,6 +27,7 @@ import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import fsspec
 import numpy as np
@@ -44,9 +45,6 @@ DEFAULT_CANDIDATE_WEIGHTS = (
 )
 DEFAULT_SELECTED_PREFIXES = REFERENCE_OUTPUTS / "delphi_phase0_harsh_cap_validation_20260825" / "selected_prefixes.json"
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branches_20260825"
-DEFAULT_OLD_MODEL_CANDIDATE = (
-    REFERENCE_OUTPUTS / "delphi_phase1_kl0p05_local_branch_fit_20260825" / "primary_adaptive_candidate.json"
-)
 HISTORICAL_FRONTIER_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
     "delphi_decoupled_phase_information_validation_20260712/mixtures/dphase_unch05_eff_e0p005.csv"
@@ -84,7 +82,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
     parser.add_argument("--selected-prefixes", type=Path, default=DEFAULT_SELECTED_PREFIXES)
-    parser.add_argument("--old-model-candidate", type=Path, default=DEFAULT_OLD_MODEL_CANDIDATE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
@@ -122,7 +119,7 @@ def selected_candidate_ids(payload: dict[str, object]) -> tuple[str, ...]:
 
 def candidate_centers(path: Path, selected: tuple[str, ...], buckets: tuple[str, ...]) -> dict[str, np.ndarray]:
     frame = pd.read_csv(path)
-    result = {}
+    result: dict[str, np.ndarray] = {}
     for candidate_id in selected:
         rows = frame[frame.candidate_id.eq(candidate_id)]
         if tuple(rows.bucket) != buckets:
@@ -130,11 +127,11 @@ def candidate_centers(path: Path, selected: tuple[str, ...], buckets: tuple[str,
         counts = rows.phase_0_count.to_numpy(dtype=int)
         if counts.sum() != MIXTURE_BLOCK_SIZE or np.any(counts < 0):
             raise ValueError(f"Invalid runtime counts for {candidate_id}")
-        result[candidate_id] = counts / MIXTURE_BLOCK_SIZE
+        result[candidate_id] = cast(np.ndarray, counts / MIXTURE_BLOCK_SIZE)
     return result
 
 
-def anchor_mixtures(path: Path, buckets: tuple[str, ...], proportional: np.ndarray) -> dict[str, np.ndarray]:
+def anchor_mixtures(buckets: tuple[str, ...], proportional: np.ndarray) -> dict[str, np.ndarray]:
     payload = read_uri_bytes(HISTORICAL_FRONTIER_URI)
     if hashlib.sha256(payload).hexdigest() != HISTORICAL_FRONTIER_SHA256:
         raise ValueError("Historical frontier mixture changed")
@@ -146,11 +143,6 @@ def anchor_mixtures(path: Path, buckets: tuple[str, ...], proportional: np.ndarr
         "proportional": proportional,
         "uniform": np.full(len(buckets), 1.0 / len(buckets)),
     }
-    if path.exists():
-        model_payload = json.loads(path.read_text())
-        model_weights = model_payload.get("weights")
-        if isinstance(model_weights, dict) and set(model_weights) == set(buckets):
-            anchors["old_prefix_model_candidate"] = np.asarray([model_weights[bucket] for bucket in buckets])
     return {name: runtime_weights(weights) for name, weights in anchors.items()}
 
 
@@ -476,13 +468,12 @@ def design_rows(
 def build_design(
     candidate_weights_path: Path,
     selected_prefixes_path: Path,
-    old_model_candidate_path: Path,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     selected_payload = json.loads(selected_prefixes_path.read_text())
     selected_ids = selected_candidate_ids(selected_payload)
     panel = common_design.load_canonical_panel_geometry()
     centers = candidate_centers(candidate_weights_path, selected_ids, panel.buckets)
-    anchors = anchor_mixtures(old_model_candidate_path, panel.buckets, runtime_weights(panel.proportional))
+    anchors = anchor_mixtures(panel.buckets, runtime_weights(panel.proportional))
     summary_rows: list[dict[str, object]] = []
     weight_rows: list[dict[str, object]] = []
     diagnostics = {}
@@ -528,7 +519,13 @@ def build_design(
             "total": len(summary),
         },
         "design": {
-            "geometry": "outcome-blind D-optimal plus maximin coverage in square-root simplex coordinates",
+            "geometry": (
+                "fixed deployment anchors followed by outcome-blind D-optimal and maximin coverage "
+                "in square-root simplex coordinates"
+            ),
+            "fit_anchors": ["historical_uncheatable_frontier", "proportional", "uniform"],
+            "historical_frontier_is_prior_outcome_selected": True,
+            "old_prefix_model_candidate_used": False,
             "common_random_number_data_seed": FIT_DATA_SEED,
             "fresh_tied_data_seeds": list(FRESH_TIED_DATA_SEEDS),
             "local_rows": LOCAL_ROWS,
@@ -544,9 +541,6 @@ def build_design(
             "design_seed": DESIGN_SEED,
             "candidate_weights_sha256": file_sha256(candidate_weights_path),
             "selected_prefixes_sha256": file_sha256(selected_prefixes_path),
-            "old_model_candidate_sha256": (
-                file_sha256(old_model_candidate_path) if old_model_candidate_path.exists() else None
-            ),
             "historical_frontier_uri": HISTORICAL_FRONTIER_URI,
             "historical_frontier_sha256": HISTORICAL_FRONTIER_SHA256,
         },
@@ -556,7 +550,7 @@ def build_design(
 
 def main() -> None:
     args = parse_args()
-    summary, weights, manifest = build_design(args.candidate_weights, args.selected_prefixes, args.old_model_candidate)
+    summary, weights, manifest = build_design(args.candidate_weights, args.selected_prefixes)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_dir / "continuation_summary.csv"
     weights_path = args.output_dir / "continuation_weights.csv"

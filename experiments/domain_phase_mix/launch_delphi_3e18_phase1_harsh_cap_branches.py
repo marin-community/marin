@@ -25,7 +25,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_commit
 from marin.execution.remote import remote
-from marin.execution.types import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, VersionedValue, this_output_path, versioned
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from rigging.filesystem import marin_prefix_for_region
@@ -118,6 +118,7 @@ class SaveManifestConfig:
     branch_run_id_base: int
     full_design_rows: int
     branch_rows_json: str
+    manifest_identity: VersionedValue[str]
 
 
 def file_sha256(path: Path) -> str:
@@ -382,8 +383,8 @@ def enrich_rows(
                 "mean_phase_tv_to_proportional": phase_tv,
             }
         )
-    identities = [(row["run_order"], row["run_id"], row["run_name"]) for row in enriched]
-    if len(identities) != len(set(identities)):
+    run_names = [str(row["run_name"]) for row in enriched]
+    if len(run_names) != len(set(run_names)):
         raise ValueError("Branch run identities are not unique")
     return enriched
 
@@ -428,6 +429,7 @@ def verify_prefix_on_worker(config: HarshBranchTrainingConfig) -> None:
 def run_phase_1_branch(config: HarshBranchTrainingConfig) -> None:
     """Restore one exact v6e prefix trainer state and continue through update 3007."""
     verify_prefix_on_worker(config)
+    observed_hardware = observe_tpu_hardware()
     run_spec = config.run_spec
     expected = replay.phase_0_boundary(run_spec.train_steps, run_spec.batch_size)
     if expected != (replay.EXPECTED_PREFIX_TRAIN_STEPS, replay.EXPECTED_PREFIX_HF_STEP):
@@ -477,7 +479,6 @@ def run_phase_1_branch(config: HarshBranchTrainingConfig) -> None:
             },
         )
     )
-    observed_hardware = observe_tpu_hardware()
     terminal_uri = os.path.join(config.output_path, "checkpoints", f"step-{replay.EXPECTED_FULL_TRAIN_STEPS - 1}")
     fs, terminal_path = fsspec.core.url_to_fs(terminal_uri)
     metadata_path = os.path.join(terminal_path, "metadata.json")
@@ -554,6 +555,7 @@ def save_manifest(config: SaveManifestConfig) -> None:
         "sealed_referee_rows": sum(row["role"] == "sealed_geometry_referee" for row in rows),
         "control_rows": sum("control" in row["role"] for row in rows),
         "branch_rows": rows,
+        "manifest_identity": config.manifest_identity.value,
     }
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     path = os.path.join(config.output_path, "manifest.json")
@@ -641,7 +643,23 @@ def main() -> None:
         if unknown:
             raise ValueError(f"Unknown --run-order values: {unknown}")
         rows = [row for row in rows if int(row["run_order"]) in selected_orders]
-    serializable_rows = [{**row, "prefix": asdict(row["prefix"])} for row in rows]
+    serializable_rows = [{**row, "prefix": asdict(row["prefix"])} for row in all_rows]
+    manifest_identity = hashlib.sha256(
+        json.dumps(
+            {
+                "selected_prefixes_sha256": args.expected_selected_prefixes_sha256,
+                "candidate_weights_sha256": args.expected_candidate_sha256,
+                "candidate_aliases_sha256": args.expected_candidate_aliases_sha256,
+                "continuation_summary_sha256": args.expected_continuation_summary_sha256,
+                "continuation_weights_sha256": args.expected_continuation_weights_sha256,
+                "design_manifest_sha256": args.expected_design_manifest_sha256,
+                "prefix_replay_code_commit": args.prefix_replay_code_commit,
+                "branch_code_commit": code_commit,
+                "branch_run_id_base": args.branch_run_id_base,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     manifest_config = SaveManifestConfig(
         experiment_name=experiment_name,
         output_path=str(args.dry_run_output_dir or LOCAL_DRY_RUN_DIR),
@@ -657,10 +675,16 @@ def main() -> None:
         branch_run_id_base=args.branch_run_id_base,
         full_design_rows=full_design_rows,
         branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
+        manifest_identity=versioned(manifest_identity),
     )
     if args.dry_run:
         save_manifest(manifest_config)
-        logger.info("Wrote %d phase-1 branch specs under %s", len(rows), manifest_config.output_path)
+        logger.info(
+            "Wrote the %d-row full manifest and selected %d phase-1 branch specs under %s",
+            len(all_rows),
+            len(rows),
+            manifest_config.output_path,
+        )
         return
 
     validation_steps = base._default_validation_sets(tokenizer=llama3_tokenizer)

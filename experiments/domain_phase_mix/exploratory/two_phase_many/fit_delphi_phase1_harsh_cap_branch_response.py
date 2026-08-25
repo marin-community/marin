@@ -34,6 +34,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_RESULTS = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branch_results_20260825" / "branch_results.csv"
+DEFAULT_COVERAGE = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branch_results_20260825" / "coverage.json"
 DEFAULT_DESIGN_SUMMARY = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branches_20260825" / "continuation_summary.csv"
 DEFAULT_DESIGN_WEIGHTS = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branches_20260825" / "continuation_weights.csv"
 DEFAULT_CANDIDATE_WEIGHTS = design.DEFAULT_CANDIDATE_WEIGHTS
@@ -60,6 +61,7 @@ class ResponseModel:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
+    parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE)
     parser.add_argument("--design-summary", type=Path, default=DEFAULT_DESIGN_SUMMARY)
     parser.add_argument("--design-weights", type=Path, default=DEFAULT_DESIGN_WEIGHTS)
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
@@ -70,6 +72,23 @@ def parse_args() -> argparse.Namespace:
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_sealed_input(results: pd.DataFrame, coverage_path: Path) -> dict[str, object]:
+    coverage = json.loads(coverage_path.read_text())
+    expected_rows = int(coverage.get("expected_rows", -1))
+    sealed_rows = int(coverage.get("sealed_referee_rows", -1))
+    if coverage.get("status") != "complete" or int(coverage.get("missing_rows", -1)) != 0:
+        raise ValueError("Branch materialization is not complete")
+    if coverage.get("referee_outcomes_opened") is not False:
+        raise ValueError("Referee outcomes were opened before model freeze")
+    if len(results) != expected_rows - sealed_rows:
+        raise ValueError(
+            f"Sealed result coverage changed: {len(results)} visible rows != {expected_rows} - {sealed_rows}"
+        )
+    if results.role.eq("sealed_geometry_referee").any():
+        raise ValueError("Referee outcomes are present in the model input")
+    return cast(dict[str, object], coverage)
 
 
 def hellinger(weights: np.ndarray, center: np.ndarray) -> np.ndarray:
@@ -291,15 +310,12 @@ def candidate_pool(
     center: np.ndarray,
     buckets: tuple[str, ...],
     measured: np.ndarray,
+    excluded_counts: set[tuple[int, ...]],
 ) -> tuple[np.ndarray, list[str]]:
     panel = design.common_design.load_canonical_panel_geometry()
     if panel.buckets != buckets:
         raise ValueError("Canonical branch geometry bucket order changed")
-    anchors = design.anchor_mixtures(
-        Path("/nonexistent/no-old-prefix-candidate.json"),
-        buckets,
-        design.runtime_weights(panel.proportional),
-    )
+    anchors = design.anchor_mixtures(buckets, design.runtime_weights(panel.proportional))
     points, _ = design.generate_pool(center, anchors, center * panel.c0, panel.c1)
     pool = [point.weights for point in points.values()]
     sources = [point.source for point in points.values()]
@@ -311,12 +327,15 @@ def candidate_pool(
     deduplicated: dict[tuple[int, ...], tuple[np.ndarray, str]] = {}
     for weights, source in zip(pool, sources, strict=True):
         counts = tuple(design.common_design.runtime_counts(weights).tolist())
+        if counts in excluded_counts:
+            continue
         deduplicated.setdefault(counts, (weights, source))
     return np.stack([value[0] for value in deduplicated.values()]), [value[1] for value in deduplicated.values()]
 
 
 def fit_candidate(
     results: pd.DataFrame,
+    design_summary_path: Path,
     design_weights_path: Path,
     candidate_weights_path: Path,
     candidate_id: str,
@@ -329,6 +348,16 @@ def fit_candidate(
         raise ValueError(f"Expected {design.FIT_ROWS_PER_PREFIX} fit rows, got {len(fit_rows)}")
     continuation_ids = tuple(fit_rows.continuation_id)
     buckets, weights = load_weights(design_weights_path, candidate_id, continuation_ids)
+    summary = pd.read_csv(design_summary_path)
+    referee_ids = tuple(
+        summary[
+            summary.prefix_candidate_id.eq(candidate_id) & summary.role.eq("sealed_geometry_referee")
+        ].continuation_id
+    )
+    if len(referee_ids) != design.REFEREE_ROWS_PER_PREFIX:
+        raise ValueError(f"Expected {design.REFEREE_ROWS_PER_PREFIX} sealed referee coordinates, got {len(referee_ids)}")
+    _, referee_weights = load_weights(design_weights_path, candidate_id, referee_ids)
+    referee_counts = {tuple(design.common_design.runtime_counts(row).tolist()) for row in referee_weights}
     center = tied_center(candidate_weights_path, candidate_id, buckets)
     baselines = control_baselines(candidate_results)
     effects = fit_rows[TARGET].to_numpy(dtype=float) - float(baselines["matched_tied_bpb"])
@@ -346,7 +375,7 @@ def fit_candidate(
     feature_kind, alpha = selected_parameter(parameter_metrics)
     model = fit_model(weights, effects, center, feature_kind, alpha)
 
-    pool, sources = candidate_pool(center, buckets, weights)
+    pool, sources = candidate_pool(center, buckets, weights, referee_counts)
     predicted_effects = predict(model, pool, center)
     fold_predictions, fold_selections = fold_ensemble_predictions(weights, effects, center, pool)
     fold_mean = fold_predictions.mean(axis=0)
@@ -439,7 +468,6 @@ def fit_candidate(
                 or (best_effect < 0.0 and probability_beat_tied >= MINIMUM_PROBABILITY)
             )
         ),
-        "referee_outcomes_used": False,
         "baselines": baselines,
     }
     return candidate, {
@@ -454,6 +482,7 @@ def fit_candidate(
 def main() -> None:
     args = parse_args()
     results = pd.read_csv(args.results)
+    coverage = validate_sealed_input(results, args.coverage)
     candidate_ids = tuple(results.prefix_candidate_id.drop_duplicates())
     if args.candidate_id is not None:
         candidate_ids = (args.candidate_id,)
@@ -467,14 +496,28 @@ def main() -> None:
         "frontier_bpb": FRONTIER_BPB,
         "inputs": {
             "results_sha256": file_sha256(args.results),
+            "coverage_sha256": file_sha256(args.coverage),
             "design_summary_sha256": file_sha256(args.design_summary),
             "design_weights_sha256": file_sha256(args.design_weights),
             "candidate_weights_sha256": file_sha256(args.candidate_weights),
         },
         "candidates": {},
+        "seal": {
+            "referee_outcomes_present_in_fit_input": bool(results.role.eq("sealed_geometry_referee").any()),
+            "materialization_referee_outcomes_opened": coverage["referee_outcomes_opened"],
+            "sealed_referee_rows": coverage["sealed_referee_rows"],
+            "sealed_coordinates_excluded_from_candidate_pool": True,
+        },
     }
+    frozen_candidates = {}
     for candidate_id in candidate_ids:
-        candidate, artifacts = fit_candidate(results, args.design_weights, args.candidate_weights, candidate_id)
+        candidate, artifacts = fit_candidate(
+            results,
+            args.design_summary,
+            args.design_weights,
+            args.candidate_weights,
+            candidate_id,
+        )
         candidate_dir = args.output_dir / candidate_id
         candidate_dir.mkdir(exist_ok=True)
         (candidate_dir / "predicted_optimum.json").write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
@@ -483,14 +526,17 @@ def main() -> None:
         status["candidates"][candidate_id] = {
             key: value for key, value in candidate.items() if key not in {"coefficients", "weights", "baselines"}
         }
+        frozen_candidates[candidate_id] = candidate
     status_path = args.output_dir / "status.json"
     status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
     contract = {
         **status,
         "status_sha256": file_sha256(status_path),
+        "frozen_candidates": frozen_candidates,
         "referee_opening_rule": (
             "Freeze this contract and all predicted optima before explicitly opening the eight sealed outcomes."
         ),
+        "referee_scoring_entrypoint": "score_delphi_phase1_harsh_cap_referees.py",
     }
     contract_path = args.output_dir / "frozen_model_contract.json"
     contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")

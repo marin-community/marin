@@ -46,14 +46,21 @@ def read_json_lines(fs: fsspec.AbstractFileSystem, path: str) -> list[dict[str, 
 
 def manifest_payload(experiment_root: str, expected_sha256: str) -> tuple[dict[str, object], bytes]:
     fs, root = fsspec.core.url_to_fs(experiment_root)
-    path = os.path.join(root, "manifest.json")
-    if not fs.exists(path):
-        raise FileNotFoundError(f"Branch manifest is not visible: {experiment_root}/manifest.json")
-    with fs.open(path, "rb") as handle:
-        payload_bytes = handle.read()
-    actual = hashlib.sha256(payload_bytes).hexdigest()
-    if actual != expected_sha256:
-        raise ValueError(f"Branch manifest changed: {actual} != {expected_sha256}")
+    candidates = set(fs.glob(os.path.join(root, "manifest-*", "manifest.json")))
+    direct_path = os.path.join(root, "manifest.json")
+    if fs.exists(direct_path):
+        candidates.add(direct_path)
+    matches = []
+    for path in sorted(candidates):
+        with fs.open(path, "rb") as handle:
+            payload_bytes = handle.read()
+        if hashlib.sha256(payload_bytes).hexdigest() == expected_sha256:
+            matches.append((path, payload_bytes))
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one branch manifest with SHA-256 {expected_sha256}; found {[path for path, _ in matches]}"
+        )
+    _, payload_bytes = matches[0]
     return json.loads(payload_bytes), payload_bytes
 
 
@@ -107,16 +114,20 @@ def validate_provenance(
 
 def terminal_metrics(fs: fsspec.AbstractFileSystem, output_path: str) -> dict[str, float]:
     path = os.path.join(output_path, "checkpoints", "eval_metrics.jsonl")
+    if not fs.exists(path):
+        raise FileNotFoundError(f"Terminal metrics are missing under {output_path}")
     records = [row for row in read_json_lines(fs, path) if int(row.get("step", -1)) == TERMINAL_STEP]
-    if len(records) != 1:
-        raise ValueError(f"Expected one step-{TERMINAL_STEP} metric row under {output_path}; found {len(records)}")
+    if not records:
+        raise ValueError(f"Expected a step-{TERMINAL_STEP} metric row under {output_path}")
+    if any(record != records[0] for record in records[1:]):
+        raise ValueError(f"Conflicting step-{TERMINAL_STEP} metric rows under {output_path}")
     record = records[0]
-    if TARGET not in record:
+    if TARGET not in record or isinstance(record[TARGET], bool) or not isinstance(record[TARGET], (float, int)):
         raise ValueError(f"Terminal Uncheatable BPB is missing under {output_path}")
     return {
         key.removeprefix(TARGET_PREFIX).replace("/", "::"): float(value)
         for key, value in record.items()
-        if key.startswith(TARGET_PREFIX) and isinstance(value, (float, int))
+        if key.startswith(TARGET_PREFIX) and not isinstance(value, bool) and isinstance(value, (float, int))
     }
 
 
@@ -171,16 +182,16 @@ def materialize(
             "output_root": output_root,
             "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
         }
+        metrics = terminal_metrics(fs, output_path)
         if row["role"] == "sealed_geometry_referee" and not open_referee:
-            referee_rows.append({**identity, "outcome_opened": False})
+            referee_rows.append({**identity, "outcome_opened": False, "terminal_metrics_verified": True})
             observed.add(run_name)
             continue
-        metrics = terminal_metrics(fs, output_path)
         result_rows.append({**identity, **metrics})
         for metric, value in metrics.items():
             metric_rows.append({**identity, "metric": metric, "value": value})
         if row["role"] == "sealed_geometry_referee":
-            referee_rows.append({**identity, "outcome_opened": True})
+            referee_rows.append({**identity, "outcome_opened": True, "terminal_metrics_verified": True})
         observed.add(run_name)
     missing = sorted(set(rows_by_name) - observed)
     return pd.DataFrame(result_rows), pd.DataFrame(metric_rows), pd.DataFrame(referee_rows), missing
@@ -218,6 +229,7 @@ def main() -> None:
         "sealed_referee_rows": int(sum(row["role"] == "sealed_geometry_referee" for row in manifest_rows)),
         "referee_outcomes_opened": args.open_referee,
         "missing_rows": len(missing),
+        "status": "complete" if not missing else "provisional_incomplete",
     }
     (args.output_dir / "coverage.json").write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n")
     print(json.dumps(coverage, indent=2, sort_keys=True))
