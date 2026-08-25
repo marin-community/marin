@@ -20,9 +20,9 @@ from marin.datakit.ingestion_manifest import (
 from marin.transform.evaluation.raw_lm_eval import (
     LmEvalRawRenderer,
     LmEvalRawStagingConfig,
-    _find_split_parquet_files,
     stage_lm_eval_source,
 )
+from marin.transform.hf_parquet_splits import find_split_parquet_files
 
 
 def _read_staged_records(output_path: Path, filename: str = "staged.jsonl.gz") -> list[dict]:
@@ -232,9 +232,9 @@ def test_find_split_parquet_files_normalizes_duplicate_slashes_in_fsspec_url(mon
         captured_paths.append(path)
         return _FakeGcsFs(), "unit-bucket/raw/openai/gsm8k_hash"
 
-    monkeypatch.setattr("marin.transform.evaluation.raw_lm_eval.url_to_fs", fake_url_to_fs)
+    monkeypatch.setattr("marin.transform.hf_parquet_splits.url_to_fs", fake_url_to_fs)
 
-    files = _find_split_parquet_files("gs://unit-bucket//raw/openai/gsm8k_hash", "train", "main")
+    files = find_split_parquet_files("gs://unit-bucket//raw/openai/gsm8k_hash", "train", "main")
 
     assert captured_paths == ["gs://unit-bucket/raw/openai/gsm8k_hash"]
     assert files == ["gs://unit-bucket/raw/openai/gsm8k_hash/main/train-00000-of-00001.parquet"]

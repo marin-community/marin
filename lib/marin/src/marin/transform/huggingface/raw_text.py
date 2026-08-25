@@ -21,8 +21,8 @@ from marin.transform.huggingface.dataset_to_eval import get_nested_item
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

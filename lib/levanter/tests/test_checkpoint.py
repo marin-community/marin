@@ -438,6 +438,16 @@ def test_trainer_config_checkpoint_search_paths():
     )
     assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
 
+    multi_config = dataclasses.replace(
+        config,
+        load_checkpoint_path=["/tmp/test-perm/run1", "/tmp/test-temp/run1", "/tmp/test-old-temp"],
+    )
+    assert multi_config.checkpoint_search_paths("run1") == [
+        "/tmp/test-perm/run1",
+        "/tmp/test-temp/run1",
+        "/tmp/test-old-temp",
+    ]
+
     pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
     assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 
@@ -744,6 +754,44 @@ def test_checkpointer_force_does_not_repeat_same_step_permanent_save():
         assert _get_checkpoint_steps(permanent_dir) == [1]
 
 
+def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint()
+    _on_step(checkpointer, 1)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(temporary_path) == [1]
+    assert not permanent_path.exists()
+
+
+def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [CheckpointInterval(every=1)],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint()
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [1]
+    assert not temporary_path.exists()
+
+
 def test_load_from_checkpoint_or_initialize():
     In = Axis("in", 2)
     Out = Axis("out", 1)
@@ -765,9 +813,7 @@ def test_load_from_checkpoint_or_initialize():
         filtered = eqx.filter(model0, is_checkpointed)
         save_checkpoint(filtered, step=0, checkpoint_path=tmpdir)
 
-        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(
-            k1
-        )
+        loaded = load_checkpoint_or_initialize(init_fn, [tmpdir], is_checkpointed=is_checkpointed, donate_args=False)(k1)
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
 
         latest_checkpoint = discover_latest_checkpoint(tmpdir)
@@ -853,9 +899,9 @@ def test_load_from_checkpoint_or_initialize_works_if_file_not_found():
         is_checkpointed = jtu.tree_map(lambda _: False, model0)
         is_checkpointed = eqx.tree_at(lambda t: t.layers[-1], is_checkpointed, replace=True)
 
-        loaded = load_checkpoint_or_initialize(
-            init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed
-        )(k1)
+        loaded = load_checkpoint_or_initialize(init_fn, ["kanmfklafnmjlkanfjklanfjkh"], is_checkpointed=is_checkpointed)(
+            k1
+        )
 
         assert not any(jax.tree_util.tree_leaves(eqx.filter(loaded, lambda x: isinstance(x, ShapeDtypeStruct))))
         # should be the same as model1

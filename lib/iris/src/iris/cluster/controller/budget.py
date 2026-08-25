@@ -17,6 +17,7 @@ from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import job_pb2
+from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +73,18 @@ def compute_effective_band(
 ) -> int:
     """Downgrade task to BATCH if its user exceeds their budget.
 
-    PRODUCTION tasks are never downgraded. Users without a ``user_budgets``
-    row fall back to ``defaults.budget_limit``; a limit of 0 means unlimited.
+    SYSTEM and PRODUCTION tasks are never downgraded. Users without a
+    ``user_budgets`` row fall back to ``defaults.budget_limit``; a limit of 0
+    means unlimited.
 
     ``task_band`` is a real band: ``LaunchJob`` resolves INHERIT once at ingestion (see
     :func:`iris.cluster.controller.ops.job.resolve_priority_band`).
     """
-    if task_band == job_pb2.PRIORITY_BAND_PRODUCTION:
+    if task_band in ADMIN_PRIORITY_BAND_VALUES:
         return task_band
     limit = user_budgets.get(user_id, defaults.budget_limit)
     if limit > 0 and user_spend.get(user_id, 0) > limit:
-        return max(task_band, job_pb2.PRIORITY_BAND_BATCH)
+        return job_pb2.PRIORITY_BAND_BATCH
     return task_band
 
 
@@ -121,15 +123,9 @@ def interleave_by_user(
 
 
 # Bands accepted in user_budgets config entries. UNSPECIFIED is kept out of the
-# set so a missing/zeroed max_band field surfaces as a config error rather than
-# silently granting BATCH; callers must pick a real band.
-_VALID_TIER_BANDS = frozenset(
-    (
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    )
-)
+# set so a missing/zeroed max_band field surfaces as a config error; callers
+# must pick a real band.
+_VALID_TIER_BANDS = frozenset(PRIORITY_BAND_VALUES)
 
 
 def reconcile_user_budget_tiers(
@@ -159,7 +155,7 @@ def reconcile_user_budget_tiers(
         for tier in tiers:
             if tier.max_band not in _VALID_TIER_BANDS:
                 raise ValueError(
-                    f"UserBudgetTier.max_band must be one of PRODUCTION/INTERACTIVE/BATCH; "
+                    f"UserBudgetTier.max_band must be one of SYSTEM/PRODUCTION/INTERACTIVE/BATCH; "
                     f"got {tier.max_band} for users {list(tier.user_ids)}"
                 )
             for user_id in tier.user_ids:

@@ -52,7 +52,7 @@ class R2DataBuckets(pulumi.ComponentResource):
                 ),
             )
         ]
-        for rule in expiration_rules(lifecycle_config):
+        for rule in sorted(expiration_rules(lifecycle_config), key=lambda rule: rule.id):
             lifecycle_rules.append(
                 cloudflare.R2BucketLifecycleRuleArgs(
                     id=rule.id,

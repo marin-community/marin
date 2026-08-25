@@ -1,12 +1,12 @@
 # Hero training stall alert
 
-`TrainingProgressStalled` is a critical Grafana alert for active Iris root jobs named `hero-*-coord`. It posts one Slack message per root job and opens a Loom triage session on that thread. The alert does not kick, restart, or profile a job. Capture `iris process profile threads -t <task>` for the affected tasks before deciding whether to intervene.
+`TrainingProgressStalled` is a critical Grafana alert for active Iris hero roots. Permitted names are `<run-id>-coord` and `<run-id>-coord-<retry>`. It posts one Slack message per run and opens a Loom triage session on that thread. The alert does not kick, restart, or profile a job. Capture `iris process profile threads -t <task>` for the applicable tasks before an intervention.
 
 This alert watches whether a run is stepping. [`TrainingLossSpike`](training-loss-spike-alert.md) watches what those steps produce, over the same enrollment.
 
-The rule evaluates once a minute and waits five minutes before notifying. A root job is eligible while its latest `iris.task_state` row is at most 90 seconds old, reports at least one running task, and matches `%/hero-%-coord`. The namespace before the run name is unrestricted. `/rav/hero-20260819-coord` and `/another-user/hero-20260819-coord` therefore have the same enrollment behavior. Other Levanter runs remain visible in Grafana without sending hero-run notifications.
+The rule evaluates once a minute and waits five minutes before notification. An eligible root has a current `iris.task_state` row. The row is at most 90 seconds old and reports one or more running tasks. The root name matches `%/hero-%-coord` or `%/hero-%-coord-%`. The namespace before the run name is unrestricted.
 
-Hero alert enrollment is a launch naming contract: the coordinator root's last component must be `<run-id>-coord`, `<run-id>` must begin with `hero-`, and Levanter's trainer `id` must be the same `<run-id>`. The selector derives the exact structured telemetry key from that contract. Changing only the user namespace is safe; changing either identity independently opts the run out or prevents telemetry attribution.
+Hero alert enrollment is a launch naming contract. The last root component is `<run-id>-coord` or `<run-id>-coord-<retry>`. The `<run-id>` value begins with `hero-`. The Levanter trainer `id` is the same `<run-id>`. A retry suffix changes the Iris job identity only. It does not change the logical run identity.
 
 An eligible job alerts when either condition holds:
 
@@ -15,7 +15,9 @@ An eligible job alerts when either condition holds:
 
 The first case is labeled `training_stalled`; the second is `initializing_stale`. Missing and stale optimizer progress share one label so a delayed sample cannot replace one firing alert instance with another. Finished and progressing jobs emit zero-valued rows, which removes the firing series and resolves its original fingerprint. An idle fleet also emits an explicit zero.
 
-The bridge derives `hero-20260819` from the root job, then queries the structured `telemetry_v1.run_id` column with exact equality. With concurrent hero runs it emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; `step` and `progress_time_seconds` from older task attempts cannot keep the run healthy. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
+A run whose newest sample of any of these metrics is more than ten minutes old is labeled `telemetry_gone` and emits a zero. Levanter republishes phase every minute, so silence that long is the telemetry path or the process rather than a slow step, and [`TrainingTelemetryGone`](hero-run-health-alerts.md) names it. Deferring keeps one incident to one page. A run that has published nothing at all is still this rule's `initializing_stale` case, which allows the full startup budget.
+
+The bridge derives `hero-20260819` from the root job, then queries the structured `telemetry_v1.run_id` column with exact equality. With concurrent hero runs it emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; `step` and `progress_time_seconds` from older task attempts cannot keep the run healthy. Iris derives `execution_uid` from the controller-minted `attempt_uid`, which stays unique if a new controller uses the same numeric task attempt. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
 
 Initialization and missing-progress grace start at the later of the current contiguous Iris running interval and the selected telemetry execution. A coordinator restart or trainer retry therefore receives a new initialization window. A hard hang retains its training execution anchor for one hour. All states remain instances of `TrainingProgressStalled`, and notification grouping excludes phase and reason, so later reclassification cannot open a second Slack group.
 
@@ -43,11 +45,11 @@ ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 20;
 ```
 
-Use the root job's last path component without `-coord` as `<hero-run-id>`. An empty result indicates missing Levanter telemetry; the named root remains eligible and becomes `initializing_stale` after 45 minutes.
+For an unsuffixed root, remove `-coord` to get `<hero-run-id>`. For a suffixed root, also remove the retry suffix. An empty result identifies missing Levanter telemetry. The root becomes `initializing_stale` after 45 minutes.
 
-Levanter republishes phase every minute. A current phase row binds progress to one execution. Finelog and telemetry health alerts cover loss of the durable telemetry path. Launcher-specific process watchdogs provide additional coverage where configured.
+Levanter republishes phase every minute. A current phase row binds progress to one execution. [`TrainingTelemetryGone`](hero-run-health-alerts.md) covers loss of the telemetry path for an enrolled run, and the Finelog health alerts cover the durable path itself. Launcher-specific process watchdogs provide additional coverage where configured.
 
-Grafana routes `notification=hero-run` through `ops-critical`, grouped by alert name, cluster, and root job. The bridge announces firing once in Slack, opens one Loom session, suppresses webhook retries, refreshes thread retention on four-hour repeat notifications, and posts resolution under the same Slack root. When there are no eligible roots, the bridge returns an explicit zero-valued `fleet/idle/healthy` row; `noDataState: Alerting` is reserved for a malformed or unavailable response. The critical contact point also includes email when SMTP is configured.
+Grafana routes `notification=hero-run` through `ops-critical`. It groups notifications by alert name and logical run. Thus, a new retry root stays in the same alert group. The bridge keys the Slack thread on this group and retains it for six hours after a resolution. A replacement retry that finishes its pending period joins the existing thread. A four-hour repeat notification also keeps the thread active. An idle fleet returns an explicit zero-valued `fleet/idle/healthy` row. The `noDataState: Alerting` state identifies an invalid or unavailable response.
 
 ## NCCL RAS snapshots
 

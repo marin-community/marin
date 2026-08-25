@@ -18,7 +18,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
   `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
-- `deploy/` — Dockerfile, k8s manifests, GCP snippets
+- `deploy/` — Docker image definition; deployment helpers live under `src/finelog/deploy/`,
+  the shared operator CLI lives in `infra/deploy/`, and the Kubernetes Pulumi project
+  lives in `infra/finelog/`
 
 ## Boundaries
 
@@ -129,7 +131,9 @@ layout, and per-query `EXPLAIN ANALYZE` metrics.
 - `log_query_bench` — the operator query corpus for `log`: job substring
   scoping, task tails, first-error lookups, body search. `generate` builds a
   corpus; `measure` runs it over a directory that already holds segments.
-- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `grafana_dashboard_bench` — every Finelog query in one or more checked-in
+  Grafana dashboards, with fixed values supplied through repeatable
+  `--variable NAME=VALUE` arguments.
 - `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
 
 Point `--log-dir` at a **disposable copy**: starting Finelog activates
@@ -179,9 +183,9 @@ each namespace this process registers for itself that is not registered.
 carries the per-namespace error, first-failure time, and attempt count, and the
 dashboard's System page renders it.
 
-The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
-(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
-`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+The deploy paths gate on the body: the VM bootstrap loop and `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), plus the `infra/finelog`
+Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
 ## Changing a server-owned schema

@@ -152,10 +152,9 @@ IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
         band=class_name.removeprefix("iris-"),
         kind=kind,
         name=workload_priority_class_name(class_name.removeprefix("iris-"), kind),
-        value=value if class_name == IRIS_PRIORITY_CLASS_PRODUCTION else value + offset,
+        value=value if class_name in (IRIS_PRIORITY_CLASS_SYSTEM, IRIS_PRIORITY_CLASS_PRODUCTION) else value + offset,
     )
     for class_name, value, _ in IRIS_PRIORITY_CLASSES
-    if class_name != IRIS_PRIORITY_CLASS_SYSTEM
     for kind, offset in (
         (WorkloadPriorityKind.CPU, 0),
         (WorkloadPriorityKind.ACCELERATOR, 1),

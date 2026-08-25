@@ -144,6 +144,10 @@ export function workloadAllocations(frame: DataFrame): WorkloadAllocation[] {
   }));
 }
 
+export function jobIds(frame: DataFrame): string[] {
+  return rows(frame).map((row) => requiredString(row, 'job'));
+}
+
 export function clusterNodes(frame: DataFrame): ClusterNode[] {
   return rows(frame).filter((row) => optionalString(row, 'node')).map((row) => ({
     cluster: requiredString(row, 'cluster'),

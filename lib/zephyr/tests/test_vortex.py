@@ -6,8 +6,8 @@
 import pytest
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.expr import col
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_parquet, load_vortex

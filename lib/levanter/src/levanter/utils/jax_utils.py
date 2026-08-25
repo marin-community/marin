@@ -198,12 +198,13 @@ def multihost_allgather_sync(obj: X, timeout: float = 200.0) -> list[X]:
     return gathered
 
 
-def barrier_sync(timeout: float = 200):
+def barrier_sync_named(barrier_id: str, timeout: float = 200):
+    """Wait for every process at ``barrier_id``, raising once ``timeout`` seconds elapse.
+
+    Barriers are one-shot, so a caller that barriers repeatedly must vary the id. Prefer this over
+    a device collective such as ``jax.experimental.multihost_utils.sync_global_devices``, which
+    cannot be cancelled and so waits indefinitely when one process is late.
     """
-    Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
-    that all processes have reached a certain point in the code before continuing.
-    """
-    global _sync_counter
     if jax.process_count() == 1:
         return
 
@@ -217,12 +218,25 @@ def barrier_sync(timeout: float = 200):
     client: Optional[DistributedRuntimeClient] = jax_distributed.global_state.client
 
     if client is None:
-        _sync_counter += 1
-        multihost_utils.sync_global_devices(f"levanter_barrier_sync_{_sync_counter}")
+        raise RuntimeError("barrier_sync_named requires jax distributed client to be initialized")
+
+    client.wait_at_barrier(barrier_id, timeout_in_ms=int(timeout * 1000.0))
+
+
+def barrier_sync(timeout: float = 200):
+    """
+    Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
+    that all processes have reached a certain point in the code before continuing.
+
+    The barrier id comes from a process-local counter, so every process must reach this call the
+    same number of times. Use :func:`barrier_sync_named` where that cannot be guaranteed.
+    """
+    global _sync_counter
+    if jax.process_count() == 1:
         return
 
     _sync_counter += 1
-    client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+    barrier_sync_named(f"levanter_barrier_sync_{_sync_counter}", timeout=timeout)
 
 
 # from https://stackoverflow.com/questions/2166818/how-to-check-if-an-object-is-an-instance-of-a-namedtuple

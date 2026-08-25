@@ -29,13 +29,10 @@ class LmEvalRawRenderer(StrEnum):
     GSM8K = "gsm8k_qa"
 
 
-MMLU_DEFAULT_NUM_FEWSHOT = 5
-MMLU_DEFAULT_FEWSHOT_SPLIT = "dev"
 MMLU_CHOICE_LABELS = ("A", "B", "C", "D")
 MMLU_DESCRIPTION_TEMPLATE = "The following are multiple choice questions (with answers) about {subject}."
 MMLU_GENERIC_DESCRIPTION = "The following are multiple choice questions (with answers)."
 MMLU_GLOBAL_FEWSHOT_KEY = "__global__"
-GSM8K_COT_DEFAULT_NUM_FEWSHOT = 8
 # Fallback for environments that do not install Marin's optional lm-eval extra.
 GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
     (

@@ -3,7 +3,9 @@
 
 import asyncio
 import json
+import threading
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
 
 import equinox as eqx
@@ -13,24 +15,38 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+import tensorstore as ts
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter import tensorstore_serialization
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostStagingGate,
+    _HostByteBudget,
+    _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
+    build_kvstore_spec,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+
+_ASYNC_TEST_TIMEOUT = 5
+
+
+def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
+    spec = build_kvstore_spec(f"file://{tmp_path}/cache")
+
+    assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
@@ -41,6 +57,19 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source_host = np.asarray(source)
     np.testing.assert_array_equal(staged, source_host)
     assert not np.shares_memory(staged, source_host)
+
+
+def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):
+    callbacks = []
+    future = SimpleNamespace(add_done_callback=callbacks.append)
+
+    monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
+    _trim_host_memory_after_commits([future])
+    assert callbacks == []
+
+    monkeypatch.delenv("LD_PRELOAD")
+    _trim_host_memory_after_commits([future])
+    assert len(callbacks) == 1
 
 
 def test_tensorstore_checkpoint_simple():
@@ -279,7 +308,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostStagingGate(100)
+        gate = _HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))
@@ -291,6 +320,133 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
         assert gate.peak_bytes == 60
 
     asyncio.run(scenario())
+
+
+def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monkeypatch, tmp_path):
+    source = {
+        "first": np.arange(8, dtype=np.float32),
+        "second": np.arange(8, dtype=np.float32) + 100,
+    }
+    expected = {name: value.copy() for name, value in source.items()}
+    open_promises_and_futures = [ts.Promise.new() for _ in source]
+    commit_promise, commit_future = ts.Promise.new()
+    writes = []
+    write_started = threading.Event()
+
+    class FakeStore:
+        def write(self, data, *, can_reference_source_data_indefinitely):
+            writes.append(np.array(data, copy=True))
+            write_started.set()
+            return SimpleNamespace(commit=commit_future)
+
+    open_futures = iter(future for _, future in open_promises_and_futures)
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *_args, **_kwargs: next(open_futures))
+
+    manager = array_ser.GlobalAsyncCheckpointManager()
+    returned = threading.Event()
+    errors = []
+
+    def serialize():
+        try:
+            tree_serialize_leaves_tensorstore(str(tmp_path), {"w": source}, manager=manager)
+        except BaseException as error:
+            errors.append(error)
+        else:
+            returned.set()
+
+    serializer = threading.Thread(target=serialize)
+    serializer.start()
+    try:
+        assert returned.wait(timeout=_ASYNC_TEST_TIMEOUT), "serialization waited for TensorStore to open after staging"
+        for value in source.values():
+            value.fill(-1)
+    finally:
+        for open_promise, _ in open_promises_and_futures:
+            open_promise.set_result(FakeStore())
+        assert write_started.wait(timeout=_ASYNC_TEST_TIMEOUT)
+        commit_promise.set_result(None)
+        serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
+        manager.wait_until_finished()
+
+    assert not serializer.is_alive()
+    assert errors == []
+    writes_by_first_value = {int(value[0]): value for value in writes}
+    for value in expected.values():
+        np.testing.assert_array_equal(writes_by_first_value[int(value[0])], value)
+
+
+def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypatch, tmp_path):
+    source = {
+        "first": np.arange(8, dtype=np.float32),
+        "second": np.arange(8, dtype=np.float32) + 100,
+    }
+    open_promises_and_futures = [ts.Promise.new() for _ in source]
+    commit_promise, commit_future = ts.Promise.new()
+    all_opens_started = threading.Event()
+    open_count = 0
+    open_count_lock = threading.Lock()
+    writes = []
+
+    class ObservedFuture:
+        def __init__(self, future):
+            self.future = future
+            self.started = False
+
+        def mark_started(self):
+            nonlocal open_count
+            with open_count_lock:
+                if self.started:
+                    return
+                self.started = True
+                open_count += 1
+                if open_count == len(source):
+                    all_opens_started.set()
+
+        def add_done_callback(self, callback):
+            self.mark_started()
+            self.future.add_done_callback(callback)
+
+        def force(self):
+            self.mark_started()
+            self.future.force()
+
+    class FakeStore:
+        def write(self, data, *, can_reference_source_data_indefinitely):
+            assert can_reference_source_data_indefinitely
+            writes.append(np.array(data, copy=True))
+            return SimpleNamespace(commit=commit_future)
+
+    open_futures = iter(ObservedFuture(future) for _, future in open_promises_and_futures)
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *_args, **_kwargs: next(open_futures))
+
+    manager = array_ser.GlobalAsyncCheckpointManager()
+    errors = []
+
+    def serialize():
+        try:
+            tree_serialize_leaves_tensorstore(
+                str(tmp_path),
+                {"w": source},
+                manager=manager,
+                write_config=TensorStoreWriteConfig(max_staged_host_bytes=source["first"].nbytes),
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    serializer = threading.Thread(target=serialize)
+    serializer.start()
+    try:
+        assert all_opens_started.wait(timeout=_ASYNC_TEST_TIMEOUT), "a staging-budget wait delayed another open"
+    finally:
+        for open_promise, _ in open_promises_and_futures:
+            open_promise.set_result(FakeStore())
+        commit_promise.set_result(None)
+        serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
+        manager.wait_until_finished()
+
+    assert not serializer.is_alive()
+    assert errors == []
+    assert {int(value[0]) for value in writes} == {0, 100}
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
@@ -305,6 +461,33 @@ def test_a_save_larger_than_the_staging_budget_rolls_through_it():
                 tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=32 * 1024)
             )
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {name: hax.zeros(A) for name in state})
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
+    "arrays, budget",
+    [
+        # One shard larger than the whole budget: it must be admitted anyway, or the read deadlocks.
+        (1, 1),
+        # Eight 16 KiB arrays through a budget admitting about two: the read rolls through it.
+        (8, 32 * 1024),
+    ],
+)
+def test_a_restore_completes_whatever_the_read_budget_admits(arrays, budget):
+    """Concurrent reads stay bounded by the budget and still return every array intact."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(arrays)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, state)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {name: hax.zeros(A) for name in state},
+                read_config=TensorStoreReadConfig(max_in_flight_bytes=budget),
+            )
 
         for name, expected in state.items():
             assert hax.all(restored[name] == expected)
@@ -333,6 +516,14 @@ def test_every_replica_writes_a_disjoint_slice_covering_the_array():
 
 def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
     run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+def test_replica_aware_restore_reads_each_shard_once():
+    run_on_eight_devices(eight_device_checkpoints.replica_aware_restore_reads_each_shard_once)
+
+
+def test_replica_aware_restore_broadcasts_across_processes():
+    eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():

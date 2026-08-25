@@ -23,8 +23,8 @@ from pydantic import BaseModel, Field
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import load_file
 from zephyr.runners import InlineRunner

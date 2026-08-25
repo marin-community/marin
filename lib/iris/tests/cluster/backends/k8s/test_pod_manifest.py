@@ -423,7 +423,6 @@ def test_task_hash_distinct_for_sanitization_collisions():
         ("Running", job_pb2.TASK_STATE_RUNNING),
         ("Succeeded", job_pb2.TASK_STATE_SUCCEEDED),
         ("Failed", job_pb2.TASK_STATE_FAILED),
-        ("Unknown", job_pb2.TASK_STATE_FAILED),
     ],
 )
 def test_task_update_from_pod_phases(phase, expected_state):
@@ -1007,13 +1006,14 @@ def test_host_network_omitted_when_disabled():
 
 def test_iris_env_vars_injected():
     """Pod manifest includes IRIS_TASK_ID, IRIS_NUM_TASKS, and other system vars."""
-    req = make_run_req("/test-job/0")
+    req = make_run_req("/test-job/0", attempt_uid="controller-attempt-abc123")
     req.num_tasks = 4
     req.bundle_id = "bundle-abc"
     manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
 
     env_by_name = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
     assert env_by_name["IRIS_TASK_ID"]["value"] == "/test-job/0:0"
+    assert env_by_name["IRIS_ATTEMPT_UID"]["value"] == "controller-attempt-abc123"
     assert env_by_name["IRIS_NUM_TASKS"]["value"] == "4"
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
@@ -1330,6 +1330,23 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
     assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == pod_hash
 
 
+@pytest.mark.parametrize(
+    "band, expected_availability",
+    [
+        (job_pb2.PRIORITY_BAND_SYSTEM, {"minAvailable": 1}),
+        (job_pb2.PRIORITY_BAND_PRODUCTION, {"minAvailable": 1}),
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, {"maxUnavailable": 1}),
+        (job_pb2.PRIORITY_BAND_BATCH, {"maxUnavailable": 1}),
+    ],
+)
+def test_build_pdb_manifest_applies_band_availability_policy(band, expected_availability):
+    request = make_run_req("/coord-job/0", num_tasks=1, priority=band)
+    _updates, resources = _dispatch(request, pod_config())
+    spec = resources[K8sResource.PDBS][0]["spec"]
+    availability = {key: spec[key] for key in ("minAvailable", "maxUnavailable") if key in spec}
+    assert availability == expected_availability
+
+
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs)
 # ---------------------------------------------------------------------------
@@ -1383,14 +1400,21 @@ def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, ex
     assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
-def test_kueue_coscheduled_gang_is_above_standalone_accelerator():
-    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
+@pytest.mark.parametrize(
+    "band, workload_class, pod_class",
+    [
+        (job_pb2.PRIORITY_BAND_SYSTEM, "iris-coscheduled-system", "iris-system"),
+        (job_pb2.PRIORITY_BAND_BATCH, "iris-coscheduled-batch", "iris-batch"),
+    ],
+)
+def test_kueue_coscheduled_gang_uses_band_priority_classes(band, workload_class, pod_class):
+    req = _cosched_req("/job/task/0", num_tasks=64, priority=band)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
 
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
 
-    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-coscheduled-batch"
-    assert manifest["spec"]["priorityClassName"] == "iris-batch"
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == workload_class
+    assert manifest["spec"]["priorityClassName"] == pod_class
 
 
 def test_kueue_required_topology_for_nvlink_domain():

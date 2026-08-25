@@ -13,6 +13,7 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from typing import Literal
 
 import fsspec
 import msgspec
@@ -435,15 +436,41 @@ SUPPORTED_EXTENSIONS = tuple(
 )
 
 
+def _resolve_read_format(spec: InputFileSpec) -> Literal["parquet", "jsonl", "vortex"]:
+    """Return the reader format for *spec*.
+
+    An explicit ``format`` wins. ``Dataset.load_parquet`` and its siblings record
+    the caller's choice on the spec, so a source whose name lacks the matching
+    extension — Spark-style ``part-00000``, a ``.bin`` shard — still reads as the
+    requested format instead of being rejected or handed to the wrong reader.
+    ``auto`` infers the format from the path extension.
+
+    Raises:
+        ValueError: If ``format`` is ``auto`` and the extension is unsupported.
+    """
+    if spec.format != "auto":
+        return spec.format
+    if spec.path.endswith(".parquet"):
+        return "parquet"
+    if spec.path.endswith(".vortex"):
+        return "vortex"
+    if spec.path.endswith(SUPPORTED_EXTENSIONS):
+        return "jsonl"
+    raise ValueError(f"Unsupported extension: {spec.path}.")
+
+
 def load_file(
     source: str | InputFileSpec,
     include_file_paths: bool = False,
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
 ) -> Iterator[dict]:
-    """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
+    """Load records from file as JSONL, Parquet, or Vortex.
+
+    The spec's ``format`` selects the reader; ``auto`` (the default for a bare
+    path) infers it from the file extension.
 
     Args:
-        source: Path to file or InputFileSpec containing the path, columns,
+        source: Path to file or InputFileSpec containing the path, format, columns,
             row range, and filter expression.
         include_file_paths: If True, inject the source file path into each record
             under file_path_column.
@@ -453,7 +480,7 @@ def load_file(
         Parsed records as dictionaries
 
     Raises:
-        ValueError: If file extension is not supported
+        ValueError: If the format is ``auto`` and the file extension is not supported.
         RuntimeError: If file_path_column already exists in a record.
 
     Example:
@@ -468,15 +495,14 @@ def load_file(
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
 
-    if not spec.path.endswith(SUPPORTED_EXTENSIONS):
-        raise ValueError(f"Unsupported extension: {spec.path}.")
+    read_format = _resolve_read_format(spec)
 
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
 
-    if spec.path.endswith(".parquet"):
+    if read_format == "parquet":
         records = load_parquet(spec)
-    elif spec.path.endswith(".vortex"):
+    elif read_format == "vortex":
         records = load_vortex(spec)
     else:
         records = load_jsonl(spec)
@@ -501,10 +527,11 @@ def load_file_batch(
 
     Only Parquet files are supported. Raises ``RuntimeError`` for any other
     file type so callers get a clear error rather than silent dict conversion.
+    A spec with ``format="parquet"`` is honored whatever the extension.
 
     Args:
-        source: Path to Parquet file or InputFileSpec containing the path, columns,
-            row range, and filter expression.
+        source: Path to Parquet file or InputFileSpec containing the path, format,
+            columns, row range, and filter expression.
         include_file_paths: If True, append a string column named file_path_column
             containing the source file path to each batch.
         file_path_column: Name of the column to add when include_file_paths is True.
@@ -517,7 +544,10 @@ def load_file_batch(
             already exists in the batch schema.
     """
     spec = _as_spec(source)
-    if not spec.path.endswith(".parquet"):
+    # Inlined rather than routed through _resolve_read_format so an unsupported
+    # extension reports "not Parquet" instead of that helper's ValueError.
+    is_parquet = spec.format == "parquet" or (spec.format == "auto" and spec.path.endswith(".parquet"))
+    if not is_parquet:
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)

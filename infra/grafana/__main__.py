@@ -5,8 +5,8 @@
 
 Deploys this directory (Grafana + the finelog bridge) as an IAP-gated Cloud Run service
 through the reusable `iac.gcp.cloud_run.CloudRunService` component. Grafana's fixed shape
-— project, region, one warm instance — lives here. The shared component owns the common
-IAP access policy; additional members are stack config (`marin-grafana:viewers`).
+— project, region, one warm instance — lives here. GCP IAM grants live in the `marin`
+infrastructure stack.
 
 Runs on the shared repo venv (plain `python` runtime), which is where `iac` and the Pulumi
 GCP/Docker providers live; `uv sync --all-packages` first. See README.md.
@@ -57,7 +57,7 @@ SMTP_SECRET = "marin-grafana-smtp-credentials"
 # bridge mints short-lived installation tokens from it (github_app.py), so nothing
 # long-lived expires under the GitHub panels. Hand-placed like the other runtime
 # secrets — the Cloud Run deploy account is fail-closed on secret creation — and
-# declared for IAM binding in infra/pulumi/src/iac/gcp/iam_data.yaml.
+# declared for IAM binding in infra/pulumi/src/iac/gcp/grafana.py.
 GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
 
@@ -76,10 +76,6 @@ def main() -> None:
     # to the container listener and links point to localhost:8080.
     custom_domain = config.get("custom_domain")
     loom_alerts_enabled = config.get_bool("loom_alerts") or False
-    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
-    #   pulumi config set --path 'viewers[0]' group:someone@example.com
-    viewers = config.get_object("viewers") or []
-
     provider = gcp.Provider("gcp", project=PROJECT)
 
     # Grafana's state lives in the shared marin-metadata Postgres (infra/cloudsql), reached
@@ -90,11 +86,10 @@ def main() -> None:
     connection_name = cloudsql.get_output("connection_name")
     database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
 
-    # Secret values stay hand-placed in Secret Manager; the component only grants the
-    # runtime service account access. CW_READ_TOKEN is the CoreWeave read-role token
-    # behind the k8s source; GF_DATABASE_PASSWORD is the grafana Postgres user's
-    # password. GF_SMTP_PASSWORD, the GitHub App key, and the Slack bot token are
-    # appended below only when their feature is on.
+    # Secret values stay hand-placed in Secret Manager; IAM access lives in iac/gcp/grafana.py.
+    # CW_READ_TOKEN is the CoreWeave read-role token behind the k8s source;
+    # GF_DATABASE_PASSWORD is the Grafana Postgres user's password. GF_SMTP_PASSWORD,
+    # the GitHub App key, and the Slack bot token are appended when their feature is on.
     secrets = [
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
@@ -134,7 +129,7 @@ def main() -> None:
     # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
     # unauthenticated (build panel shows no data), so the merge deploy never blocks.
     #   gcloud secrets create marin-grafana-github-app-private-key \
-    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iam_data.yaml)
+    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iac/gcp/grafana.py)
     #   pulumi config set marin-grafana:github_app_client_id <client-id>
     github_app_client_id = config.get("github_app_client_id")
     if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):
@@ -156,12 +151,9 @@ def main() -> None:
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
             cpu="1",
-            # The bridge lists finelog and controller VM internal IPs through the Compute API.
-            service_account_roles=("roles/compute.viewer",),
             env=env,
             secrets=tuple(secrets),
             cloudsql_instances=(connection_name,),
-            iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
     )

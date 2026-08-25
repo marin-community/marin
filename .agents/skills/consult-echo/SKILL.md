@@ -1,30 +1,23 @@
 ---
 name: consult-echo
-description: Search and cite Marin's Echo activity and wiki, then capture incident records or reusable shared knowledge. Use when looking for prior discussions, decisions, workflows, incident patterns, exact errors, tags, or identifiers; when prior context could shorten debugging; or when an investigation reaches resolution and its record or lessons may belong in Echo, docs, or OPS.md.
+description: Search or cite Echo when Marin's prior-work policy applies, another selected workflow requires it, or the user explicitly asks; do not substitute it for local code search.
 ---
 
-# Skill: Consult Echo
+# Consult Echo
 
 Search Echo before rediscovering prior work. Cite canonical Echo, GitHub, or
 Discord URLs for the evidence you use.
 
 ## Search
 
-Use federated search when prior decisions, incidents, workflows, current GitHub
-work, or indexed repository documentation could inform the task. Natural-language
-questions work:
+Use a natural-language federated search:
 
 ```bash
 uv run infra/echo/cli.py search "how do I diagnose a stalled TPU collective" --limit 10
 ```
 
 Search covers `wiki`, `file`, `pr`, and `issue` by default. Repeat `--domain` to
-select a subset:
-
-```bash
-uv run infra/echo/cli.py search "stalled TPU collective" \
-  --domain wiki --domain file --domain issue
-```
+select a subset.
 
 File search infers the configured Marin-community repository from the current
 Git checkout, including ordinary contributor forks. Pass `--repository
@@ -36,15 +29,13 @@ Discord is excluded by default because messages may be noisy or untrusted. Add
 `--domain discord` only when discussion history is relevant, and open the
 canonical URL when surrounding thread context matters.
 
-Search output is deliberately compact. Fetch any result's complete indexed or
-raw-source detail with the printed ID:
+Fetch a result's full detail with its printed ID:
 
 ```bash
 uv run infra/echo/cli.py get <domain:id>
 ```
 
-When a result materially helps, is irrelevant, or the result set fails the task,
-submit a compact judgment using the exact query and printed grading keys:
+Grade evaluated results with the exact query and printed keys:
 
 ```bash
 uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
@@ -52,13 +43,11 @@ uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
   <<< "The file result answered the task; wiki results were off-topic."
 ```
 
-Use 0 for an irrelevant result and 10 for one that directly changes or answers the
-task. Grade only results you evaluated. Always add a short stdin explanation of the
-overall result quality without restating each score. Explanation-only feedback is valid
-for an empty result set.
+Use 0 for irrelevant and 10 for directly useful. Grade only evaluated results
+and always explain overall quality on stdin, including for an empty result set.
 
-Use `grep` for exact strings in GitHub or Discord activity, with `--source` or
-`--kind` when needed:
+Use `grep` for exact strings in GitHub or Discord activity, narrowing with
+`--source` or `--kind` when needed:
 
 ```bash
 uv run infra/echo/cli.py grep "FAILED_PRECONDITION" --source github
@@ -71,50 +60,38 @@ than federated relevance, define the desired synthesis. Authentication reuses
 the shared Marin login via `iris login`; see
 [Echo setup and access](../../../infra/echo/README.md).
 
-Run this search sequence before adding or editing a wiki note. Use it at the
-start of an investigation when prior context could materially shorten
-debugging.
+Run this search sequence before adding or editing a wiki note.
 
 ## Choose the durable home
 
-At resolution, choose the narrowest durable home:
+Every incident gets a standalone Echo record through `write-ops-log`, linked
+from its associated PR or issue. Also use the narrowest reusable home when the
+incident or other work changes durable guidance:
 
 - Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
   or guardrail in one subsystem.
 - Update `docs/` for reusable product or user guidance that belongs with the
   repository.
-- Add one Echo entry for the evidence, decisions, and outcome of a specific
-  incident. Tag it `incident`, `debugging`, the subsystem, severity, and
-  resolution; add `ops` for infrastructure incidents. Link its canonical Echo
-  URL from the associated PR or issue.
 - Edit an existing Echo wiki note for a cross-cutting pattern or synthesis that
   has no single repository home.
 - Add a wiki note only when the searches find no near-duplicate.
 
-Create one incident entry per incident, and edit that entry only when the same
-incident continues. Keep raw logs and commit diffs in their source systems; the
-incident entry records the investigation and links the evidence. A fixed bug can
-also justify a separate cross-incident synthesis when several incidents support
-a reusable diagnostic pattern. Edit a near-duplicate synthesis instead of
-adding another.
+Create one incident entry per incident and edit it while the same incident
+continues. Keep raw logs and diffs in their source systems. Edit a near-duplicate
+synthesis instead of adding another.
 
 ## Write or revise a wiki note
 
-Write for future action, not for exhaustiveness. Echo results are loaded into
-limited model context, so every unnecessary detail makes later work slower and
-more expensive. Prefer the shortest entry that changes what a future reader
-will do:
+Write the shortest entry that changes a future action:
 
 - Lead with an actionable value: a decision, command, diagnostic discriminator,
   guardrail, or recovery step.
 - Include only the facts needed to support or apply that action. Link to the
   canonical PR, issue, dashboard, log bundle, or report for chronology and raw
   evidence instead of copying it into Echo.
-- Put the action in the title, `use_when`, or opening paragraph so a search
-  result is useful before the full entry is fetched.
-- Keep investigation history outside the wiki when it provides no reusable
-  decision or procedure. An issue, logbook, or source artifact is a better home
-  for a record whose only value is completeness.
+- Put the action in the title, `use_when`, or opening paragraph.
+- Keep chronology without a reusable decision in an issue, logbook, or source
+  artifact.
 
 Write an Open Knowledge Format document:
 

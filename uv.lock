@@ -111,6 +111,7 @@ fork-strategy = "fewest"
 members = [
     "marin-buckets",
     "marin-core",
+    "marin-deploy",
     "marin-ducky",
     "marin-dupekit",
     "marin-finelog",
@@ -3613,6 +3614,35 @@ test = [
 ]
 
 [[package]]
+name = "marin-deploy"
+version = "0.0.0"
+source = { editable = "infra/deploy" }
+dependencies = [
+    { name = "click" },
+    { name = "marin-finelog" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "marin-finelog", editable = "lib/finelog" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[[package]]
 name = "marin-ducky"
 version = "0.1.0"
 source = { editable = "lib/ducky" }
@@ -4523,6 +4553,7 @@ source = { editable = "." }
 dependencies = [
     { name = "joblib" },
     { name = "marin-core" },
+    { name = "marin-deploy" },
     { name = "marin-ducky" },
     { name = "marin-dupekit" },
     { name = "marin-finelog" },
@@ -4540,6 +4571,7 @@ dependencies = [
 requires-dist = [
     { name = "joblib" },
     { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-deploy", editable = "infra/deploy" },
     { name = "marin-ducky", editable = "lib/ducky" },
     { name = "marin-dupekit", editable = "lib/dupekit" },
     { name = "marin-finelog", editable = "lib/finelog" },

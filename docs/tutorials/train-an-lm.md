@@ -187,6 +187,27 @@ W&B receives metrics throughout training. The run name defaults to the `run_id` 
 (when omitted, `train_lm` derives one from the artifact name). Checkpoints are written to
 `{prefix}/{name}/{version}/checkpoints/`.
 
+Iris shows a private `training-control` endpoint for Marin `train_lm` jobs. It contains the run ID,
+resolved Levanter configuration, and redacted process environment. Select **Save checkpoint** to write a temporary
+checkpoint after the current training step. Manual saves use `temporary_base_path` when it is configured. Otherwise,
+they use the main checkpoint path. Temporary retention applies in both cases.
+
+Use an Iris capability URL to request the same checkpoint from a CLI. First, set the root job ID:
+
+```bash
+JOB_ID=/user/training-job
+ENDPOINT=$(uv run iris --config lib/iris/config/marin.yaml endpoints list "$JOB_ID" \
+  | awk '$1 ~ /training-control$/ {print $1}')
+CAPABILITY_URL=$(uv run iris --config lib/iris/config/marin.yaml endpoints mint "$ENDPOINT" \
+  | awk '$1 == "url" {print $2}')
+
+curl -X POST \
+  -H 'X-Levanter-Training-Control: request-checkpoint' \
+  "${CAPABILITY_URL%/}/checkpoint"
+```
+
+The capability URL is a credential for one endpoint. Do not share it. Iris sets an expiration time when it creates the URL.
+
 ## Memory pressure
 
 If training OOMs, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a
