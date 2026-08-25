@@ -171,17 +171,26 @@ def _activation_spec(x: Float[Array, "B S D"]) -> P:
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Look up tokens from a replicated table without a cross-rack collective."""
+    """Look up tokens from a replicated table without a cross-rack collective.
+
+    This establishes the residual stream's layout, and it is the only place that does. Every later
+    stage snaps back to whatever the caller handed it (``_activation_spec``), attention reshards
+    ``q`` relative to it, and the layer scan carries it unchanged. Sharding the sequence over
+    ``context`` here is what makes context parallelism save activation memory instead of only
+    splitting attention: with the sequence replicated, every block holds a whole ``[B, S, D]`` per
+    device no matter how wide the context axis is.
+    """
 
     def _local(table: jax.Array, ids: jax.Array) -> jax.Array:
         return table[ids]
 
-    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
+    seq_axis = _seq_axis(get_abstract_mesh())
+    token_ids = reshard(token_ids, P(_BATCH_AXES, seq_axis))
     return shard_map(
         _local,
         mesh=get_abstract_mesh(),
-        in_specs=(P(None, None), P(_BATCH_AXES, None)),
-        out_specs=P(_BATCH_AXES, None, None),
+        in_specs=(P(None, None), P(_BATCH_AXES, seq_axis)),
+        out_specs=P(_BATCH_AXES, seq_axis, None),
     )(token_embed, token_ids)
 
 
