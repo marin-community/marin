@@ -422,6 +422,28 @@ def test_model_candidate_pool_excludes_sealed_referee_coordinates(tmp_path: Path
     assert pool_keys.isdisjoint(excluded)
 
 
+def test_model_rejects_frozen_design_artifact_drift(tmp_path: Path) -> None:
+    summary_path = tmp_path / "continuation_summary.csv"
+    weights_path = tmp_path / "continuation_weights.csv"
+    manifest_path = tmp_path / "manifest.json"
+    candidate_path = tmp_path / "candidate_weights.csv"
+    paths = (summary_path, weights_path, manifest_path, candidate_path)
+    for index, path in enumerate(paths):
+        path.write_text(f"frozen-{index}\n")
+    coverage = {
+        "continuation_summary_sha256": fit.file_sha256(summary_path),
+        "continuation_weights_sha256": fit.file_sha256(weights_path),
+        "design_manifest_sha256": fit.file_sha256(manifest_path),
+        "candidate_weights_sha256": fit.file_sha256(candidate_path),
+    }
+
+    fit.validate_frozen_inputs(coverage, summary_path, weights_path, manifest_path, candidate_path)
+
+    weights_path.write_text("changed\n")
+    with pytest.raises(ValueError, match="continuation_weights_sha256"):
+        fit.validate_frozen_inputs(coverage, summary_path, weights_path, manifest_path, candidate_path)
+
+
 def test_opened_referees_are_scored_without_changing_the_frozen_optimum(tmp_path: Path, monkeypatch) -> None:
     candidate_id = "cap4_shared_bounded_ensemble_kl0"
     summary, weights, _ = _boundary_design(candidate_id, monkeypatch)

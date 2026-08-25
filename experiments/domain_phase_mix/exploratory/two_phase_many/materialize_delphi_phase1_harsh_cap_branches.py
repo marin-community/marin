@@ -23,7 +23,7 @@ from experiments.domain_phase_mix import launch_delphi_3e18_phase0_prefix_replay
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_harsh_cap_branches as launch
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase1_harsh_cap_branch_results_20260825"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase1_harsh_cap4_branch_results_20260825"
 TARGET_PREFIX = "eval/uncheatable_eval/"
 TARGET = "eval/uncheatable_eval/bpb"
 TERMINAL_STEP = replay.EXPECTED_FULL_TRAIN_STEPS - 1
@@ -230,9 +230,13 @@ def main() -> None:
     )
     (args.output_dir / "missing_rows.json").write_text(json.dumps(missing, indent=2) + "\n")
     coverage = {
-        "contract_version": "delphi_phase1_harsh_cap_branch_results_20260825_v1",
+        "contract_version": "delphi_phase1_harsh_cap_branch_results_20260825_v2",
         "experiment_root": args.experiment_root,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "candidate_weights_sha256": manifest["candidate_weights_sha256"],
+        "continuation_summary_sha256": manifest["continuation_summary_sha256"],
+        "continuation_weights_sha256": manifest["continuation_weights_sha256"],
+        "design_manifest_sha256": manifest["design_manifest_sha256"],
         "expected_rows": len(manifest_rows),
         "observed_rows": len(manifest_rows) - len(missing),
         "visible_result_rows": len(results),

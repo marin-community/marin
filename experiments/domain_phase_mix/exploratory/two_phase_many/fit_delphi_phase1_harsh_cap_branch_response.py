@@ -33,12 +33,14 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
-DEFAULT_RESULTS = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branch_results_20260825" / "branch_results.csv"
-DEFAULT_COVERAGE = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branch_results_20260825" / "coverage.json"
-DEFAULT_DESIGN_SUMMARY = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branches_20260825" / "continuation_summary.csv"
-DEFAULT_DESIGN_WEIGHTS = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branches_20260825" / "continuation_weights.csv"
+DEFAULT_RESULTS = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap4_branch_results_20260825" / "branch_results.csv"
+DEFAULT_COVERAGE = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap4_branch_results_20260825" / "coverage.json"
+DEFAULT_DESIGN_DIR = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap4_branches_20260825"
+DEFAULT_DESIGN_SUMMARY = DEFAULT_DESIGN_DIR / "continuation_summary.csv"
+DEFAULT_DESIGN_WEIGHTS = DEFAULT_DESIGN_DIR / "continuation_weights.csv"
+DEFAULT_DESIGN_MANIFEST = DEFAULT_DESIGN_DIR / "manifest.json"
 DEFAULT_CANDIDATE_WEIGHTS = design.DEFAULT_CANDIDATE_WEIGHTS
-DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap_branch_fit_20260825"
+DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "delphi_phase1_harsh_cap4_branch_fit_20260825"
 TARGET = "bpb"
 FEATURE_KINDS = ("direct", "sqrt")
 RIDGE_ALPHAS = (1e-6, 1e-4, 1e-2, 1.0, 100.0)
@@ -64,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE)
     parser.add_argument("--design-summary", type=Path, default=DEFAULT_DESIGN_SUMMARY)
     parser.add_argument("--design-weights", type=Path, default=DEFAULT_DESIGN_WEIGHTS)
+    parser.add_argument("--design-manifest", type=Path, default=DEFAULT_DESIGN_MANIFEST)
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
     parser.add_argument("--candidate-id")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -98,6 +101,24 @@ def validate_sealed_input(results: pd.DataFrame, coverage_path: Path) -> dict[st
     if results.role.eq("sealed_geometry_referee").any():
         raise ValueError("Referee outcomes are present in the model input")
     return cast(dict[str, object], coverage)
+
+
+def validate_frozen_inputs(
+    coverage: dict[str, object],
+    design_summary_path: Path,
+    design_weights_path: Path,
+    design_manifest_path: Path,
+    candidate_weights_path: Path,
+) -> None:
+    observed = {
+        "continuation_summary_sha256": file_sha256(design_summary_path),
+        "continuation_weights_sha256": file_sha256(design_weights_path),
+        "design_manifest_sha256": file_sha256(design_manifest_path),
+        "candidate_weights_sha256": file_sha256(candidate_weights_path),
+    }
+    for key, value in observed.items():
+        if coverage.get(key) != value:
+            raise ValueError(f"Frozen branch input changed: {key}={value}")
 
 
 def hellinger(weights: np.ndarray, center: np.ndarray) -> np.ndarray:
@@ -492,6 +513,13 @@ def main() -> None:
     args = parse_args()
     results = pd.read_csv(args.results)
     coverage = validate_sealed_input(results, args.coverage)
+    validate_frozen_inputs(
+        coverage,
+        args.design_summary,
+        args.design_weights,
+        args.design_manifest,
+        args.candidate_weights,
+    )
     candidate_ids = tuple(results.prefix_candidate_id.drop_duplicates())
     if args.candidate_id is not None:
         candidate_ids = (args.candidate_id,)
@@ -508,6 +536,7 @@ def main() -> None:
             "coverage_sha256": file_sha256(args.coverage),
             "design_summary_sha256": file_sha256(args.design_summary),
             "design_weights_sha256": file_sha256(args.design_weights),
+            "design_manifest_sha256": file_sha256(args.design_manifest),
             "candidate_weights_sha256": file_sha256(args.candidate_weights),
         },
         "candidates": {},
