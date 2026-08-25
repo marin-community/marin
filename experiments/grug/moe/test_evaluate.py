@@ -33,6 +33,7 @@ from experiments.grug.moe.evaluate import (
     load_grug_checkpoint_params,
     pair_mrcr_condition_losses,
     persist_grug_checkpoint_eval,
+    shard_param_exemplar_over_context,
     summarize_per_example_losses,
     validate_grug_checkpoint_eval_config,
 )
@@ -302,6 +303,22 @@ def test_evaluate_grug_checkpoint_restores_with_shape_only_param_exemplar(monkey
 
     with pytest.raises(_ShapeExemplarObserved):
         evaluate_grug_checkpoint(_config(tmp_path))
+
+
+def test_context_sharded_param_exemplar_combines_data_and_context_mesh_axes():
+    devices = np.asarray(jax.devices(), dtype=object).reshape((1, 1))
+    mesh = Mesh(devices, ("data", "context"), axis_types=(AxisType.Explicit, AxisType.Explicit))
+    params = {
+        "left": jax.ShapeDtypeStruct((8, 4), jnp.float32, sharding=NamedSharding(mesh, P("data", None))),
+        "right": jax.ShapeDtypeStruct((4, 8), jnp.float32, sharding=NamedSharding(mesh, P(None, "data"))),
+        "replicated": jax.ShapeDtypeStruct((4,), jnp.float32, sharding=NamedSharding(mesh, P(None))),
+    }
+
+    sharded = shard_param_exemplar_over_context(params)
+
+    assert sharded["left"].sharding.spec == P(("data", "context"), None)
+    assert sharded["right"].sharding.spec == P(None, ("data", "context"))
+    assert sharded["replicated"].sharding.spec == P(None)
 
 
 def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(monkeypatch, tmp_path):

@@ -58,6 +58,7 @@ class GrugCheckpointEvalRuntimeConfig:
     context_axis_size: int = 4
     expert_axis_size: int = 1
     model_axis_size: int = 1
+    parameter_sharding_axes: tuple[str, ...] = ("data",)
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,10 @@ def validate_grug_checkpoint_eval_config(config: GrugCheckpointEvalConfig) -> No
         config.runtime.eval_batch_size
     ):
         raise ValueError("eval_batch_size must equal replica_axis_size * data_axis_size * expert_axis_size")
+    if config.runtime.parameter_sharding_axes not in (("data",), ("data", "context")):
+        raise ValueError("parameter_sharding_axes must be ('data',) or ('data', 'context')")
+    if config.runtime.parameter_sharding_axes == ("data", "context") and config.runtime.context_axis_size <= 1:
+        raise ValueError("context-sharded parameters require context_axis_size greater than one")
     expected = normalized_model_config(_canonical_67b_model())
     actual = normalized_model_config(config.model)
     mismatched = sorted(field for field in expected if actual[field] != expected[field])
@@ -648,6 +653,37 @@ def load_grug_checkpoint_params(
     return int(restored["step"]), cast(ParamsT, restored["params"])
 
 
+def shard_param_exemplar_over_context(params: ParamsT) -> ParamsT:
+    """Extend every parameter ``data`` shard over the current ``context`` mesh axis."""
+
+    def shard_leaf(leaf: Any) -> Any:
+        if not isinstance(leaf, jax.ShapeDtypeStruct):
+            return leaf
+        if not isinstance(leaf.sharding, NamedSharding):
+            raise ValueError("context-sharded parameter exemplars require NamedSharding")
+
+        def extend_axis(axis: Any) -> Any:
+            if axis == "data":
+                return ("data", "context")
+            if isinstance(axis, tuple) and "data" in axis and "context" not in axis:
+                index = axis.index("data") + 1
+                return (*axis[:index], "context", *axis[index:])
+            return axis
+
+        spec = P(*(extend_axis(axis) for axis in leaf.sharding.spec))
+        sharding = NamedSharding(leaf.sharding.mesh, spec)
+        return jax.ShapeDtypeStruct(
+            leaf.shape,
+            leaf.dtype,
+            sharding=sharding,
+            weak_type=leaf.weak_type,
+            manual_axis_type=leaf.manual_axis_type,
+            is_ref=leaf.is_ref,
+        )
+
+    return cast(ParamsT, jax.tree.map(shard_leaf, params))
+
+
 def evaluate_grug_checkpoint(config: GrugCheckpointEvalConfig) -> dict[str, float]:
     """Evaluate one Grug checkpoint without constructing training state."""
     validate_grug_checkpoint_eval_config(config)
@@ -670,6 +706,8 @@ def evaluate_grug_checkpoint(config: GrugCheckpointEvalConfig) -> dict[str, floa
             lambda key: policy.cast_to_param(Transformer.init(config.model, key=key)),
             jax.random.PRNGKey(config.runtime.seed),
         )
+        if config.runtime.parameter_sharding_axes == ("data", "context"):
+            model_shape = shard_param_exemplar_over_context(model_shape)
         checkpoint_step, params = load_grug_checkpoint_params(
             config.checkpoint_path, initialized_params=model_shape, mesh=mesh
         )

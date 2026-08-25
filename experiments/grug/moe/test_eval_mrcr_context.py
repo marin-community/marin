@@ -130,6 +130,7 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     steps = build_default_steps("aggregate_262k", tpu_variant="v4-128-cp4")
     probe_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-128-cp4")
     fallback_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp2")
+    fsdp_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-32-cp4-fsdp")
 
     assert len(aggregate_262k_evaluation_cells()) == 3
     assert len(steps) == 3
@@ -153,6 +154,12 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     assert fallback_steps[0].config.evaluation.runtime.value.data_axis_size == 16
     assert fallback_steps[0].config.evaluation.runtime.value.context_axis_size == 2
     assert fallback_steps[0].name.endswith("-v464cp2")
+    assert fsdp_steps[0].config.resources.value.device.variant == "v4-32"
+    assert fsdp_steps[0].config.evaluation.runtime.value.eval_batch_size == 4
+    assert fsdp_steps[0].config.evaluation.runtime.value.data_axis_size == 4
+    assert fsdp_steps[0].config.evaluation.runtime.value.context_axis_size == 4
+    assert fsdp_steps[0].config.evaluation.runtime.value.parameter_sharding_axes == ("data", "context")
+    assert fsdp_steps[0].name.endswith("-v432cp4fsdp")
 
     with pytest.raises(ValueError, match="aggregate_262k requires a context-parallel TPU shape"):
         build_default_steps("aggregate_262k")

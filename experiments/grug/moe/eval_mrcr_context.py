@@ -53,7 +53,7 @@ PRE_EXTENSION_STEP = 141_000
 TRAINING_OFFSETS = (250, 500, 750, 1_000)
 SENSITIVITY_CONTEXT_CAPS = (8_192, 32_768)
 AGGREGATE_CONTEXT_CAP = 262_144
-CONTEXT_PARALLEL_TPU_SHAPES = ("v4-64-cp2", "v4-128-cp4")
+CONTEXT_PARALLEL_TPU_SHAPES = ("v4-32-cp4-fsdp", "v4-64-cp2", "v4-128-cp4")
 
 
 @dataclass(frozen=True)
@@ -230,6 +230,7 @@ class _MrcrEvaluationShape:
     data_axis_size: int
     context_axis_size: int
     preemptible: bool
+    parameter_sharding_axes: tuple[str, ...] = ("data",)
 
     @property
     def resources(self) -> ResourceConfig:
@@ -272,6 +273,16 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
             data_axis_size=16,
             context_axis_size=2,
             preemptible=True,
+        )
+    if tpu_variant == "v4-32-cp4-fsdp":
+        return _MrcrEvaluationShape(
+            "v4-32",
+            output_suffix="v432cp4fsdp",
+            eval_batch_size=4,
+            data_axis_size=4,
+            context_axis_size=4,
+            preemptible=True,
+            parameter_sharding_axes=("data", "context"),
         )
     if tpu_variant == "v4-128-cp4":
         return _MrcrEvaluationShape(
@@ -369,6 +380,7 @@ def build_evaluation_steps(
                     eval_batch_size=shape.eval_batch_size,
                     data_axis_size=shape.data_axis_size,
                     context_axis_size=shape.context_axis_size,
+                    parameter_sharding_axes=shape.parameter_sharding_axes,
                 )
             ),  # type: ignore[arg-type]
             output_path=this_output_path(),  # type: ignore[arg-type]
