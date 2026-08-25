@@ -972,7 +972,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
+        CREATE TABLE "telemetry_v1.levanter"(
             service VARCHAR,
             run_id VARCHAR,
             cluster VARCHAR,
@@ -988,7 +988,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        "INSERT INTO \"telemetry_v1.levanter\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
             ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
