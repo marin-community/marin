@@ -168,6 +168,30 @@ def test_grug_moe_variants_store_expert_hidden_weights_on_configured_axis(module
     assert mlp.expert_mlp.w_down.sharding.spec == P("expert", "model", "context")
 
 
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "experiments.grug.moe.model",
+        "experiments.grug.moe_hero_ep.model",
+        "experiments.grug.moe_hero_fsdp.model",
+        "experiments.june_tpu_67b_a2b.moe.model",
+    ],
+)
+def test_grug_moe_variants_reject_missing_expert_weight_hidden_axis(module_name: str):
+    model_module = importlib.import_module(module_name)
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    cfg = dataclasses.replace(cfg, expert_weight_hidden_axis="context")
+    key = jax.random.PRNGKey(0)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh), pytest.raises(ValueError):
+        eqx.filter_eval_shape(model_module.MoEMLP.init, cfg, key=key)
+
+
 def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     model_module = importlib.import_module("experiments.grug.moe.model")
     mask = GrugAttentionMask.causal().with_segment_ids(

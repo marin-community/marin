@@ -47,6 +47,7 @@ from levanter.grug.grug_moe import (
     MoeImplementation,
     PspecAxis,
     resolve_moe_implementation,
+    validate_expert_weight_hidden_axis,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
@@ -763,6 +764,7 @@ class MoEMLP(eqx.Module):
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
+        validate_expert_weight_hidden_axis(mesh, cfg.expert_weight_hidden_axis)
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 

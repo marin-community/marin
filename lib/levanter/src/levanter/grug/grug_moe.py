@@ -37,6 +37,7 @@ from levanter.grug._moe.common import (
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
+    validate_expert_weight_hidden_axis,
 )
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
@@ -368,4 +369,5 @@ __all__ = [
     "moe_mlp",
     "resolve_moe_implementation",
     "split_moe_w13_output",
+    "validate_expert_weight_hidden_axis",
 ]
