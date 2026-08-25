@@ -11,7 +11,7 @@ DKFLAGS="--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true --xla_e
 
 run_cell() {
   local name="$1" wheel="$2"
-  NAME="$name" WHEEL="$wheel" FLAGS="$DKFLAGS" BENCH_UPDATES_PER_PEER=30 bash "${LOOP_DIR}/bench_submit.sh" >/dev/null 2>&1
+  NAME="$name" WHEEL="$wheel" FLAGS="$DKFLAGS" BENCH_UPDATES_PER_PEER=30 PRIORITY=production bash "${LOOP_DIR}/bench_submit.sh" >/dev/null 2>&1
   cd "$REPO"
   for _ in 1 2 3; do
     timeout 900 uv run iris --config lib/iris/config/marin.yaml job wait "/mwittmann/${name}" >/dev/null 2>&1 && break
@@ -22,8 +22,8 @@ run_cell() {
   printf '%s\t%s\t%s\t%s\n' "$(date -u +%H:%M)" "$name" "${line:-NO-RESULT}" "${val:-NO-VALIDATION}" >> "${LOOP_DIR}/ladder_results.tsv"
 }
 
-run_cell "dkp-ab1-stock"   "$STOCK"
-run_cell "dkp-ab1-patched" "$PATCHED"
-run_cell "dkp-ab2-stock"   "$STOCK"
-run_cell "dkp-ab2-patched" "$PATCHED"
+run_cell "dkp-ab1b-stock"   "$STOCK"
+run_cell "dkp-ab1b-patched" "$PATCHED"
+run_cell "dkp-ab2b-stock"   "$STOCK"
+run_cell "dkp-ab2b-patched" "$PATCHED"
 echo AB_DONE
