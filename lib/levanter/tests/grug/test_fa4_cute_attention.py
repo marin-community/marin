@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import subprocess
 import sys
@@ -454,19 +455,22 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
     # forward key-tile bound and the backward query-tile bound depend on it. head_dim 128
     # selects the tile configuration the hero runs.
     seq_len = 512
+    mesh = compact_grug_mesh(context_axis_size=2)
+    batch_axes = ("replica_dcn", "data", "expert")
+    # `data` absorbs every device the other axes leave free, so the batch has to cover the batch
+    # axes: one sequence per batch coordinate. A fixed batch of 1 only shards on a two-device host.
+    batch = math.prod(mesh.shape[axis] for axis in batch_axes)
     key = jax.random.PRNGKey(7)
     q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
-    q = jax.random.normal(q_key, (1, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
-    k = jax.random.normal(k_key, (1, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
-    v = jax.random.normal(v_key, (1, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
-    segment_ids = jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32)
+    q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
     mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
     valid = segment_ids >= 0
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
-    mesh = compact_grug_mesh(context_axis_size=2)
-    batch_axes = ("replica_dcn", "data", "expert")
     q_sharding = NamedSharding(mesh, P(batch_axes, "context", "model", None))
     kv_sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
     with jax.set_mesh(mesh):
