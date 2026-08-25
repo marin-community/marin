@@ -128,7 +128,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
-    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    reader = ScatterReader(chunk_paths=[path], target_shard=0, avg_item_bytes=1.0)
     rows = reader.get_frames()[0].collect().to_dicts()
 
     assert len(rows) == 1
@@ -415,7 +415,7 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    reader = ScatterReader(chunk_paths=[f"{data_path}c0000.parquet"], target_shard=513, avg_item_bytes=1)
     assert _read_shard(reader) == [{"k": 513}]
 
 

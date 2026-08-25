@@ -45,9 +45,7 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
 
     tags: list[str] = dataclasses.field(default_factory=list)  # Tags for Levanter's dataset source config
 
-    def as_lm_dataset_source_config(
-        self, actual_output_path: str | None, *, include_raw_paths=True
-    ) -> LmDatasetSourceConfigBase:
+    def as_lm_dataset_source_config(self, actual_output_path: str | None) -> LmDatasetSourceConfigBase:
         """
         Returns a Levanter dataset source config that points to the downloaded cache.
         Since the cache is already tokenized and in Levanter format, train_urls and validation_urls

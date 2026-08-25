@@ -616,8 +616,9 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
             return ts.open(spec, **open_kwargs, **mode_config).result()
         except FileNotFoundError:
@@ -652,8 +653,9 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
     open_kwargs = _ts_open_kwargs(mode)
 
-    # Basically, we want to load the existing shape metadata if it exists
-    if not mode_config.get("delete_existing", False):
+    # Basically, we want to load the existing shape metadata if it exists.
+    # When we're deleting the store anyway, there is no metadata to reuse and this open always fails.
+    if not mode_config["open_mode"].delete_existing:
         try:
             return await ts.open(spec, **open_kwargs, **mode_config)
         except FileNotFoundError:

@@ -1193,7 +1193,6 @@ def test_tpu_bootstrap_marks_ready_while_cloud_stuck_creating():
     with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=True):
         _run_tpu_bootstrap(
             gcp_service,
-            "test-project",
             handle,
             poll_interval=0.01,
             ip_wait_timeout=5.0,
@@ -1225,7 +1224,6 @@ def test_tpu_bootstrap_fails_fast_on_create_operation_error(error_code, expected
         with pytest.raises(expected_exc):
             _run_tpu_bootstrap(
                 gcp_service,
-                "test-project",
                 handle,
                 poll_interval=0.01,
                 ip_wait_timeout=5.0,
@@ -1243,7 +1241,6 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
         with pytest.raises(InfraError):
             _run_tpu_bootstrap(
                 gcp_service,
-                "test-project",
                 handle,
                 poll_interval=0.01,
                 ip_wait_timeout=5.0,
