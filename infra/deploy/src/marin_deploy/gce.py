@@ -79,8 +79,9 @@ def run_remote(
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
     attempts: int = 1,
     retry_interval: float = DEFAULT_RETRY_INTERVAL,
+    capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command on ``target`` and stream its output to the caller."""
+    """Run one command on ``target`` over noninteractive GCE SSH."""
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     arguments = ssh_arguments(target, command, connect_timeout=connect_timeout)
@@ -92,6 +93,7 @@ def run_remote(
             text=True,
             check=True,
             timeout=timeout,
+            capture_output=capture_output,
         )
 
     if attempts == 1:

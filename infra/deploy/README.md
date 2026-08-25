@@ -57,3 +57,9 @@ activates the pinned images on the existing GCE VM or Kubernetes controller. A
 failed activation restores the previous controller image with that checkpoint
 through the same stack and still exits with failure. Pulumi never receives
 resolved controller secrets and does not own controller deletion.
+
+GCE deployments share the typed target and noninteractive SSH runner in
+`marin_deploy.gce`. Iris and Finelog use its startup-script persistence policies;
+Loom's Pulumi activation uses the same runner to restart the metadata-managed
+startup unit. Service-specific health checks and rollback state remain with each
+deployment.

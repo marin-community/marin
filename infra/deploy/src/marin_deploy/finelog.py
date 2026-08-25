@@ -3,9 +3,38 @@
 
 """Finelog deployment commands."""
 
+import subprocess
+
 import click
 from finelog.deploy import _k8s
 from finelog.deploy.config import FinelogConfig, load_finelog_config
+
+from marin_deploy.gce import GceVmTarget, StartupScriptPersistence, activate_startup_script
+
+GCE_ACTIVATION_TIMEOUT = 900
+
+
+def activate_gce_bootstrap(config: FinelogConfig, bootstrap: str) -> bool:
+    """Activate a Finelog bootstrap while preserving the last successful script."""
+    gcp = config.deployment.gcp
+    if gcp is None:
+        raise ValueError("Finelog GCE activation requires a GCP deployment config")
+    target = GceVmTarget(
+        project=gcp.project,
+        zone=gcp.zone,
+        instance=config.name,
+        impersonate_service_account=gcp.service_account,
+    )
+    try:
+        activate_startup_script(
+            target,
+            bootstrap,
+            persistence=StartupScriptPersistence.AFTER_SUCCESS,
+            timeout=GCE_ACTIVATION_TIMEOUT,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return True
 
 
 def _k8s_config(name: str, operation: str) -> FinelogConfig:

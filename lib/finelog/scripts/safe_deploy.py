@@ -24,11 +24,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh, apply_bootstrap, render_bootstrap_for
+from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh, render_bootstrap_for
 from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.image import resolve_image_digest
+from marin_deploy.finelog import activate_gce_bootstrap
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
 
@@ -89,7 +90,7 @@ def _require_gcp(cfg: FinelogConfig) -> None:
 
 def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> bool:
     """Bootstrap the VM onto ``image``. Returns whether it came up healthy."""
-    return apply_bootstrap(cfg, render_bootstrap_for(cfg, image))
+    return activate_gce_bootstrap(cfg, render_bootstrap_for(cfg, image))
 
 
 def _verify_health(cfg: FinelogConfig) -> bool:

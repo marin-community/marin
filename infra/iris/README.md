@@ -4,6 +4,10 @@ This application has one stack per production Iris cluster. The stack owns a
 restart-only activation resource; it does not own the GCE VM, Kubernetes
 controller objects, SQLite storage, or deletion.
 
+`Pulumi.yaml` defines the Iris Pulumi project, Python entry point, and shared
+state backend. Each `Pulumi.<cluster>.yaml` file supplies that project's stack
+configuration for one cluster; stack files do not replace the project manifest.
+
 Run deployments through the shared wrapper from the repository root:
 
 ```bash
@@ -34,8 +38,10 @@ restores the prior rollout record without requesting a checkpoint rollback.
 
 Direct `pulumi up` is intentionally unavailable: every update requires
 temporary image and activation configuration produced after the checkpoint and
-image build. To initialize a new stack, create it with the shared KMS provider
-before the first wrapper-driven deployment:
+image build. The secrets provider is stack metadata established during
+initialization; it is not defined by `Pulumi.yaml` or an uninitialized stack
+config. Create a new stack with the shared KMS provider before its first
+wrapper-driven deployment:
 
 ```bash
 cd infra/iris

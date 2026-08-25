@@ -27,10 +27,11 @@ gcloud auth configure-docker us-central1-docker.pkg.dev
 The deploy command loads the Cloudflare provider token from Secret Manager. The
 local Docker builder must support `linux/amd64`.
 
-Activation restarts the host's startup script over SSH. Create the Compute
-Engine key pair once so the key is present and propagated before deploying;
-activation fails immediately when `~/.ssh/google_compute_engine` is missing
-rather than stalling while `gcloud` generates and propagates a new key.
+Activation uses `marin-deploy`'s shared GCE SSH runner to restart the host's
+startup script. Create the Compute Engine key pair once so the key is present
+and propagated before deploying; activation fails immediately when
+`~/.ssh/google_compute_engine` is missing instead of waiting for `gcloud` to
+generate and propagate a new key.
 
 ```sh
 gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models

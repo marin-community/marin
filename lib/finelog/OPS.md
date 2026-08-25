@@ -546,8 +546,9 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
 System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
-restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
-failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
+restart`, and `safe_deploy` paths gate on the body; `safe_deploy` uses
+`marin-deploy`'s shared GCE startup-script activator and rolls back a failed
+rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
 ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
 ## Serving a copy of a store
