@@ -9,6 +9,7 @@ from typing import Any, ClassVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tokenizers import Tokenizer, models
 
 from experiments.datasets import mrcr
 
@@ -88,6 +89,92 @@ class _OffsetTokenizer:
         return _Offsets()
 
 
+class _BpeBoundaryTokenizer:
+    eos_token = "§"
+    bos_token = None
+    bos_token_id = None
+    eos_token_id = 1
+    pad_token_id = None
+    name_or_path = "bpe-boundary-tokenizer"
+    all_special_ids: ClassVar[list[int]] = [1]
+    chat_template = None
+
+    def __init__(self, characters: set[str]):
+        tokens = ["[UNK]", *sorted(characters), "pr", "pre", "fi", "fix", "prefix"]
+        self._vocab = {token: index for index, token in enumerate(tokens)}
+        self._tokenizer = Tokenizer(
+            models.BPE(
+                vocab=self._vocab,
+                merges=[("p", "r"), ("pr", "e"), ("f", "i"), ("fi", "x"), ("pre", "fix")],
+                unk_token="[UNK]",
+            )
+        )
+        self.vocab_size = len(self._vocab)
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        return self._tokenizer.encode(text, add_special_tokens=add_special_tokens).ids
+
+    def encode_batch(self, texts: list[str], *, add_special_tokens: bool = False) -> list[list[int]]:
+        return [self.encode(text, add_special_tokens=add_special_tokens) for text in texts]
+
+    def encode_with_offsets(self, text: str) -> Any:
+        return self._tokenizer.encode(text, add_special_tokens=False)
+
+    def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
+        del skip_special_tokens
+        return self._tokenizer.decode(ids)
+
+    def __len__(self) -> int:
+        return self.vocab_size
+
+    def get_vocab(self) -> dict[str, int]:
+        return self._vocab
+
+    def convert_ids_to_tokens(self, ids: int | list[int]) -> str | list[str]:
+        if isinstance(ids, int):
+            return self._tokenizer.id_to_token(ids) or "[UNK]"
+        return [self._tokenizer.id_to_token(token) or "[UNK]" for token in ids]
+
+    def convert_tokens_to_ids(self, tokens: str | list[str]) -> int | list[int]:
+        if isinstance(tokens, str):
+            return self._vocab.get(tokens, 0)
+        return [self._vocab.get(token, 0) for token in tokens]
+
+    def apply_chat_template(self, conversation: list[dict[str, str]], **kwargs: Any) -> str | list[int]:
+        del kwargs
+        rendered = conversation[0]["content"] + conversation[1]["content"] + self.eos_token
+        return self.encode(rendered)
+
+    def apply_chat_template_with_masks(
+        self,
+        conversations: list[list[dict[str, str]]],
+        *,
+        chat_template: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, list[list[int]]]:
+        del chat_template, kwargs
+        input_ids: list[list[int]] = []
+        masks: list[list[int]] = []
+        for conversation in conversations:
+            prompt_ids = self.encode(conversation[0]["content"])
+            target_ids = self.encode(conversation[1]["content"])
+            eos_ids = self.encode(self.eos_token)
+            input_ids.append([*prompt_ids, *target_ids, *eos_ids])
+            masks.append([0] * len(prompt_ids) + [1] * len(target_ids) + [0] * len(eos_ids))
+        return {"input_ids": input_ids, "assistant_masks": masks}
+
+    def as_hf_tokenizer(self) -> Any:
+        tokenizer = self._tokenizer
+
+        class _Offsets:
+            def __call__(self, text: str, **kwargs: Any) -> dict[str, list[Any]]:
+                del kwargs
+                encoded = tokenizer.encode(text, add_special_tokens=False)
+                return {"input_ids": encoded.ids, "offset_mapping": encoded.offsets}
+
+        return _Offsets()
+
+
 @pytest.fixture
 def offset_tokenizer(monkeypatch: pytest.MonkeyPatch) -> _OffsetTokenizer:
     tokenizer = _OffsetTokenizer()
@@ -110,9 +197,9 @@ def _row(
     needles: int = 2,
     desired_msg_index: int = 5,
     preamble: str | None = None,
+    nonce: str = "Ab3dE5gH7j",
+    target: str = "selected response body",
 ) -> dict[str, Any]:
-    nonce = "Ab3dE5gH7j"
-    target = "selected response body"
     messages = [
         {"role": "user", "content": preamble if preamble is not None else _preamble()},
         {"role": "user", "content": "write the target"},
@@ -150,6 +237,62 @@ def _read_gzip(path: Path) -> list[dict[str, Any]]:
 
 def _records(output: Path) -> list[dict[str, Any]]:
     return [record for path in sorted(output.glob("**/*.jsonl.gz")) for record in _read_gzip(path)]
+
+
+def test_transform_mrcr_uses_complete_bpe_offsets_when_generation_boundary_merges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _row(nonce="Ab3dE5gpre", target="fix")
+    messages = json.loads(row["prompt"])
+    canonical_prompt = (
+        "".join(f"{message['role'].capitalize()}: {message['content']}\n" for message in messages)
+        + f"Assistant: {row['random_string_to_prepend']}"
+    )
+    target = row["answer"].removeprefix(row["random_string_to_prepend"])
+    tokenizer = _BpeBoundaryTokenizer(set(canonical_prompt + target + _BpeBoundaryTokenizer.eos_token))
+    segmented_ids = [
+        *tokenizer.encode(canonical_prompt),
+        *tokenizer.encode(target),
+        *tokenizer.encode(tokenizer.eos_token),
+    ]
+    complete = tokenizer.encode_with_offsets(canonical_prompt + target + tokenizer.eos_token)
+    assert segmented_ids != complete.ids
+
+    monkeypatch.setattr(mrcr, "load_tokenizer", lambda _: tokenizer)
+    _write_rows(tmp_path / "input", [row])
+    output = tmp_path / "output"
+    mrcr.transform_mrcr(
+        mrcr.MrcrTransformConfig(
+            input_path=str(tmp_path / "input"),
+            output_path=str(output),
+            tokenizer="bpe-boundary-tokenizer",
+            context_caps=(4_096,),
+        )
+    )
+
+    selected_start = canonical_prompt.index("Assistant: fix") + len("Assistant: ")
+    selected_end = selected_start + len(target)
+    target_start = len(canonical_prompt)
+    response_tokens = [
+        index for index, (start, end) in enumerate(complete.offsets) if end > selected_start and start < selected_end
+    ]
+    target_tokens = [
+        index
+        for index, (start, end) in enumerate(complete.offsets)
+        if end > target_start and start < target_start + len(target)
+    ]
+    expected_distance = target_tokens[0] - response_tokens[-1] - 1
+    records = _records(output)
+
+    assert len(records) == 6
+    assert {record["evidence_distance_tokens"] for record in records} == {expected_distance}
+    assert {record["messages"][1]["content"] for record in records} == {target}
+    for record in records:
+        processed = mrcr._mrcr_format().build_preprocessor(tokenizer)([record])[0]
+        scored_ids = [
+            token for token, weight in zip(processed["input_ids"], processed["assistant_masks"], strict=True) if weight
+        ]
+        assert scored_ids == tokenizer.encode(target)
 
 
 def test_transform_mrcr_builds_paired_variants_with_identical_scored_bodies(

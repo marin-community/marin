@@ -178,7 +178,6 @@ def _evidence_distance(
     prompt: str,
     response_span: tuple[int, int],
     target: str,
-    canonical_input_ids: np.ndarray,
     eos_token: str,
 ) -> int:
     """Measure both endpoints from offsets produced by one full rendered tokenization."""
@@ -189,8 +188,6 @@ def _evidence_distance(
         add_special_tokens=False,
         return_offsets_mapping=True,
     )
-    if not np.array_equal(np.asarray(encoded["input_ids"], dtype=np.int32), canonical_input_ids):
-        raise ValueError("Offset tokenization differs from the canonical full-render MRCR tokenization")
     offsets = [tuple(offset) for offset in encoded["offset_mapping"]]
     response_start, response_end = response_span
     response_tokens = [
@@ -345,7 +342,6 @@ def transform_mrcr(config: MrcrTransformConfig) -> None:
                             prompt=canonical_prompt,
                             response_span=canonical_spans[desired_index + 1],
                             target=target,
-                            canonical_input_ids=canonical["input_ids"],
                             eos_token=tokenizer.eos_token or "",
                         )
                         distance_band = _distance_band(distance, config.distance_bounds)
