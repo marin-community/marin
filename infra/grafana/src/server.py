@@ -32,7 +32,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /wandb/report/{chart}                    sampled public hero-report series by chart key
     GET /wandb/history?run=&metric=&project=     one run's full logged history for one metric
-    GET /wandb/activity?run=&project=            one run's active, wall, and downtime seconds
+    GET /wandb/activity?run=&project=            one run's active/wall/downtime seconds and progress efficiency
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
