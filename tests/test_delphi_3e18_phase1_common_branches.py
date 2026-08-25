@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import cast
 
+import pandas as pd
 import pytest
 from marin.execution.executor import collect_dependencies_and_version
 from marin.execution.types import versioned
@@ -14,6 +15,9 @@ from experiments.domain_phase_mix import launch_delphi_3e18_phase1_common_branch
 from experiments.domain_phase_mix import launch_delphi_augmented_swarm_3e18 as base
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     materialize_delphi_phase1_common_branches_20260824 as materialize,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    materialize_delphi_phase1_kl0p05_wave1_20260825 as wave1_materialize,
 )
 
 CANDIDATE_SHA256 = "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6"
@@ -260,6 +264,139 @@ def test_wave1_extension_loads_fifty_fit_rows_and_repeats_the_frozen_anchor() ->
     assert anchor["fit_budget"] is False
     assert anchor["role"] == "cross_wave_anchor"
     assert anchor["weights"] == original_fit["weights"]
+
+
+def _wave_manifest_payload(contract: wave1_materialize.WaveContract) -> dict[str, object]:
+    rows = []
+    for index, run_order in enumerate(contract.selected_run_orders):
+        rows.append(
+            {
+                "run_order": run_order,
+                "run_id": contract.run_id_base + run_order,
+                "fit_budget": index < contract.fit_rows,
+            }
+        )
+    return {
+        "experiment_name": wave1_materialize.EXPERIMENT_NAME,
+        "candidate_weights_sha256": wave1_materialize.CANDIDATE_SHA256,
+        "continuation_weights_sha256": contract.continuation_sha256,
+        "selected_prefixes_sha256": wave1_materialize.SELECTED_PREFIXES_SHA256,
+        "prefix_replay_code_commit": wave1_materialize.PREFIX_REPLAY_CODE_COMMIT,
+        "code_commit": contract.branch_code_commit,
+        "continuation_hardware": asdict(wave1_materialize.CONTINUATION_HARDWARE),
+        "selected_run_orders": list(contract.selected_run_orders),
+        "branch_rows": rows,
+    }
+
+
+def test_wave1_materializer_selects_each_manifest_by_hash_and_exact_rows(tmp_path) -> None:
+    for contract in wave1_materialize.WAVE_CONTRACTS:
+        manifest_dir = tmp_path / f"manifest-{contract.name}"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(json.dumps(_wave_manifest_payload(contract)))
+    canary_dir = tmp_path / "manifest-canary"
+    canary_dir.mkdir()
+    canary = _wave_manifest_payload(wave1_materialize.WAVE_CONTRACTS[0])
+    canary["selected_run_orders"] = [0]
+    canary["branch_rows"] = [{"run_order": 0, "run_id": 950_000, "fit_budget": True}]
+    (canary_dir / "manifest.json").write_text(json.dumps(canary))
+
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    for contract in wave1_materialize.WAVE_CONTRACTS:
+        match = wave1_materialize.matching_wave_manifest(fs, root, contract)
+        assert match is not None
+        path, payload = match
+        assert contract.name in path
+        assert payload["selected_run_orders"] == list(contract.selected_run_orders)
+
+
+def test_wave1_materializer_allows_only_absent_manifests_in_partial_mode(tmp_path) -> None:
+    fs, root = materialize.fsspec.core.url_to_fs(str(tmp_path))
+    contract = wave1_materialize.WAVE_CONTRACTS[0]
+
+    assert wave1_materialize.matching_wave_manifest(fs, root, contract, allow_missing=True) is None
+    with pytest.raises(ValueError, match="Expected one wave1a manifest"):
+        wave1_materialize.matching_wave_manifest(fs, root, contract)
+
+    for suffix in ("first", "second"):
+        manifest_dir = tmp_path / f"manifest-{suffix}"
+        manifest_dir.mkdir()
+        (manifest_dir / "manifest.json").write_text(json.dumps(_wave_manifest_payload(contract)))
+    with pytest.raises(ValueError, match="Expected one wave1a manifest"):
+        wave1_materialize.matching_wave_manifest(fs, root, contract, allow_missing=True)
+
+
+def test_wave1_combined_result_contract_and_cross_wave_anchor() -> None:
+    rows = []
+    for index in range(wave1_materialize.EXPECTED_FIT_ROWS):
+        rows.append(
+            {
+                "wave": "wave1a" if index < 50 else "wave1b",
+                "run_name": f"fit-{index}",
+                "run_id": 950_000 + index,
+                "fit_budget": True,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "continuation_id": f"fit-{index}",
+                "phase_1_a": index / 100,
+                "phase_1_b": 1 - index / 100,
+            }
+        )
+    rows.extend(
+        {
+            "wave": "wave1a",
+            "run_name": f"control-{index}",
+            "run_id": 960_000 + index,
+            "fit_budget": False,
+            "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+            "prefix_repeat_seed": 0,
+            "continuation_id": f"control-{index}",
+            "phase_1_a": 0.5,
+            "phase_1_b": 0.5,
+        }
+        for index in range(8)
+    )
+    results = pd.DataFrame(rows)
+
+    wave1_materialize.validate_combined_results(results, complete=True)
+    duplicate = results.copy()
+    duplicate.loc[1, "run_id"] = duplicate.loc[0, "run_id"]
+    with pytest.raises(ValueError, match="Run IDs collide"):
+        wave1_materialize.validate_combined_results(duplicate, complete=True)
+
+    anchor_rows = pd.DataFrame(
+        [
+            {
+                "wave": "wave1a",
+                "continuation_id": wave1_materialize.WAVE1A_ANCHOR_ID,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "run_name": "wave1a-anchor",
+                "data_seed": 1,
+                "trainer_seed": 2,
+                "uncheatable_bpb": 1.0,
+                "github_cpp_bpb": 0.8,
+                "phase_0_a": 0.4,
+                "phase_1_a": 0.6,
+            },
+            {
+                "wave": "wave1b",
+                "continuation_id": wave1_materialize.WAVE1B_ANCHOR_ID,
+                "prefix_candidate_id": wave1_materialize.TARGET_PREFIX,
+                "prefix_repeat_seed": 0,
+                "run_name": "wave1b-anchor",
+                "data_seed": 1,
+                "trainer_seed": 2,
+                "uncheatable_bpb": 1.001,
+                "github_cpp_bpb": 0.799,
+                "phase_0_a": 0.4,
+                "phase_1_a": 0.6,
+            },
+        ]
+    )
+    contrast = wave1_materialize.anchor_contrast(anchor_rows).iloc[0]
+    assert contrast.uncheatable_bpb_wave1b_minus_wave1a == pytest.approx(0.001)
+    assert contrast.github_cpp_bpb_wave1b_minus_wave1a == pytest.approx(-0.001)
 
 
 def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:

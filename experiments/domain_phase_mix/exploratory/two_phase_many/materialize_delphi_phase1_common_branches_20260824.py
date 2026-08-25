@@ -194,6 +194,114 @@ def metric_record(
     return paths[0], records[0]
 
 
+def materialize_design_row(
+    fs: fsspec.AbstractFileSystem,
+    root: str,
+    design_row: dict[str, object],
+    *,
+    candidate_sha256: str,
+    continuation_sha256: str,
+    prefix_replay_code_commit: str,
+    branch_code_commit: str,
+    expected_experiment_name: str,
+    continuation_hardware: TpuHardware,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    run_name = str(design_row["run_name"])
+    metric_path, record = metric_record(fs, root, run_name)
+    if PRIMARY_METRIC not in record or DIAGNOSTIC_METRIC not in record:
+        raise ValueError(f"Required terminal metrics are missing for {run_name}")
+    output_root = str(PurePosixPath(metric_path).parents[1])
+    checkpoint_path = f"{output_root}/checkpoints/step-{EXPECTED_TERMINAL_STEP}"
+    metadata = read_json(fs, f"{checkpoint_path}/metadata.json")
+    if metadata.get("step") != EXPECTED_TERMINAL_STEP or metadata.get("is_temporary") is not False:
+        raise ValueError(f"Terminal checkpoint is not permanent for {run_name}: {metadata}")
+    provenance_path = f"{output_root}/{BRANCH_PROVENANCE_FILENAME}"
+    with fs.open(provenance_path, "rb") as handle:
+        provenance_bytes = handle.read()
+    provenance = json.loads(provenance_bytes)
+    observed_hardware = validate_observed_hardware(
+        provenance.get("observed_continuation_hardware"), continuation_hardware
+    )
+    prefix = design_row["prefix"]
+    if not isinstance(prefix, dict):
+        raise ValueError(f"Prefix identity is malformed for {run_name}")
+    phase_weights = design_row["phase_weights"]
+    if not isinstance(phase_weights, dict):
+        raise ValueError(f"Phase weights are malformed for {run_name}")
+    expected_provenance = {
+        "experiment_name": expected_experiment_name,
+        "run_name": run_name,
+        "run_order": int(design_row["run_order"]),
+        "run_id": int(design_row["run_id"]),
+        "data_seed": int(design_row["data_seed"]),
+        "trainer_seed": int(design_row["trainer_seed"]),
+        "prefix_candidate_id": prefix["candidate_id"],
+        "prefix_repeat_seed": int(prefix["repeat_seed"]),
+        "prefix_checkpoint_uri": prefix["checkpoint_uri"],
+        "prefix_provenance_sha256": prefix["provenance_sha256"],
+        "prefix_replay_code_commit": prefix_replay_code_commit,
+        "candidate_weights_sha256": candidate_sha256,
+        "continuation_weights_sha256": continuation_sha256,
+        "continuation_id": str(design_row["continuation_id"]),
+        "phase_weights_sha256": hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest(),
+        "branch_code_commit": branch_code_commit,
+        "prefix_hardware": asdict(PREFIX_HARDWARE),
+        "continuation_hardware": asdict(continuation_hardware),
+        "observed_continuation_hardware": observed_hardware,
+        "minimum_initial_step": EXPECTED_PREFIX_TRAIN_STEPS,
+        "panel_hardware_status": panel_hardware_status(continuation_hardware),
+        "terminal_checkpoint_uri": gs_uri(checkpoint_path),
+        "terminal_checkpoint_step": EXPECTED_TERMINAL_STEP,
+    }
+    if provenance != expected_provenance:
+        raise ValueError(f"Branch provenance mismatch for {run_name}: {provenance}")
+
+    row: dict[str, object] = {
+        "run_order": int(design_row["run_order"]),
+        "run_id": int(design_row["run_id"]),
+        "run_name": run_name,
+        "data_seed": int(design_row["data_seed"]),
+        "trainer_seed": int(design_row["trainer_seed"]),
+        "fit_budget": bool(design_row["fit_budget"]),
+        "branch_role": design_row["branch_role"],
+        "continuation_id": design_row["continuation_id"],
+        "continuation_role": design_row["continuation_role"],
+        "continuation_weights_sha256": continuation_sha256,
+        "branch_code_commit": branch_code_commit,
+        "prefix_candidate_id": prefix["candidate_id"],
+        "prefix_repeat_seed": int(prefix["repeat_seed"]),
+        "checkpoint_uri": gs_uri(checkpoint_path),
+        "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
+        "uncheatable_bpb": float(record[PRIMARY_METRIC]),
+        "github_cpp_bpb": float(record[DIAGNOSTIC_METRIC]),
+        "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
+        "continuation_tpu_type": continuation_hardware.tpu_type,
+        "continuation_tpu_region": continuation_hardware.region,
+        "continuation_tpu_zone": continuation_hardware.zone,
+    }
+    phase_0 = phase_weights.get("phase_0")
+    phase_1 = phase_weights.get("phase_1")
+    if not isinstance(phase_0, dict) or not isinstance(phase_1, dict) or tuple(phase_0) != tuple(phase_1):
+        raise ValueError(f"Phase weights disagree for {run_name}")
+    row.update({f"phase_0_{bucket}": float(weight) for bucket, weight in phase_0.items()})
+    row.update({f"phase_1_{bucket}": float(weight) for bucket, weight in phase_1.items()})
+    metric_rows: list[dict[str, object]] = [
+        {
+            "run_name": run_name,
+            "continuation_weights_sha256": continuation_sha256,
+            "metric": key,
+            "value": float(value),
+            "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
+            "continuation_tpu_type": continuation_hardware.tpu_type,
+            "continuation_tpu_region": continuation_hardware.region,
+            "continuation_tpu_zone": continuation_hardware.zone,
+        }
+        for key, value in record.items()
+        if key.startswith("eval/uncheatable_eval/") and isinstance(value, (float, int))
+    ]
+    return row, metric_rows
+
+
 def materialize_rows(
     fs: fsspec.AbstractFileSystem,
     root: str,
@@ -219,96 +327,19 @@ def materialize_rows(
         if run_name in observed_names:
             raise ValueError(f"Duplicate manifest run name: {run_name}")
         observed_names.add(run_name)
-        metric_path, record = metric_record(fs, root, run_name)
-        if PRIMARY_METRIC not in record or DIAGNOSTIC_METRIC not in record:
-            raise ValueError(f"Required terminal metrics are missing for {run_name}")
-        output_root = str(PurePosixPath(metric_path).parents[1])
-        checkpoint_path = f"{output_root}/checkpoints/step-{EXPECTED_TERMINAL_STEP}"
-        metadata = read_json(fs, f"{checkpoint_path}/metadata.json")
-        if metadata.get("step") != EXPECTED_TERMINAL_STEP or metadata.get("is_temporary") is not False:
-            raise ValueError(f"Terminal checkpoint is not permanent for {run_name}: {metadata}")
-        provenance_path = f"{output_root}/{BRANCH_PROVENANCE_FILENAME}"
-        with fs.open(provenance_path, "rb") as handle:
-            provenance_bytes = handle.read()
-        provenance = json.loads(provenance_bytes)
-        observed_hardware = validate_observed_hardware(
-            provenance.get("observed_continuation_hardware"), continuation_hardware
+        row, row_metrics = materialize_design_row(
+            fs,
+            root,
+            design_row,
+            candidate_sha256=candidate_sha256,
+            continuation_sha256=continuation_sha256,
+            prefix_replay_code_commit=prefix_replay_code_commit,
+            branch_code_commit=branch_code_commit,
+            expected_experiment_name=expected_experiment_name,
+            continuation_hardware=continuation_hardware,
         )
-        prefix = design_row["prefix"]
-        if not isinstance(prefix, dict):
-            raise ValueError(f"Prefix identity is malformed for {run_name}")
-        phase_weights = design_row["phase_weights"]
-        if not isinstance(phase_weights, dict):
-            raise ValueError(f"Phase weights are malformed for {run_name}")
-        expected_provenance = {
-            "experiment_name": expected_experiment_name,
-            "run_name": run_name,
-            "run_order": int(design_row["run_order"]),
-            "run_id": int(design_row["run_id"]),
-            "data_seed": int(design_row["data_seed"]),
-            "trainer_seed": int(design_row["trainer_seed"]),
-            "prefix_candidate_id": prefix["candidate_id"],
-            "prefix_repeat_seed": int(prefix["repeat_seed"]),
-            "prefix_checkpoint_uri": prefix["checkpoint_uri"],
-            "prefix_provenance_sha256": prefix["provenance_sha256"],
-            "prefix_replay_code_commit": prefix_replay_code_commit,
-            "candidate_weights_sha256": candidate_sha256,
-            "continuation_weights_sha256": continuation_sha256,
-            "continuation_id": str(design_row["continuation_id"]),
-            "phase_weights_sha256": hashlib.sha256(json.dumps(phase_weights, sort_keys=True).encode()).hexdigest(),
-            "branch_code_commit": branch_code_commit,
-            "prefix_hardware": asdict(PREFIX_HARDWARE),
-            "continuation_hardware": asdict(continuation_hardware),
-            "observed_continuation_hardware": observed_hardware,
-            "minimum_initial_step": EXPECTED_PREFIX_TRAIN_STEPS,
-            "panel_hardware_status": panel_hardware_status(continuation_hardware),
-            "terminal_checkpoint_uri": gs_uri(checkpoint_path),
-            "terminal_checkpoint_step": EXPECTED_TERMINAL_STEP,
-        }
-        if provenance != expected_provenance:
-            raise ValueError(f"Branch provenance mismatch for {run_name}: {provenance}")
-
-        row: dict[str, object] = {
-            "run_order": int(design_row["run_order"]),
-            "run_id": int(design_row["run_id"]),
-            "run_name": run_name,
-            "data_seed": int(design_row["data_seed"]),
-            "trainer_seed": int(design_row["trainer_seed"]),
-            "fit_budget": bool(design_row["fit_budget"]),
-            "branch_role": design_row["branch_role"],
-            "continuation_id": design_row["continuation_id"],
-            "continuation_role": design_row["continuation_role"],
-            "prefix_candidate_id": prefix["candidate_id"],
-            "prefix_repeat_seed": int(prefix["repeat_seed"]),
-            "checkpoint_uri": gs_uri(checkpoint_path),
-            "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
-            "uncheatable_bpb": float(record[PRIMARY_METRIC]),
-            "github_cpp_bpb": float(record[DIAGNOSTIC_METRIC]),
-            "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
-            "continuation_tpu_type": continuation_hardware.tpu_type,
-            "continuation_tpu_region": continuation_hardware.region,
-            "continuation_tpu_zone": continuation_hardware.zone,
-        }
-        phase_0 = phase_weights.get("phase_0")
-        phase_1 = phase_weights.get("phase_1")
-        if not isinstance(phase_0, dict) or not isinstance(phase_1, dict) or tuple(phase_0) != tuple(phase_1):
-            raise ValueError(f"Phase weights disagree for {run_name}")
-        row.update({f"phase_0_{bucket}": float(weight) for bucket, weight in phase_0.items()})
-        row.update({f"phase_1_{bucket}": float(weight) for bucket, weight in phase_1.items()})
         result_rows.append(row)
-        metric_rows.extend(
-            {
-                "run_name": run_name,
-                "metric": key,
-                "value": float(value),
-                "prefix_tpu_type": PREFIX_HARDWARE.tpu_type,
-                "continuation_tpu_type": continuation_hardware.tpu_type,
-                "continuation_tpu_region": continuation_hardware.region,
-                "continuation_tpu_zone": continuation_hardware.zone,
-            }
-            for key, value in record.items()
-            if key.startswith("eval/uncheatable_eval/") and isinstance(value, (float, int))
-        )
+        metric_rows.extend(row_metrics)
 
     results = pd.DataFrame(result_rows).sort_values("run_order").reset_index(drop=True)
     if len(results) != EXPECTED_FULL_ROWS or int(results.fit_budget.sum()) != EXPECTED_FIT_ROWS:
