@@ -121,6 +121,8 @@ from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
+    JOB_RESOURCE_TYPE,
+    TASK_RESOURCE_TYPE,
     JobName,
     PendingTask,
     UserBudgetDefaults,
@@ -151,7 +153,7 @@ _SYNCHRONOUS_PHASE_INTERVAL = 0.0
 def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
     registry = ResourceRegistryBuilder()
     registry.bind(
-        "/job/get",
+        f"/{JOB_RESOURCE_TYPE}/get",
         get_codec(
             controller_pb2.Controller.GetJobStatusRequest,
             controller_pb2.Controller.GetJobStatusResponse,
@@ -159,7 +161,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
         service.get_job_status,
     )
     registry.bind(
-        "/job/list",
+        f"/{JOB_RESOURCE_TYPE}/list",
         list_codec(
             controller_pb2.Controller.ListJobsRequest,
             controller_pb2.Controller.ListJobsResponse,
@@ -172,7 +174,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
         service.list_jobs,
     )
     registry.bind(
-        "/job/batch-get",
+        f"/{JOB_RESOURCE_TYPE}/batch-get",
         batch_get_codec(
             controller_pb2.Controller.GetJobStateRequest,
             controller_pb2.Controller.GetJobStateResponse,
@@ -181,7 +183,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
         service.get_job_state,
     )
     registry.bind(
-        "/task/get",
+        f"/{TASK_RESOURCE_TYPE}/get",
         get_codec(
             controller_pb2.Controller.GetTaskStatusRequest,
             controller_pb2.Controller.GetTaskStatusResponse,
@@ -189,7 +191,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
         service.get_task_status,
     )
     registry.bind(
-        "/task/list",
+        f"/{TASK_RESOURCE_TYPE}/list",
         list_codec(
             controller_pb2.Controller.ListTasksRequest,
             controller_pb2.Controller.ListTasksResponse,

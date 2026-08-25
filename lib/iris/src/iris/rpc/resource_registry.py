@@ -137,8 +137,6 @@ class ResourceRegistryBuilder:
 
 
 class ResourceRegistry:
-    """Frozen resource catalog used by the RPC dispatcher."""
-
     def __init__(self, bindings: Mapping[tuple[str, ResourceVerb], ResourceBinding]) -> None:
         self._bindings = MappingProxyType(dict(bindings))
         self._resource_types = frozenset(resource_type for resource_type, _ in bindings)

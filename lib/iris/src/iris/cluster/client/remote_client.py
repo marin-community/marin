@@ -27,6 +27,8 @@ from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
 from iris.cluster.stats.tables import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.cluster.types import (
+    JOB_RESOURCE_TYPE,
+    TASK_RESOURCE_TYPE,
     EndpointAccess,
     Entrypoint,
     EnvironmentSpec,
@@ -45,9 +47,6 @@ from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
-
-_JOB_RESOURCE_TYPE = "job"
-_TASK_RESOURCE_TYPE = "task"
 
 ReadResult = TypeVar("ReadResult")
 
@@ -258,7 +257,7 @@ class RemoteClusterClient:
             request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
             response = _resource_read_with_legacy_fallback(
                 lambda: self._resource_client.get(
-                    _JOB_RESOURCE_TYPE, request, controller_pb2.Controller.GetJobStatusResponse
+                    JOB_RESOURCE_TYPE, request, controller_pb2.Controller.GetJobStatusResponse
                 ),
                 lambda: self._client.get_job_status(request),
             )
@@ -277,7 +276,7 @@ class RemoteClusterClient:
                 lambda: {
                     snapshot.job_id: snapshot.state
                     for snapshot in self._resource_client.batch_get(
-                        _JOB_RESOURCE_TYPE,
+                        JOB_RESOURCE_TYPE,
                         request,
                         job_pb2.JobStateSnapshot,
                     )
@@ -547,7 +546,7 @@ class RemoteClusterClient:
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
 
                 def resource_page() -> tuple[list[job_pb2.JobStatus], bool]:
-                    page_jobs, page = self._resource_client.list(_JOB_RESOURCE_TYPE, request, job_pb2.JobStatus)
+                    page_jobs, page = self._resource_client.list(JOB_RESOURCE_TYPE, request, job_pb2.JobStatus)
                     return page_jobs, page.has_more
 
                 def legacy_page() -> tuple[list[job_pb2.JobStatus], bool]:
@@ -598,7 +597,7 @@ class RemoteClusterClient:
             timeout_ms = min(self._timeout_ms, max(1, deadline.remaining_ms())) if deadline is not None else None
             return _resource_read_with_legacy_fallback(
                 lambda: self._resource_client.get(
-                    _TASK_RESOURCE_TYPE,
+                    TASK_RESOURCE_TYPE,
                     request,
                     controller_pb2.Controller.GetTaskStatusResponse,
                     timeout_ms=timeout_ms,
@@ -627,7 +626,7 @@ class RemoteClusterClient:
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
             return _resource_read_with_legacy_fallback(
-                lambda: self._resource_client.list(_TASK_RESOURCE_TYPE, request, job_pb2.TaskStatus)[0],
+                lambda: self._resource_client.list(TASK_RESOURCE_TYPE, request, job_pb2.TaskStatus)[0],
                 lambda: list(self._client.list_tasks(request).tasks),
             )
 

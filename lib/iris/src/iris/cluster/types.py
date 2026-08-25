@@ -43,6 +43,9 @@ from iris.resources.state import (
 )
 from iris.rpc import controller_pb2, job_pb2
 
+JOB_RESOURCE_TYPE = "job"
+TASK_RESOURCE_TYPE = "task"
+
 
 class AcceleratorType(StrEnum):
     """Device/accelerator type for scale groups."""

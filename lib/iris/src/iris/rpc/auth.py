@@ -123,7 +123,6 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
 
 
 def authorize_resource_method(identity: VerifiedIdentity, method_name: str) -> None:
-    """Apply restricted-role policy to generic resource verbs."""
     _authorize_method(
         identity,
         method_name,
