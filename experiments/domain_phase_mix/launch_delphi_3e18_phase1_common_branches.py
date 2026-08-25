@@ -74,6 +74,7 @@ HISTORICAL_PHASE_1_EPOCH_CAP = 62.28165425173962
 HISTORICAL_TOTAL_EPOCH_CAP = 255.8246349460757
 BRANCH_RUN_ID_BASE = 950_000
 CANONICAL_CONTINUATION_WEIGHTS_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
+BASE_BRANCH_ROWS = SELECTED_PREFIX_COUNT * (COMMON_CONTINUATION_COUNT + 1 + STABILITY_CONTINUATION_COUNT)
 TOTAL_BRANCH_ROWS = (
     SELECTED_PREFIX_COUNT * (COMMON_CONTINUATION_COUNT + 1 + STABILITY_CONTINUATION_COUNT) + BRANCH_NOISE_REPEAT_COUNT
 )
@@ -146,6 +147,14 @@ class PrefixCheckpoint:
 
 
 @dataclass(frozen=True)
+class BranchNoiseControl:
+    prefix_candidate_id: str
+    continuation_id: str
+    repeat_index: int
+    data_seed: int
+
+
+@dataclass(frozen=True)
 class BranchTrainingConfig:
     experiment_name: str
     analysis_output_path: str
@@ -174,6 +183,8 @@ class SaveBranchManifestConfig:
     prefix_replay_code_commit: str
     code_commit: str
     branch_run_id_base: int
+    branch_noise_design_sha256: str | None
+    expected_full_design_rows: int
     continuation_weights_version: VersionedValue[str]
     branch_run_id_base_version: VersionedValue[int]
     branch_rows_json: str
@@ -303,6 +314,56 @@ def observe_tpu_hardware(expected: TpuHardware) -> ObservedTpuHardware:
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def default_branch_noise_controls() -> tuple[BranchNoiseControl, ...]:
+    return tuple(
+        BranchNoiseControl(
+            prefix_candidate_id=BRANCH_NOISE_PREFIX_CANDIDATE,
+            continuation_id=BRANCH_NOISE_CONTINUATION_ID,
+            repeat_index=repeat_index + 1,
+            data_seed=BRANCH_NOISE_DATA_SEED_BASE + repeat_index,
+        )
+        for repeat_index in range(BRANCH_NOISE_REPEAT_COUNT)
+    )
+
+
+def load_branch_noise_controls(path: Path | None, expected_sha256: str | None) -> tuple[BranchNoiseControl, ...]:
+    if path is None and expected_sha256 is None:
+        return default_branch_noise_controls()
+    if path is None or expected_sha256 is None:
+        raise ValueError("--branch-noise-design and --expected-branch-noise-design-sha256 must be provided together")
+    actual_sha256 = file_sha256(path)
+    if actual_sha256 != expected_sha256:
+        raise ValueError(f"Branch-noise design changed: {actual_sha256} != {expected_sha256}")
+    frame = pd.read_csv(path)
+    required = {"prefix_candidate_id", "continuation_id", "repeat_index", "data_seed"}
+    if set(frame.columns) != required:
+        raise ValueError(f"Branch-noise design columns changed: {sorted(frame.columns)} != {sorted(required)}")
+    controls = tuple(
+        BranchNoiseControl(
+            prefix_candidate_id=str(row.prefix_candidate_id),
+            continuation_id=str(row.continuation_id),
+            repeat_index=int(row.repeat_index),
+            data_seed=int(row.data_seed),
+        )
+        for row in frame.itertuples(index=False)
+    )
+    if not controls:
+        raise ValueError("Branch-noise design must contain at least one row")
+    identities = [(control.prefix_candidate_id, control.continuation_id, control.repeat_index) for control in controls]
+    if len(identities) != len(set(identities)):
+        raise ValueError("Branch-noise control identities are not unique")
+    data_seeds = [control.data_seed for control in controls]
+    if len(data_seeds) != len(set(data_seeds)):
+        raise ValueError("Branch-noise data seeds are not unique")
+    groups: dict[tuple[str, str], list[BranchNoiseControl]] = {}
+    for control in controls:
+        groups.setdefault((control.prefix_candidate_id, control.continuation_id), []).append(control)
+    for group in groups.values():
+        if tuple(control.repeat_index for control in group) != tuple(range(1, len(group) + 1)):
+            raise ValueError("Branch-noise repeat indices must be contiguous and ordered within each group")
+    return controls
 
 
 def read_uri_bytes(uri: str) -> bytes:
@@ -626,7 +687,10 @@ def branch_rows(
     prefixes: list[PrefixCheckpoint],
     prefix_specs: dict[tuple[str, int], base.DelphiSwarmRunSpec],
     continuations: list[dict[str, object]],
+    noise_controls: tuple[BranchNoiseControl, ...] | None = None,
 ) -> list[dict[str, object]]:
+    if noise_controls is None:
+        noise_controls = default_branch_noise_controls()
     rows = []
     run_order = 0
     primary_prefixes = [row for row in prefixes if row.repeat_seed == PRIMARY_BRANCH_SEED]
@@ -693,23 +757,27 @@ def branch_rows(
             )
             run_order += 1
 
-    noise_prefix = next(prefix for prefix in primary_prefixes if prefix.candidate_id == BRANCH_NOISE_PREFIX_CANDIDATE)
-    noise_source = prefix_specs[(noise_prefix.candidate_id, noise_prefix.repeat_seed)]
-    noise_continuation = next(
-        continuation for continuation in continuations if continuation["continuation_id"] == BRANCH_NOISE_CONTINUATION_ID
-    )
-    for repeat_index in range(BRANCH_NOISE_REPEAT_COUNT):
+    primary_prefixes_by_id = {prefix.candidate_id: prefix for prefix in primary_prefixes}
+    continuations_by_id = {str(continuation["continuation_id"]): continuation for continuation in continuations}
+    for control in noise_controls:
+        if control.prefix_candidate_id not in primary_prefixes_by_id:
+            raise ValueError(f"Unknown branch-noise prefix candidate: {control.prefix_candidate_id}")
+        if control.continuation_id not in continuations_by_id:
+            raise ValueError(f"Unknown branch-noise continuation: {control.continuation_id}")
+        noise_prefix = primary_prefixes_by_id[control.prefix_candidate_id]
+        noise_source = prefix_specs[(noise_prefix.candidate_id, noise_prefix.repeat_seed)]
+        noise_continuation = continuations_by_id[control.continuation_id]
         rows.append(
             {
                 "run_order": run_order,
                 "fit_budget": False,
                 "branch_role": "same_prefix_branch_noise",
                 "prefix": noise_prefix,
-                "continuation_id": f"{BRANCH_NOISE_CONTINUATION_ID}_noise{repeat_index + 1}",
+                "continuation_id": f"{control.continuation_id}_noise{control.repeat_index}",
                 "continuation_role": "same_prefix_branch_noise",
-                "noise_group_id": f"{BRANCH_NOISE_PREFIX_CANDIDATE}/{BRANCH_NOISE_CONTINUATION_ID}",
-                "branch_noise_repeat_index": repeat_index + 1,
-                "data_seed": BRANCH_NOISE_DATA_SEED_BASE + repeat_index,
+                "noise_group_id": f"{control.prefix_candidate_id}/{control.continuation_id}",
+                "branch_noise_repeat_index": control.repeat_index,
+                "data_seed": control.data_seed,
                 "phase_weights": {
                     "phase_0": noise_source.phase_weights["phase_0"],
                     "phase_1": noise_continuation["weights"],
@@ -719,7 +787,7 @@ def branch_rows(
         run_order += 1
     if sum(bool(row["fit_budget"]) for row in rows) != SELECTED_PREFIX_COUNT * COMMON_FIT_CONTINUATION_COUNT:
         raise ValueError("Round-1 fit budget changed")
-    if len(rows) != TOTAL_BRANCH_ROWS:
+    if len(rows) != BASE_BRANCH_ROWS + len(noise_controls):
         raise ValueError("Round-1 branch count changed")
     return rows
 
@@ -898,6 +966,7 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
         "branch_run_id_base": config.branch_run_id_base,
+        "branch_noise_design_sha256": config.branch_noise_design_sha256,
         "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(config.continuation_hardware),
         "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
@@ -913,17 +982,17 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
         "terminal_checkpoint_step": replay.EXPECTED_FULL_TRAIN_STEPS - 1,
         "optimizer_schedule_num_train_steps": replay.EXPECTED_FULL_TRAIN_STEPS,
-        "expected_full_design_rows": TOTAL_BRANCH_ROWS,
+        "expected_full_design_rows": config.expected_full_design_rows,
         "selected_design_rows": len(branch_rows),
         "selected_run_orders": [row["run_order"] for row in branch_rows],
         "fit_budget_rows": fit_budget_rows,
         "control_rows": len(branch_rows) - fit_budget_rows,
         "same_prefix_branch_noise_rows": sum(row["branch_role"] == "same_prefix_branch_noise" for row in branch_rows),
         "noise_estimation": (
-            "four phase-1 data-seed repeats hold the observed-incumbent seed-0 prefix checkpoint and "
-            "proportional continuation fixed, but changing the data seed also changes the document permutation and "
-            "therefore phase-0/phase-1 overlap; compare them with the seed-930000 proportional control rather than "
-            "treating them as pure operating-stream noise. Whole-run prefix-seed changes remain confounded"
+            "Each noise group holds one exact seed-0 prefix checkpoint and one phase-1 continuation fixed while "
+            "changing only the branch data seed. The data seed changes the document permutation and therefore "
+            "phase-0/phase-1 overlap, so these rows estimate full branch sampling variation rather than pure "
+            "operating-stream noise. Whole-run prefix-seed changes remain confounded."
         ),
         "prefix_selection_caveat": (
             "observed_cap10_best is outcome-selected and protected as an incumbent; frontier claims at that prefix "
@@ -951,6 +1020,8 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--branch-run-id-base", type=int, default=BRANCH_RUN_ID_BASE)
+    parser.add_argument("--branch-noise-design", type=Path)
+    parser.add_argument("--expected-branch-noise-design-sha256")
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_known_args()
@@ -996,17 +1067,28 @@ def main() -> None:
         args.prefix_replay_code_commit,
         expected_phase_hashes,
     )
+    noise_controls = load_branch_noise_controls(
+        args.branch_noise_design,
+        args.expected_branch_noise_design_sha256,
+    )
     runtime_buckets = tuple(next(iter(prefix_specs.values())).phase_weights["phase_0"])
     if set(runtime_buckets) != set(buckets):
         raise ValueError("Prefix and continuation bucket sets disagree")
     for continuation in continuations:
         weights = cast(dict[str, float], continuation["weights"])
         continuation["weights"] = {bucket: weights[bucket] for bucket in runtime_buckets}
-    rows = enrich_branch_rows(
-        branch_rows(prefixes=prefixes, prefix_specs=prefix_specs, continuations=continuations),
+    all_rows = enrich_branch_rows(
+        branch_rows(
+            prefixes=prefixes,
+            prefix_specs=prefix_specs,
+            continuations=continuations,
+            noise_controls=noise_controls,
+        ),
         prefix_specs,
         run_id_base=args.branch_run_id_base,
     )
+    expected_full_design_rows = len(all_rows)
+    rows = all_rows
     if args.run_orders is not None:
         selected_orders = tuple(dict.fromkeys(args.run_orders))
         unknown_orders = sorted(set(selected_orders) - {int(row["run_order"]) for row in rows})
@@ -1031,6 +1113,8 @@ def main() -> None:
                 prefix_replay_code_commit=args.prefix_replay_code_commit,
                 code_commit=code_commit,
                 branch_run_id_base=args.branch_run_id_base,
+                branch_noise_design_sha256=args.expected_branch_noise_design_sha256,
+                expected_full_design_rows=expected_full_design_rows,
                 continuation_weights_version=versioned(args.expected_continuation_sha256),
                 branch_run_id_base_version=versioned(args.branch_run_id_base),
                 branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
@@ -1118,6 +1202,8 @@ def main() -> None:
                     prefix_replay_code_commit=args.prefix_replay_code_commit,
                     code_commit=code_commit,
                     branch_run_id_base=args.branch_run_id_base,
+                    branch_noise_design_sha256=args.expected_branch_noise_design_sha256,
+                    expected_full_design_rows=expected_full_design_rows,
                     continuation_weights_version=versioned(args.expected_continuation_sha256),
                     branch_run_id_base_version=versioned(args.branch_run_id_base),
                     branch_rows_json=json.dumps(serializable_rows, sort_keys=True),

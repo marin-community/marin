@@ -33,6 +33,16 @@ EXTENSION_CONTINUATION_WEIGHTS = (
     / "delphi_phase1_kl0p05_wave1_extension_20260825"
     / "continuation_weights.csv"
 )
+NOISE_CONTROL_DESIGN = (
+    Path(__file__).resolve().parents[1]
+    / "experiments"
+    / "domain_phase_mix"
+    / "exploratory"
+    / "two_phase_many"
+    / "reference_outputs"
+    / "delphi_phase1_kl0p05_noise_controls_20260825"
+    / "noise_controls.csv"
+)
 SELECTED_CANDIDATES = (
     "observed_cap10_best",
     "shared_bounded_ensemble_kl0p05",
@@ -192,6 +202,49 @@ def test_branch_panel_crosses_common_fit_rows_and_keeps_controls_outside_budget(
     assert len({row["trainer_seed"] for row in noise_rows}) == 1
     assert len({branches.phase_weights_sha256(row["phase_weights"]) for row in noise_rows}) == 1
     assert tuple(row["run_order"] for row in noise_rows) == branches.hardware_canary_gate().noise_run_orders
+
+    custom_controls = (
+        branches.BranchNoiseControl(
+            prefix_candidate_id="shared_bounded_ensemble_kl0p05",
+            continuation_id="control_proportional",
+            repeat_index=1,
+            data_seed=962_000,
+        ),
+        branches.BranchNoiseControl(
+            prefix_candidate_id="shared_bounded_ensemble_kl0p05",
+            continuation_id="fit_maximin_26",
+            repeat_index=1,
+            data_seed=962_001,
+        ),
+    )
+    custom_rows = branches.branch_rows(
+        prefixes=prefixes,
+        prefix_specs=prefix_specs,
+        continuations=continuations,
+        noise_controls=custom_controls,
+    )
+    custom_noise = [row for row in custom_rows if row["branch_role"] == "same_prefix_branch_noise"]
+    assert len(custom_rows) == branches.BASE_BRANCH_ROWS + len(custom_controls)
+    assert {row["prefix"].candidate_id for row in custom_noise} == {"shared_bounded_ensemble_kl0p05"}
+    assert {row["noise_group_id"] for row in custom_noise} == {
+        "shared_bounded_ensemble_kl0p05/control_proportional",
+        "shared_bounded_ensemble_kl0p05/fit_maximin_26",
+    }
+
+
+def test_kl0p05_noise_control_design_is_hash_pinned() -> None:
+    controls = branches.load_branch_noise_controls(
+        NOISE_CONTROL_DESIGN,
+        branches.file_sha256(NOISE_CONTROL_DESIGN),
+    )
+
+    assert len(controls) == 8
+    assert {control.prefix_candidate_id for control in controls} == {"shared_bounded_ensemble_kl0p05"}
+    assert {control.continuation_id for control in controls} == {
+        "control_proportional",
+        "fit_maximin_26",
+    }
+    assert len({control.data_seed for control in controls}) == 8
 
 
 def test_branch_run_id_base_can_isolate_an_extension_panel() -> None:
@@ -540,6 +593,8 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         prefix_replay_code_commit="prefix",
         code_commit="branch",
         branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        branch_noise_design_sha256=None,
+        expected_full_design_rows=branches.TOTAL_BRANCH_ROWS,
         continuation_weights_version=versioned(CONTINUATION_SHA256),
         branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
@@ -558,6 +613,8 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         prefix_replay_code_commit="prefix",
         code_commit="branch",
         branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        branch_noise_design_sha256=None,
+        expected_full_design_rows=branches.TOTAL_BRANCH_ROWS,
         continuation_weights_version=versioned(CONTINUATION_SHA256),
         branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
