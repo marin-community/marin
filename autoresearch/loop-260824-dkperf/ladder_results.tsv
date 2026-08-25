@@ -10,3 +10,6 @@
 01:20	dkp-lad2-oneshot	per-call: 7.44 ms   payload/rank: 3.21 GB   egress: 431 GB/s	      1 VALIDATION OK;
 01:24	dkp-lad2-cta16b	per-call: 14.15 ms   payload/rank: 3.21 GB   egress: 227 GB/s	      1 VALIDATION OK;
 01:27	dkp-lad2-ilp4	per-call: 12.88 ms   payload/rank: 3.21 GB   egress: 249 GB/s	      1 VALIDATION OK;
+01:34	dkp-usw-dk-u1	per-call: 7.95 ms   payload/rank: 3.21 GB   egress: 404 GB/s	      1 VALIDATION OK;
+01:37	dkp-usw-dk-u120	per-call: 20.40 ms   payload/rank: 3.21 GB   egress: 157 GB/s	      1 VALIDATION OK;
+01:41	dkp-usw-os-u1	per-call: 24.19 ms   payload/rank: 3.21 GB   egress: 133 GB/s	      1 VALIDATION OK;
