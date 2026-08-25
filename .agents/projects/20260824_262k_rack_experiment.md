@@ -102,6 +102,35 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## The fix: a context-sharded residual, and the halo that unblocks it
+
+`short_conv` now carries a left halo over the context axis (`ad62b7f18a`), so the contract is
+shard-local *plus* `kernel_size - 1` tokens from the left neighbour, fetched with one ppermute
+inside a shard_map. The Pallas kernel is untouched and its guard still rejects a sharded sequence;
+the wrapper sits above it and serves the reference and Pallas bodies alike. The concatenated block
+is right-padded to the kernel's block size (safe: a causal convolution never reads right of an
+output it keeps), and the halo carries its neighbour's segment ids so packed-document taps are
+dropped exactly as unsharded.
+
+`_embedding_gather` then establishes `P(_BATCH_AXES, "context", None)` on the residual
+(`0a92ee59de`), which is the only place the layout is set. Everything downstream already composed.
+This closes the composition gap between the FA4 and MoE branches: each supported a context-sharded
+residual, neither established one.
+
+**One-node gate, d768, tokens per device pinned at 65,536:**
+
+| sequence | context | peak HBM before | peak HBM after | loss at step 20 |
+|---|---|---|---|---|
+| 65,536 | 1 | 12.68 GiB | 12.68 GiB | 3.7367 |
+| 131,072 | 2 | 15.31 GiB | 12.94 GiB | 3.7366 |
+| 262,144 | 4 | 19.71 GiB | 13.59 GiB | 3.7365 |
+
+The ladder flattened: per-doubling increments fell from +2.63 and +4.40 GiB to +0.26 and +0.65 GiB.
+What remains growing is the K/V all-gather, which is genuinely linear in the sequence and is what
+context parallelism buys attention with. CP1 is unchanged to the byte, and the loss trajectories
+agree across cp1/cp2/cp4 at every step to four decimals (11.8059 -> 3.7365), the residual spread
+being bf16 reduction order on different meshes.
+
 ## The residual stream is sequence-replicated, and SConv is why it cannot simply be sharded
 
 **Verified.** Under a CP4 mesh the hero model's residual carries
@@ -136,8 +165,8 @@ which re-materializes the full-sequence activation and returns the memory the ch
 
 The missing capability is a left halo of `sconv_kernel - 1` = 3 tokens from the left neighbour in the
 context group. The traffic is trivial (3 x 6144 x 2 B = 36 KB per call per boundary); the capability
-simply does not exist, and it lives in a shared levanter kernel rather than in this branch. **That is
-a design change, so it is reported rather than attempted.** The CPU verification above does not trip
+simply does not exist, and it lives in a shared levanter kernel rather than in this branch. **That was
+a design change, and it was signed off and implemented as the halo above.** The CPU verification above does not trip
 the guard, because CPU falls back to `short_conv_reference` and never enters the Pallas wrapper; the
 guard was exercised directly instead.
 
