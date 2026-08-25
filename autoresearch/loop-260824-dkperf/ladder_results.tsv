@@ -1,0 +1,8 @@
+00:40	dkp-ladr11-g8x	per-call: 12.32 ms   payload/rank: 3.21 GB   egress: 260 GB/s	      1 VALIDATION OK;
+00:48	dkp-ladr11-cta8	per-call: 12.26 ms   payload/rank: 3.21 GB   egress: 262 GB/s	      1 VALIDATION OK;
+00:49	dkp-ladr11-cta16	NO-RESULT	NO-VALIDATION
+00:52	dkp-ladr11-cta32	per-call: 17.62 ms   payload/rank: 3.21 GB   egress: 182 GB/s	      1 VALIDATION OK;
+00:58	dkp-ladr12-g8x	per-call: 12.21 ms   payload/rank: 3.21 GB   egress: 263 GB/s	      1 VALIDATION OK;
+01:02	dkp-ladr12-cta8	per-call: 12.50 ms   payload/rank: 3.21 GB   egress: 257 GB/s	      1 VALIDATION OK;
+01:06	dkp-ladr12-cta16	NO-RESULT	NO-VALIDATION
+01:10	dkp-ladr12-cta32	per-call: 17.58 ms   payload/rank: 3.21 GB   egress: 182 GB/s	      1 VALIDATION OK;
