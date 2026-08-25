@@ -33,3 +33,4 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 9	2026-08-25T08:15Z	dkp-11-bal-6k-r3	restore	third balanced draw, LATE window (drift control)	22.47	+0.47 vs oneshot-mean	KEEP-FINAL	bal: 22.34/22.58/22.47 vs oneshot 21.93/22.05 interleaved same-night. GOAL EXCEEDED.
 10	2026-08-25T17:36Z	dkp-bal9-u3/u30	bench	review-cleaned commit d6d3132a90 (merged cta-count fn, renames, comment fixes)	8.92/9.62	-	revalidated	VALIDATION OK both; ragged-a2a-dk-balanced force-updated via API, v2/v3 pruned
 11	2026-08-25T18:07Z	ab-stock-vs-patch	bench	interleaved A/B at repro config U=30, production prio: stock 22.53/22.46 vs patched 9.56/9.61	2.35x	-	KEY	clean citable pair for the upstream PR / NVIDIA thread; VALIDATION OK all four
+12	2026-08-25	mem-peak-verify	analysis	W&B memory/peak_gib on dkp-06/07/11 + dkp-09c	137.95	-	verified	dk peak == one-shot peak == 137.95 GiB (limit 138.22); PR memory claim re-verified under dk, no new arm
