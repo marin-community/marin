@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import subprocess
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -490,7 +489,9 @@ def persist_grug_checkpoint_eval(
             "bootstrap_seed": config.bootstrap_seed,
         }
     )
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    commit = os.environ["GIT_COMMIT"].strip()
+    if not commit:
+        raise ValueError("GIT_COMMIT must be nonempty")
     record = {
         "run_id": config.run_id,
         "checkpoint_path": config.checkpoint_path,

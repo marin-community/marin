@@ -304,7 +304,8 @@ def test_evaluate_grug_checkpoint_restores_with_shape_only_param_exemplar(monkey
         evaluate_grug_checkpoint(_config(tmp_path))
 
 
-def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(tmp_path):
+def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(monkeypatch, tmp_path):
+    monkeypatch.setenv("GIT_COMMIT", "abc123")
     config = _config(tmp_path)
     row = _example("a", scored_tokens=2, full_loss_sum=4.0, query_loss_sum=6.0)
     metrics = derive_mrcr_metrics((row,), bootstrap_samples=10, bootstrap_seed=0)
@@ -318,6 +319,7 @@ def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(tmp_pa
     assert (tmp_path / "output" / "mrcr_example_losses.jsonl").read_bytes() == first_examples
     record = json.loads(first_metrics)
     assert record["checkpoint_step"] == 157_000
+    assert record["evaluator_commit"] == "abc123"
     assert record["metrics"] == metrics
 
     with pytest.raises(ValueError, match="conflicting output"):
@@ -327,3 +329,14 @@ def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(tmp_pa
             paired_rows=(dataclasses.replace(row, query_only_loss_sum=7.0),),
             metrics=metrics,
         )
+
+
+def test_persist_grug_checkpoint_eval_requires_propagated_commit(monkeypatch, tmp_path):
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    config = _config(tmp_path)
+    row = _example("a", scored_tokens=2, full_loss_sum=4.0, query_loss_sum=6.0)
+
+    with pytest.raises(KeyError, match="GIT_COMMIT"):
+        persist_grug_checkpoint_eval(config, checkpoint_step=157_000, paired_rows=(row,), metrics={})
+
+    assert not (tmp_path / "output").exists()
