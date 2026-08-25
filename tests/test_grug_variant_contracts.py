@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Contract tests for grug variants under experiments/grug/*.
+"""Contract tests shared by Grug model variants.
 
-These checks are intentionally variant-discovered: if a subdirectory contains
-`model.py` and/or `train.py`, it is expected to satisfy the corresponding
-lowering and training contracts.
+Most checks discover variants under ``experiments/grug/*``: if a subdirectory
+contains ``model.py`` and/or ``train.py``, it must satisfy the corresponding
+lowering and training contracts. Cross-family checks explicitly name compatible
+Grug variants elsewhere in ``experiments``.
 """
 
 import dataclasses
