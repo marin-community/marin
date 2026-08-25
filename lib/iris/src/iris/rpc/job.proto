@@ -246,6 +246,37 @@ message TaskStatus {
   string status_message = 29;
 }
 
+message TaskOutputSkippedEntry {
+  string path = 1;
+  string reason = 2;
+}
+
+message TaskOutputArchive {
+  enum State {
+    TASK_OUTPUT_ARCHIVE_STATE_UNSPECIFIED = 0;
+    TASK_OUTPUT_ARCHIVE_STATE_EMPTY = 1;
+    TASK_OUTPUT_ARCHIVE_STATE_UPLOADED = 2;
+    TASK_OUTPUT_ARCHIVE_STATE_FAILED = 3;
+    TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE = 4;
+  }
+
+  enum Retention {
+    TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED = 0;
+    TASK_OUTPUT_ARCHIVE_RETENTION_TTL = 1;
+    TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER = 2;
+  }
+
+  State state = 1;
+  string uri = 2;
+  int64 size_bytes = 3;
+  string sha256 = 4;
+  string error = 5;
+  Retention retention = 6;
+  int32 ttl_days = 7;
+  int32 skipped_count = 8;
+  repeated TaskOutputSkippedEntry skipped_sample = 9;
+}
+
 // Record of a single task execution attempt
 message TaskAttempt {
   int32 attempt_id = 1;
@@ -270,6 +301,7 @@ message TaskAttempt {
   // init-container failure (e.g. a stage-workdir bundle fetch 404) over the task
   // container's own reason. Empty unless the attempt failed.
   string terminal_reason = 13;
+  TaskOutputArchive output_archive = 14;
 }
 
 message ResourceUsage {

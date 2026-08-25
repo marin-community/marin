@@ -3,6 +3,7 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
+import json
 import threading
 
 import pytest
@@ -514,6 +515,56 @@ def test_apply_failed_directly_from_assigned(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_FAILED
     assert task.failure_count == 1
+
+
+def test_terminal_update_persists_first_task_output_result(state):
+    [task_id] = submit_direct_job(state, "attempt-output")
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    archive = job_pb2.TaskOutputArchive(
+        state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED,
+        uri="gs://bucket/tmp/ttl=7d/outputs.tar.zst",
+        size_bytes=123,
+        sha256="abc",
+        retention=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_TTL,
+        ttl_days=7,
+    )
+
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                    output_archive=archive,
+                )
+            ],
+            now=Timestamp.now(),
+        )
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                    output_archive=job_pb2.TaskOutputArchive(
+                        state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+                        error="late replay",
+                    ),
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    row = query_attempt(state, task_id, attempt_id)
+    persisted = json.loads(row.output_archive_json)
+    assert persisted["uri"] == archive.uri
+    assert persisted["state"] == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED
 
 
 def test_apply_worker_failed_from_assigned(state):

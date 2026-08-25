@@ -15,6 +15,10 @@ from iris.client.workload import (
     ResourceUsage,
     TaskActionResult,
     TaskDescription,
+    TaskOutputArchive,
+    TaskOutputArchiveState,
+    TaskOutputRetention,
+    TaskOutputSkippedEntry,
     TaskStatus,
 )
 from iris.cluster.types import JobName
@@ -88,6 +92,33 @@ def _build_metrics(value: job_pb2.BuildMetrics) -> BuildMetrics:
 
 
 def _attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
+    output_archive = None
+    if value.HasField("output_archive"):
+        state_names = {
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_EMPTY: TaskOutputArchiveState.EMPTY,
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UPLOADED: TaskOutputArchiveState.UPLOADED,
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED: TaskOutputArchiveState.FAILED,
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE: TaskOutputArchiveState.UNAVAILABLE,
+        }
+        retention_names = {
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_TTL: TaskOutputRetention.TTL,
+            job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER: TaskOutputRetention.LOCAL_CLUSTER,
+        }
+        archive = value.output_archive
+        if archive.state in state_names:
+            output_archive = TaskOutputArchive(
+                state=state_names[archive.state],
+                uri=archive.uri,
+                size_bytes=archive.size_bytes,
+                sha256=archive.sha256,
+                error_message=archive.error,
+                retention=retention_names.get(archive.retention, TaskOutputRetention.UNSPECIFIED),
+                ttl_days=archive.ttl_days,
+                skipped_count=archive.skipped_count,
+                skipped_sample=tuple(
+                    TaskOutputSkippedEntry(path=entry.path, reason=entry.reason) for entry in archive.skipped_sample
+                ),
+            )
     return AttemptStatus(
         attempt_number=value.attempt_id,
         attempt_uid=value.attempt_uid,
@@ -102,6 +133,7 @@ def _attempt_status_from_proto(value: job_pb2.TaskAttempt) -> AttemptStatus:
         pod_uid=value.pod_uid,
         node_name=value.node_name,
         terminal_reason=value.terminal_reason,
+        output_archive=output_archive,
     )
 
 

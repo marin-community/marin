@@ -58,6 +58,17 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     assert resolved[0].kind == MountKind.CACHE
 
 
+def test_resolve_mounts_output_uses_attempt_host_path(tmp_path, runtime):
+    output_dir = tmp_path / "attempt-output"
+    mounts = [MountSpec("task-outputs", container_path="/iris/outputs", kind=MountKind.OUTPUT)]
+
+    resolved = runtime.resolve_mounts(mounts, output_host_path=output_dir)
+
+    assert output_dir.is_dir()
+    assert resolved[0].host_path == str(output_dir)
+    assert resolved[0].container_path == "/iris/outputs"
+
+
 def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
     """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
     mounts = [MountSpec("tmp", container_path="/tmp", kind=MountKind.TMPFS)]

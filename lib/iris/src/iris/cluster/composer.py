@@ -127,6 +127,7 @@ def make_task_backend(
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
+                task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
@@ -179,6 +180,7 @@ def build_base_worker_config(
     worker_config.controller_address = controller_address
     worker_config.platform = config.platform.model_copy(deep=True)
     worker_config.storage_prefix = storage_prefix
+    worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config

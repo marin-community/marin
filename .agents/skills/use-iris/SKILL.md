@@ -13,6 +13,7 @@ Read only the material needed for the request:
 - Controller deploy or rollback: [references/controller-rollout.md](references/controller-rollout.md).
 - Interactive GPU or TPU: [references/dev-accelerators.md](references/dev-accelerators.md).
 - Stuck terminating CoreWeave pod: [references/stuck-pod.md](references/stuck-pod.md).
+- Temporary task outputs: `lib/iris/docs/task-outputs.md`.
 - Logs or measurements: use `query-finelog`.
 
 Resolve cluster facts from `lib/iris/config/<cluster>.yaml`; do not copy live coordinates from memory.
@@ -36,6 +37,16 @@ uv run iris --cluster=<parent> query \
 ```
 
 Only root jobs federate; their whole tree stays on the peer. Parent `job describe` is the liveness source, while forwarded logs may lag. CoreWeave tasks normally read regional S3 and GCP tasks read GCS.
+
+## Temporary outputs
+
+Write bounded diagnostics to `$IRIS_OUTPUT_DIR`. Iris preserves that directory as one `outputs.tar.zst` archive per attempt without changing the command outcome when capture fails. Find the archive URI and its uploaded, empty, failed, or unavailable state with:
+
+```bash
+uv run iris --cluster=<cluster> attempt describe <task>:<attempt>
+```
+
+Use direct object-storage writes for large or durable outputs. See `lib/iris/docs/task-outputs.md` for retention, limits, and data-access boundaries.
 
 ## Boundaries
 
