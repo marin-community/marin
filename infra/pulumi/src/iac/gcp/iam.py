@@ -297,7 +297,7 @@ def _group_target_grants(
     return tuple((target, tuple(grants)) for target, grants in grants_by_target.items())
 
 
-def _binding_resource(
+def _binding_declaration(
     name_prefix: str,
     resource_ref: str,
     grant: GcpRoleGrant,
@@ -305,7 +305,7 @@ def _binding_resource(
     """Build one role-authoritative binding and its provider import ID."""
     assert all(
         isinstance(member, str) for member in grant.members
-    ), f"unresolved encrypted member reached _binding_resource: {grant.members!r}"
+    ), f"unresolved encrypted member reached _binding_declaration: {grant.members!r}"
     name = _binding_name(name_prefix, grant.role, grant.condition)
     import_id = f"{resource_ref} {grant.role}{_condition_suffix(grant.condition)}"
     return _BindingDeclaration(logical_name=name, members=grant.members, provider_id=import_id)
@@ -350,7 +350,7 @@ def _create_custom_roles(context: _GcpIamContext) -> list[gcp.projects.IAMCustom
 
 def _grant_project_iam(context: _GcpIamContext) -> None:
     for grant in _role_bindings(context.args.project_grants):
-        declaration = _binding_resource("project", context.args.project, grant)
+        declaration = _binding_declaration("project", context.args.project, grant)
         resource = gcp.projects.IAMBinding(
             declaration.logical_name,
             project=context.args.project,
@@ -365,7 +365,7 @@ def _grant_project_iam(context: _GcpIamContext) -> None:
 def _grant_kms_iam(context: _GcpIamContext) -> None:
     crypto_key_id = _crypto_key_id(context.args)
     for grant in _role_bindings(context.args.kms_grants):
-        declaration = _binding_resource("kms", crypto_key_id, grant)
+        declaration = _binding_declaration("kms", crypto_key_id, grant)
         resource = gcp.kms.CryptoKeyIAMBinding(
             declaration.logical_name,
             crypto_key_id=crypto_key_id,
@@ -382,7 +382,7 @@ def _grant_secret_iam(context: _GcpIamContext) -> None:
     for secret, grants in targets:
         secret_id = f"projects/{context.args.project}/secrets/{secret}"
         for grant in _role_bindings(grants):
-            declaration = _binding_resource(f"secret-{resource_slug(secret)}", secret_id, grant)
+            declaration = _binding_declaration(f"secret-{resource_slug(secret)}", secret_id, grant)
             resource = gcp.secretmanager.SecretIamBinding(
                 declaration.logical_name,
                 project=context.args.project,
@@ -399,7 +399,7 @@ def _grant_bucket_iam(context: _GcpIamContext) -> None:
     targets = _group_target_grants((bucket.bucket, bucket.grants) for bucket in context.args.buckets)
     for bucket, grants in targets:
         for grant in _role_bindings(grants):
-            declaration = _binding_resource(f"bucket-{resource_slug(bucket)}", f"b/{bucket}", grant)
+            declaration = _binding_declaration(f"bucket-{resource_slug(bucket)}", f"b/{bucket}", grant)
             resource = gcp.storage.BucketIAMBinding(
                 declaration.logical_name,
                 bucket=bucket,
@@ -419,7 +419,7 @@ def _grant_artifact_repository_iam(context: _GcpIamContext) -> None:
     for (location, repository), grants in targets:
         repo_path = f"projects/{context.args.project}/locations/{location}/repositories/{repository}"
         for grant in _role_bindings(grants):
-            declaration = _binding_resource(
+            declaration = _binding_declaration(
                 f"ar-{resource_slug(location)}-{resource_slug(repository)}",
                 repo_path,
                 grant,
@@ -443,7 +443,7 @@ def _grant_service_account_iam(context: _GcpIamContext) -> None:
         service_account_id = f"projects/{context.args.project}/serviceAccounts/{account_email}"
         account_local = account_email.split("@", 1)[0]
         for grant in _role_bindings(grants):
-            declaration = _binding_resource(f"sa-{resource_slug(account_local)}", service_account_id, grant)
+            declaration = _binding_declaration(f"sa-{resource_slug(account_local)}", service_account_id, grant)
             resource = gcp.serviceaccount.IAMBinding(
                 declaration.logical_name,
                 service_account_id=service_account_id,
@@ -463,7 +463,7 @@ def _grant_cloud_run_iap(context: _GcpIamContext) -> None:
         iap_service_id = f"projects/{context.args.project}/iap_web/cloud_run-{location}/services/{service}"
         iap_prefix = f"iap-run-service-{resource_slug(location)}-{resource_slug(service)}"
         for grant in _role_bindings(grants):
-            declaration = _binding_resource(iap_prefix, iap_service_id, grant)
+            declaration = _binding_declaration(iap_prefix, iap_service_id, grant)
             resource = gcp.iap.WebCloudRunServiceIamBinding(
                 declaration.logical_name,
                 project=context.args.project,
