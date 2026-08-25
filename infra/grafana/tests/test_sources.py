@@ -322,7 +322,8 @@ def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
             "value": 0.42,
             "report_title": "Hero report",
             "report_url": (
-                "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+                "https://wandb.ai/marin-community/marin_moe/reports/"
+                "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
             ),
         }
     ]
