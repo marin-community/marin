@@ -509,11 +509,7 @@ impl Store {
         Ok(effective_schema)
     }
 
-    /// Decode + validate + append an already-routed physical batch, returning
-    /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
-    /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
-    /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    /// `origin_cluster` overwrites the implicit `cluster` column after alignment.
+    /// Append a routed batch and return its row count and durability target.
     pub fn write_rows(
         &self,
         name: &str,

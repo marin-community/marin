@@ -90,6 +90,21 @@ impl PhysicalPartitionPolicy for StringIdentityPartitionPolicy {
     }
 }
 
+pub(crate) fn select_rows(
+    batch: &RecordBatch,
+    row_indices: Vec<u32>,
+) -> Result<RecordBatch, StatsError> {
+    let indices = UInt32Array::from(row_indices);
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &indices, None))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StatsError::Internal(format!("select record batch rows: {error}")))?;
+    RecordBatch::try_new(batch.schema(), columns)
+        .map_err(|error| StatsError::Internal(format!("build selected record batch: {error}")))
+}
+
 fn partition_string_batches(
     column: &str,
     batches: &[RecordBatch],
@@ -125,18 +140,7 @@ fn partition_string_batches(
                 .push(row as u32);
         }
         for (partition, row_indices) in indices {
-            let indices = UInt32Array::from(row_indices);
-            let columns = batch
-                .columns()
-                .iter()
-                .map(|column| take(column.as_ref(), &indices, None))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    StatsError::Internal(format!("partition record batch: {error}"))
-                })?;
-            let output = RecordBatch::try_new(batch.schema(), columns).map_err(|error| {
-                StatsError::Internal(format!("build partitioned record batch: {error}"))
-            })?;
+            let output = select_rows(batch, row_indices)?;
             outputs.entry(partition).or_default().push(output);
         }
     }

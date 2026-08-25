@@ -3,10 +3,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
-use arrow::array::{
-    new_null_array, Array, ArrayRef, Float64Array, Int64Array, StringArray, UInt32Array,
-};
-use arrow::compute::take;
+use arrow::array::{new_null_array, Array, ArrayRef, Float64Array, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 
 use crate::errors::StatsError;
@@ -15,7 +12,7 @@ use crate::ingestion_policy::{
     RoutedIngestionBatch, StepCursor,
 };
 use crate::levanter_metrics_policy::{levanter_metrics_schema, LEVANTER_METRICS_NAMESPACE};
-use crate::partition_policy::PhysicalPartitionPolicy;
+use crate::partition_policy::{select_rows, PhysicalPartitionPolicy};
 use crate::storage_policy::NamespaceStoragePolicy;
 use crate::store::namespace_name::MAX_NAMESPACE_NAME_BYTES;
 use crate::store::policy::StoragePolicy;
@@ -32,6 +29,7 @@ pub(crate) const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
 pub(crate) const IRIS_NAMESPACE: &str = "telemetry_v1.iris";
 pub(crate) const VLLM_NAMESPACE: &str = "telemetry_v1.vllm";
 pub(crate) const ZEPHYR_NAMESPACE: &str = "telemetry_v1.zephyr";
+const LEGACY_STEP_METRIC_NAMES: [&str; 2] = ["step", "global_step"];
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TelemetryPolicy {
@@ -118,7 +116,7 @@ impl IngestionPolicy for TelemetryPolicy {
         let mut routed = partitions
             .into_iter()
             .map(|(destination, row_indices)| {
-                let batch = take_rows(batch, row_indices)?;
+                let batch = select_rows(batch, row_indices)?;
                 Ok(RoutedIngestionBatch { destination, batch })
             })
             .collect::<Result<Vec<_>, StatsError>>()?;
@@ -326,18 +324,6 @@ impl TelemetryRecord<'_> {
     }
 }
 
-fn take_rows(batch: &RecordBatch, row_indices: Vec<u32>) -> Result<RecordBatch, StatsError> {
-    let indices = UInt32Array::from(row_indices);
-    let columns = batch
-        .columns()
-        .iter()
-        .map(|column| take(column.as_ref(), &indices, None))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| StatsError::Internal(format!("partition telemetry batch: {error}")))?;
-    RecordBatch::try_new(batch.schema(), columns)
-        .map_err(|error| StatsError::Internal(format!("build telemetry partition: {error}")))
-}
-
 #[derive(Clone, Debug, Default)]
 struct LegacyResource {
     run_id: Option<String>,
@@ -421,7 +407,7 @@ fn transform_legacy_levanter(
 
     let mut scalar_rows = Vec::new();
     for row in rows {
-        if row.name == "step" || row.name == "global_step" {
+        if LEGACY_STEP_METRIC_NAMES.contains(&row.name.as_str()) {
             let step = exact_step(row.value)?;
             let candidate = StepCursor {
                 timestamp_ms: row.timestamp_ms,
@@ -452,7 +438,7 @@ fn legacy_step_cursor(
     resource_cache: &mut HashMap<String, LegacyResource>,
 ) -> Result<Option<(String, i64, StepCursor)>, StatsError> {
     let name = record.required_string("name")?;
-    if name != "step" && name != "global_step" {
+    if !LEGACY_STEP_METRIC_NAMES.contains(&name) {
         return Ok(None);
     }
     let resource_json = record.required_string("resource_attributes_json")?;

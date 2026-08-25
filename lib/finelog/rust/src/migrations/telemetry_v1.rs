@@ -909,33 +909,12 @@ fn write_source_outputs(
     config: &PrepareConfig,
     source: &mut SourceSegment,
 ) -> Result<(), StatsError> {
-    if source.complete {
-        for output in &source.outputs {
-            verify_output_file(
-                &config.output_dir.join(&output.relative_path),
-                output,
-                config.batch_rows,
-            )?;
-        }
+    if verify_completed_source(config, source)? {
         return Ok(());
     }
-    if !source.outputs.is_empty() {
-        return Err(validation_error(
-            "incomplete metadata-only migration source has planned outputs",
-        ));
-    }
-
-    let source_index = i64::try_from(source_index)
-        .map_err(|_| validation_error("migration has too many source segments"))?;
-    let source_offset = source_index
-        .checked_mul(MIGRATED_SEQ_ROWS_PER_SOURCE)
-        .and_then(|offset| MIGRATED_SEQ_START.checked_add(offset))
-        .filter(|min_seq| *min_seq < 0)
-        .ok_or_else(|| validation_error("migration has too many source segments"))?;
-
+    let source_offset = migrated_source_offset(source_index)?;
     let mut writers = BTreeMap::new();
-    let reader = parquet_reader(source_path, config.batch_rows)?;
-    for batch in reader {
+    for batch in parquet_reader(source_path, config.batch_rows)? {
         let batch = batch.map_err(internal_error("read source batch"))?;
         for partition in policies.route_ingestion_batch(
             IngestionBatchSource::Stored(source.namespace.as_str()),
@@ -946,103 +925,154 @@ fn write_source_outputs(
                 partition.batch,
             )? {
                 if !writers.contains_key(&destination) {
-                    let output_index = i64::try_from(writers.len())
-                        .map_err(|_| validation_error("source produced too many outputs"))?;
-                    if output_index >= MIGRATED_SEQ_OUTPUTS_PER_SOURCE {
-                        return Err(validation_error("source produced too many outputs"));
-                    }
-                    let min_seq = output_index
-                        .checked_mul(MIGRATED_SEQ_ROWS_PER_OUTPUT)
-                        .and_then(|offset| source_offset.checked_add(offset))
-                        .ok_or_else(|| validation_error("migrated sequence range overflowed"))?;
-                    let relative_path =
-                        Path::new(&destination.namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
-                    let final_path = config.output_dir.join(relative_path);
-                    let parent = final_path
-                        .parent()
-                        .ok_or_else(|| validation_error("output segment has no parent"))?;
-                    std::fs::create_dir_all(parent)
-                        .map_err(internal_error("create output namespace"))?;
-                    let temporary_path = temporary_path(&final_path);
-                    for interrupted_path in [&temporary_path, &final_path] {
-                        if interrupted_path.exists() {
-                            std::fs::remove_file(interrupted_path)
-                                .map_err(internal_error("remove interrupted output segment"))?;
-                        }
-                    }
-                    let file = File::create(&temporary_path)
-                        .map_err(internal_error("create output segment"))?;
-                    let target_schema = schema_to_arrow(&stored_form(migration_schema_for(
-                        &destination.namespace,
-                    )?));
-                    let options = ArrowWriterOptions::new().with_properties(
-                        segment_writer_properties_with_partition(
-                            usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
-                                .expect("telemetry row-group limit fits usize"),
-                            destination.partition.as_ref(),
-                        )?,
-                    );
-                    let writer = ArrowWriter::try_new_with_options(
-                        file,
-                        Arc::clone(&target_schema),
-                        options,
-                    )
-                    .map_err(internal_error("create output parquet writer"))?;
-                    writers.insert(
-                        destination.clone(),
-                        DestinationWriter {
-                            destination: destination.clone(),
-                            min_seq,
-                            next_seq: min_seq,
-                            rows: 0,
-                            min_timestamp_ms: None,
-                            max_timestamp_ms: None,
-                            identity: Sha256::new(),
-                            temporary_path,
-                            final_path,
-                            target_schema,
-                            writer,
-                        },
-                    );
+                    let writer = create_destination_writer(
+                        &destination,
+                        writers.len(),
+                        source_offset,
+                        config,
+                    )?;
+                    writers.insert(destination.clone(), writer);
                 }
-                let writer = writers
-                    .get_mut(&destination)
-                    .expect("destination writer was just created");
-                let batch_rows = i64::try_from(batch.num_rows())
-                    .map_err(|_| validation_error("migration batch has too many rows"))?;
-                if writer.rows + batch_rows > MIGRATED_SEQ_ROWS_PER_OUTPUT {
-                    return Err(validation_error(
-                        "migration output exceeded its reserved sequence range",
-                    ));
-                }
-                let migrated =
-                    align_migrated_batch(&batch, &writer.target_schema, writer.next_seq)?;
-                let timestamps = int64_column(&migrated, "timestamp_ms")?;
-                if let Some(batch_min) = timestamps.iter().flatten().min() {
-                    writer.min_timestamp_ms = Some(
-                        writer
-                            .min_timestamp_ms
-                            .map_or(batch_min, |current| current.min(batch_min)),
-                    );
-                }
-                if let Some(batch_max) = timestamps.iter().flatten().max() {
-                    writer.max_timestamp_ms = Some(
-                        writer
-                            .max_timestamp_ms
-                            .map_or(batch_max, |current| current.max(batch_max)),
-                    );
-                }
-                update_batch_identity(&mut writer.identity, &migrated)?;
-                writer
-                    .writer
-                    .write(&migrated)
-                    .map_err(internal_error("write migrated telemetry"))?;
-                writer.rows += migrated.num_rows() as i64;
-                writer.next_seq += migrated.num_rows() as i64;
+                write_destination_batch(
+                    writers
+                        .get_mut(&destination)
+                        .expect("destination writer was just created"),
+                    &batch,
+                )?;
             }
         }
     }
+    let outputs = finish_destination_writers(writers, &config.output_dir)?;
+    record_source_outputs(source, source_path, outputs)
+}
 
+fn verify_completed_source(
+    config: &PrepareConfig,
+    source: &SourceSegment,
+) -> Result<bool, StatsError> {
+    if source.complete {
+        for output in &source.outputs {
+            verify_output_file(
+                &config.output_dir.join(&output.relative_path),
+                output,
+                config.batch_rows,
+            )?;
+        }
+        return Ok(true);
+    }
+    if !source.outputs.is_empty() {
+        return Err(validation_error(
+            "incomplete metadata-only migration source has planned outputs",
+        ));
+    }
+    Ok(false)
+}
+
+fn migrated_source_offset(source_index: usize) -> Result<i64, StatsError> {
+    let source_index = i64::try_from(source_index)
+        .map_err(|_| validation_error("migration has too many source segments"))?;
+    source_index
+        .checked_mul(MIGRATED_SEQ_ROWS_PER_SOURCE)
+        .and_then(|offset| MIGRATED_SEQ_START.checked_add(offset))
+        .filter(|min_seq| *min_seq < 0)
+        .ok_or_else(|| validation_error("migration has too many source segments"))
+}
+
+fn create_destination_writer(
+    destination: &MigrationDestination,
+    output_index: usize,
+    source_offset: i64,
+    config: &PrepareConfig,
+) -> Result<DestinationWriter, StatsError> {
+    let output_index = i64::try_from(output_index)
+        .map_err(|_| validation_error("source produced too many outputs"))?;
+    if output_index >= MIGRATED_SEQ_OUTPUTS_PER_SOURCE {
+        return Err(validation_error("source produced too many outputs"));
+    }
+    let min_seq = output_index
+        .checked_mul(MIGRATED_SEQ_ROWS_PER_OUTPUT)
+        .and_then(|offset| source_offset.checked_add(offset))
+        .ok_or_else(|| validation_error("migrated sequence range overflowed"))?;
+    let relative_path = Path::new(&destination.namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
+    let final_path = config.output_dir.join(relative_path);
+    let parent = final_path
+        .parent()
+        .ok_or_else(|| validation_error("output segment has no parent"))?;
+    std::fs::create_dir_all(parent).map_err(internal_error("create output namespace"))?;
+    let temporary_path = temporary_path(&final_path);
+    for interrupted_path in [&temporary_path, &final_path] {
+        if interrupted_path.exists() {
+            std::fs::remove_file(interrupted_path)
+                .map_err(internal_error("remove interrupted output segment"))?;
+        }
+    }
+    let file = File::create(&temporary_path).map_err(internal_error("create output segment"))?;
+    let target_schema =
+        schema_to_arrow(&stored_form(migration_schema_for(&destination.namespace)?));
+    let options =
+        ArrowWriterOptions::new().with_properties(segment_writer_properties_with_partition(
+            usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
+                .expect("telemetry row-group limit fits usize"),
+            destination.partition.as_ref(),
+        )?);
+    let writer = ArrowWriter::try_new_with_options(file, Arc::clone(&target_schema), options)
+        .map_err(internal_error("create output parquet writer"))?;
+    Ok(DestinationWriter {
+        destination: destination.clone(),
+        min_seq,
+        next_seq: min_seq,
+        rows: 0,
+        min_timestamp_ms: None,
+        max_timestamp_ms: None,
+        identity: Sha256::new(),
+        temporary_path,
+        final_path,
+        target_schema,
+        writer,
+    })
+}
+
+fn write_destination_batch(
+    writer: &mut DestinationWriter,
+    batch: &RecordBatch,
+) -> Result<(), StatsError> {
+    let batch_rows = i64::try_from(batch.num_rows())
+        .map_err(|_| validation_error("migration batch has too many rows"))?;
+    if writer.rows + batch_rows > MIGRATED_SEQ_ROWS_PER_OUTPUT {
+        return Err(validation_error(
+            "migration output exceeded its reserved sequence range",
+        ));
+    }
+    let migrated = align_migrated_batch(batch, &writer.target_schema, writer.next_seq)?;
+    let timestamps = int64_column(&migrated, "timestamp_ms")?;
+    if let Some(batch_min) = timestamps.iter().flatten().min() {
+        writer.min_timestamp_ms = Some(
+            writer
+                .min_timestamp_ms
+                .map_or(batch_min, |current| current.min(batch_min)),
+        );
+    }
+    if let Some(batch_max) = timestamps.iter().flatten().max() {
+        writer.max_timestamp_ms = Some(
+            writer
+                .max_timestamp_ms
+                .map_or(batch_max, |current| current.max(batch_max)),
+        );
+    }
+    update_batch_identity(&mut writer.identity, &migrated)?;
+    writer
+        .writer
+        .write(&migrated)
+        .map_err(internal_error("write migrated telemetry"))?;
+    writer.rows += migrated.num_rows() as i64;
+    writer.next_seq += migrated.num_rows() as i64;
+    Ok(())
+}
+
+fn finish_destination_writers(
+    writers: BTreeMap<MigrationDestination, DestinationWriter>,
+    output_dir: &Path,
+) -> Result<Vec<PlannedOutput>, StatsError> {
     let mut outputs = Vec::with_capacity(writers.len());
     for (_destination, writer) in writers {
         let file = writer
@@ -1055,7 +1085,7 @@ fn write_source_outputs(
             .map_err(internal_error("publish output segment"))?;
         let relative_path = writer
             .final_path
-            .strip_prefix(&config.output_dir)
+            .strip_prefix(output_dir)
             .map_err(|_| validation_error("output segment escaped output_dir"))?
             .to_string_lossy()
             .into_owned();
@@ -1079,6 +1109,14 @@ fn write_source_outputs(
     outputs.sort_by(|left, right| {
         (&left.namespace, &left.partition).cmp(&(&right.namespace, &right.partition))
     });
+    Ok(outputs)
+}
+
+fn record_source_outputs(
+    source: &mut SourceSegment,
+    source_path: &Path,
+    outputs: Vec<PlannedOutput>,
+) -> Result<(), StatsError> {
     let output_rows = outputs.iter().map(|output| output.rows).sum::<i64>();
     if output_rows > source.rows {
         return Err(validation_error(format!(

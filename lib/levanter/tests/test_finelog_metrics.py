@@ -18,7 +18,7 @@ class _Table:
     def write(self, rows) -> None:
         self.rows.extend(rows)
 
-    def flush(self, timeout=None) -> FlushResult:
+    def flush(self, _timeout=None) -> FlushResult:
         return FlushResult.SUCCEEDED
 
 

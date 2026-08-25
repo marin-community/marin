@@ -19,12 +19,29 @@ const LEVANTER_METRICS_ALIAS_PREFIX: &str = "levanter.metrics.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const LEVANTER_METRICS_MAX_BYTES: i64 = 32 * GIBIBYTE;
 const METRICS_ROW_GROUP_ROWS: u32 = 131_072;
+const TIMESTAMP_COLUMN: &str = "timestamp_ms";
+const RUN_ID_COLUMN: &str = "run_id";
+const STEP_COLUMN: &str = "step";
+const NAME_COLUMN: &str = "name";
+const KIND_COLUMN: &str = "kind";
+const VALUE_COLUMN: &str = "value";
+const MIN_COLUMN: &str = "min";
+const MAX_COLUMN: &str = "max";
+const COUNT_COLUMN: &str = "count";
+const NONZERO_COUNT_COLUMN: &str = "nonzero_count";
+const SUM_COLUMN: &str = "sum";
+const SUM_SQUARES_COLUMN: &str = "sum_squares";
+const MEAN_COLUMN: &str = "mean";
+const VARIANCE_COLUMN: &str = "variance";
+const RMS_COLUMN: &str = "rms";
+const BUCKET_LIMITS_COLUMN: &str = "bucket_limits";
+const BUCKET_COUNTS_COLUMN: &str = "bucket_counts";
 
 pub(crate) const LEVANTER_RUN_PARTITION_POLICY: StringIdentityPartitionPolicy =
     StringIdentityPartitionPolicy {
         spec_id: 1,
-        column: "run_id",
-        partition_field: "run_id",
+        column: RUN_ID_COLUMN,
+        partition_field: RUN_ID_COLUMN,
     };
 
 #[derive(Clone, Copy, Debug)]
@@ -102,28 +119,28 @@ fn validate_metric_batch(
     batch: &RecordBatch,
     requested_run_id: Option<&str>,
 ) -> Result<(), StatsError> {
-    let run_ids = string_column(batch, "run_id")?;
-    let names = string_column(batch, "name")?;
-    let kinds = string_column(batch, "kind")?;
-    let timestamps = int64_column(batch, "timestamp_ms")?;
-    let values = float64_column(batch, "value")?;
-    let minima = float64_column(batch, "min")?;
-    let maxima = float64_column(batch, "max")?;
-    let counts = int64_column(batch, "count")?;
-    let nonzero_counts = int64_column(batch, "nonzero_count")?;
-    let sums = float64_column(batch, "sum")?;
-    let sum_squares = float64_column(batch, "sum_squares")?;
-    let means = float64_column(batch, "mean")?;
-    let variances = float64_column(batch, "variance")?;
-    let root_mean_squares = float64_column(batch, "rms")?;
-    let bucket_limits = list_column(batch, "bucket_limits")?;
-    let bucket_counts = list_column(batch, "bucket_counts")?;
+    let run_ids = string_column(batch, RUN_ID_COLUMN)?;
+    let names = string_column(batch, NAME_COLUMN)?;
+    let kinds = string_column(batch, KIND_COLUMN)?;
+    let timestamps = int64_column(batch, TIMESTAMP_COLUMN)?;
+    let values = float64_column(batch, VALUE_COLUMN)?;
+    let minima = float64_column(batch, MIN_COLUMN)?;
+    let maxima = float64_column(batch, MAX_COLUMN)?;
+    let counts = int64_column(batch, COUNT_COLUMN)?;
+    let nonzero_counts = int64_column(batch, NONZERO_COUNT_COLUMN)?;
+    let sums = float64_column(batch, SUM_COLUMN)?;
+    let sum_squares = float64_column(batch, SUM_SQUARES_COLUMN)?;
+    let means = float64_column(batch, MEAN_COLUMN)?;
+    let variances = float64_column(batch, VARIANCE_COLUMN)?;
+    let root_mean_squares = float64_column(batch, RMS_COLUMN)?;
+    let bucket_limits = list_column(batch, BUCKET_LIMITS_COLUMN)?;
+    let bucket_counts = list_column(batch, BUCKET_COUNTS_COLUMN)?;
 
     for row in 0..batch.num_rows() {
-        require_non_null(timestamps, "timestamp_ms", row)?;
-        require_non_null(run_ids, "run_id", row)?;
-        require_non_null(names, "name", row)?;
-        require_non_null(kinds, "kind", row)?;
+        require_non_null(timestamps, TIMESTAMP_COLUMN, row)?;
+        require_non_null(run_ids, RUN_ID_COLUMN, row)?;
+        require_non_null(names, NAME_COLUMN, row)?;
+        require_non_null(kinds, KIND_COLUMN, row)?;
         let run_id = run_ids.value(row);
         if requested_run_id.is_some_and(|requested| requested != run_id) {
             return Err(StatsError::SchemaValidation(format!(
@@ -144,20 +161,20 @@ fn validate_metric_batch(
         ];
         match kinds.value(row) {
             "scalar" => {
-                require_non_null(values, "value", row)?;
+                require_non_null(values, VALUE_COLUMN, row)?;
                 require_all_null(&summary_values, "summary", row)?;
-                require_null(bucket_limits, "bucket_limits", row)?;
-                require_null(bucket_counts, "bucket_counts", row)?;
+                require_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
+                require_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
             }
             "summary" | "histogram" => {
-                require_null(values, "value", row)?;
+                require_null(values, VALUE_COLUMN, row)?;
                 require_all_non_null(&summary_values, "summary", row)?;
                 if kinds.value(row) == "summary" {
-                    require_null(bucket_limits, "bucket_limits", row)?;
-                    require_null(bucket_counts, "bucket_counts", row)?;
+                    require_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
+                    require_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
                 } else {
-                    require_non_null(bucket_limits, "bucket_limits", row)?;
-                    require_non_null(bucket_counts, "bucket_counts", row)?;
+                    require_non_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
+                    require_non_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
                     if bucket_limits.value_length(row) != bucket_counts.value_length(row) + 1 {
                         return Err(StatsError::SchemaValidation(format!(
                             "histogram row {row} requires one more bucket limit than bucket counts"
@@ -248,37 +265,37 @@ fn require_all_null(values: &[&dyn Array], name: &str, row: usize) -> Result<(),
 pub(crate) fn levanter_metrics_schema() -> Schema {
     Schema::new(
         vec![
-            nullable_column("timestamp_ms", ColumnType::COLUMN_TYPE_INT64),
-            nullable_column("run_id", ColumnType::COLUMN_TYPE_STRING),
+            nullable_column(TIMESTAMP_COLUMN, ColumnType::COLUMN_TYPE_INT64),
+            nullable_column(RUN_ID_COLUMN, ColumnType::COLUMN_TYPE_STRING),
             nullable_column("execution_uid", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("job_id", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("node_name", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("process_index", ColumnType::COLUMN_TYPE_INT64),
-            nullable_column("step", ColumnType::COLUMN_TYPE_INT64),
-            nullable_column("name", ColumnType::COLUMN_TYPE_STRING).with_trigram_index(),
-            nullable_column("kind", ColumnType::COLUMN_TYPE_STRING)
+            nullable_column(STEP_COLUMN, ColumnType::COLUMN_TYPE_INT64),
+            nullable_column(NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING).with_trigram_index(),
+            nullable_column(KIND_COLUMN, ColumnType::COLUMN_TYPE_STRING)
                 .with_exact_values(["scalar", "summary", "histogram"])
                 .with_value_counts(),
-            nullable_column("value", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("min", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("max", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("count", ColumnType::COLUMN_TYPE_INT64),
-            nullable_column("nonzero_count", ColumnType::COLUMN_TYPE_INT64),
-            nullable_column("sum", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("sum_squares", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("mean", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("variance", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("rms", ColumnType::COLUMN_TYPE_FLOAT64),
-            nullable_column("bucket_limits", ColumnType::COLUMN_TYPE_FLOAT64_LIST),
-            nullable_column("bucket_counts", ColumnType::COLUMN_TYPE_INT64_LIST),
+            nullable_column(VALUE_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(MIN_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(MAX_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(COUNT_COLUMN, ColumnType::COLUMN_TYPE_INT64),
+            nullable_column(NONZERO_COUNT_COLUMN, ColumnType::COLUMN_TYPE_INT64),
+            nullable_column(SUM_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(SUM_SQUARES_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(MEAN_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(VARIANCE_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(RMS_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
+            nullable_column(BUCKET_LIMITS_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+            nullable_column(BUCKET_COUNTS_COLUMN, ColumnType::COLUMN_TYPE_INT64_LIST),
             nullable_column("unit", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("attributes", ColumnType::COLUMN_TYPE_MAP),
             nullable_column("batch_id", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("record_index", ColumnType::COLUMN_TYPE_INT64),
         ],
-        "timestamp_ms",
+        TIMESTAMP_COLUMN,
     )
-    .with_sort_columns(["run_id", "name", "step", "timestamp_ms"])
+    .with_sort_columns([RUN_ID_COLUMN, NAME_COLUMN, STEP_COLUMN, TIMESTAMP_COLUMN])
     .with_max_row_group_rows(METRICS_ROW_GROUP_ROWS)
 }
 

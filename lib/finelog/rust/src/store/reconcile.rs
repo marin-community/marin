@@ -80,7 +80,6 @@ pub async fn reconcile_remote_segments(
         max_key: Option<i64>,
         partition: Option<SegmentPartition>,
     }
-    // Unknown remote parquet objects, skipping catalog-known and unparseable names.
     let pending: Vec<(String, u64)> = objects
         .iter()
         .filter(|(name, _)| !catalog_by_basename.contains_key(name))

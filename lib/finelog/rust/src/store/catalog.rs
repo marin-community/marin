@@ -58,9 +58,7 @@ fn sqlite_err(e: rusqlite::Error) -> StatsError {
     StatsError::Internal(format!("catalog sqlite error: {e}"))
 }
 
-/// Map one selected `segments` row (in the canonical 12-column SELECT order) to
-/// a `SegmentRow`. Shared by every segment-row reader so the column order stays
-/// in lockstep with the SELECT lists.
+/// Decode the segment projection shared by every catalog reader.
 fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
     use crate::store::types::SegmentLocation;
     let loc: String = row.get(10)?;

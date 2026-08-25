@@ -100,7 +100,8 @@ pub struct CompactionExecution<'a> {
 /// `input_key_bounds` supplies typed in-memory key bounds for each input (the
 /// catalog round-trip stringifies them, losing numeric ordering). A bump carries
 /// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
-pub fn run_job(
+#[cfg(test)]
+fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
