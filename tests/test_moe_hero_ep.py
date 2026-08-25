@@ -89,6 +89,45 @@ def test_moe_backend_override_reaches_the_model_and_the_run_tags():
     assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
 
 
+def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
+    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
+    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
+    rng = np.random.default_rng(0)
+    tokens_per_shard = 8
+    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
+    selected = rng.integers(0, ragged_ep_check.NUM_EXPERTS, size=(tokens, ragged_ep_check.TOPK))
+
+    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, ragged_ep_check.NO_DROP_CAPACITY)
+
+    assert keep.shape == selected.shape
+    assert keep.all()
+
+
+def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
+    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
+    # which is what lets the transport read them in place. The mask has to agree.
+    rng = np.random.default_rng(1)
+    tokens_per_shard = 16
+    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
+    topk, num_experts = ragged_ep_check.TOPK, ragged_ep_check.NUM_EXPERTS
+    # Skew hard toward the low experts so the gate actually bites.
+    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
+
+    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, 1.0)
+
+    dropped = int((1.0 - keep).sum())
+    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
+    for shard in range(ragged_ep_check.EP_SIZE):
+        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
+        flat_selected = selected[lo:hi].reshape(-1)
+        flat_keep = keep[lo:hi].reshape(-1)
+        for expert in range(num_experts):
+            group = np.flatnonzero(flat_selected == expert)
+            kept = flat_keep[group]
+            # A prefix: every kept entry precedes every dropped one within the group.
+            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
+
+
 def test_the_4gpu_guard_mirrors_the_hero_s_ragged_xla_flags():
     # ragged_ep_check duplicates these rather than importing the training module. If the hero's
     # set changes and the guard's does not, the guard silently validates a transport no run uses.

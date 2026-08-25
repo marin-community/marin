@@ -13,11 +13,20 @@ A. Ground truth. At a capacity factor high enough that nothing is dropped, every
    forward and gradients against an exact fp32 dense reference. The EP ``ring`` implementation is
    recorded as a diagnostic only: measured 2026-08-21, it deviates from dense by 0.8-4.5x relative
    at this shape (its gradients contain NaN), so it cannot serve as a reference.
+
+B. Drop regime. The hero trains with assignments being clipped, so the no-drop case above leaves
+   the interesting half of the transport unchecked: which rows survive, and whether the survivors
+   land where the combine expects them. Accepted rows are the prefix of each expert group under a
+   greedy first-sender-wins gate, so the surviving set is a pure function of the routing and the
+   capacity. This section computes it in NumPy, feeds it back as a mask on the combine weights,
+   and compares against the same exact fp32 dense reference -- a dropping transport is correct
+   exactly when it equals dense restricted to the rows it kept.
 """
 
 import dataclasses
 import json
 import logging
+import math
 
 import click
 import jax
@@ -26,6 +35,7 @@ import numpy as np
 from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS
 from levanter.grug.grug_moe import moe_mlp
 from marin.execution.artifact import Artifact
@@ -70,6 +80,9 @@ NO_DROP_CAPACITY = _no_drop_capacity()
 # selection ask for more rows than exist and fail. It is a diagnostic (see the module docstring),
 # so it does not need the structural bound the graded ragged run does.
 RING_DIAGNOSTIC_CAPACITY = 2.0
+# Section B's capacity: at or below the mean assignment count per expert, so the skewed router in
+# `_inputs` drives real clipping and the surviving set is worth checking.
+SKEWED_CAPACITY = 1.0
 
 # Gradients are compared on the MEDIAN relative difference, not the max. Both paths compute the
 # same mathematical gradient, so every observed difference is bf16 reduction-order noise: weight
@@ -100,6 +113,11 @@ class SeedRow(BaseModel):
     median_grad_vs_dense: float
     dropped_no_drop_case: int
     dropped_no_drop_case_ring: int
+    ragged_vs_dense_dropped: float
+    max_grad_vs_dense_dropped: float
+    median_grad_vs_dense_dropped: float
+    dropped_skewed: int
+    dropped_skewed_expected: int
 
 
 class RaggedEpResult(Artifact):
@@ -133,6 +151,56 @@ def _inputs(key, tokens, *, skew):
     w13 = jax.random.normal(k_w13, (NUM_EXPERTS, HIDDEN_DIM, 2 * INTERMEDIATE_DIM), dtype=jnp.bfloat16)
     w2 = jax.random.normal(k_w2, (NUM_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM), dtype=jnp.bfloat16)
     return x, selected, combine_weights, w13, w2
+
+
+def _accepted_counts(group_sizes: np.ndarray, capacity_factor: float, assignments_per_shard: int) -> np.ndarray:
+    """Rows each (sender, global expert) pair gets to keep, summed over the backend's chunks.
+
+    Mirrors the backend's per-chunk gate: local experts are split into ``_EXPERT_CHUNKS`` groups
+    processed in sequence, each with its own share of the receiver buffer, so an expert competes
+    for capacity only with the other experts in its chunk.
+    """
+    local_experts = NUM_EXPERTS // EP_SIZE
+    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunk_experts = local_experts // chunks
+    local_capacity = max(local_experts, math.ceil(capacity_factor * assignments_per_shard))
+    chunk_capacity = max(chunk_experts, math.ceil(local_capacity / chunks))
+    chunk_of_expert = (np.arange(NUM_EXPERTS) % local_experts) // chunk_experts
+
+    accepted = np.zeros_like(group_sizes)
+    for chunk in range(chunks):
+        masked = np.where(chunk_of_expert[None, :] == chunk, group_sizes, 0)
+        accepted += np.asarray(
+            _clip_receiver_group_sizes(
+                jnp.asarray(masked), local_expert_size=local_experts, receiver_capacity=chunk_capacity
+            )
+        )
+    return accepted
+
+
+def _keep_mask(selected: np.ndarray, tokens_per_shard: int, capacity_factor: float) -> np.ndarray:
+    """Which (token, route) assignments survive capacity clipping, as a [tokens, TOPK] 0/1 mask.
+
+    The batch is sharded over ``("data", "expert")``, so shard ``j`` owns a contiguous token block
+    and the all-to-all runs between the ``EP_SIZE`` shards that share a ``data`` index. Within a
+    shard the dispatch buffer is expert-sorted with a stable sort, so the accepted prefix of each
+    expert group is its lowest-indexed assignments.
+    """
+    tokens = selected.shape[0]
+    num_shards = tokens // tokens_per_shard
+    keep = np.zeros(selected.shape, dtype=np.float32)
+    for group_start in range(0, num_shards, EP_SIZE):
+        shards = range(group_start, group_start + EP_SIZE)
+        flat = [selected[s * tokens_per_shard : (s + 1) * tokens_per_shard].reshape(-1) for s in shards]
+        group_sizes = np.stack([np.bincount(f, minlength=NUM_EXPERTS) for f in flat]).astype(np.int32)
+        accepted = _accepted_counts(group_sizes, capacity_factor, tokens_per_shard * TOPK)
+        for sender, shard in enumerate(shards):
+            for expert in range(NUM_EXPERTS):
+                # Stable expert-sorted order == ascending flat assignment index within the group.
+                positions = np.flatnonzero(flat[sender] == expert)[: accepted[sender, expert]]
+                rows, routes = np.divmod(positions, TOPK)
+                keep[shard * tokens_per_shard + rows, routes] = 1.0
+    return keep
 
 
 def _dense_reference(x, selected, combine_weights, w13, w2):
@@ -224,7 +292,21 @@ def _run() -> list[SeedRow]:
                 "ring", xb, selb, cwb, w13b, w2b, capacity_factor=RING_DIAGNOSTIC_CAPACITY
             )
 
+            # B. drop regime: skewed routing at a capacity that clips, checked against the dense
+            # reference restricted to the assignments the NumPy oracle says survive.
+            raw_skew = _inputs(jax.random.key(seed), tokens, skew=True)
+            xs_raw, sel_raw, cw_raw, w13_raw, w2_raw = raw_skew
+            keep = _keep_mask(np.asarray(sel_raw), TOKENS_PER_DEVICE, SKEWED_CAPACITY)
+            dense_dropped, g_dense_dropped = _dense_reference(
+                xs_raw, sel_raw, jnp.asarray(cw_raw, jnp.float32) * keep, w13_raw, w2_raw
+            )
+            xs, sels, cws, w13s, w2s = reshard(*raw_skew)
+            o_drop, g_drop, dropped_skewed = loss_and_grad(
+                "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY
+            )
+
         max_g, med_g = _graddiff(g_ragged, g_dense)
+        max_gd, med_gd = _graddiff(g_drop, g_dense_dropped)
         rows.append(
             SeedRow(
                 seed=seed,
@@ -234,6 +316,11 @@ def _run() -> list[SeedRow]:
                 median_grad_vs_dense=med_g,
                 dropped_no_drop_case=dropped,
                 dropped_no_drop_case_ring=dropped_ring,
+                ragged_vs_dense_dropped=_maxdiff_vs_dense(o_drop, dense_dropped),
+                max_grad_vs_dense_dropped=max_gd,
+                median_grad_vs_dense_dropped=med_gd,
+                dropped_skewed=dropped_skewed,
+                dropped_skewed_expected=round(float((1.0 - keep).sum())),
             )
         )
         logger.info("ragged_ep_seed %s", rows[-1].model_dump_json())
@@ -247,9 +334,19 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         r.ragged_vs_dense <= TOLERANCE and r.median_grad_vs_dense <= TOLERANCE and r.dropped_no_drop_case == 0
         for r in rows
     )
+    # A dropping transport is correct when it equals dense over the rows it kept AND keeps the
+    # rows the gate says it should: matching values while dropping a different set would mean the
+    # oracle and the backend disagree about which assignments exist.
+    drops_ok = all(
+        r.ragged_vs_dense_dropped <= TOLERANCE
+        and r.median_grad_vs_dense_dropped <= TOLERANCE
+        and r.dropped_skewed == r.dropped_skewed_expected
+        for r in rows
+    )
     verdict = {
-        "ragged_correct": bool(ground_truth_ok),
+        "ragged_correct": bool(ground_truth_ok and drops_ok),
         "matches_dense_no_drop": ground_truth_ok,
+        "matches_dense_under_drops": drops_ok,
     }
     logger.info("ragged_ep_result %s verdict %s", json.dumps(payload), json.dumps(verdict))
     output_dir = StoragePath(config.output_path)
