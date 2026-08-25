@@ -74,3 +74,34 @@ grid sync, persistent kernel, decomposer-based two-leg structure.
 
 results.tsv columns: iter, ts, cell, kind (bench|synth|restore|build), config, metric
 (ms for bench, MFU for arms), delta-vs-transport-best, status, notes.
+
+## Findings (2026-08-25, through iteration 7)
+
+Causal chain, each link measured on the 64-rank validating microbench (3.21 GB/rank/call):
+
+1. The dk copy engine is NOT slow: at 1 update/peer it moves 404 GB/s vs the one-shot's
+   424-431 -- effectively parity. The whole dk deficit was update granularity.
+2. The U-curve has a cliff exactly where update count crosses the grid size: U=2/3/6/15 read
+   8.16-8.56 ms, U=30 reads 12.2 (2nd wave 62% occupied ~ x1.5), U=120 reads 20.4 (7 waves).
+   Wave quantization from the fixed ctas-per-update assignment, plus skew starvation of hot
+   experts' units at the hero restore, fully explain the training gap.
+3. Dead ends, all measured: cta0-delegated barrier = tie at 8x, worse at 16x/32x (barrier
+   slots were never the 8x bottleneck; spinning oversubscribed CTAs throttle stores); ILP4
+   unroll = null; mode=symmetric = null-to-slightly-negative; GXL = unavailable (hangs in
+   fallback); one-shot at U=1 collapses to 24.2 (opposite granularity preference).
+4. The fix: work-proportional CTA assignment (fork branch `ragged-a2a-dk-balanced`,
+   06df0ee8a6) -- partition total copied elements evenly across the grid, walking update
+   boundaries peer-major. Bench: U=30 12.2->10.9, U=120 20.4->14.2, U<=3 unchanged, all
+   VALIDATION OK.
+5. Hero gates (dkbal8 wheel, splits=1): synthetic 22.51 (dk stock 22.62, one-shot 22.77);
+   6k restore 22.34 and 22.58 across two draws (stock dk best 21.98; one-shot band
+   22.46-22.60) -- PARITY at the restore, +0.4..+0.6 over stock dk. splits=64 under the
+   balanced kernel reads 21.12: splits are now purely harmful, the kernel replaces them as
+   the load-balancing device.
+
+Same-night one-shot pairing arm (dkp-09b) pending (first attempt starved: rack co-tenancy).
+Not run: decomposer-off cell (expected inert inside one LSA domain), chunks=6.
+
+Measurement discipline: single bench cells vary 12.2-14.2 across jobs when co-tenants share
+the 72-GPU NVLink domain (we hold 64); the one-shot is much less sensitive. Verdicts came
+from interleaved same-night series and repeat draws only.
