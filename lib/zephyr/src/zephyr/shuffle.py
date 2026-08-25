@@ -14,9 +14,9 @@ On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
-The resulting LazyFrames are merged via ``external_sort_merge``: a fully
-streaming multi-pass merge that writes runs with ``sink_parquet`` and keeps
-every merge below ``_EXTERNAL_SORT_MAX_MERGE_FAN_IN`` inputs.
+The resulting LazyFrames are merged by :meth:`ScatterReader.merge_sorted_chunks`,
+which streams the final merge and spills repeated passes to Parquet runs only
+when the shard exceeds its memory budget.
 
 Write-side memory is bounded by buffer estimated size: when the sum of
 ``DataFrame.estimated_size()`` across buffered frames exceeds
@@ -48,7 +48,6 @@ from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
-from zephyr.external_sort import external_sort_merge
 from zephyr.parquet_scan import scan_parquet
 from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
@@ -106,7 +105,7 @@ _SCATTER_READ_PYTHON_ROW_OVERHEAD = 2
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # Polars streaming chunk size, important to avoid excessive memory usage during merge.
 _POLARS_STREAMING_CHUNK_SIZE = 10000
-# Maximum run files that Polars merges at one time during an external sort.
+# Maximum run files that Polars merges at one time after the first external-sort pass.
 _EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
 # Bound Parquet footer size when a shuffle has thousands of target shards. One
 # row group per target gives ideal predicate pruning, but makes every reducer
@@ -435,8 +434,9 @@ class ScatterReader:
         Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
         secondary sort). Performs a k-way merge across all chunks.
         Args:
-            external_sort_dir: If set and the shard exceeds the memory budget,
-                spill intermediate runs.
+            external_sort_dir: Directory for intermediate run files, used only
+                when the shard exceeds its memory budget and has more inputs
+                than the first-pass fan-in.
 
         Yields:
             Deserialized Python items in merged sort order.
@@ -457,41 +457,72 @@ class ScatterReader:
             # Future Polars-only processing would remove the Python overhead.
             overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
             memory_bytes = _task_memory_bytes()
+            required_memory_bytes = estimated_merge_memory_bytes * overhead
+            available_memory_bytes = memory_bytes * _SCATTER_READ_MEMORY_FRACTION
+            spill_required = required_memory_bytes > available_memory_bytes
 
-            if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
-                fan_in = math.ceil(math.sqrt(self.total_chunks))
+            logger.info(
+                "[shard %d] Merging %d chunks (%s memory needed, %s memory available)",
+                self._target_shard,
+                self.total_chunks,
+                humanfriendly.format_size(required_memory_bytes, binary=True),
+                humanfriendly.format_size(available_memory_bytes, binary=True),
+            )
+
+            frames = self.get_frames()
+            spill_dir: StoragePath | None = None
+            spill_files: set[StoragePath] = set()
+
+            try:
+                prior_runs: list[StoragePath] = []
+                pass_index = 0
+                merge_fan_in = math.ceil(math.sqrt(self.total_chunks))
+                while spill_required and len(frames) > merge_fan_in:
+                    if spill_dir is None:
+                        spill_dir = StoragePath(external_sort_dir)
+                        spill_dir.mkdirs()
+
+                    logger.info(
+                        "[shard %d] External sort: pass %d merging %d frames with fan_in=%d",
+                        self._target_shard,
+                        pass_index,
+                        len(frames),
+                        merge_fan_in,
+                    )
+                    groups = [frames[i : i + merge_fan_in] for i in range(0, len(frames), merge_fan_in)]
+                    runs: list[StoragePath] = []
+                    for run_index, group in enumerate(groups):
+                        run_name = f"pass-{pass_index:04d}-run-{run_index:04d}.spill"
+                        run = spill_dir / run_name
+                        spill_files.add(run)
+                        with run.open("wb") as output:
+                            pl.merge_sorted(group, key=_SORT_KEY_COL).sink_parquet(output, compression="zstd")
+                        runs.append(run)
+
+                    for prior_run in prior_runs:
+                        prior_run.rm()
+                        spill_files.remove(prior_run)
+
+                    frames = [scan_parquet(str(run)) for run in runs]
+                    prior_runs = runs
+                    pass_index += 1
+                    merge_fan_in = _EXTERNAL_SORT_MAX_MERGE_FAN_IN
 
                 logger.info(
-                    "[shard %d] Merging %d chunks via external sort "
-                    "(%s memory needed > %s memory available); fan_in=%d",
+                    "[shard %d] Final merge of %d frames (%d spill pass(es))",
                     self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                    fan_in,
+                    len(frames),
+                    pass_index,
                 )
-
-                batches = external_sort_merge(
-                    input_frames=self.get_frames(),
-                    sort_key=_SORT_KEY_COL,
-                    external_sort_dir=external_sort_dir,
-                    fan_in=fan_in,
-                    max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
-                    shard=self._target_shard,
-                )
-
-            else:
-                logger.info(
-                    "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
-                    self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                )
-                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
-
-            for batch in batches:
-                yield from _dataframe_to_items(batch)
+                for batch in pl.merge_sorted(frames, key=_SORT_KEY_COL).collect_batches():
+                    yield from _dataframe_to_items(batch)
+            finally:
+                if spill_files:
+                    try:
+                        for spill_file in sorted(spill_files, key=str):
+                            spill_file.rm()
+                    except Exception:
+                        logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

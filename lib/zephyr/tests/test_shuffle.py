@@ -7,10 +7,8 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-import itertools
 import os
 from collections import OrderedDict
-from collections.abc import Iterator
 from unittest.mock import patch
 
 import cloudpickle
@@ -20,7 +18,6 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
-from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -177,10 +174,12 @@ def test_merge_sorted_chunks_basic(tmp_path):
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path)))
+    external_dir = tmp_path / "sort_work"
+    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(external_dir)))
 
     assert [_key(item) for item in merged] == ["a", "a", "b", "b"]
     assert [item["v"] for item in merged] == [1, 3, 2, 4]
+    assert not external_dir.exists()
 
 
 def test_merge_sorted_chunks_secondary_sort(tmp_path):
@@ -346,6 +345,7 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
 
     assert len(merged) == 10
     assert [item["k"] for item in merged] == list(range(10))
+    assert list(external_dir.iterdir()) == []
 
 
 def test_scatter_null_keys(tmp_path):
@@ -490,96 +490,27 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
     assert sorted(row["v"] for row in _read_shard(shard)) == sorted([*range(100), *range(100)])
 
 
-# ---------------------------------------------------------------------------
-# external_sort_merge
-# ---------------------------------------------------------------------------
+def test_merge_sorted_chunks_multi_pass_preserves_rows(tmp_path):
+    data_path = str(tmp_path / "shard-0000/scatter/")
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer.write(_items_to_dataframe([{"k": 1, "v": 1}], _key, None, 1))
+    scatter_paths = list(writer.close())
+    chunk_file = _Sidecar.read_all(scatter_paths)[0].files[0]
 
-
-def _make_sorted_frame(values: list[int]) -> pl.LazyFrame:
-    """Build a sorted LazyFrame by _SORT_KEY_COL for use in external sort tests."""
-    return pl.DataFrame(
-        {
-            _PAYLOAD_COL: pl.Series([cloudpickle.dumps({"v": v}) for v in values], dtype=pl.Binary),
-            _SORT_KEY_COL: [OrderedDict([("key", v), ("sort_value", None)]) for v in values],
-        }
-    ).lazy()
-
-
-def _external_sort_items(
-    batches: Iterator[pl.LazyFrame],
-    *,
-    sort_key: str,
-    external_sort_dir: str,
-    fan_in: int,
-    max_merge_fan_in: int = 32,
-    shard: int,
-) -> list:
-    merged = external_sort_merge(
-        batches,
-        sort_key=sort_key,
-        external_sort_dir=external_sort_dir,
-        fan_in=fan_in,
-        max_merge_fan_in=max_merge_fan_in,
-        shard=shard,
+    # 1,057 inputs produce 33 runs at the sqrt-sized first fan-in, requiring
+    # another pass to reach the fixed 32-run cap before the final merge.
+    reader = ScatterReader(
+        chunk_files=[chunk_file] * 1057,
+        target_shard=0,
+        shard_payload_bytes=1057,
     )
-    return list(itertools.chain.from_iterable(map(_dataframe_to_items, merged)))
+    external_dir = tmp_path / "sort_work"
+    with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
+        mock_res.return_value = TaskResources(memory_bytes=1, cpu_cores=1, gpu_count=0, tpu_count=0)
+        rows = list(reader.merge_sorted_chunks(external_sort_dir=str(external_dir)))
 
-
-def test_external_sort_merge_streaming(tmp_path):
-    frames = [_make_sorted_frame([1, 4, 7]), _make_sorted_frame([2, 5, 8]), _make_sorted_frame([3, 6, 9])]
-    rows = _external_sort_items(
-        frames,
-        sort_key=_SORT_KEY_COL,
-        external_sort_dir=str(tmp_path),
-        fan_in=4,
-        shard=0,
-    )
-    result = [row["v"] for row in rows]
-    assert result == list(range(1, 10))
-
-
-def test_external_sort_merge_single_batch(tmp_path):
-    frames = [_make_sorted_frame([i]) for i in range(10)]
-    rows = _external_sort_items(
-        frames,
-        sort_key=_SORT_KEY_COL,
-        external_sort_dir=str(tmp_path),
-        fan_in=10,
-        shard=0,
-    )
-    result = [row["v"] for row in rows]
-    assert result == list(range(10))
-
-
-def test_external_sort_merge_cleans_up(tmp_path):
-    fan_in = 4
-    frames = [_make_sorted_frame([i]) for i in range(fan_in + 1)]
-    list(
-        external_sort_merge(
-            frames,
-            sort_key=_SORT_KEY_COL,
-            external_sort_dir=str(tmp_path),
-            fan_in=fan_in,
-            max_merge_fan_in=32,
-            shard=0,
-        )
-    )
-    assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
-
-
-def test_external_sort_merge_limits_later_pass_fan_in(tmp_path):
-    frames = [_make_sorted_frame([value]) for value in range(20)]
-    rows = _external_sort_items(
-        frames,
-        sort_key=_SORT_KEY_COL,
-        external_sort_dir=str(tmp_path),
-        fan_in=2,
-        max_merge_fan_in=2,
-        shard=0,
-    )
-
-    assert [row["v"] for row in rows] == list(range(20))
-    assert list(tmp_path.iterdir()) == []
+    assert rows == [{"k": 1, "v": 1}] * 1057
+    assert list(external_dir.iterdir()) == []
 
 
 def test_scatter_removes_partial_dir_on_write_failure(tmp_path):
@@ -594,33 +525,6 @@ def test_scatter_removes_partial_dir_on_write_failure(tmp_path):
         _write_scatter(failing_items(), source_shard=0, data_path=data_path, key_fn=_key, num_output_shards=2)
 
     assert not os.path.exists(data_path), "failed shard left a partial scatter directory"
-
-
-def test_external_sort_merge_across_source_shards(tmp_path):
-    """external_sort_merge correctly merges interleaved keys from multiple source shards."""
-    # Shard 0 writes keys [1, 3], shard 1 writes key [2].  The merge must produce [1, 2, 3].
-    paths = []
-    for shard_idx, items in [(0, [{"k": 3, "v": "a"}, {"k": 1, "v": "b"}]), (1, [{"k": 2, "v": "c"}])]:
-        data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
-        paths.append(data_path)
-        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
-        writer.write(_items_to_dataframe(items, _key, None, 1))
-        writer.close()
-
-    shard = ScatterReader.from_sidecars(paths, target_shard=0)
-    assert shard.total_chunks == 2, "expected one Parquet file per source shard"
-
-    external_dir = tmp_path / "sort_work"
-    external_dir.mkdir()
-
-    rows = _external_sort_items(
-        shard.get_frames(),
-        sort_key=_SORT_KEY_COL,
-        external_sort_dir=str(external_dir),
-        fan_in=4,
-        shard=0,
-    )
-    assert [r["k"] for r in rows] == [1, 2, 3]
 
 
 class _CountingFileSystem(LocalFileSystem):
