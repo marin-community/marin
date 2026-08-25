@@ -1,0 +1,1 @@
+ra2a-dkp-09-oneshot-6k	bc661792c1	2026.08.25.5	ragged_all_to_all	mixture	disabled	4470000	2400	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-6000	--ragged-all-to-all-splits-per-peer 64
