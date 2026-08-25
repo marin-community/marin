@@ -27,6 +27,7 @@ import dataclasses
 import json
 import logging
 import math
+import os
 
 import click
 import jax
@@ -36,7 +37,7 @@ from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
-from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS
+from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS, _quack_grouped_gemm_available, _select_expert_mlp
 from levanter.grug.grug_moe import moe_mlp
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -118,6 +119,34 @@ class SeedRow(BaseModel):
     median_grad_vs_dense_dropped: float
     dropped_skewed: int
     dropped_skewed_expected: int
+
+
+class RuntimeRow(BaseModel):
+    """What the run actually exercised, so a green verdict names the code it covers.
+
+    The expert-MLP kernels are chosen at trace time from the device's compute capability and the
+    installed packages, and the transport kernel from XLA flags the runtime may not recognize.
+    Both are environment-dependent, so recording them is the difference between "the ragged EP
+    path is correct" and "some ragged EP path was correct somewhere".
+    """
+
+    jax_version: str
+    device_kind: str
+    quack_grouped_gemm_available: bool
+    expert_mlp_silu: str
+    expert_mlp_gelu: str
+    xla_flags: str
+
+
+def _runtime_row() -> RuntimeRow:
+    return RuntimeRow(
+        jax_version=jax.__version__,
+        device_kind=jax.devices()[0].device_kind,
+        quack_grouped_gemm_available=_quack_grouped_gemm_available(),
+        expert_mlp_silu=_select_expert_mlp(jax.nn.silu).__name__,
+        expert_mlp_gelu=_select_expert_mlp(jax.nn.gelu).__name__,
+        xla_flags=os.environ.get("XLA_FLAGS", ""),
+    )
 
 
 class RaggedEpResult(Artifact):
@@ -348,10 +377,18 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         "matches_dense_no_drop": ground_truth_ok,
         "matches_dense_under_drops": drops_ok,
     }
-    logger.info("ragged_ep_result %s verdict %s", json.dumps(payload), json.dumps(verdict))
+    runtime = _runtime_row()
+    logger.info(
+        "ragged_ep_result %s verdict %s runtime %s",
+        json.dumps(payload),
+        json.dumps(verdict),
+        runtime.model_dump_json(),
+    )
     output_dir = StoragePath(config.output_path)
     output_dir.mkdirs(exist_ok=True)
-    (output_dir / "results.json").write_text(json.dumps({"rows": payload, "verdict": verdict}, indent=2))
+    (output_dir / "results.json").write_text(
+        json.dumps({"rows": payload, "verdict": verdict, "runtime": runtime.model_dump(mode="json")}, indent=2)
+    )
     if not verdict["ragged_correct"]:
         raise RuntimeError(f"ragged EP NOT validated: {verdict}")
 
