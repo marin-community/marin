@@ -44,6 +44,7 @@ from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
+    MoEExpertMlpPspecs,
     MoeImplementation,
     resolve_moe_implementation,
 )
@@ -70,9 +71,19 @@ _ROUTING_RENORM_SUM = 2.5
 _CE_TOKENS_PER_RANK = 65_536
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096)
 # The embedding is fully replicated for a local lookup. The language-model head
-# is sharded across the data, expert, and model axes.
+# is sharded across the data, expert, context, and model axes.
 _EMBED_PARTITION_SPEC = P(None, None)
-_FSDP_AXES: tuple[str, ...] = ("data", "expert")
+# Context parallelism replicates activations across the `context` axis but must not replicate
+# parameters across it: at EP16 x CP4 the fp32 master plus Muon momentum would need roughly
+# 1072 GB per node against ~850 GB of host RAM. Parameters therefore shard over the composite
+# that includes `context`, and their master and optimizer state inherit that placement. At
+# `context_axis_size == 1` the composite names an axis of size 1, which shards nothing and
+# leaves every spec equivalent to the one before the axis existed.
+_FSDP_AXES: tuple[str, ...] = ("data", "expert", "context")
+# Expert weights carry the bank on their leading axis, so `context` extends that axis rather
+# than the FSDP one. `moe_mlp` reshards them to the EP spec before its shard_map, which turns
+# this into a per-layer all-gather over the context group -- cheap inside an NVL72 rack.
+_EXPERT_WEIGHT_AXES: tuple[str, ...] = ("expert", "context")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
@@ -1042,6 +1053,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
+                pspecs=MoEExpertMlpPspecs(expert=_EXPERT_WEIGHT_AXES),
             ),
             cfg=cfg,
         )

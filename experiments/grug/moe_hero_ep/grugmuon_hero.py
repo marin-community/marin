@@ -95,7 +95,15 @@ def _grug_scale_with_muon_hero(
                     target_sharding=_target_named_sharding(param),
                 )
             else:
-                updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type, use_syrk)
+                updated = _newtonschulz_4d_distributed(
+                    path,
+                    x,
+                    steps,
+                    muon_eps,
+                    coefficient_type,
+                    use_syrk,
+                    target_sharding=_target_named_sharding(param),
+                )
 
             fan_in, fan_out = updated.shape[-2:]
             scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
@@ -215,8 +223,15 @@ def _newtonschulz_4d_distributed(
     eps: float,
     coefficient_type: CoefficientType,
     use_syrk: bool,
+    target_sharding: NamedSharding | None = None,
 ) -> jax.Array:
-    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dims."""
+    """Run Newton-Schulz on a stacked 4D expert leaf without gathering matrix dims.
+
+    ``target_sharding`` is the parameter's own layout. The update has to come back on it: under
+    context parallelism the expert bank is split over ``("expert", "context")`` rather than
+    ``"expert"`` alone, and an update that returned on the narrower spec would silently pull the
+    parameter, its master, and the momentum buffer back to a context-replicated layout.
+    """
 
     def local_ns(matrix):
         return _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
@@ -231,10 +246,13 @@ def _newtonschulz_4d_distributed(
     layers, expert_count, d, last = x.shape
     is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
     trailing = ("model", "data") if is_w_down else ("data", "model")
-    orig_4d_spec = PartitionSpec(None, "expert", *trailing)
+    orig_4d_spec = target_sharding.spec if target_sharding is not None else PartitionSpec(None, "expert", *trailing)
+    # The bank axis of the parameter's own spec, so the Newton-Schulz stack stays split exactly
+    # where the parameter is split instead of gathering the context shards back together.
+    expert_dim_axes = orig_4d_spec[1] if len(orig_4d_spec) > 1 else None
 
     if int(mesh.shape.get("expert", 1)) > 1:
-        distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+        distributed_4d_spec = PartitionSpec(None, expert_dim_axes or "expert", None, None)
         x_distributed = reshard(x.astype(jnp.bfloat16), distributed_4d_spec)
         if use_syrk:
 

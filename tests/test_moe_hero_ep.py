@@ -451,6 +451,35 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
     assert output.sharding == NamedSharding(mesh, P(None, "expert", "data", "model"))
 
 
+def test_ep_newton_schulz_follows_a_context_sharded_expert_bank():
+    # Under CP the expert bank is split over ("expert", "context"). An update that came back on
+    # "expert" alone would drag the parameter, its fp32 master and the momentum buffer back to a
+    # context-replicated layout -- the memory this sharding exists to avoid.
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 4, 16, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    param_spec = P(None, ("expert", "context"), None, None)
+    x = jax.ShapeDtypeStruct((48, 256, 8, 4), jnp.float32, sharding=NamedSharding(mesh, param_spec))
+
+    def apply_ns(y):
+        return grugmuon_hero._newtonschulz_4d_distributed(
+            (jax.tree_util.GetAttrKey("w_gate"),),
+            y,
+            steps=0,
+            eps=1e-8,
+            coefficient_type="quintic",
+            use_syrk=False,
+            target_sharding=NamedSharding(mesh, param_spec),
+        )
+
+    with use_abstract_mesh(mesh):
+        output = jax.eval_shape(apply_ns, x)
+
+    assert output.sharding == NamedSharding(mesh, param_spec)
+
+
 def test_ep_newton_schulz_matches_replicated_path():
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"

@@ -242,6 +242,62 @@ def test_a_pre_context_axis_checkpoint_restores_onto_the_context_mesh():
     )
 
 
+def test_a_pre_context_axis_checkpoint_restores_onto_context_sharded_parameters():
+    """The 262K restore reads the hero's expert bank onto weights split over ("expert", "context").
+
+    The sibling case above holds the PartitionSpec fixed and only adds a length-1 axis. This one
+    changes the spec: the hero wrote its expert stack sharded over "expert" alone, and a CP run
+    places the same array over the composite so the fp32 master and the Muon momentum that inherit
+    the placement fit in node RAM. A checkpoint records no mesh, so the target template alone
+    decides -- but only if the restore actually rebuilds the array on the wider partition, which
+    is what the value comparison here checks.
+    """
+    _run_on_eight_cpu_devices(
+        """
+        import tempfile
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.checkpoint import load_checkpoint, save_checkpoint
+        from levanter.grug.sharding import compact_grug_mesh
+
+        legacy_mesh = Mesh(
+            np.asarray(jax.devices(), dtype=object).reshape(1, 4, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = compact_grug_mesh(expert_axis_size=2, context_axis_size=2, replica_axis_size=1)
+        assert dict(mesh.shape) == {"replica_dcn": 1, "data": 2, "context": 2, "expert": 2, "model": 1}, mesh.shape
+
+        # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
+        # mesh that wrote it.
+        shape = (4, 3, 2)
+        written = jax.device_put(
+            jnp.arange(24, dtype=jnp.float32).reshape(shape),
+            NamedSharding(legacy_mesh, P("expert", None, None)),
+        )
+        sharding = NamedSharding(mesh, P(("expert", "context"), None, None))
+        assert len({index for index in sharding.devices_indices_map(shape).values()}) == 4
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
+        """
+    )
+
+
 def _variant_has_noverify(variant_dir: Path) -> bool:
     train_file = variant_dir / "train.py"
     if not train_file.is_file():
