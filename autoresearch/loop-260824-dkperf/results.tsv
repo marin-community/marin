@@ -31,3 +31,4 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 8	2026-08-25T07:1xZ	dkp-10-oneshot-6k-r2	restore	second one-shot draw	-	-	running	interleaved round 2
 9	2026-08-25T08:00Z	dkp-10-oneshot-6k-r2	restore	second one-shot draw	22.05	-	KEY	oneshot tonight: 21.93/22.05
 9	2026-08-25T08:15Z	dkp-11-bal-6k-r3	restore	third balanced draw, LATE window (drift control)	22.47	+0.47 vs oneshot-mean	KEEP-FINAL	bal: 22.34/22.58/22.47 vs oneshot 21.93/22.05 interleaved same-night. GOAL EXCEEDED.
+10	2026-08-25T17:36Z	dkp-bal9-u3/u30	bench	review-cleaned commit d6d3132a90 (merged cta-count fn, renames, comment fixes)	8.92/9.62	-	revalidated	VALIDATION OK both; ragged-a2a-dk-balanced force-updated via API, v2/v3 pruned
