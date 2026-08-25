@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeVar, cast
 
+import equinox as eqx
 import fsspec
 import jax
 import jax.numpy as jnp
@@ -652,11 +653,12 @@ def evaluate_grug_checkpoint(config: GrugCheckpointEvalConfig) -> dict[str, floa
         )
     policy = jmp.get_policy(config.runtime.mp)
     with set_mesh(mesh):
-        model = jax.jit(lambda key: policy.cast_to_param(Transformer.init(config.model, key=key)))(
-            jax.random.PRNGKey(config.runtime.seed)
+        model_shape = eqx.filter_eval_shape(
+            lambda key: policy.cast_to_param(Transformer.init(config.model, key=key)),
+            jax.random.PRNGKey(config.runtime.seed),
         )
         checkpoint_step, params = load_grug_checkpoint_params(
-            config.checkpoint_path, initialized_params=model, mesh=mesh
+            config.checkpoint_path, initialized_params=model_shape, mesh=mesh
         )
         condition_losses = _evaluate_components(config, policy.cast_to_compute(params), mesh)
     if jax.process_index() != 0:

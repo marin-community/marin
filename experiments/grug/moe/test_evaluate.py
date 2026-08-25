@@ -29,9 +29,14 @@ from experiments.grug.moe.evaluate import (
     summarize_per_example_losses,
     validate_grug_checkpoint_eval_config,
 )
+from experiments.grug.moe.model import Transformer
 
 
 class _TrackerInitialized(Exception):
+    pass
+
+
+class _ShapeExemplarObserved(Exception):
     pass
 
 
@@ -226,6 +231,29 @@ def test_evaluate_grug_checkpoint_initializes_distributed_before_tracker(monkeyp
         evaluate_grug_checkpoint(_config(tmp_path))
 
     assert events == ["distributed", "tracker"]
+
+
+def test_evaluate_grug_checkpoint_restores_with_shape_only_param_exemplar(monkeypatch, tmp_path):
+    def initialize_distributed(_self):
+        pass
+
+    def initialize_model(_config, *, key):
+        del key
+        return {"weight": jnp.ones((2, 3), dtype=jnp.float32)}
+
+    def load_checkpoint_with_shape_exemplar(initialized, _checkpoint_path, **_kwargs):
+        param_leaves = jax.tree.leaves(initialized["params"])
+        assert param_leaves
+        assert all(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in param_leaves)
+        assert not any(isinstance(leaf, jax.Array) for leaf in param_leaves)
+        raise _ShapeExemplarObserved
+
+    monkeypatch.setattr(DistributedConfig, "initialize", initialize_distributed)
+    monkeypatch.setattr(Transformer, "init", initialize_model)
+    monkeypatch.setattr("experiments.grug.moe.evaluate.load_checkpoint", load_checkpoint_with_shape_exemplar)
+
+    with pytest.raises(_ShapeExemplarObserved):
+        evaluate_grug_checkpoint(_config(tmp_path))
 
 
 def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(tmp_path):
