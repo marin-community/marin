@@ -55,7 +55,7 @@ def _moe_mlp_ep_ring_local(
 
         ep_size = num_experts // local_experts
         local_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
-        local_capacity = max(local_experts, local_capacity)
+        local_capacity = min(assignments, max(local_experts, local_capacity))
 
         expert_axis = jax.lax.axis_index("expert")
         expert_start = expert_axis * local_experts
