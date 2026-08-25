@@ -102,6 +102,46 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## Attempt 3 (2026-08-25 21:50 UTC): the step runs
+
+Run `lc262k-ep16cp4-08251450`, job `/mwittmann/lc262k-ep16cp4-08251450-coord`, on `7962b135ea`
+(halo + context-sharded residual). Gang admitted in under a minute, restore of the step-6000
+checkpoint complete by 21:54, first optimizer step at 22:00. No OOM, no SConv rejection, no
+`Involuntary full rematerialization`, no `hlo_rematerialization` overflow.
+
+**Peak HBM 127.63 GiB against the 138.22 GiB pool limit.** The same step needed 350.36 GiB before
+the residual fix, so context-sharding the residual removed roughly 223 GiB per device and left about
+10.6 GiB of headroom.
+
+Steady state over steps 6000-6012, from raw `_timestamp` deltas rather than the smoothed tqdm rate:
+
+| quantity | value |
+|---|---|
+| s/step | 113.5 median (113.3-115.5 after the first three) |
+| tokens/s | 37,042 |
+| MFU | 8.78 % |
+| loss | 1.416 median, restored at 1.336, range 1.09-1.52 |
+| `moe/drop_fraction` | 0.1805 median, rising 0.168 -> 0.207 |
+| sender / receiver | 0.0806 / 0.1008 |
+| peak HBM | 127.63 GiB |
+
+Two results worth separating. Throughput: 8.78 % MFU against roughly 21 % for the 4K hero on one
+rack, which is the cost of 262K attention at a hero-matched 4.19M tokens per step.
+
+Routing: **the drop rate is 18 %, against 3.5 % for the live 4K hero and 1.7e-4 for the 4K one-rack
+baseline**, and it is drifting up rather than settling. The capacity factors are the hero's 1.15/1.15
+and were tuned at sequence 4096 with a global batch of 1024. Here the batch is 16, so each expert
+coordinate routes one document's 65,536 tokens instead of sixteen independent 4,096-token
+sequences; token-to-expert load within a single long document is far more correlated, and the fixed
+per-expert capacity clips it. `train/router/capacity_overflow_rate_mean` tracks `drop_fraction`
+exactly, so the loss is entirely capacity clipping and not transport. This is the headline
+measurement the probe was for, and it says the 4K capacity settings do not carry to 262K at this
+batch.
+
+Read the loss trajectory with the learning-rate caveat below: at ~6.9e-5, about 2 % of the rate the
+checkpoint was trained at, the model is barely moving and the step-to-step spread is batch-16 noise
+rather than learning.
+
 ## The fix: a context-sharded residual, and the halo that unblocks it
 
 `short_conv` now carries a left halo over the context axis (`ad62b7f18a`), so the contract is
