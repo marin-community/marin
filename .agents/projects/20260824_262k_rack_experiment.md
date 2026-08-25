@@ -64,6 +64,33 @@ the composite spec is identical to today's.
 3. A short small-shape rack-free smoke (single node, 4 GPUs, CP4 over a tiny model config) to
    catch integration-level sharding errors before burning a rack slot.
 
+## Pre-flight results (2026-08-25, gates 1 and 3)
+
+Gate 1 passes. `lib/levanter/tests/grug/test_fa4_cute_attention.py` is 19/19 green on one
+`cw-us-east-08a` GB200 tray, including all three `..._with_context_sharded_queries`
+parametrizations, which are the only hardware coverage of the CuTe `q_offset` arithmetic and the
+backward `m_block_min` clamp. `tests/test_moe_hero_ep.py -k "context_parallel or context_sharded"`
+is 2/2 green. The context-sharded case first failed at four visible GPUs because it fixed the batch
+at one sequence while `compact_grug_mesh` gave `data` the devices `context` left free; the batch now
+comes from the mesh (commit a3b0a4b492) and the case passes at two and at four GPUs.
+
+Gate 3 passes on the mesh, on synthetic data: 20 steps at `context_axis_size=4`,
+`expert_axis_size=1`, d768, sequence 32768, one GB200 tray. Loss falls monotonically 11.81 -> 3.86,
+drop metrics are finite, and no sharding error appears
+([W&B](https://wandb.ai/marin-community/marin_moe/runs/cp4-smoke-03)).
+
+**The run plan's data configuration will not start.** `LmDataConfig` slices every mixture component
+to `int(sequences * experiment_budget / target_budget)`, and `experiment_budget` is
+`total_schedule_steps * batch * max_seq_len` against an 18.75T target. At `--num-steps 6100`,
+batch 16 and sequence 262144 the ratio is 1.36e-3, and because a component's length is counted in
+*sequences* (tokens // 262144, 64x fewer than at 4096) three of the mixture's 200 cells (`c13q0`,
+`c22q0`, `c27q0`) slice to zero. `MixtureDataset` then raises `ValueError: ... encountered an empty
+finite dataset`, before the first step. The same step and batch count at sequence 4096 empties no
+cell, so this is specific to the long context. Reproduced twice on hardware, at
+`context_axis_size` 4 and 1 alike, so it is not a context-parallel fault. Resolve it before the
+rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
+this probe, or drop the cells that cannot fill one sequence.
+
 ## Measurements to record
 
 `tokens/s`, s/step (raw elapsed stamps, not smoothed tqdm), MFU, `moe/drop_fraction` +

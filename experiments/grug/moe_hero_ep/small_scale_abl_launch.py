@@ -48,7 +48,13 @@ from experiments.grug.moe_hero_ep.launch_mfu_test import (
     validate_mesh_axes,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    TrainingDataMode,
+    run_grug,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
 # The EP sweep (issue #8062) settings: 4096-token sequences at batch 1024, 2048 sliding window with
@@ -276,6 +282,7 @@ def build_small_run(
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
     watch_interval: int = 10,
+    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     context_axis_size: int = 1,
     expert_axis_size_override: int | None = None,
     dp_racks: int = 1,
@@ -384,6 +391,7 @@ def build_small_run(
         z_loss_weight=1e-4,
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
         save_checkpoints=True,
+        training_data_mode=training_data_mode,
         expert_axis_size=expert_axis_size,
         context_axis_size=context_axis_size,
         replica_axis_size=dp_racks,
@@ -613,6 +621,13 @@ def build_small_run(
     help="Train this many steps instead of the --tokens-per-active-param budget. For smokes.",
 )
 @click.option(
+    "--training-data",
+    type=click.Choice([mode.value for mode in TrainingDataMode]),
+    default=TrainingDataMode.MIXTURE.value,
+    show_default=True,
+    help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
+)
+@click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
     default=1,
@@ -647,6 +662,7 @@ def main(
     context_axis_size: int,
     expert_axis_size: int | None,
     num_steps: int | None,
+    training_data: str,
     dp_racks: int,
     steps_per_eval: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -668,6 +684,7 @@ def main(
         tokens_per_active_param=tokens_per_active_param,
         num_train_steps_override=num_steps,
         watch_interval=watch_interval,
+        training_data_mode=TrainingDataMode(training_data),
         context_axis_size=context_axis_size,
         expert_axis_size_override=expert_axis_size,
         dp_racks=dp_racks,
