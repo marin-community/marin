@@ -428,7 +428,7 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     )
     with set_mesh(mesh):
         m = model.Transformer.init(cfg, key=jax.random.key(0))
-    dropless = train._to_dropless_local(m)
+    dropless = train._to_dropless_local(m, implementation="sonic_cute")
 
     original = m.stacked_blocks.stacked.mlp.expert_mlp
     swapped = dropless.stacked_blocks.stacked.mlp.expert_mlp

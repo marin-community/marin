@@ -347,7 +347,7 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
     return jax.tree.map(move, tree)
 
 
-def _to_dropless_local(model: Transformer, *, implementation: MoeImplementation = "sonic_cute") -> Transformer:
+def _to_dropless_local(model: Transformer, *, implementation: MoeImplementation) -> Transformer:
     """Swap the scanned block's MoE expert backend to the selected dropless local path.
 
     ``implementation``/``expert_chunks`` are static fields shared across the whole stacked block,

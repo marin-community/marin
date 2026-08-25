@@ -3,11 +3,11 @@
 
 """Hero-shape scaling ladders on GB200 and H100.
 
-Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
-hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
+The GB200 rungs train the same EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in
+a hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
 tokenizer, offloaded MuonH state on FP32 pinned-host master params, the QB histogram estimator, and
-a dropless held-out eval -- and differs only in width and the rack count it spans. Behaviour is
-uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the hero itself.
+a dropless held-out eval. They differ only in width and rack count, so a rung predicts the d6144
+hero. ``d6144`` is the hero itself.
 
     size   racks  batch    steps  eval        checkpoints  tokens  active  total   FLOPs
     d768     1     1024    11420  every 5%    final only     48B     61M    1.6B    5.5e19
@@ -23,8 +23,8 @@ analytic estimate (forward+backward, including attention and the latent-MoE corr
 The H100 ladder extends the same recipe downward. Its global token batch is the largest power-of-two
 sequence batch no greater than ``training_tokens ** 0.6``. d384 uses EP4 because EP8 underfills the
 devices at this width, d512 uses EP8, and d768 uses two data-parallel EP8 replicas to stay
-comfortably below a 12-hour wall-time target. The hardware mapping changes only the expert/replica
-topology, accelerator kernels, and per-device eval batch:
+comfortably below a 12-hour wall-time target. Its execution mapping selects the expert/replica
+topology, accelerator kernels, per-device eval batch, and bounded retry policy:
 
     size   H100 GPUs  EP per task  global batch  steps  tokens
     d384       4           4            128       12162   6.4B
@@ -105,14 +105,14 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
-H100_LADDER_NODES: dict[str, int] = {"d384": 1, "d512": 1, "d768": 2}
-H100_LADDER_GPUS_PER_TASK: dict[str, int] = {"d384": 4, "d512": 8, "d768": 8}
+H100_LADDER_SIZES = ("d384", "d512", "d768")
 QB_HIST_BINS = 10_000
 # Gradient and parameter norm logs every 10 steps on every rung.
 WATCH_INTERVAL = 10
 # 791 tokens per active parameter sets the step budget: it lands the d6144 hero at 18T tokens and
 # scales every narrower rung by the same ratio.
 TOKENS_PER_ACTIVE_PARAM = 791
+H100_BATCH_TOKEN_EXPONENT = 0.6
 # The decoded-chunk cache is process-local. A two-tray loader benchmark at the hero's global batch
 # and sequence length found 1 GB retained 18.6x throughput headroom while bounding the cache near
 # 0.923 GiB per process; 125 GB allowed native RSS to grow until the cache filled.
@@ -175,10 +175,14 @@ def _ladder_execution(size: str, target: LadderTarget) -> LadderExecution:
             tags=(f"racks-{dp_racks}", "gb200"),
         )
 
-    if size not in H100_LADDER_NODES:
-        raise ValueError(f"size must be one of {sorted(H100_LADDER_NODES)} for {target}, got {size!r}")
-    nodes = H100_LADDER_NODES[size]
-    gpus_per_task = H100_LADDER_GPUS_PER_TASK[size]
+    if size == "d384":
+        nodes, gpus_per_task = 1, 4
+    elif size == "d512":
+        nodes, gpus_per_task = 1, 8
+    elif size == "d768":
+        nodes, gpus_per_task = 2, 8
+    else:
+        raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)} for {target}, got {size!r}")
     return LadderExecution(
         accelerator="H100",
         gpus_per_task=gpus_per_task,
@@ -198,12 +202,13 @@ def _ladder_execution(size: str, target: LadderTarget) -> LadderExecution:
 
 def _h100_ladder_batch_size(training_tokens: int, global_device_count: int) -> int:
     """Largest power-of-two sequence batch within the token-budget scaling ceiling."""
-    max_sequences = int(training_tokens**0.6) // SEQ_LEN
+    token_ceiling = training_tokens**H100_BATCH_TOKEN_EXPONENT
+    max_sequences = int(token_ceiling) // SEQ_LEN
     if max_sequences < global_device_count:
         raise ValueError(f"token batch ceiling permits {max_sequences} sequences for {global_device_count} devices")
     batch_size = 1 << (max_sequences.bit_length() - 1)
     assert batch_size % global_device_count == 0
-    assert batch_size * SEQ_LEN <= training_tokens**0.6
+    assert batch_size * SEQ_LEN <= token_ceiling
     return batch_size
 
 
@@ -435,7 +440,7 @@ def build_ladder_run(
 @click.option(
     "--size",
     required=True,
-    type=click.Choice(sorted(set(LADDER_RACKS) | set(H100_LADDER_NODES))),
+    type=click.Choice(sorted(set(LADDER_RACKS) | set(H100_LADDER_SIZES))),
     help="Ladder rung width; availability depends on --target.",
 )
 @click.option(

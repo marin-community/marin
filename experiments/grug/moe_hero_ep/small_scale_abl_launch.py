@@ -169,7 +169,7 @@ class SmallShape:
     global_kv_heads: int
 
 
-# Hidden/depth/head split extends the #7856 sweep grid downward: heads = hidden/128, KV split local =
+# Hidden/depth/head split extends the established sweep grid downward: heads = hidden/128, KV split local =
 # heads//4 and global = heads//8 (floored at 1), with depth 4/6/8/12/14/16/22. The step count is
 # derived from the active-param count (see `_active_params`), not carried here.
 SMALL_SHAPES: dict[str, SmallShape] = {

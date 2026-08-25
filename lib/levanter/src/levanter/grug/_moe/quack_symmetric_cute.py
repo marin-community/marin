@@ -1,23 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CuTeDSL->JAX bridge for QuACK's symmetric GEMM (D = X @ X^T, full symmetric via an
-in-kernel mirror), used to accelerate the two symmetric products in the Grug Muon Newton-Schulz.
-
-A thin ``@cute.jit`` launcher over QuACK's architecture-specific kernel wrapped with
-``cutlass.jax.cutlass_call``
-(the same bridge the FA4 attention backend uses, so the kernel runs on XLA's stream and is ordered
-correctly with the surrounding graph). The kernel computes ``A @ B^T`` with a triangular tile
-scheduler that writes each lower tile to D and its mirror to ``D.mT`` (same storage), so D comes out
-fully symmetric with ~half the matmul FLOPs.
-
-Configs match QuACK's own paths: SM90 uses ``mma_tiler (128, 256)`` and SM100 uses ``(256, 256)``;
-both use ``cluster (2, 1, 1)`` and static persistence. The dynamic CLC scheduler (with its GMEM
-tile-count semaphore) raced between clusters and returned intermittent garbage on tiny-magnitude and
-square SM100 inputs; static persistence is deterministic and validated end to end.
-
-Lazy-imported with the GPU-only Grug backend, like the sonic MoE backend.
-"""
+"""QuACK symmetric GEMM for Grug Muon Newton-Schulz on Hopper and Blackwell GPUs."""
 
 from __future__ import annotations
 
@@ -53,6 +37,8 @@ _JAX_TO_CUTE = {
 # loss 11.8 -> 5.94). Do not narrow tile_N without validating on the full set of live NS shapes.
 _SM90_MMA_TILER = (128, 256)
 _SM100_MMA_TILER = (256, 256)
+_HOPPER_ARCH_FAMILY = 9
+_BLACKWELL_ARCH_FAMILIES = (10, 11)
 _DEFAULT_CLUSTER = (2, 1, 1)
 _DEFAULT_SWIZZLE = 8
 
@@ -68,16 +54,16 @@ def _transpose_mn(mD):
 
 def _symmetric_gemm_config(arch: int) -> tuple[int, tuple[int, int]]:
     arch_family = arch // 10
-    if arch_family == 9:
+    if arch_family == _HOPPER_ARCH_FAMILY:
         return arch_family, _SM90_MMA_TILER
-    if arch_family in (10, 11):
+    if arch_family in _BLACKWELL_ARCH_FAMILIES:
         return arch_family, _SM100_MMA_TILER
     raise NotImplementedError(f"QuACK symmetric GEMM does not support CUDA compute capability {arch}.")
 
 
 @cute_launcher_factory
 def _build_launcher(*, arch_family, a_dtype, mma_tiler_mnk, cluster_mnk, mac, max_swizzle):
-    gemm_type = GemmSymmetricSm90 if arch_family == 9 else GemmSymmetricSm100
+    gemm_type = GemmSymmetricSm90 if arch_family == _HOPPER_ARCH_FAMILY else GemmSymmetricSm100
 
     @cute.jit
     def launcher(stream, mA, mB, mD):
