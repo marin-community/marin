@@ -32,7 +32,7 @@ from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_20260825"
+EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825"
 DEFAULT_CANDIDATE_DIR = (
     Path(__file__).resolve().parent
     / "exploratory"
@@ -200,6 +200,7 @@ def candidate_specs(
 
 def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> None:
     """Train one prefix and bind the permanent checkpoint to frozen inputs."""
+    replay.run_phase_0_prefix(config.prefix_config)
     devices = jax.devices()
     if (
         jax.default_backend() != "tpu"
@@ -212,7 +213,6 @@ def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> No
             f"backend={jax.default_backend()}, global={jax.device_count()}, local={jax.local_device_count()}, "
             f"kinds={[device.device_kind for device in devices]}"
         )
-    replay.run_phase_0_prefix(config.prefix_config)
     run_spec = config.prefix_config.run_spec
     checkpoint_uri = os.path.join(
         config.prefix_config.output_path,
