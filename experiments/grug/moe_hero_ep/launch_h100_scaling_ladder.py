@@ -3,55 +3,67 @@
 
 """H100 scaling ladder for the Grug MoE EP hero recipe.
 
-The two rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter
-scaling rules while mapping the expert and replica axes onto Hopper nodes. Every rung uses a global
-sequence batch of 1024.
+The four rungs share the current B200 hero model, data, trainer, checkpointing, and
+791-token-per-active-parameter scaling rules while mapping the expert and replica axes onto Hopper
+nodes. Every rung uses a global sequence batch of 1024.
 
     size   H100 GPUs  EP per task  global batch  steps  tokens
     d512       8           8           1024        3930    16B
     d768      16           8           1024       11420    48B
+    d1024     32           8           1024       30552   128B
+    d1536     64           8           1024       90767   381B
 
 Use ``--batch-size`` for one-off batch comparisons. The step count and compute-scaled optimizer are
 recomputed from the override unless ``--num-steps`` is also set.
 """
 
 import dataclasses
-from datetime import timedelta
 
 import click
-import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import data_local_temporary_checkpoint_base_path, temporary_checkpoint_base_path
+from marin.training.training import (
+    data_local_temporary_checkpoint_base_path,
+    temporary_checkpoint_base_path,
+)
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
-from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
     harrier_mix_2026_08_18_data_config,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_MIXED_PRECISION,
+    HERO_QB_HIST_BINS,
+    HERO_TENSORSTORE_CACHE_BYTES,
+    HERO_WATCH_INTERVAL,
     HeroThroughputResult,
-    _validation_datasets,
+    hero_grug_trainer_config,
+    hero_trainer_config,
+    validation_datasets,
 )
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import TENSORSTORE_CACHE_BYTES, TOKENS_PER_ACTIVE_PARAM
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import (
+    HERO_PROCESS_STALL_TIMEOUT,
+    HERO_STARTUP_TIMEOUT,
+    HERO_STEP_TIMEOUT,
+    RESUME_SAVE_INTERVAL,
+    TOKENS_PER_ACTIVE_PARAM,
+)
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
+    SMALL_SHAPES,
     SmallShape,
     _active_params,
     _small_model,
@@ -59,48 +71,28 @@ from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
-    GrugTrainerConfig,
-    MasterParamMode,
+    TrainingDataMode,
     WatchMode,
     _compute_flops,
     run_grug,
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
-H100_LADDER_SIZES = ("d512", "d768")
+H100_LADDER_NODES: dict[str, int] = {"d512": 1, "d768": 2, "d1024": 4, "d1536": 8}
+H100_GPUS_PER_NODE = 8
+H100_NODE_CPU = 32
+H100_NODE_RAM = "600g"
+H100_NODE_DISK = "900g"
 GLOBAL_BATCH_SIZE = 1024
-QB_HIST_BINS = 10_000
-WATCH_INTERVAL = 10
-RESUME_SAVE_INTERVAL = timedelta(hours=1)
-STEP_TIMEOUT = timedelta(minutes=15)
-PROCESS_STALL_TIMEOUT = timedelta(hours=1)
-STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
+H100_D512_SHAPE = SmallShape(512, 6, 4, 1, 1)
 MAX_RETRIES_FAILURE = 3
 MAX_TASK_FAILURES = 3
 
 
-@dataclasses.dataclass(frozen=True)
-class H100LadderRung:
-    shape: SmallShape
-    gpus_per_task: int
-    task_count: int
-
-    @property
-    def global_device_count(self) -> int:
-        return self.gpus_per_task * self.task_count
-
-
-def _h100_ladder_rung(size: str) -> H100LadderRung:
-    if size == "d512":
-        return H100LadderRung(SmallShape(512, 6, 4, 1, 1), gpus_per_task=8, task_count=1)
-    if size == "d768":
-        return H100LadderRung(SmallShape(768, 8, 6, 1, 1), gpus_per_task=8, task_count=2)
-    raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
-
-
-def _h100_ladder_model(rung: H100LadderRung):
+def _h100_ladder_model(size: str):
+    shape = H100_D512_SHAPE if size == "d512" else SMALL_SHAPES[size]
     return _small_model(
-        rung.shape,
+        shape,
         _EP_CAPACITY_FACTOR,
         attention_implementation="gpu_fa4_cute",
         moe_implementation="fixed_pooled_wave_all_to_all",
@@ -113,7 +105,7 @@ def _h100_ladder_model(rung: H100LadderRung):
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         num_expert_waves=3,
         qb_use_histogram=True,
-        qb_hist_bins=QB_HIST_BINS,
+        qb_hist_bins=HERO_QB_HIST_BINS,
     )
 
 
@@ -137,14 +129,17 @@ def build_h100_ladder_run(
         raise ValueError("run_id must not be empty")
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
+    if size not in H100_LADDER_NODES:
+        raise ValueError(f"size must be one of {sorted(H100_LADDER_NODES)}, got {size!r}")
     if checkpoint_every is not None and checkpoint_every <= 0:
         raise ValueError(f"checkpoint_every must be positive, got {checkpoint_every}")
 
-    rung = _h100_ladder_rung(size)
-    model = _h100_ladder_model(rung)
+    task_count = H100_LADDER_NODES[size]
+    global_device_count = H100_GPUS_PER_NODE * task_count
+    model = _h100_ladder_model(size)
     training_tokens = TOKENS_PER_ACTIVE_PARAM * _active_params(model)
-    if batch_size <= 0 or batch_size % rung.global_device_count != 0:
-        raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
+    if batch_size <= 0 or batch_size % global_device_count != 0:
+        raise ValueError(f"batch_size must be positive and divisible by {global_device_count}, got {batch_size}")
 
     global_tokens_per_step = batch_size * SEQ_LEN
     if num_steps is None:
@@ -165,42 +160,38 @@ def build_h100_ladder_run(
         ),
         use_syrk=True,
     )
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=True,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
-        watch_mode=WatchMode.INLINE,
-        save_checkpoints=True,
-        expert_axis_size=rung.gpus_per_task,
-        replica_axis_size=rung.task_count,
-        sharding_dump_path=None,
+    grug_trainer = dataclasses.replace(
+        hero_grug_trainer_config(
+            replica_axis_size=task_count,
+            training_data_mode=TrainingDataMode.MIXTURE,
+            watch_mode=WatchMode.INLINE,
+            save_checkpoints=True,
+        ),
+        # The shared B200 recipe uses EP64; one Hopper node is the H100 EP domain.
+        expert_axis_size=H100_GPUS_PER_NODE,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
-        count=rung.gpus_per_task,
-        cpu=32,
-        ram="600g",
-        disk="900g",
-        replicas=rung.task_count,
+        count=H100_GPUS_PER_NODE,
+        cpu=H100_NODE_CPU,
+        ram=H100_NODE_RAM,
+        disk=H100_NODE_DISK,
+        replicas=task_count,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = [*_validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
+    validation = [*validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
         temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
         data_local_checkpoint_path = data_local_temporary_checkpoint_base_path(ctx.output_path)
-        trainer = TrainerConfig(
-            id=run_id,
+        trainer = hero_trainer_config(
+            run_id=run_id,
             seed=0,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -212,23 +203,20 @@ def build_h100_ladder_run(
                     "scaling-ladder",
                     "h100",
                     f"shape-{size}",
-                    f"h100-nodes-{rung.task_count}",
-                    f"ep{rung.gpus_per_task}",
+                    f"h100-nodes-{task_count}",
+                    f"ep{H100_GPUS_PER_NODE}",
                     HARRIER_MIX_2026_08_18_TAG,
                 ],
                 group="moe-hero-ep-h100-scaling-ladder",
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=WATCH_INTERVAL),
+            watch=WatchConfig(interval=HERO_WATCH_INTERVAL),
             progress_watchdog=ProgressWatchdogConfig(
-                step_timeout=STEP_TIMEOUT,
-                process_timeout=PROCESS_STALL_TIMEOUT,
-                startup_timeout=STARTUP_TIMEOUT,
+                step_timeout=HERO_STEP_TIMEOUT,
+                process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+                startup_timeout=HERO_STARTUP_TIMEOUT,
             ),
-            use_explicit_mesh_axes=True,
-            require_accelerator=True,
-            allow_nondivisible_batch_size=False,
             load_checkpoint_path=[
                 permanent_checkpoint_path,
                 temporary_checkpoint_path,
@@ -255,19 +243,20 @@ def build_h100_ladder_run(
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),
-            tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
+            tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
                 steps_per_eval=steps_per_eval,
-                eval_batch_size=rung.global_device_count,
+                eval_batch_size=global_device_count,
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
+                # Hopper evaluates through the Triton Sonic path; Blackwell uses sonic_cute.
                 dropless_eval_moe_implementation="sonic",
             ),
             stop_after_steps=num_steps,
-            processes_per_task=rung.gpus_per_task,
+            processes_per_task=H100_GPUS_PER_NODE,
             max_retries_failure=MAX_RETRIES_FAILURE,
             max_task_failures=MAX_TASK_FAILURES,
         )
@@ -285,7 +274,7 @@ def build_h100_ladder_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option("--size", required=True, type=click.Choice(H100_LADDER_SIZES), help="H100 ladder rung width.")
+@click.option("--size", required=True, type=click.Choice(sorted(H100_LADDER_NODES)), help="H100 ladder rung width.")
 @click.option(
     "--num-steps",
     type=click.IntRange(min=1),
