@@ -25,8 +25,7 @@ uv pip install --python "$PYBIN" --reinstall \
   "jax-cuda13-pjrt @ ${NIGHTLY}/jax-cuda13-pjrt/jax_cuda13_pjrt-0.11.2.dev20260821-py3-none-manylinux_2_27_aarch64.whl"
 uv pip install --python "$PYBIN" --no-deps --reinstall /tmp/pjrt-wheel/*.whl
 
-LOOP_DIR="$(dirname "${BASH_SOURCE[0]}")"
-BENCH_DIR="${LOOP_DIR}/../loop-260823-dknative"
+BENCH_DIR="$(dirname "${BASH_SOURCE[0]}")"
 echo "==== BENCH flags: ${FLAGS} ===="
 if [ "${GANG:-0}" = "1" ]; then
   XLA_FLAGS="$FLAGS" python -m iris.hooks.multigpu_main --nproc 4 --devices-per-proc 1 -- \
