@@ -24,12 +24,12 @@ from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, ragged_ep_check, train
-from experiments.grug.moe_hero_ep import launch_mfu_test as launch
+from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
-def test_hero_run_without_shape_overrides_uses_the_selected_model():
-    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_diagnostic_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert (
@@ -43,9 +43,13 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.pooled_transport_capacity_factor,
         config.model.num_expert_waves,
         config.model.moe_implementation,
+        config.model.qb_estimator,
+        config.model.qb_hist_bins,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
         config.processes_per_task,
+        config.trainer.trainer.watch.interval,
+        config.tensorstore_cache_bytes,
         config.trainer.trainer.mp.param_dtype,
         config.trainer.trainer.mp.compute_dtype,
         config.trainer.master_param_mode,
@@ -60,118 +64,17 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         1.15,
         3,
         "fixed_pooled_wave_all_to_all",
+        model.QbEstimator.HIST,
+        10_000,
         1024,
         4096,
-        1,
+        4,
+        10,
+        1_000_000_000,
         jnp.bfloat16,
         jnp.bfloat16,
         train.MasterParamMode.FP32_PINNED_HOST,
     )
-
-
-def test_moe_backend_override_reaches_the_model_and_the_run_tags():
-    step = launch.build_hero_run(
-        run_id="ragged-backend",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation="ragged_all_to_all",
-        processes_per_task=4,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.model.moe_implementation == "ragged_all_to_all"
-    assert config.processes_per_task == 4
-    tags = config.trainer.trainer.tracker.tags
-    assert "ragged-all-to-all" in tags
-    # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
-    # transport that has no such buffer would label the run with a setting it never read.
-    assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
-
-
-def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
-    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
-    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
-    rng = np.random.default_rng(0)
-    tokens_per_shard = 8
-    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
-    selected = rng.integers(0, ragged_ep_check.NUM_EXPERTS, size=(tokens, ragged_ep_check.TOPK))
-
-    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, ragged_ep_check.NO_DROP_CAPACITY)
-
-    assert keep.shape == selected.shape
-    assert keep.all()
-
-
-def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
-    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
-    # which is what lets the transport read them in place. The mask has to agree.
-    rng = np.random.default_rng(1)
-    tokens_per_shard = 16
-    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
-    topk, num_experts = ragged_ep_check.TOPK, ragged_ep_check.NUM_EXPERTS
-    # Skew hard toward the low experts so the gate actually bites.
-    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
-
-    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, 1.0)
-
-    dropped = int((1.0 - keep).sum())
-    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
-    for shard in range(ragged_ep_check.EP_SIZE):
-        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
-        flat_selected = selected[lo:hi].reshape(-1)
-        flat_keep = keep[lo:hi].reshape(-1)
-        for expert in range(num_experts):
-            group = np.flatnonzero(flat_selected == expert)
-            kept = flat_keep[group]
-            # A prefix: every kept entry precedes every dropped one within the group.
-            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
-
-
-def test_the_4gpu_guard_mirrors_the_hero_s_ragged_xla_flags():
-    # ragged_ep_check duplicates these rather than importing the training module. If the hero's
-    # set changes and the guard's does not, the guard silently validates a transport no run uses.
-    assert ragged_ep_check.RAGGED_TRANSPORT_XLA_FLAGS == train.RAGGED_REQUIRED_XLA_FLAGS
-
-
-def test_the_ragged_backend_requires_one_process_per_gpu():
-    # The default suits pooled-wave, so a bare --moe-implementation ragged_all_to_all would
-    # otherwise build a run that only fails once the rack is allocated and compiled.
-    with pytest.raises(ValueError, match="one process per GPU"):
-        launch.build_hero_run(
-            run_id="ragged-default-processes",
-            dp_racks=1,
-            num_steps=1,
-            moe_implementation="ragged_all_to_all",
-            version="dev",
-        )
-
-    step = launch.build_hero_run(
-        run_id="ragged-explicit-processes",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation="ragged_all_to_all",
-        processes_per_task=launch.HERO_GPUS_PER_NODE,
-        version="dev",
-    )
-    assert step is not None
-
-
-def test_disabling_the_master_keeps_fp32_weights_on_device():
-    step = launch.build_hero_run(
-        run_id="fp32-device-params",
-        dp_racks=1,
-        num_steps=1,
-        master_param_mode=train.MasterParamMode.DISABLED,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.trainer.master_param_mode is train.MasterParamMode.DISABLED
-    # Weights move to fp32 on device; the compute precision does not follow them there.
-    assert config.trainer.trainer.mp.param_dtype == jnp.float32
-    assert config.trainer.trainer.mp.compute_dtype == jnp.bfloat16
-    assert "master-params-disabled" in config.trainer.trainer.tracker.tags
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -179,7 +82,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="full-bank",
             dp_racks=1,
             num_steps=1,
@@ -192,7 +95,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
 def test_checkpoint_path_overrides_the_step_output_path():
     """A run that only exercises the checkpoint write sends it to disposable storage."""
     temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="ckpt-elsewhere",
         dp_racks=1,
         num_steps=1,
@@ -206,7 +109,7 @@ def test_checkpoint_path_overrides_the_step_output_path():
 
 
 def test_checkpoint_path_defaults_under_the_step_output_path():
-    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
     ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
     config = step.build_config(ctx)
 
@@ -215,7 +118,7 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
 
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-checkpoint-interval",
             dp_racks=1,
             num_steps=1,
@@ -230,7 +133,7 @@ def test_checkpoint_interval_must_be_positive():
 )
 def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_step):
     with pytest.raises(ValueError, match="profile"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-profile-window",
             dp_racks=1,
             num_steps=3,
@@ -241,7 +144,7 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
-    step = launch.build_hero_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
@@ -250,7 +153,7 @@ def test_data_parallel_racks_keep_the_global_batch_explicit():
 
 
 def test_schedule_steps_do_not_extend_the_run():
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="schedule-head",
         dp_racks=1,
         num_steps=5,
@@ -288,12 +191,12 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match="must be divisible by 64"):
-        launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+        launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
 def test_expert_bank_override_must_support_three_waves():
     with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
-        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+        launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
 def _runtime_env_config(
@@ -396,20 +299,6 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
-
-
-def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
-    # A watch interval of 0 would otherwise select overlap 4, so the assertion below
-    # separates the ragged posture from the inline-watch one rather than aliasing it.
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    flags = os.environ["XLA_FLAGS"].split()
-    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
-    assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -569,8 +458,8 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
-    off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
-    on = launch.build_hero_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_diagnostic_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
 
@@ -579,6 +468,8 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
+    assert on_config.eval.eval_batch_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+    assert on_config.eval.dropless_eval is True
 
 
 def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
@@ -586,7 +477,7 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
     # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
-    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and top-k QB (the hero default).
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and the selected top-k QB arm.
     assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
     assert (m.num_experts, m.num_experts_per_token) == (384, 8)
     assert m.intermediate_dim == m.hidden_dim // 2
@@ -1081,3 +972,123 @@ def test_baseline_eval_hook_runs_once_after_the_first_step():
     fired.clear()
     run_steps([5001, 5002])  # a resumed run
     assert fired == []
+
+
+def test_moe_backend_override_reaches_the_model_and_the_run_tags():
+    step = launch.build_diagnostic_run(
+        run_id="ragged-backend",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        processes_per_task=4,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.moe_implementation == "ragged_all_to_all"
+    assert config.processes_per_task == 4
+    tags = config.trainer.trainer.tracker.tags
+    assert "ragged-all-to-all" in tags
+    # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
+    # transport that has no such buffer would label the run with a setting it never read.
+    assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
+
+
+def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
+    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
+    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
+    rng = np.random.default_rng(0)
+    tokens_per_shard = 8
+    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
+    selected = rng.integers(0, ragged_ep_check.NUM_EXPERTS, size=(tokens, ragged_ep_check.TOPK))
+
+    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, ragged_ep_check.NO_DROP_CAPACITY)
+
+    assert keep.shape == selected.shape
+    assert keep.all()
+
+
+def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
+    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
+    # which is what lets the transport read them in place. The mask has to agree.
+    rng = np.random.default_rng(1)
+    tokens_per_shard = 16
+    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
+    topk, num_experts = ragged_ep_check.TOPK, ragged_ep_check.NUM_EXPERTS
+    # Skew hard toward the low experts so the gate actually bites.
+    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
+
+    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, 1.0)
+
+    dropped = int((1.0 - keep).sum())
+    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
+    for shard in range(ragged_ep_check.EP_SIZE):
+        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
+        flat_selected = selected[lo:hi].reshape(-1)
+        flat_keep = keep[lo:hi].reshape(-1)
+        for expert in range(num_experts):
+            group = np.flatnonzero(flat_selected == expert)
+            kept = flat_keep[group]
+            # A prefix: every kept entry precedes every dropped one within the group.
+            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
+
+
+def test_the_4gpu_guard_mirrors_the_hero_s_ragged_xla_flags():
+    # ragged_ep_check duplicates these rather than importing the training module. If the hero's
+    # set changes and the guard's does not, the guard silently validates a transport no run uses.
+    assert ragged_ep_check.RAGGED_TRANSPORT_XLA_FLAGS == train.RAGGED_REQUIRED_XLA_FLAGS
+
+
+def test_the_ragged_backend_requires_one_process_per_gpu():
+    # The hero default already gives one process per GPU, so this guards an explicit wrong value
+    # rather than a trap: a task holding several GPUs in one process cannot run the ragged
+    # transport, and without the guard that only surfaces after the rack is allocated and compiled.
+    step = launch.build_diagnostic_run(
+        run_id="ragged-default-processes",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        version="dev",
+    )
+    assert step is not None
+
+    with pytest.raises(ValueError, match="one process per GPU"):
+        launch.build_diagnostic_run(
+            run_id="ragged-one-process",
+            dp_racks=1,
+            num_steps=1,
+            moe_implementation="ragged_all_to_all",
+            processes_per_task=1,
+            version="dev",
+        )
+
+
+def test_disabling_the_master_keeps_fp32_weights_on_device():
+    step = launch.build_diagnostic_run(
+        run_id="fp32-device-params",
+        dp_racks=1,
+        num_steps=1,
+        master_param_mode=train.MasterParamMode.DISABLED,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.master_param_mode is train.MasterParamMode.DISABLED
+    # Weights move to fp32 on device; the compute precision does not follow them there.
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32
+    assert config.trainer.trainer.mp.compute_dtype == jnp.bfloat16
+    assert "master-params-disabled" in config.trainer.trainer.tracker.tags
+
+
+def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
+    # A watch interval of 0 would otherwise select overlap 4, so the assertion below
+    # separates the ragged posture from the inline-watch one rather than aliasing it.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
+    assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags

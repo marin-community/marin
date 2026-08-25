@@ -80,8 +80,10 @@ from cache import TtlCache
 from config import (
     BRIDGE_PORT,
     CLUSTERS,
+    DEFAULT_OPERATOR_BEHAVIOR,
     FINELOG_SLOW_THRESHOLD_MS,
     GITHUB_REPO,
+    HERO_OPERATOR_BEHAVIOR,
     K8S_CLUSTERS,
     BridgeConfig,
     ClusterTarget,
@@ -111,6 +113,7 @@ from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
+    OperatorBehavior,
     SlackAlertClient,
     SlackAnnouncementError,
 )
@@ -131,6 +134,26 @@ from wandb_source import WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 logger = logging.getLogger(__name__)
+
+HERO_OPERATOR_INSTRUCTIONS = (
+    "Start from this alert's logical run identity and gather current evidence before deciding whether it joins an "
+    "existing incident. Later alerts on this channel may refer to the same run across execution or coordinator "
+    "retries, so correlate them instead of assuming either a clean run or inherited evidence. Treat the alert's "
+    "cluster, run, and job labels as discovery leads, not a complete task inventory. Read "
+    "docs/ops/hero-run-health-alerts.md, the linked runbook, lib/iris/OPS.md, and the current launcher, configuration, "
+    "and applicable skills before probing; checkpoint paths, task layouts, and retry behavior can change during a "
+    "run. Use bounded Finelog queries to: (1) inspect telemetry_v1 for the labeled cluster and run_id with "
+    "service='levanter' and process_index='0', enumerate recent execution_uid values and their time bounds, and read "
+    "the latest relevant metrics per execution; (2) recover coordinator roots from execution UIDs of the form "
+    "iris:<task-id>:attempt:<n> using the current Iris root-job logic, including prior roots for this logical run; "
+    "(3) inspect recent iris.task_state rows for the exact root_job_id values; (4) inspect iris.task_event for each "
+    "literal root task subtree with prefix(task_id, '<root>/'), summing its count field when aggregating deduplicated "
+    "events; and (5) inspect log rows for literal key prefixes around execution boundaries and task events. If the "
+    "cluster label is unknown, resolve the real cluster before interpreting empty results. Examine stderr, "
+    "warning/error levels, and other abnormal output without relying on a fixed error-signature list or assuming the "
+    "first query is exhaustive. Compare ranks and tasks to distinguish the first causal failure from expected "
+    "gang-scheduling fallout, and gather additional live evidence as needed before concluding."
+)
 
 # Window macros a panel writes into its SQL, substituted with tz-naive UTC
 # TIMESTAMP literals before the query runs.
@@ -864,7 +887,26 @@ def main() -> None:
     github_source = GithubSource(auth=github_auth, timeout=config.http_timeout)
     k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     wandb_source = WandbSource(timeout=config.http_timeout)
-    loom_alerts = LoomAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
+    loom_alerts = None
+    if config.loom_alerts is not None:
+        loom_alerts = LoomAlertClient(
+            config.loom_alerts,
+            behaviors=(
+                OperatorBehavior(
+                    name=DEFAULT_OPERATOR_BEHAVIOR,
+                    channel="operator",
+                    session_title="Grafana operator",
+                    operator_name="Marin Grafana operator",
+                ),
+                OperatorBehavior(
+                    name=HERO_OPERATOR_BEHAVIOR,
+                    channel="operator:hero",
+                    session_title="Hero run operator",
+                    operator_name="Marin hero-run operator",
+                    instructions=HERO_OPERATOR_INSTRUCTIONS,
+                ),
+            ),
+        )
     slack_alerts = SlackAlertClient(config.loom_alerts) if config.loom_alerts is not None else None
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.

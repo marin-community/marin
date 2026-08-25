@@ -86,11 +86,10 @@ decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on th
 key ("Backend").
 
 The `marin` stack is the sole repository owner of grants on `hai-gcp-models`; application
-stacks and deploy scripts must not create or mutate IAM policy. The resources remain additive
-`*IAMMember` resources during inventory adoption. Import only grants confirmed by the
-live-policy audit, then convert them to authoritative role bindings in a separately reviewed
-change. Record code-declared grants that are absent live for a separate policy review instead
-of creating them during import.
+stacks and deploy scripts must not create or mutate IAM policy. Each `*IAMBinding` resource is
+authoritative for one role and optional condition on its target: Pulumi removes undeclared
+members from managed bindings while leaving other roles untouched. Audit live policy before
+adding or importing a managed binding so the declaration includes every intended member.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -198,7 +197,7 @@ Once the preview is clean, `pulumi up`.
 Marin follows Pulumi's Program-first bulk-import workflow. The normal program never attaches
 `import_` options, so adding one live resource cannot put unrelated resources into import mode.
 Each component instead records the provider ID beside the resource declaration. This includes
-all nine GCP `*IAMMember` types, custom roles, service accounts, and the existing CoreWeave
+all seven GCP `*IAMBinding` types, custom roles, service accounts, and the existing CoreWeave
 resource types.
 
 Declare the resource in code first and review its ordinary `create` preview in the PR. After the

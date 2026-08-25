@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -139,6 +140,16 @@ def _one(rows: list[dict], section: str, metric: str, stat: str, series: str | N
     return matches[0]
 
 
+def test_query_names_every_output_projection_for_finelog():
+    query = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", START_MS, END_MS, BUCKET_MS)
+    output_cte = query.sql.split("), output AS (\n", 1)[1].split("\n)\nSELECT t, section", 1)[0]
+    output_columns = ("t", "section", "metric", "stat", "series", "value", "unit", "status", "samples", "gap_seconds")
+    output_alias = re.compile(rf"\bAS ({'|'.join(output_columns)})\b")
+
+    for branch in output_cte.split("\n\n    UNION ALL\n\n"):
+        assert output_alias.findall(branch) == list(output_columns)
+
+
 def _counter_records() -> list[TelemetryRow]:
     cumulative = _attributes("cumulative_snapshot")
     rows: list[TelemetryRow] = []
@@ -214,9 +225,9 @@ def _latency_records() -> list[TelemetryRow]:
         rows.extend(
             [
                 _record("a", f"{family}_sum", 0, 105_000, cumulative),
-                _record("a", f"{family}_count", 0, 105_000, cumulative),
+                _record("a", f"{family}_count", 0, 105_001, cumulative),
                 _record("a", f"{family}_sum", total_sum, 135_000, cumulative),
-                _record("a", f"{family}_count", count, 135_000, cumulative),
+                _record("a", f"{family}_count", count, 135_001, cumulative),
             ]
         )
     return rows

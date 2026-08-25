@@ -465,9 +465,17 @@ reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
 
-Distinct firing groups feed one live `Grafana operator` session; the operator can
-delegate independent incidents to child Loom sessions. Repeated notifications for
-the same alert fingerprint and start time reuse the same Loom run, and thread a
+Generic firing groups feed the live `Grafana operator` session on the `operator`
+channel. `TrainingProgressStalled`, `TrainingLossSpike`,
+`TrainingTelemetryGone`, and `TrainingOptimizerUnstable` also carry the trusted
+`operator_behavior=hero` label, which selects the `operator:hero` channel. Loom
+therefore keeps a separate durable coordinator for Hero while both behaviors use
+the same four-session `ops` policy pool. Every nonterminal session explicitly
+using `ops` counts toward that pool; an operator-launched child with no explicit
+profile uses Loom's `default` profile. The extra `ops` capacity covers handoffs or
+explicit same-profile delegation but is shared, not reserved per channel.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run, and thread a
 short "still firing" note under the original announcement. The Slack thread key is
 the Grafana notification group key. A replacement alert instance in the same group
 therefore keeps the thread even when the prior instance first resolves. Resolved
@@ -477,15 +485,25 @@ unreachable, and that failure is reported into the thread instead of only into
 Grafana's notification history. A Slack failure is logged and still opens the
 triage session.
 
+The Hero behavior receives static discovery and query guidance instead of a
+precomputed evidence snapshot. It tells the coordinator how to follow the alert's
+logical run across execution and coordinator retries, then query current
+`telemetry_v1`, `iris.task_state`, `iris.task_event`, and `log` rows. The guidance
+uses exact IDs and Finelog's literal `prefix` predicate, includes the deduplicated
+event `count`, and asks the coordinator to compare tasks and ranks rather than
+grep a fixed error-signature list. Live evidence stays out of the webhook path, so
+query latency, truncation, redaction, or an unknown cluster label cannot silently
+turn a partial snapshot into the operator's starting facts.
+
 Open threads are tracked for six hours in the bridge's memory, which is sound
 because Cloud Run runs this service at `min=max=1`. A revision rollover forgets
 them: the next notification for a still-firing alert announces afresh, and a
 resolution for an alert this revision never announced is dropped rather than
 posted bare.
 
-The Loom Pulumi stack binds the exact `marin-grafana`
-service-account email and numeric subject to this profile. The Grafana stack
-reads the Loom URL and profile from that stack's `workloadClients` output, so
+The Loom Pulumi stack binds the exact `marin-grafana` service-account email and
+numeric subject to the `ops` profile. The Grafana stack reads the Loom URL and
+profile from that stack's `workloadClients` output, so
 the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation

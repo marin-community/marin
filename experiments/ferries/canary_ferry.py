@@ -3,14 +3,14 @@
 
 """Canary ferry: Grug MoE daily accelerator smoke canary.
 
-Supports TPU (v5p-8, FineWeb-Edu 10M, ~0.25B tokens) and GPU (8x H100, FineWeb-Edu 10M, ~50 steps).
+Supports TPU (v6e-4, FineWeb-Edu 10M, ~0.25B tokens) and GPU (8x H100, FineWeb-Edu 10M, ~50 steps).
 Config is driven by env vars set in the GH Actions workflow env: block and forwarded
 to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
 
     CANARY_ACCELERATOR   tpu | gpu
     CANARY_ATTENTION_IMPLEMENTATION gpu-only attention backend, e.g. gpu_fa4_cute
     CANARY_TPU_TYPE      tpu-only comma-separated slice types, primary first
-                         (default v5p-8,v6e-4,v4-8)
+                         (default v6e-4)
     CANARY_BATCH_SIZE    per-device batch size
     CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_GPU_TYPE      gpu-only accelerator type, e.g. H100, GH200, B200
@@ -106,17 +106,10 @@ def _env_bool(key: str, default: bool) -> bool:
     return raw.lower() in ("1", "true")
 
 
-# Primary first; the run lands on whichever pool has capacity. v5p has only two
-# zones (us-central1-a, us-east5-a) and is preemptible-only, so a single-pool
-# stockout otherwise strands the canary indefinitely. v4-8 is a topology-compatible
-# fallback (both are single-VM 4-chip slices, so training shape is unchanged) and
-# adds us-central2-b plus the v4 reserved pool, which is not subject to preemptible
-# capacity churn. v4 has only ~1/3 the per-chip HBM of v5p (~30.75 vs 95 GiB), so the
-# canary's batch size is sized to fit v4 (see the TPU branch below). v6e-4 adds
-# us-east1, us-east5, and europe-west4 capacity with the same 4-chip host shape.
-# Keep any new entry's per-chip HBM at or above v4's. All entries must share vm_count and
-# chips_per_vm (ResourceConfig enforces this).
-_DEFAULT_CANARY_TPU_TYPES = ("v5p-8", "v6e-4", "v4-8")
+# The scheduled canary exercises v6e while v5p capacity is unavailable. Manual
+# dispatches may still provide comma-separated alternatives with the same VM and
+# chip topology (enforced by ResourceConfig).
+_DEFAULT_CANARY_TPU_TYPES = ("v6e-4",)
 
 
 def _tpu_types_from_env() -> list[str]:
@@ -140,13 +133,9 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
 
     if accelerator == "tpu":
         model = CANARY_MODEL
-        # Global batch is sized to fit the smallest pool in the fallback list. The
-        # dominant train_step HBM allocation is the MoE expert grouped-matmul over
-        # batch_size * max_seq_len tokens, so per-device HBM scales with the global
-        # batch. 128 leaves comfortable headroom on the v4-8 fallback (~30.75 GiB
-        # usable, ~1/3 of v5p) while staying valid on v5p, giving one config across
-        # all fallback pools. With the smaller representative model above this is well
-        # within v4's budget.
+        # The dominant train_step HBM allocation is the MoE expert grouped-matmul
+        # over batch_size * max_seq_len tokens, so per-device HBM scales with the
+        # global batch. The default 128 fits the v6e-4 canary profile.
         batch_size = env_int("CANARY_BATCH_SIZE", 128)
         # Keep wall-clock bounded via a fixed token budget: tokens = batch_size *
         # max_seq_len * steps. At 250M tokens with batch 128 and the heuristic

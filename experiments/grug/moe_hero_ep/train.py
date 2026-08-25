@@ -37,6 +37,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -85,6 +86,7 @@ XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
+DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
@@ -236,6 +238,9 @@ class GrugEvalConfig:
     # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
     # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
     dropless_eval: bool = False
+    # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
+    # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
+    dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
     # Run the evals once after the first optimization step, for a baseline at the start of the loss
     # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
     eval_at_first_step: bool = False
@@ -374,8 +379,10 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
     return jax.tree.map(move, tree)
 
 
-def _to_dropless_local(model: Transformer) -> Transformer:
-    """Swap the scanned block's MoE expert backend to the dropless local ``sonic_cute`` path.
+def _to_dropless_local(
+    model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
+) -> Transformer:
+    """Swap the scanned block's MoE expert backend to the selected dropless local path.
 
     ``implementation``/``expert_chunks`` are static fields shared across the whole stacked block,
     so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
@@ -383,7 +390,7 @@ def _to_dropless_local(model: Transformer) -> Transformer:
     mesh: the local backend raises when the mesh expert axis is larger than one.
     """
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
-    dropless = dataclasses.replace(expert_mlp, implementation="sonic_cute", expert_chunks=1)
+    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 
@@ -941,7 +948,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         mesh=dropless_eval_mesh,
                         eval_cfg=eval_cfg,
                         mp=trainer.mp,
-                        model_transform=_to_dropless_local,
+                        model_transform=functools.partial(
+                            _to_dropless_local,
+                            implementation=eval_cfg.dropless_eval_moe_implementation,
+                        ),
                     )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
