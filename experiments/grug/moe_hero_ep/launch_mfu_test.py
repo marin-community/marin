@@ -31,6 +31,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -166,6 +167,14 @@ def build_hero_run(
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+    # The ragged transport's collectives address peers per GPU, so a task holding several GPUs in
+    # one process cannot run it. Rejecting it here costs a second; the same mistake reaching the
+    # cluster costs a 16-node allocation and a compile before it fails.
+    if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
+        raise ValueError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs one process per GPU: pass "
+            f"processes_per_task={HERO_GPUS_PER_NODE}, got {processes_per_task}"
         )
     pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
     if pooled and model.pooled_transport_capacity_factor is None:

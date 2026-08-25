@@ -89,6 +89,29 @@ def test_moe_backend_override_reaches_the_model_and_the_run_tags():
     assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
 
 
+def test_the_ragged_backend_requires_one_process_per_gpu():
+    # The default suits pooled-wave, so a bare --moe-implementation ragged_all_to_all would
+    # otherwise build a run that only fails once the rack is allocated and compiled.
+    with pytest.raises(ValueError, match="one process per GPU"):
+        launch.build_hero_run(
+            run_id="ragged-default-processes",
+            dp_racks=1,
+            num_steps=1,
+            moe_implementation="ragged_all_to_all",
+            version="dev",
+        )
+
+    step = launch.build_hero_run(
+        run_id="ragged-explicit-processes",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="ragged_all_to_all",
+        processes_per_task=launch.HERO_GPUS_PER_NODE,
+        version="dev",
+    )
+    assert step is not None
+
+
 def test_disabling_the_master_keeps_fp32_weights_on_device():
     step = launch.build_hero_run(
         run_id="fp32-device-params",

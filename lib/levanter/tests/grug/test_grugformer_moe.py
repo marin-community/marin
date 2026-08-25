@@ -945,7 +945,13 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
 
 
 def _simulate_ragged_a2a(operands, outputs, params):
-    """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd."""
+    """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
+
+    Checks the receiver's ``recv_sizes`` against what each sender actually writes. The real
+    collective sizes incoming transfers from that vector, so building it from the wrong direction
+    -- the easiest mistake in this arithmetic, since the two are transposes of one another -- moves
+    the right bytes here but mis-sizes the receive on a real multi-shard run.
+    """
     num_shards = len(operands)
     for sender in range(num_shards):
         in_off, send, out_off, _ = (np.asarray(a) for a in params[sender])
@@ -953,6 +959,8 @@ def _simulate_ragged_a2a(operands, outputs, params):
         for i in range(len(in_off)):
             dst = i // slices_per_device
             n = send[i]
+            recv = np.asarray(params[dst].recv_sizes)[sender * slices_per_device + i % slices_per_device]
+            assert recv == n, f"recv_sizes {recv} != send_sizes {n} for update {i} from {sender} to {dst}"
             outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
 
 

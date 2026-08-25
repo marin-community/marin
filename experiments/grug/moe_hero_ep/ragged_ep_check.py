@@ -25,6 +25,7 @@ import numpy as np
 from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS
 from levanter.grug.grug_moe import moe_mlp
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -43,10 +44,31 @@ INTERMEDIATE_DIM = 96
 NUM_EXPERTS = 8
 TOPK = 2
 SEEDS = (0, 1, 2, 3)
-# Capacity high enough that no assignment is clipped, so the dropless dense reference applies.
-# At the 4-GPU mesh (EP size 2) this equals the entire global assignment count, so nothing can
-# drop; larger factors make `ring`'s top_k selection ask for more rows than exist and fail.
-NO_DROP_CAPACITY = 2.0
+# The expert axis this harness builds; `_make_ep_mesh` fixes it at 2 whatever the device count.
+EP_SIZE = 2
+
+
+def _no_drop_capacity() -> float:
+    """Capacity factor at which the ragged transport provably cannot clip an assignment.
+
+    A receiver's worst case is every assignment on the expert axis landing on a single one of its
+    chunks: ``EP_SIZE * assignments_per_shard`` rows arriving against a chunk buffer holding
+    ``capacity_factor * assignments_per_shard / chunks``. The structural bound is therefore
+    ``EP_SIZE * chunks``. Unchunked it is just ``EP_SIZE`` -- which is why the pre-chunking value
+    of 2.0 no longer guarantees anything here: at four local experts the backend runs two chunks,
+    so 2.0 leaves each chunk holding only half the rows that can arrive, and droplessness becomes
+    a property of how evenly the seed happens to route rather than of the capacity.
+    """
+    local_experts = NUM_EXPERTS // EP_SIZE
+    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    return float(EP_SIZE * chunks)
+
+
+NO_DROP_CAPACITY = _no_drop_capacity()
+# `ring` keeps the pre-chunking value: it does not chunk, and larger factors make its top_k
+# selection ask for more rows than exist and fail. It is a diagnostic (see the module docstring),
+# so it does not need the structural bound the graded ragged run does.
+RING_DIAGNOSTIC_CAPACITY = 2.0
 
 # Gradients are compared on the MEDIAN relative difference, not the max. Both paths compute the
 # same mathematical gradient, so every observed difference is bf16 reduction-order noise: weight
@@ -67,6 +89,7 @@ class SeedRow(BaseModel):
     max_grad_vs_dense: float
     median_grad_vs_dense: float
     dropped_no_drop_case: int
+    dropped_no_drop_case_ring: int
 
 
 class RaggedEpResult(Artifact):
@@ -188,7 +211,7 @@ def _run() -> list[SeedRow]:
                 "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
             )
             o_ring, _g_ring, dropped_ring = loss_and_grad(
-                "ring", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
+                "ring", xb, selb, cwb, w13b, w2b, capacity_factor=RING_DIAGNOSTIC_CAPACITY
             )
 
         max_g, med_g = _graddiff(g_ragged, g_dense)
@@ -199,7 +222,8 @@ def _run() -> list[SeedRow]:
                 ring_vs_dense=_maxdiff_vs_dense(o_ring, dense),
                 max_grad_vs_dense=max_g,
                 median_grad_vs_dense=med_g,
-                dropped_no_drop_case=dropped + dropped_ring,
+                dropped_no_drop_case=dropped,
+                dropped_no_drop_case_ring=dropped_ring,
             )
         )
         logger.info("ragged_ep_seed %s", rows[-1].model_dump_json())

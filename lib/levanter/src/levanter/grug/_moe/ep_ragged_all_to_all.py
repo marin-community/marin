@@ -88,7 +88,16 @@ def _quack_grouped_gemm_available() -> bool:
         return False
     try:
         import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
-    except ImportError:
+        from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
+
+        # `sonic_cute` importing proves nothing about cuDNN: the frontend modules the weight
+        # gradient needs are resolved lazily inside `_cudnn_modules`. Resolve them here, or an
+        # environment carrying quack and cutlass but not the pinned `nvidia-cudnn-frontend`
+        # passes this probe and dies during backward tracing, past the point where returning
+        # the `ragged_dot` path is still an option. `AttributeError` catches a frontend old
+        # enough to import but too old to carry the kernel symbols.
+        _cudnn_modules()
+    except (ImportError, AttributeError):
         return False
     return True
 
