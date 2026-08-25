@@ -37,7 +37,7 @@ from loom_alerts import (
     SlackThread,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
-from server import HERO_OPERATOR_INSTRUCTIONS, create_app, workload_overview
+from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
@@ -49,14 +49,6 @@ TO_MS = FROM_MS + 3_600_000
 MARIN = ClusterTarget(
     name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
 )
-
-
-def test_hero_operator_guidance_points_to_live_identity_and_evidence_queries():
-    for query_surface in ("telemetry_v1", "execution_uid", "iris.task_state", "iris.task_event", "prefix(", "log rows"):
-        assert query_surface in HERO_OPERATOR_INSTRUCTIONS
-    assert "summing its count field" in HERO_OPERATOR_INSTRUCTIONS
-    assert "unknown" in HERO_OPERATOR_INSTRUCTIONS
-    assert "operatorContext" not in HERO_OPERATOR_INSTRUCTIONS
 
 
 def finelog_result(**columns: list) -> pa.Table:

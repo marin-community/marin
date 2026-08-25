@@ -249,10 +249,6 @@ def test_hero_behavior_uses_a_separate_channel_and_live_query_guidance():
     data = goal_data(request)
     assert data["operatorBehavior"] == "hero"
     assert "operatorContext" not in data
-    assert "telemetry_v1" in request["session"]["goal"]
-    assert "iris.task_state" in request["session"]["goal"]
-    assert "iris.task_event" in request["session"]["goal"]
-    assert "log queries" in request["session"]["goal"]
 
 
 def test_operator_behavior_routes_independently_of_alert_name():

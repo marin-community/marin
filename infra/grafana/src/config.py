@@ -33,7 +33,6 @@ GITHUB_REPO = "marin-community/marin"
 # stamp this one.
 GITHUB_USER_AGENT = "marin-grafana-bridge"
 
-HERO_NOTIFICATION = "hero-run"
 OPERATOR_BEHAVIOR_LABEL = "operator_behavior"
 DEFAULT_OPERATOR_BEHAVIOR = "default"
 HERO_OPERATOR_BEHAVIOR = "hero"
