@@ -4,10 +4,9 @@
 """Stream The Stack v2 parquet shards from Hugging Face into blob-prefix partitions.
 
 The pipeline has one Zephyr source shard per Hugging Face parquet file. Each worker
-uses Polars' native ``hf://`` object-store reader and streaming parquet sink, so the
-source parquet is never materialized on worker disk. This deliberately uses Polars'
-native range reader instead of ``hf_xet``'s file downloader, which reconstructs a
-complete local file before a transform can run.
+uses Polars' native ``hf://`` range reader and streaming parquet sink, so the source
+parquet is never materialized on worker disk. This deliberately avoids ``hf_xet``'s
+file downloader, which reconstructs a complete local file before a transform can run.
 """
 
 import hashlib
@@ -18,7 +17,7 @@ from dataclasses import dataclass, field
 import draccus
 import polars as pl
 from fray.types import ResourceConfig
-from huggingface_hub import get_token
+from huggingface_hub import get_hf_file_metadata, get_token, hf_hub_url
 from polars.io.partition import FileProviderArgs
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
@@ -72,6 +71,7 @@ class StackV2ParquetTask:
     source_url: str
     relative_source_path: str
     output_path: str
+    revision: str = HF_REVISION
 
     @property
     def source_id(self) -> str:
@@ -127,14 +127,31 @@ def list_stack_v2_tasks(cfg: StackV2DownloadConfig) -> list[StackV2ParquetTask]:
         raise ValueError(f"No parquet files matched {HF_DATASET_ID}@{cfg.revision}:{HF_PARQUET_GLOB}")
 
     data_output_path = prefix_join(cfg.output_path, "data")
-    return [
+    tasks = [
         StackV2ParquetTask(
             source_url=f"{HF_PROTOCOL_PREFIX}{file}",
             relative_source_path=_relative_path_in_source(file, source_root),
             output_path=data_output_path,
+            revision=cfg.revision,
         )
         for file in files
     ]
+    # Repository trees are public even when file content is gated. Validate one file
+    # before provisioning the worker fleet so a missing grant fails at the driver.
+    _assert_hf_access(tasks[0])
+    return tasks
+
+
+def _assert_hf_access(task: StackV2ParquetTask) -> None:
+    if not task.source_url.startswith(HF_PROTOCOL_PREFIX):
+        return
+    resolve_url = hf_hub_url(
+        repo_id=HF_DATASET_ID,
+        filename=task.relative_source_path,
+        repo_type="dataset",
+        revision=task.revision,
+    )
+    get_hf_file_metadata(resolve_url, token=_hf_token(), retry_on_errors=True)
 
 
 def _input_storage_options(source_url: str) -> dict[str, object] | None:

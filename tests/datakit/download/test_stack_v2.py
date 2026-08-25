@@ -3,9 +3,11 @@
 
 from pathlib import Path
 
+import marin.datakit.download.stack_v2 as stack_v2
 import polars as pl
 import pytest
 from fray.local_backend import LocalClient
+from marin.datakit.download.huggingface import HfRepoFile, HfRepoListing
 from marin.datakit.download.stack_v2 import (
     StackV2ParquetTask,
     build_stack_v2_pipeline,
@@ -13,6 +15,42 @@ from marin.datakit.download.stack_v2 import (
 )
 from zephyr.context import ZephyrContext
 from zephyr.plan import compute_plan
+
+
+def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    cfg = stack_v2.StackV2DownloadConfig(output_path=str(tmp_path))
+    listing = HfRepoListing(
+        source_root="datasets/bigcode/the-stack-v2",
+        files={
+            (f"datasets/bigcode/the-stack-v2@{cfg.revision}/" "data/Text/train-00000-of-00019.parquet"): HfRepoFile(
+                size=1_170_874_875, xet_hash="xet-hash"
+            )
+        },
+    )
+    metadata_calls = 0
+
+    def reject_file_access(url: str, **kwargs):
+        nonlocal metadata_calls
+        metadata_calls += 1
+        assert url == (
+            "https://huggingface.co/datasets/bigcode/the-stack-v2/"
+            f"resolve/{cfg.revision}/data/Text/train-00000-of-00019.parquet"
+        )
+        assert kwargs == {"token": "hf-test-token", "retry_on_errors": True}
+        raise PermissionError("Hugging Face gate not accepted")
+
+    def fail_if_workers_start(**_kwargs):
+        pytest.fail("Zephyr workers started before gated content access was validated")
+
+    monkeypatch.setattr(stack_v2, "list_hf_repo_files", lambda **_kwargs: listing)
+    monkeypatch.setattr(stack_v2, "get_hf_file_metadata", reject_file_access)
+    monkeypatch.setattr(stack_v2, "_hf_token", lambda: "hf-test-token")
+    monkeypatch.setattr(stack_v2, "ZephyrContext", fail_if_workers_start)
+
+    with pytest.raises(PermissionError, match="gate not accepted"):
+        stack_v2.download_stack_v2(cfg)
+
+    assert metadata_calls == 1
 
 
 def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: Path):
