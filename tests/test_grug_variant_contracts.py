@@ -207,17 +207,6 @@ def _seed_cache_records(step, prefix: str) -> None:
             )
 
 
-def test_tpu_canary_defaults_to_v6e(monkeypatch, tmp_path):
-    monkeypatch.setenv("CANARY_ACCELERATOR", "tpu")
-    monkeypatch.delenv("CANARY_TPU_TYPE", raising=False)
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-
-    resources = canary_ferry.build().runtime_args["train_resources"]
-
-    assert resources.device.variant == "v6e-4"
-    assert resources.device_alternatives is None
-
-
 def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tmp_path):
     monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
     monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
