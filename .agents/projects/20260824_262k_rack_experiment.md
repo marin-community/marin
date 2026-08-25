@@ -102,6 +102,42 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## Attribution of the OOM (2026-08-25, one GB200 node, no rack)
+
+**There is no sequence-squared buffer.** Three d768 arms on one `gb200-1node` tray, each holding
+tokens per device fixed at 65,536 and varying only the sequence and the context width, all
+completed their training steps and logged `memory/peak_gib`:
+
+| sequence | context | peak HBM | run |
+|---|---|---|---|
+| 65,536 | 1 | 12.68 GiB | `cp1probe-s65536-c1-1400` |
+| 131,072 | 2 | 15.31 GiB | `cp2probe-s131072-c2-1400` |
+| 262,144 | 4 | 19.71 GiB | `cp4probe-s262144-c4-1358` |
+
+Each doubling of the sequence adds 2.63 then 4.40 GiB. A quadratic term would quadruple the
+increment and a linear one would double it, so the sequence-driven cost is at most linear: the whole
+4K-to-262K move costs 7.03 GiB on a 12.68 GiB base at this width. The `jit_train_step` at sequence
+262144 with context 4 **fits on one tray in 19.71 GiB**.
+
+The 96 GiB and 192 GiB overflows those probes also produced are **not** the train step. Every one is
+`jit(accum_for_batch)` -- the evaluator -- and the failing buffer is `bf16[262144, 256, 6, 128]`,
+exactly 96.00 GiB, which is K or V for a whole eval batch. `small_scale_abl_launch` fixes
+`EVAL_BATCH_SIZE = 256` regardless of `--seq-len`, so its eval batch is 67M tokens at sequence
+262144 against a 4.2M-token training step. That is a real bug in the ablation launcher, unrelated to
+the hero, which runs with eval disabled.
+
+So the rack OOM is **width-driven, not sequence-driven**. Scaling the sequence term by width (x8
+from d768 to d6144) accounts for roughly 56 GiB of the roughly 230 GiB that long context added at
+hero width, so most of the gap belongs to something present at `expert_axis_size` 16 and absent at
+1. The one-node probes cannot see it: at expert axis 1 the composite `("expert", "context")`
+parameter spec is inert, which is why they logged no `Involuntary full rematerialization` at all,
+exactly as the pre-flight's CP4/EP1 arm did not.
+
+The 12 replicated parameter copies are themselves small -- summing the shapes the rack logged gives
+about 1 GB -- so if the composite spec is the cause, the cost is not the copies but what replicating
+them does to the gradients and optimizer state that depend on them. Confirming that needs a mesh
+with both axes above 1 at hero width, which one tray cannot provide.
+
 ## Attempt 2 (2026-08-25 20:44 UTC): the step does not fit in HBM
 
 Run `lc262k-ep16cp4-08251344`, job `/mwittmann/lc262k-ep16cp4-08251344-coord`, on commit
