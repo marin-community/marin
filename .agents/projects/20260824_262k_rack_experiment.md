@@ -102,6 +102,47 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## Attempt 2 (2026-08-25 20:44 UTC): the step does not fit in HBM
+
+Run `lc262k-ep16cp4-08251344`, job `/mwittmann/lc262k-ep16cp4-08251344-coord`, on commit
+`cedb42d399` (the mesh-config fix). The gang was admitted in a minute, cleared
+`trainer.initialize()`, and all 16 ranks restored the step-6000 checkpoint at 20:47:13 -- about
+three and a half minutes for a 535B checkpoint, with no host-memory pressure. Compiling
+`jit_train_step` then failed to fit:
+
+```
+W hlo_rematerialization.cc:3282] Can't reduce memory use below 193.77GiB (208055883007 bytes) by
+  rematerialization; only reduced to 350.36GiB (376197049916 bytes), down from 350.79GiB originally
+E gpu_cudamallocasync_allocator.cc:359] cuMemAllocAsync failed to allocate 281923031072 bytes
+jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 262.56GiB.
+  [executable_name='jit_train_step']
+```
+
+The step needs 350.36 GiB per device against a 193.77 GiB budget, and rematerialization recovered
+0.43 GiB of it. **This is not the `cuda_async` release-threshold trap (#8490).** That one is a
+runtime pool-limit effect on a program that fits; here the compiler's own static requirement is 1.8x
+physical HBM. The pool limit in the log is 138.22 GiB (the 0.75 default fraction of the 184.3 GiB
+usable); raising the fraction to 1.0 buys about 46 GiB against a 157 GiB shortfall, so no memory
+setting reaches this. That is why no retry was attempted.
+
+The predicted reshard is real, and it now costs memory rather than only time. Rank 0 logged exactly
+12 `[SPMD] Involuntary full rematerialization` warnings, all on `f32` parameter copies: one
+`[64,96,6144]`, one `[64,6144,96]`, two `[64,96,1536]`, five `[64,96,3072]`, three `[64,3072,96]`.
+Each goes from `{devices=[1,64,1]}` or `{devices=[1,1,64]}` -- a flat 64-way shard -- to
+`{devices=[4,1,1,16] last_tile_dim_replicate}`, a 4-way shard on `context` replicated over the 16
+`expert` ranks. That target is the composite `("expert", "context")` parameter spec from
+`859eeebd25`, and the 96-sized axis does not divide 64, hence the `pad` and then the
+give-up-and-replicate. The pre-flight saw this at 2x2; at EP16xCP4 it arrives at full width.
+
+The 262.56 GiB allocation is not attributed yet. Two candidates land near it by arithmetic -- a
+sequence-squared attention buffer (262144^2 x 4 B = 256 GiB) and a fully replicated parameter copy --
+and telling them apart does not need a rack: lower and compile the step once and read
+`.compile().memory_analysis()`, or compile with `--xla_dump_to` and read the buffer assignment. Do
+that before requesting the rack again.
+
+Neither the drop rate, the MFU, nor the loss trajectory was measured. Rack occupancy was about six
+minutes; all 16 tasks released (1 `failed`, 15 `cosched_failed`) and no GPUs stayed held.
+
 ## Attempt 1 (2026-08-25 20:17 UTC): batch 16 is below the device count
 
 Run `lc262k-ep16cp4-08251317`, job `/mwittmann/lc262k-ep16cp4-08251317-coord`. The 16-node gang
