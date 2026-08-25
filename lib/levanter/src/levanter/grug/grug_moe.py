@@ -51,6 +51,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
+    _axis_names,
     _batch_spec_from_x,
     _current_mesh,
     _drop_absent_mesh_axes,
@@ -228,6 +229,11 @@ def moe_mlp(
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
+    # Drop counters are summed over exactly the axes the token dim is split across, read off the
+    # spec the shard_map is about to use rather than off the mesh: a caller whose token axis names
+    # fewer axes than the mesh offers would otherwise have its total multiplied by the shards it
+    # never split across.
+    token_axis_names = _axis_names(batch_spec[0])
 
     if has_expert_axis and expert_axis_size > 1:
         if expert_chunks != 1:
@@ -275,6 +281,7 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                token_axis_names=token_axis_names,
             ),
             mesh=mesh,
             in_specs=(
@@ -313,8 +320,11 @@ def moe_mlp(
         w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
         w_down_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
     else:
-        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
-        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+        # Replicated, not "whatever layout the weights happen to carry": the unchunked local body
+        # contracts a full-width hidden dim against the whole expert bank, so an FSDP or TP slice
+        # would hand the kernel a hidden shard that does not line up with `x`.
+        w_up_gate_spec = P(*(None for _ in range(w_up_gate.ndim)))
+        w_down_spec = P(*(None for _ in range(w_down.ndim)))
 
     x = _reshard_for_shard_map(x, mesh, x_spec)
     selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
@@ -334,9 +344,9 @@ def moe_mlp(
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
         )
-        batch_axis_names = x_spec[0]
-        if report_capacity_overflow and batch_axis_names is not None:
-            dropped = jax.lax.psum(dropped, axis_name=batch_axis_names)
+        local_token_axis_names = _axis_names(x_spec[0])
+        if report_capacity_overflow and local_token_axis_names:
+            dropped = jax.lax.psum(dropped, axis_name=local_token_axis_names)
         return out, dropped
 
     shard_fn = shard_map(

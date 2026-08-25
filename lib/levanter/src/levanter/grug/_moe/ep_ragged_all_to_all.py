@@ -23,7 +23,6 @@ from levanter.grug._moe.ep_common import (
     _sort_activations,
     _unpermute_from_global_expert,
 )
-from levanter.grug.sharding import _batch_axes
 
 
 def _moe_mlp_ep_ragged_a2a_local(
@@ -36,6 +35,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_axis_names: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -121,5 +121,5 @@ def _moe_mlp_ep_ragged_a2a_local(
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+        dropped_total = jax.lax.psum(dropped_local, token_axis_names)
     return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))

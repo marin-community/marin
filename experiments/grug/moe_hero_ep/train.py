@@ -187,11 +187,10 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. Leave it at 1:
-    # no model here shards the sequence dim yet, so a value above 1 not only narrows `data` but
-    # corrupts metrics -- the MoE token-space psums reduce over `context`, and with every
-    # context shard holding the same tokens they scale dropped-token counts by the context
-    # width. Raise it once model-side context sharding lands.
+    # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. The MoE, loss and
+    # router metrics here reduce over `context` as part of the token axis, so raising it is
+    # supported: it splits the sequence dim of the activations and multiplies the number of
+    # independent routing shards, which shrinks tokens per shard and raises drop pressure.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 

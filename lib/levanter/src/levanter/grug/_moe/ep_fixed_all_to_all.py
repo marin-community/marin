@@ -12,7 +12,6 @@ from jaxtyping import Array, Float, Int
 
 from haliax.jax_utils import tree_checkpoint_name
 from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MOE_OUTPUT, CapacityOverflow
-from levanter.grug.sharding import _batch_axes
 
 
 @jax.custom_vjp
@@ -84,6 +83,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_axis_names: tuple[str, ...],
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
@@ -177,5 +177,5 @@ def _moe_mlp_ep_fixed_a2a_local(
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
         dropped_local = assignments_per_shard - jnp.sum(keep, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+        dropped_total = jax.lax.psum(dropped_local, token_axis_names)
     return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))

@@ -15,7 +15,6 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import CapacityOverflow
 from levanter.grug._moe.ep_common import _assignment_sources, _ranks_within_groups, _token_sources
 from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
-from levanter.grug.sharding import _batch_axes
 
 
 class _PooledDispatch(NamedTuple):
@@ -511,6 +510,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    token_axis_names: tuple[str, ...],
     transport_capacity_factor: float,
     num_expert_waves: int,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
@@ -595,6 +595,6 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
 
     sender_dropped = assignments_per_shard - jnp.sum(sender_keep, dtype=jnp.int32)
     dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
-    dropped_by_stage = jax.lax.psum(dropped_by_stage_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    dropped_by_stage = jax.lax.psum(dropped_by_stage_local, token_axis_names)
     overflow = CapacityOverflow(sender=dropped_by_stage[0], receiver=dropped_by_stage[1])
     return out_local.astype(x_local.dtype), overflow

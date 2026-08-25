@@ -12,32 +12,37 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _current_mesh, _reshard_for_shard_map
+from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
 
-def _batch_axis_spec(x: jax.Array):
-    x_type = jax.typeof(x)
-    sharding = getattr(x_type, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
-        return spec[0]
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
-        return spec[0]
-    return ("data",)
+def _token_dim_specs(x: jax.Array) -> tuple:
+    """Partition entries for `x`'s token dims, i.e. every dim but the trailing feature dim.
 
+    Naming every token dim is a layout fix, not a value fix. Reading the batch dim alone still
+    gives the right number -- the reshard onto a batch-only spec gathers the sequence, and the psum
+    over the batch axes then covers every token -- but it pays for that with an all-gather of the
+    activation before the kernel. Keeping the sequence on ``context`` and reducing over it instead
+    turns those two collectives into one all-reduce, which is the whole point of sharding it.
 
-def _axis_names_from_spec(axis_spec) -> tuple[str, ...]:
-    if axis_spec is None:
-        return ()
-    if isinstance(axis_spec, tuple):
-        return tuple(str(name) for name in axis_spec)
-    return (str(axis_spec),)
+    A spec counts as informative when *any* token dim names an axis, not just the batch dim: a
+    context-parallel activation can arrive batch-replicated and sequence-sharded, and testing the
+    batch dim alone would send that case to the replicated default -- gathering the sequence onto
+    every device, which for a long-context run is the allocation this axis exists to avoid.
+    """
+    for candidate in (jax.typeof(x), x):
+        sharding = getattr(candidate, "sharding", None)
+        spec = getattr(sharding, "spec", None)
+        if spec is None or len(spec) == 0:
+            continue
+        padded = tuple(spec) + (None,) * (x.ndim - len(spec))
+        token_dims = padded[: x.ndim - 1]
+        if any(entry is not None for entry in token_dims):
+            return token_dims
+    return ("data",) + (None,) * (x.ndim - 2)
 
 
 def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
@@ -97,8 +102,8 @@ def fused_linear_softmax_cross_entropy_loss(
     mesh = _current_mesh()
     has_mesh = mesh is not None and not mesh.empty
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
-    batch_axis_spec = _batch_axis_spec(hidden) if has_mesh else None
-    batch_axis_names = _axis_names_from_spec(batch_axis_spec) if has_mesh else ()
+    token_dim_specs = _token_dim_specs(hidden) if has_mesh else ()
+    token_axis_names = tuple(name for entry in token_dim_specs for name in _axis_names(entry))
 
     def _loss_shard(
         shard_hidden: jax.Array,
@@ -129,24 +134,24 @@ def fused_linear_softmax_cross_entropy_loss(
 
         local_sum = jnp.sum(loss)
         local_denom = jnp.sum(flat_weight)
-        total_sum = _psum_over_axes(local_sum, batch_axis_names)
+        total_sum = _psum_over_axes(local_sum, token_axis_names)
         if reduction_mode == "sum":
             return total_sum
-        total_denom = _psum_over_axes(local_denom, batch_axis_names)
+        total_denom = _psum_over_axes(local_denom, token_axis_names)
         return jnp.where(total_denom != 0, total_sum / total_denom, jnp.zeros_like(total_denom))
 
     if not has_mesh:
         return _loss_shard(hidden, lm_head, labels, weight_array)
 
-    hidden_spec = P(batch_axis_spec)
+    hidden_spec = P(*token_dim_specs, None)
     lm_head_spec = P(None, None)
-    label_spec = P(batch_axis_spec)
+    label_spec = P(*token_dim_specs)
     hidden = _reshard_for_shard_map(hidden, mesh, hidden_spec)
     lm_head = _reshard_for_shard_map(lm_head, mesh, lm_head_spec)
     labels = _reshard_for_shard_map(labels, mesh, label_spec)
     weight_array = _reshard_for_shard_map(weight_array, mesh, label_spec)
 
-    out_specs = hidden_spec if reduction_mode is None else P()
+    out_specs = label_spec if reduction_mode is None else P()
     return jax.shard_map(
         _loss_shard,
         mesh=mesh,

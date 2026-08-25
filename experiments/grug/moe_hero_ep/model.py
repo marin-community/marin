@@ -81,6 +81,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_SEQ_AXIS_NAME: str = "context"
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -102,6 +103,58 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
+
+
+def _seq_axis(mesh: jax.sharding.AbstractMesh | None) -> str | None:
+    """The sequence-sharding (context-parallel) mesh axis, or ``None`` if the mesh lacks it.
+
+    Unlike ``_mesh_axis_size``, which treats a missing axis as a caller bug, this tolerates one:
+    the axis is new, and meshes built by tests and older tooling name only the axes they use. A
+    mesh without it simply has no sequence sharding to account for.
+    """
+    if mesh is None or mesh.empty:
+        return None
+    return _SEQ_AXIS_NAME if _SEQ_AXIS_NAME in mesh.shape else None
+
+
+def _token_axes(mesh: jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
+    """Mesh axes that partition the flat token dim of a `[T = B*S, ...]` tensor.
+
+    This tuple is the policy, not a description of what a reshape does for free. Flattening a
+    `[B, S, D]` activation whose sequence dim is sharded over ``context`` produces a token set per
+    device that no PartitionSpec can express -- a device owning several batch rows and one sequence
+    slice holds a strided set of token indices -- so XLA settles it with an all-to-all over the
+    context group. Under context parallelism that costs four activation-sized exchanges per layer:
+    into and out of both ``MoEMLP`` and ``DenseMLP``. Flattening inside a ``shard_map`` over the
+    3-D activation would avoid them, at the cost of a different ``moe_mlp`` interface; that is an
+    open design decision, not something this layout hides.
+
+    Batch axes come first and ``context`` last because that is the order the fused dim inherits
+    from `(b, s)`. ``expert`` keeps its dual role: it partitions tokens *and* names the EP
+    collective, so every context shard routes its own tokens independently.
+
+    Any reduction over "all tokens" -- drop counts, router partials, the QB threshold, the loss
+    denominator -- has to run over this whole tuple.
+    """
+    seq = _seq_axis(mesh)
+    return (*_BATCH_AXES, seq) if seq is not None else _BATCH_AXES
+
+
+def _token_spec() -> P:
+    """PartitionSpec for a flattened `[T = B*S, ...]` tensor, on the ambient mesh."""
+    return P(_token_axes(get_abstract_mesh()))
+
+
+def _activation_spec(x: Float[Array, "B S D"]) -> P:
+    """PartitionSpec to restore on a `[B, S, D]` activation after a flat-token round trip.
+
+    Unflattening `(b s) d -> b s d` leaves the whole fused token tuple on the batch dim, which
+    leaks `expert`/`context` onto a dim that does not carry them and breaks the residual add. Snap
+    back to the layout the caller handed in -- seq-replicated today, seq-sharded on ``context``
+    once the sequence itself is context-parallel -- so the MoE never dictates the residual stream's
+    layout and the scan carry keeps one sharding across layers.
+    """
+    return _partition_spec_of(x) or _batch_spec()
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -665,17 +718,14 @@ class DenseMLP(eqx.Module):
             activation_fn = activation
 
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
-        # Reshard after the reshape so the shared-expert output carries the same
-        # canonical batch sharding as the routed MoE output (MoEMLP reshards its
-        # routed result identically). Splitting the fused
-        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
-        # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
-        # residual add fails with a ShardingTypeError on a multi-node mesh.
-        return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
+        # Reshard after the reshape so the shared-expert output carries the same sharding as the
+        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
+        # for why the unflattened tensor cannot keep the fused token tuple.
+        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
 
 
 def _local_routing_stats(
@@ -699,9 +749,10 @@ def _local_routing_stats(
 
     So return the unreduced per-shard partials and let ``_reduce_router_stats`` do the collective
     once, on the stacked ``[num_layers, num_shards, ...]`` scan outputs. The returned arrays carry a
-    leading shard axis that stays sharded over ``_BATCH_AXES``; per device they are the same size as
-    the replicated per-layer metrics they replace.
+    leading shard axis that stays sharded over ``_token_axes(mesh)``; per device they are the same
+    size as the replicated per-layer metrics they replace.
     """
+    token_axes = _token_axes(mesh)
 
     def _local(sel: jax.Array, probs: jax.Array, logits: jax.Array) -> dict[str, jax.Array]:
         probs_f = probs.astype(jnp.float32)
@@ -717,11 +768,11 @@ def _local_routing_stats(
     return shard_map(
         _local,
         mesh=mesh,
-        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        in_specs=(P(token_axes, None), P(token_axes, None), P(token_axes, None)),
         out_specs={
-            "routing_counts_local": P(_BATCH_AXES, None),
-            "router_prob_sum_local": P(_BATCH_AXES, None),
-            "router_z_sq_sum_local": P(_BATCH_AXES),
+            "routing_counts_local": P(token_axes, None),
+            "router_prob_sum_local": P(token_axes, None),
+            "router_z_sq_sum_local": P(token_axes),
         },
     )(selected_experts, router_probs, router_logits)
 
@@ -736,7 +787,7 @@ def _reduce_router_stats(
     """Reduce the stacked per-shard router partials across devices once, after the layer scan.
 
     ``stacked`` holds the scan's ``ys``: a leading ``[num_layers]`` axis over a shard axis that is
-    still sharded over ``_BATCH_AXES``. Summing that shard axis is one all-reduce for the whole
+    still sharded over the token axes. Summing that shard axis is one all-reduce for the whole
     stack rather than one per layer; XLA's all-reduce combiner then merges the four into a single
     tupled collective, so the layer scan emits none at all. The pointwise algebra below is
     identical to what the old per-layer ``_routing_stats`` did, just vectorized over the layer axis.
@@ -850,6 +901,7 @@ def _bincount_upper_quantile(
     lo: jax.Array,
     hi: jax.Array,
     target_rank: float,
+    token_axes: tuple[str, ...],
 ) -> jax.Array:
     """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
 
@@ -862,7 +914,7 @@ def _bincount_upper_quantile(
     idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
     flat = (expert_ids * n_bins + idx).reshape(-1)
     local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
-    counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+    counts = jax.lax.psum(local_counts, axis_name=token_axes).astype(jnp.float32)
     cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
     bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
     ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
@@ -889,19 +941,26 @@ def _qb_beta_hist(
     (the grid ``lo``/``hi``), surfaced for logging.
     """
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+    token_axes = _token_axes(mesh)
 
     def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
         # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
-        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
-        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
+        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=token_axes)
+        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=token_axes)
         hi_grid = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
         beta = _bincount_upper_quantile(
-            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi_grid, target_rank=target_rank
+            s_local,
+            num_experts=num_experts,
+            n_bins=n_bins,
+            lo=lo,
+            hi=hi_grid,
+            target_rank=target_rank,
+            token_axes=token_axes,
         )
         return beta, lo, hi  # surface the live margin range for logging
 
-    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
+    return shard_map(_fn, mesh=mesh, in_specs=(P(token_axes, None),), out_specs=(P(), P(), P()))(s_ma)
 
 
 class MoEMLP(eqx.Module):
@@ -965,7 +1024,10 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        # Pin the fused token dim onto `_token_axes()` before routing: capacity, drop accounting and
+        # the QB threshold are all per-shard quantities, so the whole layer has to agree on which
+        # mesh axes partition tokens.
+        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
@@ -984,14 +1046,14 @@ class MoEMLP(eqx.Module):
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
         router_stats = _local_routing_stats(
-            reshard(selected_experts, P(_BATCH_AXES, None)),
-            reshard(router_probs, P(_BATCH_AXES, None)),
-            reshard(router_logits, P(_BATCH_AXES, None)),
+            reshard(selected_experts, _token_spec()),
+            reshard(router_probs, _token_spec()),
+            reshard(router_logits, _token_spec()),
             mesh,
             num_experts=self.cfg.num_experts,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+        s_minus_alpha = reshard(router_logits - qb_alpha, _token_spec())
         if self.cfg.qb_estimator == QbEstimator.HIST:
             beta, margin_min, margin_max = _qb_beta_hist(
                 s_minus_alpha,
@@ -1004,13 +1066,13 @@ class MoEMLP(eqx.Module):
             router_stats["margin_min"] = margin_min
             router_stats["margin_max"] = margin_max
         else:
-            num_devices = 1
-            for a in _BATCH_AXES:
-                num_devices *= mesh.shape[a]
-            local_tokens = s_minus_alpha.shape[0] // num_devices
-            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+            token_axes = _token_axes(mesh)
 
             def _local_qb_beta(s_ma):
+                # The shard's own token count, rather than a global count divided by the mesh sizes:
+                # the division floors, so an indivisible token dim would silently shrink the rank
+                # this reads the threshold at.
+                qb_count = max(1, s_ma.shape[0] * self.cfg.num_experts_per_token // self.cfg.num_experts)
                 topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
                 # The `pmean` that used to live here is deferred to `_reduce_router_stats`: the
                 # mean of the per-shard betas is the same number whether it is taken per layer or
@@ -1020,8 +1082,8 @@ class MoEMLP(eqx.Module):
             router_stats["qb_beta_local"] = shard_map(
                 _local_qb_beta,
                 mesh=mesh,
-                in_specs=(P(_BATCH_AXES, None),),
-                out_specs=P(_BATCH_AXES, None),
+                in_specs=(P(token_axes, None),),
+                out_specs=P(token_axes, None),
             )(s_minus_alpha)
             # TOPK has no histogram grid, so no live margin range to surface. Reshard the
             # placeholder onto the run's mesh: a bare constant carries an empty-mesh sharding,
@@ -1040,7 +1102,7 @@ class MoEMLP(eqx.Module):
                 "td,dl->tl",
                 x_flat,
                 self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_batch_spec(),
+                out_sharding=_token_spec(),
             )
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(routed_input)
@@ -1072,11 +1134,11 @@ class MoEMLP(eqx.Module):
                 "tl,ld->td",
                 routed_flat,
                 self.w_latent_up.astype(routed_flat.dtype),
-                out_sharding=_batch_spec(),
+                out_sharding=_token_spec(),
             )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _batch_spec())
+        routed = reshard(routed, _activation_spec(x))
         return routed, router_stats
 
 
