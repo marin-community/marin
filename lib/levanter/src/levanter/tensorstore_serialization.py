@@ -615,6 +615,7 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
+    on_local_commit: Optional[Callable[[str], None]] = None,
     on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
     write_config: Optional[TensorStoreWriteConfig] = None,
@@ -684,7 +685,16 @@ def tree_serialize_leaves_tensorstore(
         )
         flush_debug_output(logger)
 
-    staged_host_bytes = _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback, on_staged)
+    staged_host_bytes = _serialize_arrays(
+        arrays,
+        tspecs,
+        plans,
+        manager,
+        write_config,
+        commit_callback,
+        on_local_commit,
+        on_staged,
+    )
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
@@ -703,6 +713,7 @@ def _serialize_arrays(
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
     commit_callback: Callable,
+    on_local_commit: Optional[Callable[[str], None]],
     on_staged: Optional[Callable[[int], None]],
 ) -> int:
     """Write every array according to its plan and start the asynchronous commit.
@@ -811,6 +822,29 @@ def _serialize_arrays(
     manager._add_futures(commit_futures)
     if on_staged is not None:
         on_staged(staged_host_bytes)
+    if on_local_commit is not None:
+        remaining = len(commit_futures)
+        callback_lock = threading.Lock()
+        local_status = "local_completed"
+
+        def local_write_finished(future: ts.Future) -> None:
+            nonlocal remaining, local_status
+            try:
+                future.result()
+                failed = False
+            except BaseException:
+                failed = True
+            with callback_lock:
+                if failed:
+                    local_status = "local_failed"
+                remaining -= 1
+                if remaining == 0:
+                    on_local_commit(local_status)
+
+        for future in commit_futures:
+            future.add_done_callback(local_write_finished)
+        if not commit_futures:
+            on_local_commit(local_status)
     manager._start_async_commit(commit_callback)
     return staged_host_bytes
 

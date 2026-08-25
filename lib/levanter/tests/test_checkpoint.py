@@ -521,6 +521,39 @@ def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypa
     assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in checkpoint_records)
 
 
+def test_debug_checkpoint_nonprimary_process_finishes_local_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(jax, "process_index", lambda: 1)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        save_checkpoint(
+            {"weight": np.arange(8, dtype=np.float32)},
+            step=7,
+            checkpoint_path=tmp_path / "checkpoint",
+            debug=CheckpointDebugConfig(
+                enabled=True,
+                tracemalloc_frames=None,
+                force_gc_before_serialize=False,
+                top_allocations=0,
+                flush_logs=False,
+            ),
+        )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+    assert "async_commit_in_flight" in {
+        record["attributes"]["phase"]
+        for record in checkpoint_records
+        if record["name"] == "checkpoint_phase_duration_seconds"
+    }
+    assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
+
+
 def test_debug_checkpointer_state_providers_register_and_unregister():
     provider_name = "unit-test-provider"
     provider = lambda: {"weight_transfer": {"bytes": 123}}

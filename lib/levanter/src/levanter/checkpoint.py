@@ -318,7 +318,7 @@ class _CheckpointProgressLogger:
     def publish_staged_host_bytes(self, staged_host_bytes: int) -> None:
         self._publish("checkpoint_staged_host_bytes", staged_host_bytes)
 
-    def finish(self, status: str) -> None:
+    def finish(self, status: str, *, publish_total: bool = True) -> None:
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
@@ -327,7 +327,8 @@ class _CheckpointProgressLogger:
         elapsed = now - self.started_at
         phase_elapsed = now - self.phase_started_at
         self._publish("checkpoint_phase_duration_seconds", phase_elapsed, phase=self.phase)
-        self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
+        if publish_total:
+            self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
         self._log_memory_state(f"checkpoint_{status}", include_top_allocations=True)
         self._log(
             logging.INFO,
@@ -847,6 +848,10 @@ def save_checkpoint(
             progress_logger.publish_staged_host_bytes(staged_host_bytes)
             progress_logger.set_phase("async_commit_in_flight")
 
+    def on_local_commit(status: str) -> None:
+        if progress_logger is not None and jax.process_index() != 0:
+            progress_logger.finish(status, publish_total=False)
+
     try:
         if progress_logger is not None:
             if checkpoint_debug.force_gc_before_serialize:
@@ -858,6 +863,7 @@ def save_checkpoint(
             tree,
             manager,
             commit_callback=my_callback,
+            on_local_commit=on_local_commit,
             on_staged=on_staged,
             debug_checkpointer=checkpoint_debug.enabled,
             write_config=write_config,

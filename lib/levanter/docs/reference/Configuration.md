@@ -201,7 +201,7 @@ This configuration does not start `tracemalloc` or force Python garbage collecti
 | Metric | Value |
 |--------|-------|
 | `checkpoint_phase_duration_seconds` | Time in one checkpoint phase. |
-| `checkpoint_total_duration_seconds` | Time from checkpoint start through metadata commit. |
+| `checkpoint_total_duration_seconds` | Time from checkpoint start through metadata commit. Process zero publishes this metric. |
 | `checkpoint_staged_host_bytes` | Peak host bytes staged by one process. |
 | `checkpoint_process_peak_rss_bytes` | Peak resident memory for one process. |
 
@@ -230,7 +230,7 @@ ORDER BY timestamp_ms, process_index, name
 SQL
 ```
 
-The checkpoint is complete when each process reports `checkpoint_total_duration_seconds`. Compare the maximum phase time across processes to find the checkpoint straggler.
+The checkpoint is complete when process zero reports `checkpoint_total_duration_seconds`. Each process reports its local asynchronous commit phase.
 
 ### JAX Compilation Cache Configuration
 
