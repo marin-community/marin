@@ -740,7 +740,7 @@ def main() -> None:
         output_path=OUTPUT_PATH,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
-        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="32g", preemptible=False),
+        worker_resources=ResourceConfig(cpu=2, ram="32g", disk="32g", preemptible=False),
         max_workers=MAX_WORKERS,
         shards_per_task=SHARDS_PER_TASK,
     )
