@@ -74,10 +74,21 @@ is 2/2 green. The context-sharded case first failed at four visible GPUs because
 at one sequence while `compact_grug_mesh` gave `data` the devices `context` left free; the batch now
 comes from the mesh (commit a3b0a4b492) and the case passes at two and at four GPUs.
 
-Gate 3 passes on the mesh, on synthetic data: 20 steps at `context_axis_size=4`,
-`expert_axis_size=1`, d768, sequence 32768, one GB200 tray. Loss falls monotonically 11.81 -> 3.86,
-drop metrics are finite, and no sharding error appears
-([W&B](https://wandb.ai/marin-community/marin_moe/runs/cp4-smoke-03)).
+Gate 3 passes on the mesh, on synthetic data: 20 steps of d768 at sequence 32768 on one GB200 tray,
+once at `context_axis_size=4` / `expert_axis_size=1`
+([W&B](https://wandb.ai/marin-community/marin_moe/runs/cp4-smoke-03)) and once at 2 / 2, which is
+the arrangement that puts the pooled-wave transport behind a context-sharded token axis
+([W&B](https://wandb.ai/marin-community/marin_moe/runs/cp2ep2-smoke-05)). Both fall monotonically
+11.806 -> 3.863 with no sharding error; the 2x2 arm reports finite drops settling from 7.9e-3 to
+3.1e-6, all at the receiver.
+
+One thing to watch at rack scale: only the 2x2 arm logs `[SPMD] Involuntary full rematerialization`,
+twelve tensors per rank per step, all of them the stacked routed-expert weights (`f32[8, 192, *]`,
+that is layers x local experts x width). XLA cannot reshard
+`{devices=[1,1,4]<=[2,2]T(1,0)}` to `{devices=[2,1,1,2] last_tile_dim_replicate}` efficiently, so it
+replicates and re-partitions. The CP4/EP1 arm logs none, so the cost belongs to the composite
+`("expert", "context")` parameter spec and appears only where both axes exceed 1 -- which the
+EP16xCP4 rack mesh does. Watch the step time and the peak HBM against the EP-only baseline.
 
 **The run plan's data configuration will not start.** `LmDataConfig` slices every mixture component
 to `int(sequences * experiment_budget / target_budget)`, and `experiment_budget` is
