@@ -79,6 +79,16 @@ class ControllerStatus:
     vm_name: str | None = None
 
 
+@dataclass(frozen=True)
+class ControllerRestartPlan:
+    """Inputs needed to activate an existing VM controller."""
+
+    vm: StandaloneWorkerHandle
+    bootstrap_script: str
+    address: str
+    port: int
+
+
 @dataclass
 class HealthCheckResult:
     """Result of a health check with diagnostic info."""
@@ -411,18 +421,12 @@ def start_controller(
     return address, vm
 
 
-def restart_controller(
+def controller_restart_plan(
     platform: WorkerInfraProvider,
     config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
-    health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
-) -> tuple[str, StandaloneWorkerHandle]:
-    """Restart controller container in-place on existing VM.
-
-    Re-runs the bootstrap script on the existing controller VM, which stops the
-    running container, pulls the latest image, and starts a new container.
-    Much faster than a full stop+start cycle since it skips VM creation.
-    """
+) -> ControllerRestartPlan:
+    """Resolve the existing VM and bootstrap script for a controller restart."""
     _resolve_image = resolve_image or _identity_resolve_image
     label_prefix = config.platform.label_prefix or "iris"
     port = _controller_port(config)
@@ -431,19 +435,33 @@ def restart_controller(
     if vm is None:
         raise RuntimeError("No existing controller VM found. Use 'iris cluster start' to create one first.")
 
-    logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
-
     bootstrap_script = build_controller_bootstrap_script_from_config(
         with_injected_task_env(config), resolve_image=_resolve_image
     )
-    vm.bootstrap(bootstrap_script)
+    return ControllerRestartPlan(
+        vm=vm,
+        bootstrap_script=bootstrap_script,
+        address=f"http://{vm.internal_address}:{port}",
+        port=port,
+    )
 
-    address = f"http://{vm.internal_address}:{port}"
-    if not wait_healthy(vm, port, timeout=health_check_timeout):
-        raise RuntimeError(f"Controller at {address} failed health check after restart")
 
-    logger.info("Controller container restarted at %s", address)
-    return address, vm
+def restart_controller(
+    platform: WorkerInfraProvider,
+    config: IrisClusterConfig,
+    resolve_image: Callable[[str, str | None], str] | None = None,
+    health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+) -> tuple[str, StandaloneWorkerHandle]:
+    """Restart controller container in-place on an existing VM."""
+    plan = controller_restart_plan(platform, config, resolve_image)
+    logger.info("Restarting controller container in-place on VM %s", plan.vm.vm_id)
+    plan.vm.bootstrap(plan.bootstrap_script)
+
+    if not wait_healthy(plan.vm, plan.port, timeout=health_check_timeout):
+        raise RuntimeError(f"Controller at {plan.address} failed health check after restart")
+
+    logger.info("Controller container restarted at %s", plan.address)
+    return plan.address, plan.vm
 
 
 def stop_controller(platform: WorkerInfraProvider, config: IrisClusterConfig) -> None:

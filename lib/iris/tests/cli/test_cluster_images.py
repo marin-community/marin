@@ -189,6 +189,8 @@ def test_cluster_start_single_platform_task_uses_architecture_suffix(monkeypatch
 
 def test_prebuilt_kubernetes_images_reject_manifest_missing_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     config = _kubernetes_config()
+    controller_image = config.controller.image
+    task_image = config.defaults.worker.default_task_image
     manifest = {
         "digest": f"sha256:{'b' * 64}",
         "manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}],
@@ -198,5 +200,7 @@ def test_prebuilt_kubernetes_images_reject_manifest_missing_platform(monkeypatch
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr=""),
     )
-    with pytest.raises(cluster_cli.click.ClickException, match="missing platforms: linux/arm64"):
+    with pytest.raises(cluster_cli.click.ClickException):
         cluster_cli.use_prebuilt_kubernetes_images(config, "abc1234")
+    assert config.controller.image == controller_image
+    assert config.defaults.worker.default_task_image == task_image

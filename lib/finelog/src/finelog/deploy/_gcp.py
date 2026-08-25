@@ -15,6 +15,7 @@ import tempfile
 import time
 
 import click
+from rigging.gce import gce_ssh_arguments
 
 from finelog.deploy.bootstrap import (
     CONTAINER_NAME,
@@ -66,18 +67,13 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
     """
     assert cfg.deployment.gcp is not None
     gcp = cfg.deployment.gcp
-    args = [
-        "gcloud",
-        "compute",
-        "ssh",
-        cfg.name,
-        f"--project={gcp.project}",
-        f"--zone={gcp.zone}",
-        f"--command={command}",
-    ]
-    if gcp.service_account:
-        args.append(f"--impersonate-service-account={gcp.service_account}")
-    return args
+    return gce_ssh_arguments(
+        project=gcp.project,
+        zone=gcp.zone,
+        instance=cfg.name,
+        command=command,
+        impersonate_service_account=gcp.service_account,
+    )
 
 
 def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> str:

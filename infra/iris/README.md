@@ -20,8 +20,9 @@ The rollout wrapper resolves controller secrets, takes a checkpoint, builds and
 pins the controller images, and invokes `pulumi up`. When a prior deployment is
 recorded, it first writes a `pending` record with the paired rollback state.
 Pulumi records the cluster name, image references, activation ID, and digest.
-The dynamic resource loads the cluster configuration and resolves runtime
-values in the operator process; secret values do not enter Pulumi config,
+The dynamic provider loads the cluster configuration and resolves runtime values
+in the operator process. It avoids the stdout and stderr state capture performed
+by `pulumi_command.local.Command`; secret values do not enter Pulumi config,
 inputs, outputs, or state.
 
 GCE activation updates `startup-script` metadata and runs the script over SSH on
@@ -38,9 +39,9 @@ restores the prior rollout record without requesting a checkpoint rollback.
 
 Direct `pulumi up` is intentionally unavailable: every update requires
 temporary image and activation configuration produced after the checkpoint and
-image build. The secrets provider is stack metadata established during
-initialization; it is not defined by `Pulumi.yaml` or an uninitialized stack
-config. Create a new stack with the shared KMS provider before its first
+image build. The checked-in stack settings record the KMS provider used by
+subsequent operations. Pulumi still selects that provider while creating the
+backend stack, so pass the same provider to `stack init` before the first
 wrapper-driven deployment:
 
 ```bash

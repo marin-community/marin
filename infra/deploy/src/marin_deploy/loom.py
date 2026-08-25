@@ -12,7 +12,6 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from marin_deploy.gce import GceVmTarget, run_remote
 
-SSH_CONNECT_TIMEOUT = 15
 RESTART_TIMEOUT = 600
 READY_ATTEMPTS = 90
 READY_INTERVAL = 10
@@ -30,7 +29,7 @@ class LoomNotReadyError(RuntimeError):
 
 
 def _require_ready(url: str) -> None:
-    with urlopen(url, timeout=READY_REQUEST_TIMEOUT) as response:  # noqa: S310
+    with urlopen(url, timeout=READY_REQUEST_TIMEOUT) as response:
         status = json.load(response).get("status")
     if status != "ready":
         raise LoomNotReadyError(f"Loom readiness status is {status!r}")
@@ -51,7 +50,6 @@ def activate_loom(target: GceVmTarget, readiness_url: str) -> None:
         target,
         STARTUP_RESTART_COMMAND,
         timeout=RESTART_TIMEOUT,
-        connect_timeout=SSH_CONNECT_TIMEOUT,
     )
     retry_with_backoff(
         lambda: _require_ready(readiness_url),

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from rigging.gce import gce_ssh_arguments
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 DEFAULT_CONNECT_TIMEOUT = 15
@@ -22,10 +23,8 @@ class GceVmTarget:
     project: str
     zone: str
     instance: str
-    user: str | None = None
     ssh_key_file: Path | None = None
     impersonate_service_account: str | None = None
-    tunnel_through_iap: bool = False
 
 
 class StartupScriptPersistence(StrEnum):
@@ -42,34 +41,6 @@ def _identity_args(target: GceVmTarget) -> list[str]:
     return arguments
 
 
-def ssh_arguments(
-    target: GceVmTarget,
-    command: str,
-    *,
-    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
-) -> list[str]:
-    """Return the noninteractive ``gcloud compute ssh`` arguments for ``target``."""
-    destination = f"{target.user}@{target.instance}" if target.user else target.instance
-    arguments = [
-        "gcloud",
-        "compute",
-        "ssh",
-        destination,
-        f"--project={target.project}",
-        f"--zone={target.zone}",
-        *_identity_args(target),
-        "--quiet",
-        "--ssh-flag=-oBatchMode=yes",
-        f"--ssh-flag=-oConnectTimeout={connect_timeout}",
-    ]
-    if target.ssh_key_file is not None:
-        arguments.append(f"--ssh-key-file={target.ssh_key_file}")
-    if target.tunnel_through_iap:
-        arguments.append("--tunnel-through-iap")
-    arguments.extend(("--command", command))
-    return arguments
-
-
 def run_remote(
     target: GceVmTarget,
     command: str,
@@ -79,12 +50,19 @@ def run_remote(
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
     attempts: int = 1,
     retry_interval: float = DEFAULT_RETRY_INTERVAL,
-    capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command on ``target`` over noninteractive GCE SSH."""
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
-    arguments = ssh_arguments(target, command, connect_timeout=connect_timeout)
+    arguments = gce_ssh_arguments(
+        project=target.project,
+        zone=target.zone,
+        instance=target.instance,
+        command=command,
+        ssh_key_file=str(target.ssh_key_file) if target.ssh_key_file is not None else None,
+        impersonate_service_account=target.impersonate_service_account,
+        connect_timeout=connect_timeout,
+    )
 
     def run() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -93,7 +71,6 @@ def run_remote(
             text=True,
             check=True,
             timeout=timeout,
-            capture_output=capture_output,
         )
 
     if attempts == 1:

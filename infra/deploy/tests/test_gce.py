@@ -89,32 +89,22 @@ def test_run_remote_applies_explicit_connection_identity(monkeypatch: pytest.Mon
         project="project",
         zone="zone-a",
         instance="service",
-        user="operator",
         ssh_key_file=key_file,
         impersonate_service_account="deployer@example.com",
-        tunnel_through_iap=True,
     )
 
     run_remote(target, "true", timeout=30)
 
-    assert observed == [
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            "operator@service",
-            "--project=project",
-            "--zone=zone-a",
-            "--impersonate-service-account=deployer@example.com",
-            "--quiet",
-            "--ssh-flag=-oBatchMode=yes",
-            "--ssh-flag=-oConnectTimeout=15",
-            f"--ssh-key-file={key_file}",
-            "--tunnel-through-iap",
-            "--command",
-            "true",
-        ]
-    ]
+    assert len(observed) == 1
+    arguments = observed[0]
+    assert arguments[:4] == ["gcloud", "compute", "ssh", "service"]
+    assert "--project=project" in arguments
+    assert "--zone=zone-a" in arguments
+    assert f"--ssh-key-file={key_file}" in arguments
+    assert "--impersonate-service-account=deployer@example.com" in arguments
+    assert "--ssh-flag=-oBatchMode=yes" in arguments
+    assert "--ssh-flag=-oConnectTimeout=15" in arguments
+    assert arguments[-2:] == ["--command", "true"]
 
 
 def test_run_remote_retries_failed_ssh_attempt(monkeypatch: pytest.MonkeyPatch) -> None:

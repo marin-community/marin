@@ -140,17 +140,14 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
 
     @property
     def gce_vm_name(self) -> str:
-        """Return the GCE instance name used for deployment operations."""
         return self._gce_vm_name
 
     @property
     def zone(self) -> str:
-        """Return the GCE zone containing the instance."""
         return self._zone
 
     @property
     def project_id(self) -> str:
-        """Return the GCP project containing the instance."""
         return self._project_id
 
     def status(self) -> WorkerStatus:

@@ -28,13 +28,11 @@ from iris.cluster.controller.rollout import (
     read_rollout_record,
     write_rollout_record,
 )
-from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.platforms.factory import ProviderBundle
-from iris.cluster.platforms.gcp.controller_bootstrap import build_controller_bootstrap_script_from_config
 from iris.cluster.platforms.gcp.handles import GcpStandaloneWorkerHandle
 from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
 from iris.cluster.platforms.k8s.controller import K8sControllerProvider, configure_client_s3
-from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, discover_controller_vm
+from iris.cluster.platforms.vm_lifecycle import controller_restart_plan
 from rigging.config_discovery import resolve_cluster_config
 from rigging.timing import Timestamp
 
@@ -90,12 +88,21 @@ class IrisActivationSpec:
     def with_controller_image(self, image: str) -> "IrisActivationSpec":
         return replace(self, controller_image=image, activation_id=uuid.uuid4().hex)
 
+    def to_json(self) -> str:
+        """Serialize the activation for Pulumi resource state."""
+        return json.dumps(asdict(self), sort_keys=True)
+
+    @classmethod
+    def from_json(cls, value: str) -> "IrisActivationSpec":
+        """Load an activation from Pulumi resource state."""
+        return cls(**json.loads(value))
+
     def digest(self) -> str:
-        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+        return hashlib.sha256(self.to_json().encode()).hexdigest()
 
 
 def activation_marker_path(spec: IrisActivationSpec) -> Path:
-    """Return the process-local mutation marker shared with the Pulumi provider."""
+    """Return the marker written immediately before controller mutation."""
     activation_hash = hashlib.sha256(spec.activation_id.encode()).hexdigest()
     return Path(tempfile.gettempdir()) / f"{ACTIVATION_MARKER_PREFIX}{activation_hash}.started"
 
@@ -310,17 +317,11 @@ def _activate_gce_controller(
     workers = bundle.workers
     if workers is None:
         raise IrisDeployError("GCE controller activation requires a worker infrastructure provider")
-    label_prefix = config.platform.label_prefix or "iris"
-    vm = discover_controller_vm(workers, label_prefix)
-    if vm is None:
-        raise IrisDeployError("No existing controller VM found; create the cluster before deploying it")
+    plan = controller_restart_plan(workers, config, bundle.controller.resolve_image)
+    vm = plan.vm
     if not isinstance(vm, GcpStandaloneWorkerHandle):
         raise IrisDeployError(f"Expected a GCE controller VM, found {type(vm).__name__}")
 
-    bootstrap = build_controller_bootstrap_script_from_config(
-        with_injected_task_env(config),
-        resolve_image=bundle.controller.resolve_image,
-    )
     target = GceVmTarget(
         project=vm.project_id,
         zone=vm.zone,
@@ -330,13 +331,12 @@ def _activate_gce_controller(
     on_activation_start()
     activate_startup_script(
         target,
-        bootstrap,
+        plan.bootstrap_script,
         persistence=StartupScriptPersistence.BEFORE_ACTIVATION,
         timeout=GCE_ACTIVATION_TIMEOUT,
         attempts=3,
     )
-    port = config.controller.gcp.port or DEFAULT_CONTROLLER_PORT
-    return f"http://{vm.internal_address}:{port}"
+    return plan.address
 
 
 def activate_controller(
@@ -348,6 +348,8 @@ def activate_controller(
     config = spec.apply(_config_for_cluster(spec.cluster))
     bundle = provider_bundle(config)
     bundle.controller.preflight_controller(config)
+    # GCE activation stays here so marin-deploy owns startup-script persistence
+    # and SSH. Kubernetes has no VM activation layer to replace.
     if config.platform.platform_kind() == "gcp":
         return _activate_gce_controller(config, bundle, on_activation_start)
     if not isinstance(bundle.controller, K8sControllerProvider):

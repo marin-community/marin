@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from rigging.gce import gce_ssh_arguments
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
@@ -173,21 +174,15 @@ class GceRemoteExec:
         return self.vm_name
 
     def _build_cmd(self, command: str) -> list[str]:
-        target = f"{self.ssh_user}@{self.vm_name}" if self.ssh_user else self.vm_name
-        cmd = [
-            "gcloud",
-            "compute",
-            "ssh",
-            target,
-            f"--zone={self.zone}",
-            f"--project={self.project_id}",
-        ]
-        _extend_gcloud_ssh_options(
-            cmd,
+        return gce_ssh_arguments(
+            project=self.project_id,
+            zone=self.zone,
+            instance=self.vm_name,
+            command=command,
+            ssh_user=self.ssh_user,
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
         )
-        return _append_gcloud_ssh_command(cmd, command)
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         return _run_subprocess(self._build_cmd(command), timeout)

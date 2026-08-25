@@ -349,8 +349,8 @@ def _resolve_prebuilt_image(image: str) -> str:
     return f"{_image_repository(image)}@{digest}"
 
 
-def use_prebuilt_kubernetes_images(config, tag: str) -> str:
-    """Pin Kubernetes images to verified digests and return the controller image."""
+def use_prebuilt_kubernetes_images(config, tag: str) -> None:
+    """Pin Kubernetes images to verified digests."""
     if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
         raise click.ClickException("--prebuilt-tag is only supported for Kubernetes clusters")
     if tag == "latest" or DOCKER_TAG_PATTERN.fullmatch(tag) is None:
@@ -373,7 +373,6 @@ def use_prebuilt_kubernetes_images(config, tag: str) -> str:
     click.echo("Using verified prebuilt Kubernetes images (Docker build skipped):")
     click.echo(f"  controller: {controller_tag} -> {config.controller.image}")
     click.echo(f"  task: {task_tag} -> {config.defaults.worker.default_task_image}")
-    return config.controller.image
 
 
 # =============================================================================
