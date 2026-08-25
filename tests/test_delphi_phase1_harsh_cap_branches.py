@@ -21,6 +21,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
     fit_delphi_phase1_harsh_cap_branch_response as fit,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    fit_delphi_phase1_harsh_cap_branch_response_partial as partial_fit,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
     materialize_delphi_phase0_harsh_cap_validation_20260825 as prefix_materialize,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
@@ -260,6 +263,50 @@ def test_manifest_write_is_idempotent(tmp_path: Path) -> None:
     launch.save_manifest(runtime_config)
 
     assert (tmp_path / "manifest.json").read_bytes() == first
+
+
+def test_partial_response_fit_uses_unpenalized_intercept() -> None:
+    generator = np.random.default_rng(17)
+    center = np.full(8, 1.0 / 8.0)
+    weights = generator.dirichlet(np.full(8, 2.0), size=60)
+    coefficients = np.linspace(-0.02, 0.02, len(center))
+    endpoints = 0.98 + (weights - center) @ coefficients + 0.03 * fit.hellinger(weights, center) ** 2
+
+    model = partial_fit.fit_model(weights, endpoints, center, "direct", 1e-8)
+    predictions = partial_fit.predict(model, weights, center)
+
+    assert model.intercept == pytest.approx(0.98, abs=1e-7)
+    assert model.damage >= 0.0
+    assert np.sqrt(np.mean((predictions - endpoints) ** 2)) < 1e-7
+
+
+def test_confirmation_rows_pair_candidate_and_tied_by_prefix_and_data_seed() -> None:
+    buckets = ("a", "b")
+    candidate = {"a": 0.75, "b": 0.25}
+    tied = {"b": 0.6, "a": 0.4}
+    rows = [
+        {
+            "prefix_candidate_id": "candidate",
+            "continuation_id": "fit_000",
+            "fit_budget": True,
+            "weights": candidate,
+        }
+    ]
+
+    confirmation = launch.confirmation_rows(rows, "candidate", "fit_000", tied)
+
+    assert len(confirmation) == 18
+    assert {row["role"] for row in confirmation} == {"candidate_confirmation", "paired_tied_control"}
+    for prefix_seed, data_seeds in launch.CONFIRMATION_DATA_SEEDS.items():
+        for data_seed in data_seeds:
+            pair = [
+                row for row in confirmation if row["prefix_repeat_seed"] == prefix_seed and row["data_seed"] == data_seed
+            ]
+            assert len(pair) == 2
+            assert {tuple(row["weights"][bucket] for bucket in buckets) for row in pair} == {
+                tuple(candidate.values()),
+                tuple(tied[bucket] for bucket in buckets),
+            }
 
 
 def test_hardware_observation_initializes_distributed_jax_before_device_discovery(monkeypatch) -> None:

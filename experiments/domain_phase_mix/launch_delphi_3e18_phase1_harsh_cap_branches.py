@@ -54,6 +54,11 @@ CONTROL_ROWS_PER_PREFIX = 8
 ROWS_PER_PREFIX = FIT_ROWS_PER_PREFIX + REFEREE_ROWS_PER_PREFIX + CONTROL_ROWS_PER_PREFIX
 DEFAULT_MAX_CONCURRENT = ROWS_PER_PREFIX
 TOTAL_MATERIALIZED_EPOCH_CAP = 10.0
+CONFIRMATION_DATA_SEEDS = {
+    0: (971_000, 971_001, 971_002),
+    1: (971_000, 971_001, 971_002),
+    2: (971_000, 971_001, 971_002),
+}
 WEIGHT_ARTIFACT_COLUMNS = (
     "prefix_candidate_id",
     "continuation_id",
@@ -178,6 +183,7 @@ def selected_prefixes(
     expected_sha256: str,
     expected_candidate_weights_sha256: str,
     expected_prefix_replay_code_commit: str,
+    expected_repeat_seeds: tuple[int, ...] = (0, 1),
 ) -> tuple[list[PrefixCheckpoint], dict[str, object]]:
     payload_bytes = read_uri_bytes(uri)
     actual_sha256 = hashlib.sha256(payload_bytes).hexdigest()
@@ -203,11 +209,11 @@ def selected_prefixes(
         )
         for row in payload.get("prefixes", [])
     ]
-    if len(rows) != 2 * len(candidate_ids):
-        raise ValueError("Selected prefixes must include primary and stability checkpoints")
+    if len(rows) != len(expected_repeat_seeds) * len(candidate_ids):
+        raise ValueError(f"Selected prefixes must include repeat seeds {expected_repeat_seeds}")
     for candidate_id in candidate_ids:
         seeds = {row.repeat_seed for row in rows if row.candidate_id == candidate_id}
-        if seeds != {0, 1}:
+        if seeds != set(expected_repeat_seeds):
             raise ValueError(f"Prefix {candidate_id} has checkpoint seeds {sorted(seeds)}")
     return rows, payload
 
@@ -398,6 +404,56 @@ def enrich_rows(
     if len(run_names) != len(set(run_names)):
         raise ValueError("Branch run identities are not unique")
     return enriched
+
+
+def confirmation_rows(
+    rows: list[dict[str, object]],
+    candidate_id: str,
+    continuation_id: str,
+    tied_weights: dict[str, float],
+) -> list[dict[str, object]]:
+    matches = [
+        row
+        for row in rows
+        if row["prefix_candidate_id"] == candidate_id
+        and row["continuation_id"] == continuation_id
+        and bool(row["fit_budget"])
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"Expected one fit continuation {candidate_id}/{continuation_id}, got {len(matches)}")
+    candidate_weights = cast(dict[str, float], matches[0]["weights"])
+    if set(candidate_weights) != set(tied_weights):
+        raise ValueError("Confirmation and tied bucket sets differ")
+    ordered_tied_weights = {bucket: tied_weights[bucket] for bucket in candidate_weights}
+    confirmation: list[dict[str, object]] = []
+    for prefix_repeat_seed, data_seeds in CONFIRMATION_DATA_SEEDS.items():
+        for data_seed in data_seeds:
+            pair_id = f"{continuation_id}_p{prefix_repeat_seed}_d{data_seed}"
+            confirmation.extend(
+                (
+                    {
+                        "prefix_candidate_id": candidate_id,
+                        "continuation_id": f"confirm_{pair_id}",
+                        "role": "candidate_confirmation",
+                        "fit_budget": False,
+                        "prefix_repeat_seed": prefix_repeat_seed,
+                        "data_seed": data_seed,
+                        "source": f"confirm:{continuation_id}",
+                        "weights": candidate_weights,
+                    },
+                    {
+                        "prefix_candidate_id": candidate_id,
+                        "continuation_id": f"tied_{pair_id}",
+                        "role": "paired_tied_control",
+                        "fit_budget": False,
+                        "prefix_repeat_seed": prefix_repeat_seed,
+                        "data_seed": data_seed,
+                        "source": "tied",
+                        "weights": ordered_tied_weights,
+                    },
+                )
+            )
+    return confirmation
 
 
 def wandb_tags(config: HarshBranchTrainingConfig) -> list[str]:
@@ -597,6 +653,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--branch-run-id-base", type=int, required=True)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
+    parser.add_argument("--confirmation-continuation-id")
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--dry-run-output-dir", type=Path)
@@ -621,12 +678,19 @@ def main() -> None:
         args.expected_selected_prefixes_sha256,
         args.expected_candidate_sha256,
         args.prefix_replay_code_commit,
+        expected_repeat_seeds=(0, 1, 2) if args.confirmation_continuation_id is not None else (0, 1),
     )
     selected_aliases = selected_payload.get("selected_aliases")
     if not isinstance(selected_aliases, list) or not all(isinstance(row, dict) for row in selected_aliases):
         raise ValueError("Selected-prefix aliases are malformed")
     candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in selected_aliases)
     panel_label = "_".join(candidate_ids)
+    if args.confirmation_continuation_id is not None:
+        if RUN_NAME_PATTERN.fullmatch(args.confirmation_continuation_id) is None:
+            raise ValueError(
+                f"Confirmation continuation identity is not run-name safe: {args.confirmation_continuation_id}"
+            )
+        panel_label = f"{panel_label}_confirmation_{args.confirmation_continuation_id}"
     experiment_name = f"{EXPERIMENT_PREFIX}_{panel_label}"
     specs = source_prefix_specs(args.candidate_weights, args.expected_candidate_sha256, args.analysis_output_path)
     validate_selected_prefixes(
@@ -645,6 +709,12 @@ def main() -> None:
         args.expected_design_manifest_sha256,
         candidate_ids,
     )
+    if args.confirmation_continuation_id is not None:
+        if len(candidate_ids) != 1:
+            raise ValueError("Confirmation mode requires exactly one selected prefix candidate")
+        candidate_id = candidate_ids[0]
+        tied_weights = specs[(candidate_id, 0)].phase_weights["phase_0"]
+        design = confirmation_rows(design, candidate_id, args.confirmation_continuation_id, tied_weights)
     all_rows = enrich_rows(design, prefixes, specs, args.branch_run_id_base)
     full_design_rows = len(all_rows)
     rows = all_rows
@@ -655,22 +725,20 @@ def main() -> None:
             raise ValueError(f"Unknown --run-order values: {unknown}")
         rows = [row for row in rows if int(row["run_order"]) in selected_orders]
     serializable_rows = [{**row, "prefix": asdict(row["prefix"])} for row in all_rows]
-    manifest_identity = hashlib.sha256(
-        json.dumps(
-            {
-                "selected_prefixes_sha256": args.expected_selected_prefixes_sha256,
-                "candidate_weights_sha256": args.expected_candidate_sha256,
-                "candidate_aliases_sha256": args.expected_candidate_aliases_sha256,
-                "continuation_summary_sha256": args.expected_continuation_summary_sha256,
-                "continuation_weights_sha256": args.expected_continuation_weights_sha256,
-                "design_manifest_sha256": args.expected_design_manifest_sha256,
-                "prefix_replay_code_commit": args.prefix_replay_code_commit,
-                "branch_code_commit": code_commit,
-                "branch_run_id_base": args.branch_run_id_base,
-            },
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
+    manifest_identity_payload = {
+        "selected_prefixes_sha256": args.expected_selected_prefixes_sha256,
+        "candidate_weights_sha256": args.expected_candidate_sha256,
+        "candidate_aliases_sha256": args.expected_candidate_aliases_sha256,
+        "continuation_summary_sha256": args.expected_continuation_summary_sha256,
+        "continuation_weights_sha256": args.expected_continuation_weights_sha256,
+        "design_manifest_sha256": args.expected_design_manifest_sha256,
+        "prefix_replay_code_commit": args.prefix_replay_code_commit,
+        "branch_code_commit": code_commit,
+        "branch_run_id_base": args.branch_run_id_base,
+    }
+    if args.confirmation_continuation_id is not None:
+        manifest_identity_payload["confirmation_continuation_id"] = args.confirmation_continuation_id
+    manifest_identity = hashlib.sha256(json.dumps(manifest_identity_payload, sort_keys=True).encode()).hexdigest()
     manifest_config = SaveManifestConfig(
         experiment_name=experiment_name,
         output_path=str(args.dry_run_output_dir or LOCAL_DRY_RUN_DIR),
