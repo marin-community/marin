@@ -15,11 +15,19 @@ from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
     LoomAlertPayloadError,
+    OperatorBehavior,
     SlackAlertClient,
     SlackAnnouncementError,
 )
 
 SLACK_CHANNEL = "C0123ABCD"
+
+
+def goal_data(request: dict) -> dict:
+    """Decode the structured alert payload appended to a Loom session goal."""
+    _, separator, rendered = request["session"]["goal"].partition("\n\n")
+    assert separator
+    return json.loads(rendered)
 
 
 def loom_config() -> LoomAlertConfig:
@@ -65,7 +73,12 @@ class FakeSlack:
         return [post["text"] for post in self.replies]
 
 
-def client_for(slack: FakeSlack, *, runs: list[dict] | None = None, loom_status: int | None = None):
+def client_for(
+    slack: FakeSlack,
+    *,
+    runs: list[dict] | None = None,
+    loom_status: int | None = None,
+):
     """A client whose Slack and Loom legs are both mocked.
 
     `runs` collects the run requests. `loom_status` fails every Loom-side call
@@ -94,7 +107,25 @@ def client_for(slack: FakeSlack, *, runs: list[dict] | None = None, loom_status:
             return httpx.Response(201, json={"id": "run-1", "session_id": "session-1"})
         raise AssertionError(f"unexpected request: {request.url}")
 
-    return LoomAlertClient(loom_config(), transport=httpx.MockTransport(handler))
+    behaviors = (
+        OperatorBehavior(
+            name="default",
+            channel="operator",
+            session_title="Grafana operator",
+            operator_name="Marin Grafana operator",
+        ),
+        OperatorBehavior(
+            name="hero",
+            channel="operator:hero",
+            session_title="Hero run operator",
+            operator_name="Marin hero-run operator",
+            instructions=(
+                "Gather current evidence for the logical run with telemetry_v1, iris.task_state, "
+                "iris.task_event, and log queries."
+            ),
+        ),
+    )
+    return LoomAlertClient(loom_config(), behaviors=behaviors, transport=httpx.MockTransport(handler))
 
 
 def alert_payload(status: str = "firing") -> dict:
@@ -151,6 +182,8 @@ def hero_stall_payload(
         "reason": "training_stalled",
         "run": "hero-run",
         "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
     }
     payload["groupKey"] = '{}:{alertname="TrainingProgressStalled", run="hero-run"}'
     payload["commonLabels"] = labels
@@ -201,6 +234,57 @@ def test_firing_alert_is_announced_then_delivered_on_that_thread():
             "thread_ts": "1700000000.000001",
         }
     ]
+
+
+def test_hero_behavior_uses_a_separate_channel_and_live_query_guidance():
+    runs: list[dict] = []
+    slack = FakeSlack()
+
+    asyncio.run(client_for(slack, runs=runs).submit(hero_stall_payload()))
+
+    request = runs[0]
+    assert request["profile"] == "ops"
+    assert request["channel"] == "operator:hero"
+    assert request["session"]["title"] == "Hero run operator"
+    data = goal_data(request)
+    assert data["operatorBehavior"] == "hero"
+    assert "operatorContext" not in data
+
+
+def test_operator_behavior_routes_independently_of_alert_name():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    payload["alerts"][0]["labels"]["alertname"] = "TrainingLossSpike"
+    payload["commonLabels"]["alertname"] = "TrainingLossSpike"
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["channel"] == "operator:hero"
+
+
+def test_unknown_operator_behavior_uses_the_default_operator():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    payload["alerts"][0]["labels"]["operator_behavior"] = "untrusted-channel"
+    payload["commonLabels"]["operator_behavior"] = "untrusted-channel"
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["profile"] == "ops"
+    assert runs[0]["channel"] == "operator"
+    assert goal_data(runs[0])["operatorBehavior"] == "default"
+
+
+def test_mixed_operator_behaviors_use_the_default_operator():
+    runs: list[dict] = []
+    payload = hero_stall_payload()
+    generic_alert = alert_payload()["alerts"][0]
+    payload["alerts"].append(generic_alert)
+
+    asyncio.run(client_for(FakeSlack(), runs=runs).submit(payload))
+
+    assert runs[0]["channel"] == "operator"
+    assert goal_data(runs[0])["operatorBehavior"] == "default"
 
 
 def test_a_webhook_retry_reuses_the_thread_without_announcing_again():

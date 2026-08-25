@@ -547,6 +547,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.job }} has {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-stall-alert-contract.md
@@ -595,6 +596,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
@@ -648,6 +650,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} publishes no telemetry while Iris runs its tasks"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
@@ -692,6 +695,7 @@ groups:
         labels:
           severity: critical
           notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.run }} optimizer reports {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
