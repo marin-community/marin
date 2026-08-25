@@ -334,16 +334,13 @@ def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monke
     write_started = threading.Event()
 
     class FakeStore:
-        def __getitem__(self, index):
-            return self
-
         def write(self, data, *, can_reference_source_data_indefinitely):
             writes.append(np.array(data, copy=True))
             write_started.set()
             return SimpleNamespace(commit=commit_future)
 
     open_futures = iter(future for _, future in open_promises_and_futures)
-    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *args, **kwargs: next(open_futures))
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *_args, **_kwargs: next(open_futures))
 
     manager = array_ser.GlobalAsyncCheckpointManager()
     returned = threading.Event()
