@@ -24,7 +24,7 @@ DEFAULT_CANDIDATE_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase0_harsh_
 DEFAULT_CANDIDATE_WEIGHTS = DEFAULT_CANDIDATE_DIR / "training_candidate_weights.csv"
 DEFAULT_ALIASES = DEFAULT_CANDIDATE_DIR / "candidate_aliases.csv"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase0_harsh_cap_validation_20260825"
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_20260825"
+EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_20260825"
 DEFAULT_EXPERIMENT_ROOT = f"gs://marin-us-east5/{EXPERIMENT_NAME}"
 EXPECTED_SEEDS = (0, 1, 2)
 EXPECTED_CHECKPOINT_STEP = 2_399
@@ -77,6 +77,7 @@ def materialize_rows(
     experiment_root: str,
     candidate_ids: tuple[str, ...],
     candidate_weights_sha256: str,
+    candidate_aliases_sha256: str,
     prefix_replay_code_commit: str,
 ) -> pd.DataFrame:
     fs, root = fsspec.core.url_to_fs(experiment_root)
@@ -124,6 +125,7 @@ def materialize_rows(
             "experiment_name": EXPERIMENT_NAME,
             "candidate_id": candidate_id,
             "candidate_weights_sha256": candidate_weights_sha256,
+            "candidate_aliases_sha256": candidate_aliases_sha256,
             "replay_code_commit": prefix_replay_code_commit,
             "run_name": f"prefix_{candidate_id}_seed{seed}",
             "run_order": run_order,
@@ -287,6 +289,7 @@ def main() -> None:
         experiment_root=args.experiment_root,
         candidate_ids=candidate_ids,
         candidate_weights_sha256=candidate_weights_sha256,
+        candidate_aliases_sha256=candidate_aliases_sha256,
         prefix_replay_code_commit=args.prefix_replay_code_commit,
     )
     summary = summarize(results)

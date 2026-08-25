@@ -32,7 +32,7 @@ from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_20260825"
+EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_20260825"
 DEFAULT_CANDIDATE_DIR = (
     Path(__file__).resolve().parent
     / "exploratory"
@@ -65,6 +65,7 @@ TPU_REGION = "us-east5"
 TPU_ZONE = "us-east5-b"
 PARENT_ZONE = "us-east5-a"
 EXPECTED_GLOBAL_DEVICE_COUNT = 8
+TENSOR_PARALLEL_SIZE = 1
 PANEL_HARDWARE_STATUS = "v6e_only"
 
 
@@ -73,6 +74,7 @@ class HarshCandidatePrefixTrainingConfig:
     prefix_config: replay.PrefixTrainingConfig
     candidate_id: str
     candidate_weights_sha256: str
+    candidate_aliases_sha256: str
 
 
 @dataclass(frozen=True)
@@ -183,7 +185,7 @@ def candidate_specs(
                     tpu_type=tpu_type,
                     tpu_region=tpu_region,
                     tpu_zone=tpu_zone,
-                    tensor_parallel_size=base._tensor_parallel_size(template.model_hidden_dim, tpu_type),
+                    tensor_parallel_size=TENSOR_PARALLEL_SIZE,
                     data_seed=DATA_SEED_BASE + repeat,
                     trainer_seed=repeat,
                     max_simulated_epoch=max_epoch,
@@ -230,6 +232,7 @@ def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> No
         "experiment_name": EXPERIMENT_NAME,
         "candidate_id": config.candidate_id,
         "candidate_weights_sha256": config.candidate_weights_sha256,
+        "candidate_aliases_sha256": config.candidate_aliases_sha256,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "replay_code_commit": config.prefix_config.replay_code_commit,
         "run_name": run_spec.run_name,
@@ -348,6 +351,7 @@ def build_steps(
                     ),
                     candidate_id=candidate_id,
                     candidate_weights_sha256=candidate_weights_sha256,
+                    candidate_aliases_sha256=candidate_aliases_sha256,
                 ),
             )
         )
@@ -452,13 +456,15 @@ def main() -> None:
                 "execution stops after update 2400",
                 "candidate-specific output paths and W&B tags replace fit-panel tags",
                 "prefix hardware is v6e-8 in east5b",
+                "a v6e-specific experiment namespace isolates this panel from prior executor state",
             ],
         },
     }
     if args.dry_run:
+        dry_run_output_path = LOCAL_ARTIFACT_DIR / replay_code_commit[:12]
         save_harsh_candidate_manifest(
             SaveHarshCandidateManifestConfig(
-                output_path=str(LOCAL_ARTIFACT_DIR),
+                output_path=str(dry_run_output_path),
                 candidate_weights_path=str(args.candidate_weights),
                 candidate_weights_sha256=args.expected_candidate_sha256,
                 candidate_aliases_path=str(args.candidate_aliases),
@@ -468,7 +474,7 @@ def main() -> None:
                 run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
             )
         )
-        logger.info("Wrote %d candidate validation specs under %s", len(run_specs), LOCAL_ARTIFACT_DIR)
+        logger.info("Wrote %d candidate validation specs under %s", len(run_specs), dry_run_output_path)
         return
 
     validation_steps = base._default_validation_sets(tokenizer=llama3_tokenizer)
