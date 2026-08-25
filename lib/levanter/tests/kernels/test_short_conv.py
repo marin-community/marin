@@ -24,6 +24,10 @@ has no accumulation to associate, still matches exactly. Running the interpreter
 therefore measures XLA:TPU rather than the kernel that ships.
 """
 
+import os
+import subprocess
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -335,3 +339,122 @@ def test_short_conv_rejects_mixed_dtypes():
     x = jnp.ones((1, 16, 8), dtype=jnp.bfloat16)
     with pytest.raises(ValueError, match="share a dtype"):
         short_conv(weight, x)
+
+
+# ---------------------------------------------------------------------------------------
+# Context-parallel halo. The wrapper prepends `kernel_size - 1` tokens from the left
+# neighbour so a sequence split over the context axis reproduces the unsharded result.
+# These need real devices, not an abstract mesh: `ppermute` has to execute.
+# ---------------------------------------------------------------------------------------
+
+_HALO_SCRIPT = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.pallas.short_conv import short_conv, short_conv_reference
+from levanter.kernels.pallas.short_conv import api
+__MUTATION__
+
+CONTEXT, BATCH, SEQ, CHANNELS, WIDTH = __CONTEXT__, __BATCH__, 32, 8, 4
+
+assert jax.device_count() == 8
+# `data` is sized to the batch so both axes are genuinely split; whatever is left over goes on a
+# spare axis nothing names, which keeps every device in the mesh.
+mesh = Mesh(
+    np.asarray(jax.devices()).reshape(BATCH, CONTEXT, 8 // (BATCH * CONTEXT)),
+    axis_names=("data", "context", "spare"),
+    axis_types=(AxisType.Explicit,) * 3,
+)
+
+rng = np.random.default_rng(0)
+weight = jnp.asarray(rng.normal(size=(WIDTH, CHANNELS)), jnp.float32)
+x = jnp.asarray(rng.normal(size=(BATCH, SEQ, CHANNELS)), jnp.float32)
+cot = jnp.asarray(rng.normal(size=(BATCH, SEQ, CHANNELS)), jnp.float32)
+if __PACKED__:
+    # Runs shorter than the kernel, and a document numbered 0 at the front, so a halo filled
+    # with segment id 0 rather than -1 keeps a tap the unsharded kernel drops.
+    seg = np.concatenate(
+        [np.zeros((BATCH, 5)), np.full((BATCH, 2), 7), np.full((BATCH, SEQ - 7), 9)], axis=1
+    )
+    segment_ids = jnp.asarray(seg, jnp.int32)
+else:
+    segment_ids = jnp.zeros((BATCH, SEQ), jnp.int32)
+
+
+def loss(w, xx, seg_arg):
+    return jnp.sum(short_conv(w, xx, seg_arg, implementation="reference", batch_axes=("data",)) * cot)
+
+
+with jax.set_mesh(mesh):
+    unsharded = jax.device_put(x, NamedSharding(mesh, P("data", None, None)))
+    sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+    seg_un = jax.device_put(segment_ids, NamedSharding(mesh, P("data", None)))
+    seg_sh = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+    # The halo path must engage, and only when the sequence is actually sharded.
+    assert api._sequence_shard_axes(sharded, mesh) == ("context",), "halo path did not engage"
+    assert api._sequence_shard_axes(unsharded, mesh) == (), "halo path engaged when unsharded"
+
+    want = short_conv_reference(weight, unsharded, seg_un)
+    got = short_conv(weight, sharded, seg_sh, implementation="reference", batch_axes=("data",))
+    np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+    dw_want, dx_want = jax.grad(loss, argnums=(0, 1))(weight, unsharded, seg_un)
+    dw_got, dx_got = jax.grad(loss, argnums=(0, 1))(weight, sharded, seg_sh)
+    np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
+"""
+
+# Each entry corrupts one property the halo depends on. The parity script above must fail
+# under every one of them, or it is not actually testing the halo.
+_HALO_MUTATIONS = {
+    "none": "",
+    "dropped": """
+_original = api._short_conv_sequence_sharded
+api._short_conv_sequence_sharded = lambda *a, **kw: _original(*a, **{**kw, "width": 1})
+""",
+    "off_by_one": """
+_original = api._short_conv_sequence_sharded
+api._short_conv_sequence_sharded = lambda *a, **kw: _original(*a, **{**kw, "width": kw["width"] - 1})
+""",
+}
+# Not listed: `_FIRST_SHARD_SEGMENT_ID = 0`. The first shard's halo activations are zero, so a tap
+# that reads them contributes `weight * 0` whether the mask keeps it or not, in the forward and in
+# both gradients. The sentinel mirrors what `short_conv_reference` pads with and is kept for that
+# agreement, but it is not independently observable and gets no mutation that cannot fail.
+
+
+def _run_halo_script(*, context: int, batch: int, packed: bool, mutation: str) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = (
+        _HALO_SCRIPT.replace("__CONTEXT__", str(context))
+        .replace("__BATCH__", str(batch))
+        .replace("__PACKED__", str(packed))
+        .replace("__MUTATION__", _HALO_MUTATIONS[mutation])
+    )
+    return subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("context", [2, 4])
+@pytest.mark.parametrize("batch", [1, 2])
+@pytest.mark.parametrize("packed", [True, False], ids=["packed", "unpacked"])
+def test_context_parallel_halo_matches_the_unsharded_reference(context, batch, packed):
+    """Forward and both gradients, against the unsharded oracle on the same data.
+
+    The backward rides ``ppermute``'s transpose, but it is asserted explicitly: a halo that is
+    right in the forward and dropped in the backward is a silent wrong-gradient bug, which is
+    exactly what a throughput run would never notice.
+    """
+    result = _run_halo_script(context=context, batch=batch, packed=packed, mutation="none")
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("mutation", sorted(set(_HALO_MUTATIONS) - {"none"}))
+def test_the_halo_parity_check_fails_when_the_halo_is_wrong(mutation):
+    """The parity test is only worth its runtime if a broken halo breaks it."""
+    result = _run_halo_script(context=4, batch=2, packed=True, mutation=mutation)
+    assert result.returncode != 0, f"parity passed with mutation {mutation!r}"
