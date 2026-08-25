@@ -141,6 +141,8 @@ class TaskJobSummary:
     failure_count: int = 0
     preemption_count: int = 0
     task_state_counts: dict[int, int] = field(default_factory=dict)
+    # One task's backend status one-liner, standing in for the job's.
+    status_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -412,6 +414,46 @@ _TASK_SUMMARIES_FOR_JOBS_STMT = (
     .group_by(tasks_table.c.job_id, tasks_table.c.state)
 )
 
+# Only a waiting task's message is current: a terminal row keeps whatever it last
+# said, and a PENDING one was never dispatched.
+_WAITING_TASK_STATES = (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_BUILDING)
+
+# A second statement, not a column on the aggregate above: ``status_message`` is not in
+# ``idx_tasks_job_state (job_id, state)``, so selecting it there costs that query its
+# covering scan — ~2.4x on a 1000-job page, on every dashboard refresh and federation sync.
+_WAITING_STATUS_MESSAGES_STMT = (
+    select(
+        tasks_table.c.job_id,
+        tasks_table.c.status_message,
+        func.count().label("cnt"),
+    )
+    .where(
+        tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)),
+        tasks_table.c.state.in_(_WAITING_TASK_STATES),
+        tasks_table.c.status_message.is_not(None),
+        tasks_table.c.status_message != "",
+    )
+    .group_by(tasks_table.c.job_id, tasks_table.c.status_message)
+)
+
+
+def _rarest_status_message(tx: Tx, job_ids: list[JobName]) -> dict[JobName, str]:
+    """Return each job's least common backend message across its waiting tasks.
+
+    Rarest wins because the odd one out is the actionable one: seven gated pods and one
+    that cannot pull its image reports the ImagePullBackOff, not the seven siblings
+    saying the queue is full. Ties break on the text, so the answer is stable per tick.
+    """
+    if not job_ids:
+        return {}
+    best: dict[JobName, tuple[int, str]] = {}
+    for row in tx.execute(_WAITING_STATUS_MESSAGES_STMT, {"job_ids": job_ids}).all():
+        candidate = (int(row.cnt), row.status_message)
+        current = best.get(row.job_id)
+        if current is None or candidate < current:
+            best[row.job_id] = candidate
+    return {job_id: message for job_id, (_, message) in best.items()}
+
 
 def task_summaries_for_jobs(
     tx: Tx,
@@ -443,11 +485,20 @@ def task_summaries_for_jobs(
             completed_count=prev.completed_count + (cnt if state in _COMPLETED_TASK_STATES else 0),
             task_state_counts={**prev.task_state_counts, state: cnt},
         )
+    # federation_sync calls this once per job, so asking on a job whose histogram shows
+    # nothing waiting would be a round trip per received job that can only return empty.
+    waiting_ids = [
+        jid
+        for jid, summary in summaries.items()
+        if any(summary.task_state_counts.get(task_state, 0) > 0 for task_state in _WAITING_TASK_STATES)
+    ]
+    messages = _rarest_status_message(tx, waiting_ids)
     return {
         jid: replace(
             summary,
             failure_count=counts.get(jid, AttemptCounts()).failure_count,
             preemption_count=counts.get(jid, AttemptCounts()).preemption_count,
+            status_message=messages.get(jid, ""),
         )
         for jid, summary in summaries.items()
     }

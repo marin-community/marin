@@ -22,6 +22,13 @@ function activeJobCount(summary: UserSummary): number {
     .reduce((acc, [, count]) => acc + count, 0)
 }
 
+// 'building' is dispatched but not executing, so it counts as waiting. Without this
+// row Active would exceed Running with nothing on screen explaining the difference.
+function pendingJobCount(summary: UserSummary): number {
+  const counts = summary.jobStateCounts ?? {}
+  return (counts['pending'] ?? 0) + (counts['building'] ?? 0) + (counts['unschedulable'] ?? 0)
+}
+
 function countByStates(counts?: Record<string, number>): number {
   if (!counts) return 0
   return Object.values(counts).reduce((a, b) => a + b, 0)
@@ -75,6 +82,11 @@ onMounted(async () => {
           <InfoRow label="Running Jobs">
             <span class="font-mono tabular-nums" :class="(userSummary.jobStateCounts?.['running'] ?? 0) > 0 ? 'text-accent font-semibold' : ''">
               {{ userSummary.jobStateCounts?.['running'] ?? 0 }}
+            </span>
+          </InfoRow>
+          <InfoRow label="Pending Jobs">
+            <span class="font-mono tabular-nums" :class="pendingJobCount(userSummary) > 0 ? 'text-status-warning' : ''">
+              {{ pendingJobCount(userSummary) }}
             </span>
           </InfoRow>
           <InfoRow label="Total Tasks">

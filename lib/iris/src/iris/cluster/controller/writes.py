@@ -502,10 +502,11 @@ def record_federation_change(
 
 
 @writes_to(jobs_table)
-def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
-    """Promote each PENDING job in ``job_ids`` to RUNNING, stamping ``started_at_ms``.
+def mark_jobs_building(tx: Tx, job_ids: Iterable[JobName]) -> None:
+    """Promote each PENDING job in ``job_ids`` to BUILDING. Non-PENDING jobs keep their state.
 
-    Non-PENDING jobs keep their state; ``started_at_ms`` is set only if still NULL (first assignment wins).
+    Dispatch is not a start: ``started_at_ms`` stays NULL until a task reports RUNNING,
+    stamped by ``reconcile.job.recompute_state``.
     """
     for chunk in batched(job_ids, _ID_CHUNK_SIZE):
         tx.execute(
@@ -513,10 +514,9 @@ def mark_jobs_running(tx: Tx, job_ids: Iterable[JobName], now_ms: int) -> None:
             .where(jobs_table.c.job_id.in_(chunk))
             .values(
                 state=case(
-                    (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
+                    (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_BUILDING),
                     else_=jobs_table.c.state,
                 ),
-                started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
             )
         )
 

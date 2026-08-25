@@ -377,10 +377,14 @@ def compute_stage_wall_seconds(
     Returns ``(stage_wall_seconds, cached_steps)``. Steps in ``EXPECTED_STEPS``
     that don't appear in the tree are reported with ``0.0`` and added to
     ``cached_steps`` — those steps always run unless the artifact already
-    exists, so absence implies a cache hit.
+    exists, so absence implies a cache hit. A step whose job *is* in the tree but
+    never started (dispatched, then killed or failed before any task ran, so
+    ``started_at`` is unset) reports ``0.0`` without being called cached — it did
+    not cache, it did no work.
     """
     parent_depth = _job_depth(parent_id)
     durations: dict[str, float] = {}
+    present_steps: set[str] = set()
 
     for job in jobs:
         job_id = job.get("job_id") or ""
@@ -392,15 +396,16 @@ def compute_stage_wall_seconds(
         for prefix, step in _STEP_PREFIXES.items():
             if not name.startswith(prefix):
                 continue
+            present_steps.add(step)
             start_ms = int((job.get("started_at") or {}).get("epoch_ms") or 0)
             end_ms = int((job.get("finished_at") or {}).get("epoch_ms") or 0)
             if start_ms and end_ms and end_ms > start_ms:
                 durations[step] = durations.get(step, 0.0) + (end_ms - start_ms) / 1000.0
             break
 
-    cached_steps = sorted(s for s in EXPECTED_STEPS if s not in durations)
-    for s in cached_steps:
-        durations[s] = 0.0
+    cached_steps = sorted(s for s in EXPECTED_STEPS if s not in present_steps)
+    for s in EXPECTED_STEPS:
+        durations.setdefault(s, 0.0)
     return durations, cached_steps
 
 

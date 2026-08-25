@@ -19,7 +19,9 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
 
     Returns the new state (which may equal current). Returns ``None`` when
     the job basis is not in the snapshot (out-of-slice). Records a job-state
-    delta when the state changes.
+    delta when the state changes. The first transition into RUNNING is the job's only
+    ``started_at`` stamp, and the RUNNING branches are checked first, so
+    ``JOB_STATE_BUILDING`` implies ``started_at IS NULL`` — a BUILDING job has no clock.
     """
     basis = state.job_basis(job_id)
     if basis is None:
@@ -78,14 +80,18 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
         # terminal a lone tolerated FAILED still fails the job.) Without this
         # branch the job falls through to the started_at branch and hangs RUNNING.
         new_state = job_pb2.JOB_STATE_FAILED
-    elif (
-        counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0
-        or counts.get(job_pb2.TASK_STATE_BUILDING, 0) > 0
-        or counts.get(job_pb2.TASK_STATE_RUNNING, 0) > 0
-    ):
+    elif counts.get(job_pb2.TASK_STATE_RUNNING, 0) > 0:
         new_state = job_pb2.JOB_STATE_RUNNING
     elif basis.started_at is not None:
+        # A job that has genuinely started stays RUNNING across retries and re-dispatch.
+        # Ordered above BUILDING because ``started_at`` is first-wins (commit.py): demoting
+        # a re-dispatching job would keep its stamp and render the climbing duration that
+        # BUILDING exists to prevent.
         new_state = job_pb2.JOB_STATE_RUNNING
+    elif counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0 or counts.get(job_pb2.TASK_STATE_BUILDING, 0) > 0:
+        # Dispatched, nothing executing, never started. A gang the queue cannot admit sits
+        # here; calling it RUNNING reported a run that never began, clocked from dispatch.
+        new_state = job_pb2.JOB_STATE_BUILDING
     elif total > 0:
         new_state = job_pb2.JOB_STATE_PENDING
     if new_state == current_state:

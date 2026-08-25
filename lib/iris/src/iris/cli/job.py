@@ -1184,7 +1184,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
         state_name = j.state.value
         submitted = j.submitted_at.as_formatted_date() if j.submitted_at is not None else "-"
 
-        reason = j.error_message or j.pending_reason or ""
+        reason = j.error_message or j.pending_reason or j.status_message or ""
         if reason:
             has_reasons = True
             reason = (reason[:60] + "...") if len(reason) > 63 else reason

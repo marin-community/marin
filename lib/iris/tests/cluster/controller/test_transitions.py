@@ -663,6 +663,93 @@ def test_max_task_failures_tolerance(state):
     assert _query_job(state, job.job_id).state == job_pb2.JOB_STATE_FAILED
 
 
+def test_dispatched_gang_that_never_starts_is_building_with_no_start_time(state):
+    """Tasks handed to a backend but not executing leave the job BUILDING and unstamped.
+
+    Kueue admits a gang all-or-nothing, so an unadmittable gang sits ASSIGNED for as
+    long as the queue is full. Reporting RUNNING with a dispatch-time ``started_at``
+    there showed operators a nine-hour run that had never begun.
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    tasks = submit_job(state, "gang", make_job_request("gang", replicas=2))
+    job_id = JobName.root("test-user", "gang")
+
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id) for task in tasks],
+            health=state._health,
+        )
+
+    for task in tasks:
+        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
+    job = _query_job(state, job_id)
+    assert job.state == job_pb2.JOB_STATE_BUILDING
+    assert job.started_at_ms is None, "dispatch is not a start"
+
+
+def test_first_running_task_starts_the_job_and_its_clock(state):
+    """The job leaves BUILDING and gets its ``started_at`` when a task reports RUNNING."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    tasks = submit_job(state, "gang", make_job_request("gang", replicas=2))
+    job_id = JobName.root("test-user", "gang")
+
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id) for task in tasks],
+            health=state._health,
+        )
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_BUILDING
+
+    first = _query_task(state, tasks[0].task_id)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=first.task_id,
+                            attempt_id=first.current_attempt_id,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                        )
+                    ],
+                )
+            ],
+            health=state._health,
+            now=Timestamp.now(),
+        )
+
+    job = _query_job(state, job_id)
+    assert job.state == job_pb2.JOB_STATE_RUNNING
+    assert job.started_at_ms is not None
+
+
+def test_job_cancelled_while_building_goes_terminal_without_a_start_time(state):
+    """A gang killed before it ran is terminal with ``finished_at`` and no ``started_at``."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+    tasks = submit_job(state, "gang", make_job_request("gang", replicas=2))
+    job_id = JobName.root("test-user", "gang")
+
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id) for task in tasks],
+            health=state._health,
+        )
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_BUILDING
+
+    with state._db.transaction() as cur:
+        ops.job.cancel(cur, job_id=job_id, reason="never admitted")
+
+    job = _query_job(state, job_id)
+    assert job.state == job_pb2.JOB_STATE_KILLED
+    assert job.started_at_ms is None
+    assert job.finished_at_ms is not None
+
+
 def test_coscheduled_crash_loop_fails_on_cumulative_budget(state):
     """A coscheduled gang crash-looping across rounds fails on the cumulative budget.
 
@@ -3849,11 +3936,13 @@ def _recompute_snapshot(
     task_states: list[int],
     max_task_failures: int,
     failure_counts: list[int] | None = None,
+    started_at: Timestamp | None = Timestamp.from_ms(500),
 ):
     """A RUNNING job snapshot whose tasks carry ``task_states``.
 
-    ``started_at`` is set on the basis so a job that does not otherwise finalize
-    falls through to the RUNNING strand the #5 fix closes. ``job_basis`` rebuilds
+    ``started_at`` defaults to a set stamp so a job that does not otherwise finalize
+    falls through to the RUNNING strand the #5 fix closes; pass ``None`` to model a
+    job that has never had a running task. ``job_basis`` rebuilds
     the task histogram and cumulative failure count from ``all_tasks_by_job``, so
     both live there. ``failure_counts`` defaults to one charged failure per task
     currently in FAILED; pass it explicitly to model failures that have already
@@ -3864,7 +3953,7 @@ def _recompute_snapshot(
     basis = JobStateBasis(
         job_id=job_id,
         state=job_pb2.JOB_STATE_RUNNING,
-        started_at=Timestamp.from_ms(500),
+        started_at=started_at,
         max_task_failures=max_task_failures,
         task_state_counts={},
         total_failures=sum(failure_counts),
@@ -3975,6 +4064,57 @@ def test_recompute_keeps_job_running_within_budget(task_states, failure_counts, 
     new_state = recompute_state(ws, jid)
 
     assert new_state == job_pb2.JOB_STATE_RUNNING
+
+
+@pytest.mark.parametrize(
+    "task_states",
+    [
+        [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_ASSIGNED],
+        [job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_BUILDING],
+        [job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_ASSIGNED],
+    ],
+    ids=["all-assigned", "all-building", "one-done-one-waiting"],
+)
+def test_recompute_reports_a_never_started_job_with_dispatched_tasks_as_building(task_states):
+    """RUNNING needs a task that is actually running; dispatched-but-never-started is BUILDING.
+
+    The basis carries no ``started_at``, which is what distinguishes this from a job
+    that ran and is re-dispatching. The recorded delta must not stamp one either —
+    BUILDING implies no clock.
+    """
+    jid = JobName.from_wire("/u/gated")
+    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=0, started_at=None))
+
+    new_state = recompute_state(ws, jid)
+
+    assert new_state == job_pb2.JOB_STATE_BUILDING
+    assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_BUILDING
+    assert ws.effects.jobs[jid].started_at is None
+    assert ws.effects.jobs[jid].finished_at is None
+
+
+@pytest.mark.parametrize(
+    "task_states",
+    [
+        [job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_ASSIGNED],
+        [job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_BUILDING],
+        [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_PENDING],
+    ],
+    ids=["redispatched", "rebuilding", "requeued"],
+)
+def test_recompute_keeps_a_job_that_already_ran_running_while_it_redispatches(task_states):
+    """A started job does not fall back to BUILDING when its tasks bounce.
+
+    ``started_at`` is first-wins, so a demotion here would pair BUILDING with a stamp
+    from the original run and render as a duration that never stops climbing.
+    """
+    jid = JobName.from_wire("/u/restarted")
+    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=0))
+
+    new_state = recompute_state(ws, jid)
+
+    assert new_state == job_pb2.JOB_STATE_RUNNING
+    assert jid not in ws.effects.jobs, "no state change, so no job row delta"
 
 
 def test_pick_earliest_task_error_reports_first_failed_task():

@@ -22,7 +22,7 @@ import type {
   JobStatus,
   JobQuery,
 } from '@/types/rpc'
-import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
+import { timestampMs, formatRelativeTime, bandDisplayName, bandColor, jobDiagnostic } from '@/utils/formatting'
 import { buildSliceView, type SliceJob, type SliceStatus, type SliceView } from '@/utils/slices'
 import SliceList from '@/components/controller/SliceList.vue'
 import FleetOverview from '@/components/controller/FleetOverview.vue'
@@ -714,7 +714,9 @@ const mergedUsers = computed<MergedUser[]>(() => {
       userId,
       activeJobs,
       runningJobs: jobCounts['running'] ?? 0,
-      pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
+      // 'building' is dispatched but not executing, so it counts as waiting. Without it
+    // Running + Pending would not sum to Active for a job stuck in admission/image pull.
+    pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['building'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
       runningTasks: taskCounts['running'] ?? 0,
       totalTasks: Object.values(taskCounts).reduce((a, b) => a + b, 0),
       budgetSpent: budget?.budgetSpent ?? '-',
@@ -1217,8 +1219,8 @@ function sliceIdShort(sliceId?: string): string {
                 </button>
                 <span v-else class="text-text-muted">—</span>
               </td>
-              <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="job.pendingReason ?? ''">
-                {{ job.pendingReason || '-' }}
+              <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="jobDiagnostic(job)">
+                {{ jobDiagnostic(job) || '-' }}
               </td>
               <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
                 {{ job.submittedAt ? formatRelativeTime(timestampMs(job.submittedAt)) : '-' }}

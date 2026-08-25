@@ -57,14 +57,14 @@ from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
-from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations, commit_dispatch_updates
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
-from sqlalchemy import func, insert, select
+from sqlalchemy import event, func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 
@@ -605,6 +605,186 @@ def test_get_job_status_returns_retry_info(client, state, job_request):
     assert job_status["preemptionCount"] == 1
     assert job_status["state"] == "JOB_STATE_RUNNING"
     assert int(job_status["startedAt"]["epochMs"]) == 3000
+
+
+def test_get_job_status_surfaces_the_backend_reason_for_a_building_job(client, state, job_request):
+    """A dispatched-but-unstarted job reads BUILDING, carries the backend's reason, and has no start time.
+
+    The reason is the task's ``status_message`` (here Kueue's admission verdict for a
+    gated pod), lifted onto the job so an operator sees why it is waiting without
+    opening a task.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "gated-job", job_request)
+    task_id = job_id.task(0)
+
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+    # The cluster-backend (direct dispatch) path: only it carries status_message.
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message="SchedulingGated: waiting for Kueue quota",
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    job_status = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+
+    assert job_status["state"] == "JOB_STATE_BUILDING"
+    assert job_status["statusMessage"] == "SchedulingGated: waiting for Kueue quota"
+    assert "startedAt" not in job_status
+
+
+def _summaries_counting_message_queries(state, job_ids):
+    """``task_summaries_for_jobs`` plus how many times the backend-message query ran.
+
+    The narrow message statement is the only one grouping on ``status_message``; the
+    per-job histogram groups on ``state``.
+    """
+    seen: list[str] = []
+
+    def _record(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "GROUP BY tasks.job_id, tasks.status_message" in statement:
+            seen.append(statement)
+
+    engine = state._db.sa_read_engine
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        with state._db.read_snapshot() as tx:
+            summaries = reads.task_summaries_for_jobs(tx, list(job_ids))
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+    return summaries, len(seen)
+
+
+def test_task_summaries_query_backend_messages_only_for_jobs_with_a_waiting_task(state, job_request):
+    """The message query is skipped when no task could carry one.
+
+    federation_sync calls this once per job, so a query that can only come back empty
+    costs one round trip per received job per sync. An empty result and a skipped query
+    look identical in the returned summary, so count executions instead — and assert
+    the waiting case *does* run it, or a wrong match string would pass both ways.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    waiting_id = submit_job(state, "waiting", job_request)
+    running_id = submit_job(state, "running", job_request)
+
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=jid.task(0), worker_id=wid) for jid in (waiting_id, running_id)],
+            health=state._health,
+        )
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=waiting_id.task(0),
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message="SchedulingGated: waiting for Kueue quota",
+                ),
+                TaskUpdate(task_id=running_id.task(0), attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING),
+            ],
+            now=Timestamp.now(),
+        )
+
+    waiting_summaries, waiting_queries = _summaries_counting_message_queries(state, [waiting_id])
+    running_summaries, running_queries = _summaries_counting_message_queries(state, [running_id])
+
+    assert waiting_summaries[waiting_id].status_message == "SchedulingGated: waiting for Kueue quota"
+    assert waiting_queries == 1, "a job with a BUILDING task must be asked about"
+    assert running_summaries[running_id].status_message == ""
+    assert running_queries == 0, "a job with nothing waiting must not run the message query"
+
+
+def test_get_job_status_reports_the_rarest_backend_reason_not_the_loudest(client, state, job_request):
+    """One bad image among seven gated pods is what the operator needs to see.
+
+    The odd message out is the actionable one; the seven siblings only report that the
+    queue is full. A lexicographic pick would return "SchedulingGated" here, since it
+    sorts above "ImagePullBackOff" — the precise misdiagnosis this field exists to
+    prevent.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_request.replicas = 8
+    job_id = submit_job(state, "gang", job_request)
+    task_ids = [job_id.task(i) for i in range(8)]
+
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=tid, worker_id=wid) for tid in task_ids], health=state._health)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=tid,
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message=(
+                        "ImagePullBackOff: back-off pulling image"
+                        if i == 0
+                        else "SchedulingGated: waiting for Kueue quota"
+                    ),
+                )
+                for i, tid in enumerate(task_ids)
+            ],
+            now=Timestamp.now(),
+        )
+
+    job_status = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+
+    assert job_status["state"] == "JOB_STATE_BUILDING"
+    assert job_status["statusMessage"] == "ImagePullBackOff: back-off pulling image"
+
+
+def test_get_job_status_ignores_a_status_message_left_on_a_terminal_task(client, state, job_request):
+    """A finished task's last message is stale and must not become the job's.
+
+    The backend clears status_message when a pod starts or ends, but a row that went
+    terminal without a clearing update keeps its old text. Only ASSIGNED/BUILDING tasks
+    are consulted, so the stale row cannot speak for the job.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "finished", job_request)
+    task_id = job_id.task(0)
+
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message="SchedulingGated: waiting for Kueue quota",
+                )
+            ],
+            now=Timestamp.now(),
+        )
+    # status_message=None leaves the column untouched, so the row goes terminal still
+    # carrying the gated text.
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
+            now=Timestamp.now(),
+        )
+
+    job_status = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})["job"]
+
+    assert job_status["state"] == "JOB_STATE_SUCCEEDED"
+    assert job_status.get("statusMessage", "") == ""
 
 
 def test_get_job_status_returns_original_request(client, state):

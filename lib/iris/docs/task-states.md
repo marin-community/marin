@@ -340,8 +340,15 @@ Job state is computed from task state counts in `_compute_job_state()`:
 2. **FAILED**: Count of `TASK_STATE_FAILED` tasks exceeds `max_task_failures`.
 3. **UNSCHEDULABLE**: Any task is `TASK_STATE_UNSCHEDULABLE`.
 4. **KILLED**: Any task is `TASK_STATE_KILLED` (and job is not already terminal).
-5. **RUNNING**: Any task is `ASSIGNED`, `BUILDING`, or `RUNNING`.
-6. **PENDING**: Default (no tasks have started).
+5. **RUNNING**: Any task is `RUNNING`, or the job has already started (its
+   `started_at` is set, so a retry bounce or re-dispatch keeps it RUNNING).
+6. **BUILDING**: Any task is `ASSIGNED` or `BUILDING` and the job has never
+   started. A gang awaiting Kueue admission sits here, with no `started_at` and
+   so no elapsed time.
+7. **PENDING**: Default (no tasks have started).
 
 The ordering matters -- earlier rules take priority. A job with one succeeded
-task and one failed task (beyond tolerance) is `FAILED`, not `RUNNING`.
+task and one failed task (beyond tolerance) is `FAILED`, not `RUNNING`. Rule 5
+precedes rule 6 for the same reason: `started_at` is first-wins, so a started job
+that dropped back to `BUILDING` would keep its original stamp and report a
+duration that never stops climbing. `BUILDING` therefore implies no `started_at`.

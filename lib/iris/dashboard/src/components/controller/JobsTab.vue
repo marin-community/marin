@@ -7,7 +7,7 @@ import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh
 import { SEGMENT_COLORS, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
 import { LOCAL_CLUSTER, type JobStatus, type JobQuery, type ListJobsResponse } from '@/types/rpc'
-import { timestampMs, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatDuration, formatRelativeTime, jobDiagnostic } from '@/utils/formatting'
 import { flattenLoadedJobTree, getLeafJobName } from '@/utils/jobTree'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -692,9 +692,9 @@ function sortIndicator(field: SortField): string {
           <!-- Diagnostic -->
           <td
             class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate"
-            :title="node.job.pendingReason ?? ''"
+            :title="jobDiagnostic(node.job)"
           >
-            {{ node.job.pendingReason || '—' }}
+            {{ jobDiagnostic(node.job) || '—' }}
           </td>
         </tr>
       </tbody>

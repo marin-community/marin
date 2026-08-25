@@ -204,7 +204,7 @@ job-state rollup rules, see [`docs/task-states.md`](docs/task-states.md).
 | State | Description |
 |-------|-------------|
 | **PENDING** | Job submitted, waiting for worker assignment |
-| **BUILDING** | Job bundle being built/transferred (future use) |
+| **BUILDING** | Tasks dispatched but none executing yet -- awaiting admission, image pull, or setup. Never started, so no duration |
 | **RUNNING** | At least one task is actively executing |
 | **SUCCEEDED** | All tasks completed successfully |
 | **FAILED** | Job failed (exceeded max task failures or retry limit) |

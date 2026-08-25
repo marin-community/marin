@@ -115,7 +115,7 @@ def assign(
                 worker=ww,
             )
         )
-    writes.mark_jobs_running(cur, jobs_to_update, now_ms)
+    writes.mark_jobs_building(cur, jobs_to_update)
 
 
 def apply_dispatch_updates(

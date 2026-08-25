@@ -12,7 +12,7 @@ import {
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor, jobDiagnostic } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
 import { batchSummarySql } from '@/utils/taskStatus'
@@ -446,6 +446,9 @@ const childJobComparator = computed<((a: JobStatus, b: JobStatus) => number) | u
         break
       case 'duration':
         cmp = childJobDurationMs(a) - childJobDurationMs(b)
+        // A job that never started has no duration (0). Order those by how long they
+        // have been waiting rather than leaving them in one arbitrary bucket.
+        if (cmp === 0) cmp = timestampMs(a.submittedAt) - timestampMs(b.submittedAt)
         break
     }
     return cmp * dir
@@ -803,6 +806,8 @@ const filteredTasks = computed(() => {
         break
       case 'duration':
         cmp = taskDurationMs(a) - taskDurationMs(b)
+        // Same as the child-job sort: tasks that never started share duration 0.
+        if (cmp === 0) cmp = timestampMs(a.submittedAt) - timestampMs(b.submittedAt)
         break
     }
     return cmp * dir
@@ -1383,8 +1388,8 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   </span>
                 </div>
               </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="node.job.pendingReason ?? ''">
-                {{ node.job.pendingReason || '—' }}
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="jobDiagnostic(node.job)">
+                {{ jobDiagnostic(node.job) || '—' }}
               </td>
             </tr>
           </tbody>

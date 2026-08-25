@@ -700,14 +700,14 @@ def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
     return value
 
 
-def _job_status_counts(
+def _job_status_from_summary(
     summary: TaskJobSummary | None, job_id: JobName, *, pre_sync_task_count: int = 0
 ) -> dict[str, Any]:
-    """Return the clamped int32 counter fields for a ``JobStatus``.
+    """Return the ``JobStatus`` fields derived from a job's task summary.
 
-    Spread into ``JobStatus(...)`` as ``**_job_status_counts(summary, job_id)``.
+    Spread into ``JobStatus(...)`` as ``**_job_status_from_summary(summary, job_id)``.
     A ``None`` summary collapses to all-zero counters (no log noise); a real
-    summary runs each field through ``_clamp_int32`` so 64-bit aggregates
+    summary runs each counter through ``_clamp_int32`` so 64-bit aggregates
     never trip the proto encoder.
 
     ``pre_sync_task_count`` is the requested replica count of a federated job
@@ -727,6 +727,7 @@ def _job_status_counts(
             task_state_friendly(state): _clamp_int32(count, job_id=job_id, field=f"task_state_counts[{state}]")
             for state, count in s.task_state_counts.items()
         },
+        "status_message": s.status_message,
     }
 
 
@@ -1963,7 +1964,7 @@ class ControllerServiceImpl:
             backend_id=job.backend_id or "",
             cluster=job.cluster,
             peer_status=peer_status,
-            **_job_status_counts(
+            **_job_status_from_summary(
                 summary, job.job_id, pre_sync_task_count=job.num_tasks if is_federated(job.cluster) else 0
             ),
         )
@@ -2111,7 +2112,7 @@ class ControllerServiceImpl:
             backend_id=j.backend_id or "",
             cluster=j.cluster,
             peer_status=peer_status,
-            **_job_status_counts(
+            **_job_status_from_summary(
                 task_summary, j.job_id, pre_sync_task_count=j.num_tasks if is_federated(j.cluster) else 0
             ),
         )
@@ -3467,7 +3468,7 @@ class ControllerServiceImpl:
             backend_id=job.backend_id or "",
             cluster=job.cluster,
             resources=resource_spec_from_job_row(job),
-            **_job_status_counts(summaries.get(job.job_id), job.job_id),
+            **_job_status_from_summary(summaries.get(job.job_id), job.job_id),
         )
         if job.started_at_ms:
             status.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))

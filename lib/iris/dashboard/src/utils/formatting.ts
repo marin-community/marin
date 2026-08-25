@@ -13,6 +13,17 @@ export function formatTimestamp(ts?: ProtoTimestamp): string {
   return new Date(ms).toLocaleString()
 }
 
+/**
+ * Why a job is not progressing, for a Diagnostic column.
+ *
+ * `pendingReason` is scheduler diagnostics and is only populated while PENDING, so a
+ * BUILDING job — dispatched, waiting on admission or an image pull — has its only
+ * explanation in `statusMessage` (the backend's one-liner). Mirrors `cli/job.py`.
+ */
+export function jobDiagnostic(job: { pendingReason?: string; statusMessage?: string }): string {
+  return job.pendingReason || job.statusMessage || ''
+}
+
 /** Format epoch ms as relative time ("5s ago", "3m ago", etc). */
 export function formatRelativeTime(ms: number): string {
   if (!ms) return '-'

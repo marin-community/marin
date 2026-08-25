@@ -81,7 +81,9 @@ function toRow(summary: UserSummary): UserRow {
     role: summary.role ?? '',
     activeJobs,
     runningJobs: jobCounts['running'] ?? 0,
-    pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
+    // 'building' is dispatched but not executing, so it counts as waiting. Without it
+    // Running + Pending would not sum to Active for a job stuck in admission/image pull.
+    pendingJobs: (jobCounts['pending'] ?? 0) + (jobCounts['building'] ?? 0) + (jobCounts['unschedulable'] ?? 0),
     runningTasks: taskCounts['running'] ?? 0,
     totalTasks: Object.values(taskCounts).reduce((a, b) => a + b, 0),
     starred: starredUsers.value.has(summary.user),

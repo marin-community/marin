@@ -11,10 +11,12 @@ from iris.cli.job import (
     cancel,
     complete,
     describe,
+    list_jobs,
     run,
     wait,
 )
 from iris.client.client import IrisClient
+from iris.client.workload_codec import job_status_from_proto
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -508,6 +510,28 @@ def test_job_describe_cli_shows_active_backend_status(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert 'Kueue: excluded: resource "memory": 32' in result.output
+
+
+def test_job_list_cli_reports_why_a_building_job_is_waiting(monkeypatch):
+    """A BUILDING job has no pending_reason, so its backend status fills the REASON column."""
+    job = job_status_from_proto(
+        _job_pb2.JobStatus(
+            job_id="/u/gang",
+            state=_job_pb2.JOB_STATE_BUILDING,
+            status_message="SchedulingGated: waiting for Kueue quota",
+        )
+    )
+
+    class FakeClient:
+        def list_jobs(self, **_kwargs):
+            return [job]
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+    result = CliRunner().invoke(list_jobs, [], obj={"controller_url": "http://controller.test"})
+
+    assert result.exit_code == 0, result.output
+    assert "REASON" in result.output
+    assert "SchedulingGated: waiting for Kueue quota" in result.output
 
 
 class _JobActionClusterClient:
