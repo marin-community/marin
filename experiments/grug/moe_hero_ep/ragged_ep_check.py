@@ -28,6 +28,7 @@ import json
 import logging
 import math
 import os
+from enum import StrEnum
 
 import click
 import jax
@@ -96,12 +97,32 @@ TOLERANCE = 5e-2
 
 # Mirrors `train.py`'s `RAGGED_REQUIRED_XLA_FLAGS`. Duplicated rather than imported so this guard
 # does not pull in the hero's training module, at the cost of having to be kept in step with it:
-# without these the check validates the host-launched one-shot kernel while every hero run uses the
+# without these the check validates the host-launched kernel while every hero run uses the
 # device-initiated one, which is the opposite of what a transport guard is for.
 RAGGED_TRANSPORT_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
 )
+
+
+class TransportKernel(StrEnum):
+    """Which ragged all-to-all kernel the run exercises.
+
+    ``DEVICE`` matches the hero and is the default, but jaxlib vintages that predate the two flags
+    abort at import on unknown ``XLA_FLAGS`` entries, so it needs the pinned jax/XLA build.
+    ``STOCK`` drops the flags and takes whatever the runtime defaults to -- the host-launched
+    kernel -- which lets the expert-MLP kernels and the offset arithmetic be validated on a stock
+    image while that build is pending. The choice is recorded in the results either way, so a
+    ``STOCK`` run is never mistaken for coverage of the transport the hero uses.
+    """
+
+    DEVICE = "device-kernel"
+    STOCK = "stock"
+
+
+def _transport_flags(kernel: TransportKernel) -> tuple[str, ...]:
+    return RAGGED_TRANSPORT_XLA_FLAGS if kernel is TransportKernel.DEVICE else ()
+
 
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256g", disk="128g", regions=[ANY_REGION])
 
@@ -393,7 +414,9 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         raise RuntimeError(f"ragged EP NOT validated: {verdict}")
 
 
-def build_benchmark(*, version: str | None = None) -> ArtifactStep[RaggedEpResult]:
+def build_benchmark(
+    *, version: str | None = None, transport_kernel: TransportKernel = TransportKernel.DEVICE
+) -> ArtifactStep[RaggedEpResult]:
     name = "grug/ragged-ep-check"
     version = resolve_version(name, version)
 
@@ -408,16 +431,26 @@ def build_benchmark(*, version: str | None = None) -> ArtifactStep[RaggedEpResul
             run_benchmark,
             name="ragged-ep-check-gb200",
             resources=BENCHMARK_RESOURCES,
-            env_vars={"JAX_ENABLE_PGLE": "false", "XLA_FLAGS": " ".join(RAGGED_TRANSPORT_XLA_FLAGS)},
+            env_vars={"JAX_ENABLE_PGLE": "false", "XLA_FLAGS": " ".join(_transport_flags(transport_kernel))},
         ),
         build_config=build_config,
     )
 
 
 @click.command()
+@click.option(
+    "--transport-kernel",
+    type=click.Choice([kernel.value for kernel in TransportKernel]),
+    default=TransportKernel.DEVICE.value,
+    show_default=True,
+    help=(
+        "Ragged all-to-all kernel to validate. The default matches the hero and needs the pinned "
+        "jax/XLA build; 'stock' drops the flags so the run works on an image without it."
+    ),
+)
 @build_options
-def main() -> ArtifactStep[RaggedEpResult]:
-    return build_benchmark()
+def main(transport_kernel: str) -> ArtifactStep[RaggedEpResult]:
+    return build_benchmark(transport_kernel=TransportKernel(transport_kernel))
 
 
 if __name__ == "__main__":
