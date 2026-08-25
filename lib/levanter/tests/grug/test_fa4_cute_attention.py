@@ -20,7 +20,7 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
-from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
 from levanter.grug.sharding import compact_grug_mesh
 
 
@@ -178,6 +178,65 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
 
     assert out.shape == q.shape
     assert out.sharding.spec == qkv_sharding.spec
+
+
+def test_fa4_frontend_rejects_context_outside_the_q_sequence_axis(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *args, **kwargs: q)
+    mesh = AbstractMesh(
+        axis_sizes=(1, 2, 4, 1, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    # "context" folded into the batch entry would leave the shard_map specs naming it nowhere,
+    # silently dropping every batch shard but one.
+    q = jax.ShapeDtypeStruct((16, 8, 2, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P(("data", "context"), None)))
+    kv_sharding = NamedSharding(mesh, P("data", None, None, None))
+    k = jax.ShapeDtypeStruct((16, 8, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+    v = jax.ShapeDtypeStruct((16, 8, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh), pytest.raises(ValueError, match="only on q's sequence axis"):
+        jax.eval_shape(
+            lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, AttentionMask.causal()),
+            q,
+            k,
+            v,
+        )
+
+
+def test_fa4_frontend_shards_context_without_batch_axes(monkeypatch):
+    local_shapes = []
+
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset=None):
+        del k, v, lower_bounds, valid, sm_scale, kernel_config
+        local_shapes.append((q.shape, q_offset is not None))
+        return q
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
+    mesh = AbstractMesh(
+        axis_sizes=(4, 1),
+        axis_names=("context", "model"),
+        axis_types=(AxisType.Explicit,) * 2,
+    )
+    q = jax.ShapeDtypeStruct(
+        (2, 16, 2, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P(None, "context", "model", None))
+    )
+    kv_sharding = NamedSharding(mesh, P(None, None, "model", None))
+    k = jax.ShapeDtypeStruct((2, 16, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+    v = jax.ShapeDtypeStruct((2, 16, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        jax.eval_shape(
+            lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, AttentionMask.causal()),
+            q,
+            k,
+            v,
+        )
+
+    assert local_shapes == [((2, 4, 2, 8), True)]
 
 
 _CONTEXT_PARALLEL_PARITY_SCRIPT = """
@@ -380,7 +439,8 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
-def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries():
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
+def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
     if jax.device_count() < 2:
@@ -388,13 +448,19 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    if head_dim == 128 and q_heads != kv_heads and _segmented_kernel_config(head_dim).sm90_backward is not None:
+        pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
+    # 512 tokens over two shards puts several query tiles behind the offset, so both the
+    # forward key-tile bound and the backward query-tile bound depend on it. head_dim 128
+    # selects the tile configuration the hero runs.
+    seq_len = 512
     key = jax.random.PRNGKey(7)
     q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
-    q = jax.random.normal(q_key, (1, 128, 4, 64), dtype=jnp.bfloat16)
-    k = jax.random.normal(k_key, (1, 128, 1, 64), dtype=jnp.bfloat16)
-    v = jax.random.normal(v_key, (1, 128, 1, 64), dtype=jnp.bfloat16)
-    segment_ids = jnp.array([[11] * 53 + [12] * 71 + [-1] * 4], dtype=jnp.int32)
-    mask = AttentionMask.causal(sliding_window=17).with_segment_ids(segment_ids)
+    q = jax.random.normal(q_key, (1, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    segment_ids = jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
     valid = segment_ids >= 0
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)

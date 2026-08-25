@@ -133,6 +133,29 @@ rank): K and V stay 402 MiB each after the all-gather, and the backward adds one
 all-reduce of the same 402 MiB per tensor over the context axis. Q, O and dQ shrink by the
 context degree.
 
+**Precision of the cross-shard dK/dV sum.** That psum runs in the K/V dtype. Each shard
+accumulates its dK/dV in fp32 inside the kernel and rounds to bf16 *before* the cross-shard sum,
+so the reduction error grows with the context degree — unlike the single-shard case, where the
+sum stays in fp32 until the epilogue. Changing the reduction dtype is out of scope; it is worth
+measuring against a cp=1 baseline if long-context loss curves drift.
+
+**Backward tile bound.** The backward grid covers the whole key sequence while `m_block_max`
+counts local query tiles, so a key block past a shard's queries maps `m_block_min` beyond the
+last tile. Those CTAs are clamped onto the final tile rather than exited: the mainloop prologue
+loads stage 0 unconditionally and the LSE/dPsum copies are unpredicated over buffers sized to the
+local query count, and at `qhead_per_kvhead == 1` the epilogue writes dK/dV straight to the output
+with no pre-zeroed accumulator. Every score in the clamped tile is masked, so it adds nothing.
+The unsharded path cannot reach this: upstream's right-aligned formula already bounds
+`m_block_min`.
+
+**Standalone activation memory and metrics.** This branch shards only the attention block. `data`
+narrows by the context degree while the residual stream, MoE and loss stay sequence-replicated,
+so per-device activation memory *grows* by roughly that factor until
+`long-context/moe-context-sharding` lands. The EP routing and drop metrics also over-count by the
+same factor on this branch alone — they psum over token axes that now include `context` while the
+tokens arrive context-replicated — and the sibling branch threads the real token axes through to
+fix it. Neither is a reason to run cp>1 standalone outside correctness tests.
+
 **Deviation.** `shard_map` `in_specs` stay inferred from the argument shardings rather than
 being passed explicitly: q and k/v legitimately differ in head sharding (the hero replicates K/V
 heads while Q keeps `model`), so a fixed spec would insert collectives the unsharded path does

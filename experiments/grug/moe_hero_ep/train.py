@@ -188,8 +188,10 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     # Sequence-dim (context-parallel) shard count. The mesh always carries a `context` axis;
-    # at size 1 it is inert. Sharding activations over it is the model's job, so raising this
-    # on its own only narrows `data`.
+    # at size 1 it is inert. Above 1 the attention block shards Q over it and all-gathers K/V,
+    # but the residual stream and MoE stay sequence-replicated until their layout lands: `data`
+    # narrows by this factor, so per-device activation memory grows with it, and the routing
+    # and drop metrics over-count by it.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 

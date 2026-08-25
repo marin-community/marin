@@ -74,8 +74,9 @@ class GrugTrainerConfig:
     )
     loss_implementation: str | tuple[str, ...] | None = None
     # Sequence-dim (context-parallel) shard count on the compact mesh's `context` axis; `data`
-    # absorbs the remainder. At size 1 the axis is inert. Sharding activations over it is the
-    # model's job, so raising this on its own only narrows `data`.
+    # absorbs the remainder. At size 1 the axis is inert. The base model shards no activation
+    # over it -- only the moe_hero_ep attention block does -- so raising this narrows `data`
+    # and nothing else.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 

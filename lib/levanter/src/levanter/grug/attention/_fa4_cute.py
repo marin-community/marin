@@ -235,9 +235,17 @@ def _query_sequence_shard_axis(q: jax.Array) -> str | None:
 
     Context parallelism shards the query sequence over ``context``; no other axis may
     partition it, since the kernel's key range is derived from the shard's q positions.
+    The context axis may not appear on any other dimension either: the shard_map specs
+    below name it only on the sequence dim, so a stray entry would silently drop shards.
     """
     spec = _partition_spec_of(q)
-    if spec is None or len(spec) <= 1 or spec[1] is None:
+    if spec is None:
+        return None
+    if _CONTEXT_AXIS in _spec_axis_names(spec[:1] + spec[2:]):
+        raise ValueError(
+            f"FA4/CuTe shard_map accepts {_CONTEXT_AXIS!r} only on q's sequence axis, got sharding {spec}."
+        )
+    if len(spec) <= 1 or spec[1] is None:
         return None
     if spec[1] != _CONTEXT_AXIS:
         raise ValueError(
@@ -285,8 +293,14 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
+    # Validate before the unsharded shortcut below: a context-sharded q still needs the
+    # shard_map and its offset even on a mesh that partitions no batch axis.
+    context_axis = _query_sequence_shard_axis(q)
+    _assert_kv_replicated_over_context("k", k)
+    _assert_kv_replicated_over_context("v", v)
+
     batch_axes = _active_batch_axes(mesh)
-    if not batch_axes:
+    if not batch_axes and context_axis is None:
         return fa4_cute_attention_forward(
             q,
             k,
@@ -297,13 +311,11 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
-    context_axis = _query_sequence_shard_axis(q)
-    _assert_kv_replicated_over_context("k", k)
-    _assert_kv_replicated_over_context("v", v)
-    qkv_spec = P(batch_axes, context_axis, _head_axis(mesh), None)
+    batch_spec = batch_axes if batch_axes else None
+    qkv_spec = P(batch_spec, context_axis, _head_axis(mesh), None)
     # The bounds carry global key positions whatever their layout, so pin them to q's
     # sequence sharding rather than rejecting a mismatch.
-    metadata_spec = P(batch_axes, context_axis)
+    metadata_spec = P(batch_spec, context_axis)
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
 
@@ -326,7 +338,9 @@ def _fa4_cute_attention_forward_sharded(
 
         # Global position of local query i is i + q_offset; the kernel derives every
         # causal upper bound from it. K/V are replicated over the context axis, so
-        # shard_map's transpose reduces each shard's partial dK/dV for us.
+        # shard_map's transpose reduces each shard's partial dK/dV for us. That psum runs
+        # in the K/V dtype: each shard accumulates its own dK/dV in fp32 and rounds to
+        # bf16 before the cross-shard sum, so rounding error grows with the context degree.
         q_offset = jax.lax.axis_index(context_axis) * q_local.shape[1]
         return fa4_cute_attention_forward(
             q_local,
