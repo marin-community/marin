@@ -128,6 +128,7 @@ def test_v4_64_smoke_builder_uses_full_data_sharding_without_context_parallelism
 
 def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_parallelism():
     steps = build_default_steps("aggregate_262k", tpu_variant="v4-128-cp4")
+    probe_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-128-cp4")
 
     assert len(aggregate_262k_evaluation_cells()) == 3
     assert len(steps) == 3
@@ -144,6 +145,8 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     assert all(step.config.evaluation.runtime.value.data_axis_size == 16 for step in steps)
     assert all(step.config.evaluation.runtime.value.context_axis_size == 4 for step in steps)
     assert all(step.name.endswith("-v4128cp4") for step in steps)
+    assert len(probe_steps) == 1
+    assert probe_steps[0].config.evaluation.run_id.startswith("mrcr-67b-step141000-")
 
     with pytest.raises(ValueError, match="aggregate_262k requires v4-128-cp4"):
         build_default_steps("aggregate_262k")

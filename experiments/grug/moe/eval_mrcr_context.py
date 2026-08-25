@@ -205,6 +205,8 @@ def evaluation_cells(selection: str) -> tuple[MrcrEvaluationCell, ...]:
         return smoke_evaluation_cells()
     if selection == "aggregate_262k":
         return aggregate_262k_evaluation_cells()
+    if selection == "aggregate_262k_probe":
+        return aggregate_262k_evaluation_cells()[:1]
     if selection == "primary":
         return primary_evaluation_cells()
     if selection == "sensitivity":
@@ -380,9 +382,10 @@ def build_default_steps(
     """Build the selected checked-in matrix without submitting any other cells."""
 
     cells = evaluation_cells(selection)
-    if selection == "aggregate_262k" and tpu_variant != CONTEXT_PARALLEL_TPU_SHAPE:
-        raise ValueError(f"aggregate_262k requires {CONTEXT_PARALLEL_TPU_SHAPE}")
-    if tpu_variant != DEFAULT_TPU_VARIANT and selection not in ("smoke", "aggregate_262k"):
+    bounded_262k_selections = ("aggregate_262k", "aggregate_262k_probe")
+    if selection in bounded_262k_selections and tpu_variant != CONTEXT_PARALLEL_TPU_SHAPE:
+        raise ValueError(f"{selection} requires {CONTEXT_PARALLEL_TPU_SHAPE}")
+    if tpu_variant != DEFAULT_TPU_VARIANT and selection not in ("smoke", *bounded_262k_selections):
         raise ValueError("Noncanonical TPU shapes are limited to the bounded smoke selection")
     variants = tuple(dict.fromkeys(cell.prompt_variant for cell in cells))
     bundle = mrcr_datasets(prompt_variants=variants)
@@ -788,7 +791,8 @@ if __name__ == "__main__":
     selection = os.environ.get("MRCR_MATRIX_SELECTION")
     if selection is None:
         raise ValueError(
-            "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k, primary, sensitivity, or complete; "
+            "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k_probe, aggregate_262k, primary, "
+            "sensitivity, or complete; "
             "the launcher does not default to an expensive matrix"
         )
     tpu_variant = os.environ.get("MRCR_EVAL_TPU", DEFAULT_TPU_VARIANT)
