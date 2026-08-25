@@ -125,6 +125,7 @@ class Rung:
 LADDER = (
     Rung("canonical", True, "canonical", False, "canonical single-phase DSP, per-domain rate and threshold"),
     Rung("shared_shape", False, "canonical", False, "ablation down: one rate and one threshold for all buckets"),
+    Rung("shared_bounded_harm", False, "bounded", False, "shared rate and bounded harm shape"),
     Rung("bounded_harm", True, "bounded", False, "swap the unbounded quadratic harm for a bounded one"),
     Rung("canonical+pairs", True, "canonical", True, "tie amplitudes of the two quality splits of a domain"),
     Rung("bounded_harm+pairs", True, "bounded", True, "both additions together"),
@@ -184,7 +185,13 @@ def main() -> None:
     parser.add_argument("--scales", default="delphi_3e18")
     parser.add_argument("--maxiter", type=int, default=40)
     parser.add_argument("--restarts", type=int, default=RESTARTS)
+    parser.add_argument("--rungs", default=",".join(rung.name for rung in LADDER))
+    parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
+    requested_rungs = set(args.rungs.split(","))
+    known_rungs = {rung.name for rung in LADDER}
+    if not requested_rungs or not requested_rungs.issubset(known_rungs):
+        raise ValueError(f"Unknown rung selection: {sorted(requested_rungs - known_rungs)}")
 
     rows = []
     for scale in args.scales.split(","):
@@ -207,6 +214,8 @@ def main() -> None:
                     groups.setdefault(base.domain_of(bucket), []).append(position)
                 pairs = tuple((members[0], members[1]) for members in groups.values() if len(members) == 2)
                 for rung in LADDER:
+                    if rung.name not in requested_rungs:
+                        continue
                     vector, intercept, coefficients = fit_rung(
                         exposure, response, rung, folds, pairs, seed=0, maxiter=args.maxiter, restarts=args.restarts
                     )
@@ -217,6 +226,9 @@ def main() -> None:
                     )
                     print(f"  done {scale}/{target.split('_')[0]} {fit_name} {rung.name}", flush=True)
     table = pd.DataFrame(rows)
+    if args.output_csv is not None:
+        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(args.output_csv, index=False)
     for cell, group in table.groupby("cell"):
         print(f"\n=== {cell} ===")
         print(group.drop(columns=["cell"]).to_string(index=False, float_format=lambda v: f"{v:+.5f}"))

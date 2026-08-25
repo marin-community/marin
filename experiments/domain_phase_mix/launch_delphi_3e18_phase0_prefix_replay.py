@@ -70,6 +70,7 @@ class PrefixTrainingConfig:
     validation_configs: dict[str, DatasetComponent] | None
     prefix_train_steps: int
     optimizer_schedule_num_train_steps: int
+    wandb_tags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -210,7 +211,7 @@ def run_phase_0_prefix(config: PrefixTrainingConfig) -> None:
                     for tag in (
                         "issue-6611",
                         "delphi-3e18-phase0-prefix-replay",
-                        "canonical-280-row-panel",
+                        *config.wandb_tags,
                         "phase-boundary-state",
                         "completed-adamh",
                         f"panel_source={run_spec.panel_source}",
@@ -377,6 +378,7 @@ def build_launch_artifacts(
                 validation_configs=validation_configs,
                 prefix_train_steps=EXPECTED_PREFIX_TRAIN_STEPS,
                 optimizer_schedule_num_train_steps=EXPECTED_FULL_TRAIN_STEPS,
+                wandb_tags=("canonical-280-row-panel",),
             ),
         )
         training_steps.append(training_step)
