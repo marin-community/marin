@@ -37,8 +37,6 @@ enum Command {
     RetireTelemetryV1 {
         #[arg(long)]
         store_dir: PathBuf,
-        #[arg(long, default_value_t = DEFAULT_BATCH_ROWS)]
-        batch_rows: usize,
     },
     /// Recheck the current migration phase without changing it.
     VerifyTelemetryV1 {
@@ -66,12 +64,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             store_dir,
             batch_rows,
         })?,
-        Command::RetireTelemetryV1 {
+        Command::RetireTelemetryV1 { store_dir } => retire_in_place(&InPlaceConfig {
             store_dir,
-            batch_rows,
-        } => retire_in_place(&InPlaceConfig {
-            store_dir,
-            batch_rows,
+            batch_rows: DEFAULT_BATCH_ROWS,
         })?,
         Command::VerifyTelemetryV1 {
             store_dir,

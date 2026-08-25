@@ -140,9 +140,6 @@ pub(crate) const TELEMETRY_POLICY: TelemetryPolicy = TelemetryPolicy {
 };
 
 impl IngestionPolicy for TelemetryPolicy {
-    /// Partition a complete normalized batch into logical streams and physical
-    /// storage shards. Policy decisions receive a view of every column in each
-    /// row; callers do not pre-extract a routing key.
     fn route_batch(
         &self,
         source: IngestionBatchSource<'_>,

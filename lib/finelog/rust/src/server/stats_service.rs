@@ -188,8 +188,6 @@ impl StatsService for StatsServiceImpl {
         let forwarded_telemetry =
             origin_cluster.is_some() && is_forwarded_telemetry_namespace(&namespace);
 
-        // Decode + validate + align + append on the blocking pool; the size/row
-        // caps and IPC decode live in the Store ingestion methods.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {

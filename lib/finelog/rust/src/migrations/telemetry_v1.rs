@@ -79,7 +79,6 @@ pub struct MigrationManifest {
     pub phase: MigrationPhase,
     pub input_rows: i64,
     pub output_rows: i64,
-    pub residual_rows: i64,
     pub source_segments: Vec<SourceSegment>,
     #[serde(default)]
     pub published_files: Vec<String>,
@@ -751,7 +750,6 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
     let mut source_segments = Vec::new();
     let mut input_rows = 0_i64;
     let mut output_rows = 0_i64;
-    let residual_rows = 0_i64;
 
     for namespace in migration_source_namespaces() {
         let namespace_dir = config.source_dir.join(namespace);
@@ -841,7 +839,6 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         phase: MigrationPhase::Staged,
         input_rows,
         output_rows,
-        residual_rows,
         source_segments,
         published_files: Vec::new(),
         retired_files: Vec::new(),
@@ -1564,7 +1561,6 @@ mod tests {
 
         assert_eq!(manifest.input_rows, 7);
         assert_eq!(manifest.output_rows, 7);
-        assert_eq!(manifest.residual_rows, 0);
         assert!(manifest.complete);
         assert_eq!(manifest.phase, MigrationPhase::Staged);
         assert_eq!(
