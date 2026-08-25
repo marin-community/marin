@@ -161,8 +161,8 @@ def test_schedule_steps_do_not_extend_the_run():
 def test_synthetic_training_data_builds_a_reusable_global_batch():
     device_count = len(jax.devices())
     mesh = Mesh(
-        np.asarray(jax.devices()).reshape(1, device_count, 1, 1),
-        ("replica_dcn", "data", "expert", "model"),
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
     )
     batch = train._make_synthetic_batch(
         batch_size=device_count,
@@ -288,9 +288,9 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        axis_sizes=(1, 1, 1, 64, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     input_sharding = NamedSharding(mesh, P(None, "expert", None, None))
     x = jax.ShapeDtypeStruct((48, 256, 8, 4), jnp.float32, sharding=input_sharding)
@@ -328,9 +328,9 @@ def test_ep_newton_schulz_matches_replicated_path():
         )
 
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 2, 1),
-            ("replica_dcn", "data", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 4,
+            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
         x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
         x_sharded = jax.device_put(x, NamedSharding(mesh, P(None, "expert", "data", "model")))
@@ -372,9 +372,9 @@ def test_ep_newton_schulz_matches_replicated_path():
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        axis_sizes=(1, 1, 1, 64, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     parameter_sharding = NamedSharding(mesh, P(None, "expert", None))
     x = jax.ShapeDtypeStruct((48, 64, 4), jnp.float32, sharding=parameter_sharding)
@@ -398,9 +398,9 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     # The dropless eval transform must retarget only the static MoE backend fields and keep every
     # weight leaf shared by identity, so the eval scores the trained weights with no capacity drops.
     mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     cfg = model.GrugModelConfig(
         vocab_size=128,
@@ -518,9 +518,9 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
         from experiments.grug.moe_hero_ep import model
 
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 2, 2),
-            ("replica_dcn", "data", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 4,
+            np.asarray(jax.devices()).reshape(1, 1, 1, 2, 2),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
         cfg = model.GrugModelConfig(
             vocab_size=128,
@@ -569,8 +569,8 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
 def _explicit_mesh(*axis_sizes):
     return Mesh(
         np.asarray(jax.devices()).reshape(*axis_sizes),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
 
 
@@ -605,7 +605,7 @@ def _latent_config(latent_dim=None):
 def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
     # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
     # not, so the expert weights must be latent-wide and the layer output hidden-wide.
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config(latent_dim=16)
     tokens = jax.ShapeDtypeStruct((1, 8), jnp.int32)
     with set_mesh(mesh):
@@ -626,7 +626,7 @@ def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
 
 def test_latent_moe_is_absent_by_default():
     # A config without a latent width must keep the standard MoE layer.
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config(latent_dim=None)
     with set_mesh(mesh):
         built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
@@ -647,7 +647,7 @@ def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
 
 
 def test_latent_moe_state_dict_contains_the_projection_state():
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config(latent_dim=16)
     with set_mesh(mesh):
         built = model.Transformer.init(cfg, key=jax.random.key(0))
@@ -787,9 +787,9 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
 
 def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 1, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        axis_sizes=(1, 1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
 
     with use_abstract_mesh(mesh):
@@ -854,7 +854,7 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
 def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
     config = _latent_config()
     key = jax.random.key(17)
-    mesh = _explicit_mesh(1, 1, 1, 1)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
     monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
 
     with set_mesh(mesh):
