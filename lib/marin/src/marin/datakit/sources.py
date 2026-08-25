@@ -23,6 +23,7 @@ from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biocorpus import biocorpus_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
+from marin.datakit.download.code_alchemy import code_alchemy_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_corpus import common_corpus_normalize_steps
 from marin.datakit.download.common_crawl_focus import common_crawl_focus_normalize_steps
@@ -251,6 +252,20 @@ def all_sources() -> dict[str, DatakitSource]:
         {
             "biocollection/free_text_stream": 33.186704843,
             "biocollection/instruction_stream": 18.123700603,
+        },
+    )
+
+    # Code Alchemy: five independent training subsets from the pinned upstream
+    # release. Counts are the dataset-card estimates pending exact Marin-tokenizer
+    # measurements over the normalized artifacts.
+    code_alchemy = _rows_flat(
+        code_alchemy_normalize_steps,
+        {
+            "code-alchemy/code-dev": 269.8,
+            "code-alchemy/code-dialogue": 544.7,
+            "code-alchemy/code-enhance": 124.5,
+            "code-alchemy/code-qa": 31.3,
+            "code-alchemy/code-trace": 6.3,
         },
     )
 
@@ -610,6 +625,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *single_sources,
         *starcoder2_extras,
         *biocollection,
+        *code_alchemy,
         *common_pile,
         *finepdfs,
         *dolma4pdfs,

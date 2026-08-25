@@ -409,6 +409,7 @@ def normalize_to_parquet(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    heartbeat_timeout: float = 120.0,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -448,6 +449,8 @@ def normalize_to_parquet(
             Scale up when increasing partition size.
         max_workers: Maximum number of Zephyr workers for the pipeline.
             Defaults to 1024.
+        heartbeat_timeout: Maximum seconds between worker heartbeats. Increase
+            this when one input shard can take longer than two minutes.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -492,7 +495,12 @@ def normalize_to_parquet(
         drop_fields=drop_fields,
         output_schema=output_schema,
     )
-    ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
+    ctx = ZephyrContext(
+        name="normalize",
+        resources=resources,
+        max_workers=max_workers,
+        heartbeat_timeout=heartbeat_timeout,
+    )
     outcome = ctx.execute(pipeline)
     counters_dict = dict(outcome.counters)
 
@@ -522,6 +530,7 @@ def normalize_step(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    heartbeat_timeout: float = 120.0,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
@@ -543,6 +552,8 @@ def normalize_step(
             See :func:`normalize_to_parquet` for the default.
         max_workers: Maximum number of Zephyr workers. Defaults to
             ``DEFAULT_MAX_WORKERS`` (1024).
+        heartbeat_timeout: Maximum seconds between worker heartbeats. This is
+            execution policy and does not affect the normalized artifact hash.
         output_path_prefix: Optional prefix for the normalized step output.
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
@@ -592,6 +603,7 @@ def normalize_step(
             max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            heartbeat_timeout=heartbeat_timeout,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             bare=bare,
