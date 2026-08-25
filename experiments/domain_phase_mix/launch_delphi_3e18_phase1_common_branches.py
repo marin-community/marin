@@ -170,6 +170,8 @@ class BranchTrainingConfig:
     prefix_hardware: TpuHardware
     continuation_hardware: TpuHardware
     continuation_hardware_version: VersionedValue[tuple[str, str, str]]
+    selection_manifest_sha256: str | None
+    selection_contract_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,8 @@ class SaveBranchManifestConfig:
     prefix_hardware: TpuHardware
     continuation_hardware: TpuHardware
     continuation_hardware_version: VersionedValue[tuple[str, str, str]]
+    selection_manifest_sha256: str | None
+    selection_contract_sha256: str | None
 
 
 def hardware_identity(hardware: TpuHardware) -> tuple[str, str, str]:
@@ -277,7 +281,9 @@ def hardware_canary_gate() -> HardwareCanaryGate:
 
 def hardware_canary_gate_payload(noise_run_orders: tuple[int, ...] | None = None) -> dict[str, object]:
     payload = asdict(hardware_canary_gate())
-    payload["noise_run_orders"] = list(noise_run_orders or hardware_canary_gate().noise_run_orders)
+    if noise_run_orders is None:
+        noise_run_orders = hardware_canary_gate().noise_run_orders
+    payload["noise_run_orders"] = list(noise_run_orders)
     payload["provenance_comparison_mask"] = list(hardware_canary_gate().provenance_comparison_mask)
     return payload
 
@@ -932,6 +938,8 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
         "continuation_id": config.continuation_id,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "branch_code_commit": config.code_commit,
+        "selection_manifest_sha256": config.selection_manifest_sha256,
+        "selection_contract_sha256": config.selection_contract_sha256,
         "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(config.continuation_hardware),
         "observed_continuation_hardware": asdict(observed_hardware),
@@ -965,6 +973,8 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "continuation_weights_sha256": config.continuation_weights_sha256,
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
+        "selection_manifest_sha256": config.selection_manifest_sha256,
+        "selection_contract_sha256": config.selection_contract_sha256,
         "branch_run_id_base": config.branch_run_id_base,
         "branch_noise_design_sha256": config.branch_noise_design_sha256,
         "prefix_hardware": asdict(config.prefix_hardware),
@@ -1125,6 +1135,8 @@ def main() -> None:
                 prefix_hardware=PREFIX_HARDWARE,
                 continuation_hardware=deployment.hardware,
                 continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
+                selection_manifest_sha256=None,
+                selection_contract_sha256=None,
             )
         )
         logger.info("Wrote %d phase-1 branch specs under %s", len(rows), dry_run_output)
@@ -1188,6 +1200,8 @@ def main() -> None:
                         prefix_hardware=PREFIX_HARDWARE,
                         continuation_hardware=deployment.hardware,
                         continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
+                        selection_manifest_sha256=None,
+                        selection_contract_sha256=None,
                     ),
                 )
             )
@@ -1214,6 +1228,8 @@ def main() -> None:
                     prefix_hardware=PREFIX_HARDWARE,
                     continuation_hardware=deployment.hardware,
                     continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
+                    selection_manifest_sha256=None,
+                    selection_contract_sha256=None,
                 ),
             )
         )

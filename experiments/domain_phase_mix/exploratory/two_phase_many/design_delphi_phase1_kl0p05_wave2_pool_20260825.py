@@ -3,7 +3,14 @@
 
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["fsspec", "gcsfs", "numpy", "pandas", "scikit-learn"]
+# dependencies = [
+#   "fsspec==2026.1.0",
+#   "gcsfs==2026.1.0",
+#   "numpy==2.3.5",
+#   "pandas==2.2.2",
+#   "scikit-learn==1.8.0",
+#   "scipy==1.17.0",
+# ]
 # ///
 """Freeze the outcome-blind candidate pool and coverage tranche for Delphi Wave 2.
 
@@ -12,6 +19,10 @@ Run from the repository root with::
     PYTHONPATH=. uv run \
       experiments/domain_phase_mix/exploratory/two_phase_many/\
 design_delphi_phase1_kl0p05_wave2_pool_20260825.py
+
+The raw 50,000-row pool exceeds the repository's per-file size limit and is
+therefore regenerated rather than committed. The checked-in manifest and the
+Wave-2 selector pin the exact hashes of every generated file.
 """
 
 from __future__ import annotations

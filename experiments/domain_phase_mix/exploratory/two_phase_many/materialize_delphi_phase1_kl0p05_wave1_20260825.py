@@ -43,6 +43,8 @@ EXPECTED_RESULT_ROWS = 108
 EXPECTED_FIT_ROWS = 100
 WAVE1A_ANCHOR_ID = "fit_maximin_00"
 WAVE1B_ANCHOR_ID = "control_wave1a_anchor_fit_maximin_00"
+MATERIALIZATION_MANIFEST = "materialization_manifest.json"
+MATERIALIZATION_COVERAGE = "materialization_coverage.json"
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,30 @@ def phase_hash(row: pd.Series, phase: str) -> str:
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
+def local_file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def artifact_record(path: Path, rows: int) -> dict[str, object]:
+    return {"sha256": local_file_sha256(path), "rows": rows}
+
+
+def write_materialization_manifest(
+    output_dir: Path,
+    artifacts: dict[str, dict[str, object]],
+    provenance: dict[str, object],
+) -> Path:
+    path = output_dir / MATERIALIZATION_MANIFEST
+    payload = {
+        "schema_version": "delphi_phase1_materialization_v1",
+        "complete": True,
+        "artifacts": artifacts,
+        "provenance": provenance,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def validate_combined_results(results: pd.DataFrame, *, complete: bool) -> None:
     if results.run_name.duplicated().any():
         raise ValueError("Run names collide across Wave 1A and Wave 1B")
@@ -304,19 +330,19 @@ def main() -> None:
     if not missing.empty:
         missing = missing.sort_values(["wave", "run_order", "run_id"]).reset_index(drop=True)
     anchor = anchor_contrast(results) if not results.empty else pd.DataFrame()
+    if complete and anchor.empty:
+        raise ValueError("Complete Wave 1 lacks its cross-wave anchor")
+
+    fit_results = results[results.fit_budget] if not results.empty else pd.DataFrame()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    results.to_csv(args.output_dir / "branch_results.csv", index=False)
-    results[results.fit_budget].to_csv(args.output_dir / "branch_fit_matrix.csv", index=False)
-    metrics.to_csv(args.output_dir / "uncheatable_metrics_long.csv", index=False)
     missing.to_csv(args.output_dir / "missing_rows.csv", index=False)
-    anchor.to_csv(args.output_dir / "cross_wave_anchor.csv", index=False)
     coverage = {
         "complete": complete,
         "expected_result_rows": EXPECTED_RESULT_ROWS,
         "expected_fit_rows": EXPECTED_FIT_ROWS,
         "completed_result_rows": len(results),
-        "completed_fit_rows": int(results.fit_budget.sum()) if not results.empty else 0,
+        "completed_fit_rows": len(fit_results),
         "missing_result_rows": len(missing),
         "metric_rows": len(metrics),
         "experiment_root": args.experiment_root,
@@ -329,6 +355,35 @@ def main() -> None:
         "cross_wave_anchor_available": not anchor.empty,
     }
     (args.output_dir / "coverage.json").write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n")
+    if complete:
+        final_frames = {
+            "branch_results.csv": results,
+            "branch_fit_matrix.csv": fit_results,
+            "uncheatable_metrics_long.csv": metrics,
+            "cross_wave_anchor.csv": anchor,
+        }
+        for name, frame in final_frames.items():
+            frame.to_csv(args.output_dir / name, index=False)
+        (args.output_dir / MATERIALIZATION_COVERAGE).write_text(json.dumps(coverage, indent=2, sort_keys=True) + "\n")
+        artifacts = {name: artifact_record(args.output_dir / name, len(frame)) for name, frame in final_frames.items()}
+        artifacts[MATERIALIZATION_COVERAGE] = artifact_record(args.output_dir / MATERIALIZATION_COVERAGE, 1)
+        write_materialization_manifest(
+            args.output_dir,
+            artifacts,
+            {
+                "experiment_root": args.experiment_root,
+                "experiment_name": EXPERIMENT_NAME,
+                "candidate_weights_sha256": CANDIDATE_SHA256,
+                "selected_prefixes_sha256": SELECTED_PREFIXES_SHA256,
+                "prefix_replay_code_commit": PREFIX_REPLAY_CODE_COMMIT,
+                "manifests": manifest_rows,
+            },
+        )
+    else:
+        results.to_csv(args.output_dir / "partial_branch_results.csv", index=False)
+        fit_results.to_csv(args.output_dir / "partial_branch_fit_matrix.csv", index=False)
+        metrics.to_csv(args.output_dir / "partial_uncheatable_metrics_long.csv", index=False)
+        anchor.to_csv(args.output_dir / "partial_cross_wave_anchor.csv", index=False)
     print(json.dumps(coverage, indent=2, sort_keys=True))
     if not complete and not args.allow_incomplete:
         raise ValueError(f"Wave 1 is incomplete: {len(missing)} rows are missing")

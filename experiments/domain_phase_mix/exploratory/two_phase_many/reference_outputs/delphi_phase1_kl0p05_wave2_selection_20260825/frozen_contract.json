@@ -1,0 +1,112 @@
+{
+  "acquisition": {
+    "fallback": "40 additional outcome-blind Hellinger maximin rows",
+    "fallback_conditions": [
+      "no model passes all frozen gates",
+      "winner subfit spread or all-model disagreement is at most minimum_prediction_spread"
+    ],
+    "fixed_coverage_rows": 40,
+    "guided_disagreement_rows": 8,
+    "guided_geometry_inputs": [
+      {
+        "path": "reference_outputs/delphi_phase1_common_branches_20260824/continuation_weights.csv",
+        "sha256": "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
+      },
+      {
+        "path": "reference_outputs/delphi_phase1_kl0p05_wave1_extension_20260825/continuation_weights.csv",
+        "sha256": "2860d0e1f177f1728580ec1cdda05e049734e7977b868a8c0abd05d9d8bd0ec3"
+      }
+    ],
+    "guided_geometry_scale": "median nearest-neighbor Hellinger distance among the frozen 100 Wave-1 rows",
+    "guided_lcb_rows": 32,
+    "guided_minimum_distance_hellinger": 0.20134715929654884,
+    "guided_support_radius_hellinger": 0.4026943185930977,
+    "lcb_standard_deviations": 1.5,
+    "minimum_prediction_spread": 1e-12,
+    "outcome_blind_geometry_preflight": {
+      "eligible_annulus_rows_after_fixed_exclusions": 21850,
+      "eligible_pool_rows_after_fixed_exclusions": 45441,
+      "fallback_minimum_hellinger_to_existing_design": 0.4020897826051688,
+      "fallback_minimum_pairwise_hellinger": 0.4080151587060811,
+      "fallback_rows_materialized": 40
+    },
+    "referee_holdouts_inside_fixed_coverage": 8,
+    "uncertainty_ensemble": "15 spatial subfits: 5 outer folds x 3 partition seeds"
+  },
+  "contract_version": "delphi_phase1_kl0p05_wave2_20260825_v1",
+  "endpoint_outcomes_used_to_define_contract": false,
+  "fit_budget": {
+    "confirmations_and_noise_controls_included": false,
+    "fixed_coverage_wave2_rows": 40,
+    "guided_wave2_rows": 40,
+    "total_wave2_rows": 80,
+    "wave1_rows": 100
+  },
+  "frozen_input_hashes": {
+    "coverage_summary": "fa041c9dd8eddb09ca501d73c025f430907c21684f8d4e7edfe5e3711455e2ed",
+    "coverage_weights": "c0d2bf2e17feb6cc936e1f7bcd19bb4e36ef275893f4f4676f8f289cdf24394c",
+    "pool_counts": "f19bdcf1dd8e4f666f137013fe07a91c5cc02947e66e422c03475994c3e14a14",
+    "pool_manifest": "b8cba48f3ffa60ce95bd6f28c5f3476b4bf219fd68c9805c8e55bdb1ce01c534",
+    "pool_metadata": "6a5672255989f10de6959e7b25822e12f297d5fb9439b04a840c373b1be0ba49",
+    "prefix_weights": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "wave1_continuation_designs": [
+      "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355",
+      "2860d0e1f177f1728580ec1cdda05e049734e7977b868a8c0abd05d9d8bd0ec3"
+    ]
+  },
+  "implementation": {
+    "dependency_versions": {
+      "numpy": "2.3.5",
+      "pandas": "2.2.2",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.17.0"
+    },
+    "outcome_materializations": "required by caller-supplied manifest SHA-256 and recursively verified"
+  },
+  "models": {
+    "feature_basis_fit": "outcome-blind 50000-row candidate pool",
+    "incremental_benefit": "(1+E0)^-1/2 - (1+E0+E1)^-1/2",
+    "incremental_damage": "bounded_excess(E0+E1)-bounded_excess(E0), knee=1 epoch",
+    "maximum_columns_excluding_intercept": 14,
+    "names": [
+      "hellinger_linear_14",
+      "valley_quadratic_14",
+      "incremental_dsp_14",
+      "hybrid_14"
+    ],
+    "semantic_bucket_partitions": false
+  },
+  "target_metric": "uncheatable_bpb",
+  "target_prefix": "shared_bounded_ensemble_kl0p05",
+  "validation": {
+    "coordinate_distance_gate": false,
+    "identifiability_caveat": "outer folds fit at most 14 columns on 80 rows; inner folds select alpha on 60 rows",
+    "inner_folds": 4,
+    "maximum_baseline_rmse_ratio": 0.9,
+    "maximum_cross_wave_anchor_absolute_bpb": 0.0002,
+    "maximum_mean_fold_regret_at_3": "3 * conservative n=5 full-branch data-seed sample SD",
+    "minimum_mean_spearman": 0.4,
+    "minimum_response_q90_q10_to_noise_sd": 4.0,
+    "minimum_spatial_test_rows": 8,
+    "minimum_spatial_train_rows": 28,
+    "noise_control_actions": [
+      "control_proportional",
+      "fit_maximin_26"
+    ],
+    "outer_folds": 5,
+    "partition_seeds": [
+      0,
+      1,
+      2
+    ],
+    "ridge_alphas": [
+      1e-06,
+      0.0001,
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "spatial_geometry": "capacity-balanced KMeans blocks in Hellinger coordinates"
+  }
+}

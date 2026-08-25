@@ -27,6 +27,7 @@ EXPECTED_FIT_CONTINUATIONS = 50
 EXPECTED_BRANCH_NOISE_ROWS = 4
 PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 DIAGNOSTIC_METRIC = "eval/uncheatable_eval/github_cpp/bpb"
+OPERATIONAL_EVAL_FIELDS = frozenset({"eval/loading_time", "eval/total_time"})
 BRANCH_PROVENANCE_FILENAME = "branch_provenance.json"
 EXPECTED_TPU_DEVICE_COUNTS = {"v5p-8": 4, "v6e-8": 8}
 EXPECTED_TPU_KIND_FRAGMENTS = {"v5p-8": "v5", "v6e-8": "v6"}
@@ -189,7 +190,11 @@ def metric_record(
     records = [row for row in read_json_lines(fs, paths[0]) if int(row.get("step", -1)) == EXPECTED_TERMINAL_STEP]
     if not records:
         raise ValueError(f"Expected a step-{EXPECTED_TERMINAL_STEP} metric row for {run_name}")
-    if any(record != records[0] for record in records[1:]):
+    scientific_record = {key: value for key, value in records[0].items() if key not in OPERATIONAL_EVAL_FIELDS}
+    if any(
+        {key: value for key, value in record.items() if key not in OPERATIONAL_EVAL_FIELDS} != scientific_record
+        for record in records[1:]
+    ):
         raise ValueError(f"Conflicting step-{EXPECTED_TERMINAL_STEP} metric rows for {run_name}")
     return paths[0], records[0]
 
