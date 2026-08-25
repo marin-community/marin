@@ -877,7 +877,10 @@ def save_checkpoint(
         )
     except Exception:
         if progress_logger is not None:
-            progress_logger.finish("failed")
+            if jax.process_index() == 0:
+                progress_logger.finish("failed")
+            else:
+                progress_logger.finish_local("failed")
         raise
 
     return checkpoint_path

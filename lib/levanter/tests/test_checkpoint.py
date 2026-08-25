@@ -15,6 +15,7 @@ import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
+import levanter.checkpoint as checkpoint_module
 import numpy as np
 import optax
 import pytest
@@ -555,6 +556,40 @@ def test_debug_checkpoint_nonprimary_process_finishes_local_telemetry(tmp_path, 
         for record in checkpoint_records
         if record["name"] == "checkpoint_phase_duration_seconds"
     }
+    assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
+
+
+def test_debug_checkpoint_nonprimary_serialization_failure_omits_total_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(jax, "process_index", lambda: 1)
+
+    def fail_serialization(*args, **kwargs):
+        raise RuntimeError("serialization failed")
+
+    monkeypatch.setattr(checkpoint_module, "tree_serialize_leaves_tensorstore", fail_serialization)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        with pytest.raises(RuntimeError, match="serialization failed"):
+            save_checkpoint(
+                {"weight": np.arange(8, dtype=np.float32)},
+                step=7,
+                checkpoint_path=tmp_path / "checkpoint",
+                debug=CheckpointDebugConfig(
+                    enabled=True,
+                    tracemalloc_frames=None,
+                    force_gc_before_serialize=False,
+                    top_allocations=0,
+                    flush_logs=False,
+                ),
+            )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
     assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
 
 
