@@ -286,6 +286,12 @@ def test_branch_run_id_base_rejects_negative_values() -> None:
         branches.enrich_branch_rows([], {}, run_id_base=-1)
 
 
+def test_hardware_canary_payload_uses_actual_custom_noise_orders() -> None:
+    payload = branches.hardware_canary_gate_payload((228, 229, 230, 231, 232, 233, 234, 235))
+
+    assert payload["noise_run_orders"] == [228, 229, 230, 231, 232, 233, 234, 235]
+
+
 def test_noncanonical_continuation_panel_requires_distinct_run_id_namespace() -> None:
     with pytest.raises(ValueError, match="must use a distinct"):
         branches.validate_branch_run_id_namespace("extension", branches.BRANCH_RUN_ID_BASE)

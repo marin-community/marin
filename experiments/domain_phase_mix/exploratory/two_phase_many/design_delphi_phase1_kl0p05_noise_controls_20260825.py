@@ -33,6 +33,8 @@ PROPORTIONAL_CONTINUATION_ID = "control_proportional"
 EXPECTED_HIGH_EXPOSURE_CONTINUATION_ID = "fit_maximin_26"
 REPEATS_PER_ACTION = 4
 DATA_SEED_BASE = 962_000
+EXISTING_SEED_BRANCH_CODE_COMMIT = "d016caa0fbd0f1f50e29ffa0c9dea5d40f5438e2"
+NOISE_CONTROL_BASE_COMMIT = "983f450523"
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,6 +86,12 @@ def build_design(continuation_summary_path: Path) -> tuple[pd.DataFrame, dict[st
         "fit_budget_rows": 0,
         "data_seed_base": DATA_SEED_BASE,
         "continuation_summary_sha256": actual_sha256,
+        "existing_seed_branch_code_commit": EXISTING_SEED_BRANCH_CODE_COMMIT,
+        "noise_control_base_commit": NOISE_CONTROL_BASE_COMMIT,
+        "exchangeability_audit": (
+            "The d016caa0..983f450 diff changes branch run-ID/manifest identity and result materialization only; "
+            "the branch training function, optimizer restoration, data construction, and evaluation path are unchanged."
+        ),
         "high_exposure_action_selection": (
             "the runtime-exact fit continuation with maximum phase-1 materialized exposure in the frozen "
             "outcome-blind Wave 1A design"
@@ -91,8 +99,8 @@ def build_design(continuation_summary_path: Path) -> tuple[pd.DataFrame, dict[st
         "high_exposure_action_max_phase_1_materialized_epoch": float(high_exposure.max_phase_1_materialized_epoch),
         "interpretation": (
             "Together with each action's existing data-seed-930000 Wave 1 endpoint, these four fresh data seeds "
-            "provide five observations per action at one exact KL0.05 boundary checkpoint. They estimate branch "
-            "sampling variation and remain outside the 180-row fit budget."
+            "provide five observations per action at one exact KL0.05 boundary checkpoint. They screen for gross "
+            "branch sampling variation and heteroskedasticity and remain outside the 180-row fit budget."
         ),
     }
     return design, manifest

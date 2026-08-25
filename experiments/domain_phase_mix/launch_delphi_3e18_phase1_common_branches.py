@@ -275,9 +275,9 @@ def hardware_canary_gate() -> HardwareCanaryGate:
     )
 
 
-def hardware_canary_gate_payload() -> dict[str, object]:
+def hardware_canary_gate_payload(noise_run_orders: tuple[int, ...] | None = None) -> dict[str, object]:
     payload = asdict(hardware_canary_gate())
-    payload["noise_run_orders"] = list(hardware_canary_gate().noise_run_orders)
+    payload["noise_run_orders"] = list(noise_run_orders or hardware_canary_gate().noise_run_orders)
     payload["provenance_comparison_mask"] = list(hardware_canary_gate().provenance_comparison_mask)
     return payload
 
@@ -970,7 +970,9 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(config.continuation_hardware),
         "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
-        "hardware_canary_gate": hardware_canary_gate_payload(),
+        "hardware_canary_gate": hardware_canary_gate_payload(
+            tuple(int(row["run_order"]) for row in branch_rows if row["branch_role"] == "same_prefix_branch_noise")
+        ),
         "panel_hardware_caveat": (
             "The v6e continuation panel is valid for surrogate fitting and selection only. Any frontier finalist must "
             "be confirmed on the canonical v5p continuation hardware before a performance claim."
