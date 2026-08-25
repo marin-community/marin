@@ -3,12 +3,11 @@
 
 """H100 scaling ladder for the Grug MoE EP hero recipe.
 
-The three rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter
+The two rungs keep the existing hero model, data, optimizer, and 791-token-per-active-parameter
 scaling rules while mapping the expert and replica axes onto Hopper nodes. Every rung uses a global
 sequence batch of 1024.
 
     size   H100 GPUs  EP per task  global batch  steps  tokens
-    d384       4           4           1024        1520   6.4B
     d512       8           8           1024        3930    16B
     d768      16           8           1024       11420    48B
 
@@ -68,7 +67,7 @@ from experiments.grug.moe_hero_ep.train import (
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
-H100_LADDER_SIZES = ("d384", "d512", "d768")
+H100_LADDER_SIZES = ("d512", "d768")
 GLOBAL_BATCH_SIZE = 1024
 QB_HIST_BINS = 10_000
 WATCH_INTERVAL = 10
@@ -92,8 +91,6 @@ class H100LadderRung:
 
 
 def _h100_ladder_rung(size: str) -> H100LadderRung:
-    if size == "d384":
-        return H100LadderRung(SmallShape(384, 4, 3, 1, 1), gpus_per_task=4, task_count=1)
     if size == "d512":
         return H100LadderRung(SmallShape(512, 6, 4, 1, 1), gpus_per_task=8, task_count=1)
     if size == "d768":
