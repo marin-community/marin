@@ -53,7 +53,9 @@ from experiments.grug.moe_hero_ep.train import (
     TrainingDataMode,
     WatchMode,
     _compute_flops,
+    grug_trainer_mesh_config,
     run_grug,
+    trainer_batch_axis_size,
 )
 
 DEFAULT_HERO_STEPS = 25
@@ -73,6 +75,10 @@ def validate_mesh_axes(
 
     ``device_count`` is the whole fleet, so the small-scale ablation launcher reuses this check
     for the fleets it names.
+
+    The last check is the trainer's own view of the same batch. ``TrainerConfig`` divides the global
+    batch by the devices *its* mesh config puts the batch on, and that has to be the number grug's
+    axes give, or the run dies inside ``trainer.initialize()`` on an already allocated fleet.
     """
     if context_axis_size <= 0:
         raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
@@ -91,6 +97,13 @@ def validate_mesh_axes(
         raise ValueError(
             f"batch_size={batch_size} must be divisible by the batch axes replica ({dp_racks}) * "
             f"data ({data_axis_size}) * expert ({expert_axis_size}) = {batch_axes_product}"
+        )
+    trainer_axis_size = trainer_batch_axis_size(grug_trainer_mesh_config(context_axis_size), device_count)
+    if trainer_axis_size != batch_axes_product:
+        raise ValueError(
+            f"TrainerConfig would spread the batch over {trainer_axis_size} devices while grug's "
+            f"batch axes span {batch_axes_product}; its mesh config does not match the grug mesh at "
+            f"context={context_axis_size}, expert={expert_axis_size}"
         )
 
 
@@ -245,6 +258,7 @@ def build_diagnostic_run(
                     enable_hlo_proto=True,
                 ),
             ),
+            mesh=grug_trainer_mesh_config(context_axis_size),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
