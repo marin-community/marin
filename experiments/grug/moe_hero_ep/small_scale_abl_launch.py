@@ -139,6 +139,10 @@ class Flavor:
     kernel runs the experts: ``fsdp-nodrop`` at one chunk computes every assignment (dropless), and
     ``fsdp-chunk4`` splits into four chunks to match the FSDP hero's minor-dropping reference. Both use
     the same kernel; only the chunk count (drop rate) differs.
+
+    ``ragged`` spans the fleet like ``ep`` but moves tokens with the ragged all-to-all transport,
+    which has a single gate: per-chunk receiver capacity from ``capacity_factor``. It has no sender
+    pool, so ``pooled_transport_capacity_factor`` does not apply.
     """
 
     expert_axis_size: int | None  # None spans the fleet

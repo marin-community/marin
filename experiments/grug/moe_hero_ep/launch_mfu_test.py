@@ -31,7 +31,6 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
 )
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
-    RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
@@ -49,11 +48,6 @@ HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
 HERO_PROCESSES_PER_TASK = 1
-# Updates per peer for the ragged transport at the hero shape. The device kernel partitions
-# copy work across CTAs by bytes rather than by update, so splitting buys no load balance and
-# only adds per-update granularity cost: 1 measured 22.34-22.58 MFU at the trained-router
-# restore vs 21.12 with 64 splits.
-HERO_RAGGED_SPLITS_PER_PEER = 1
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
 # pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
@@ -63,7 +57,9 @@ HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
     MasterParamMode.DISABLED: "params=float32,compute=bfloat16,output=bfloat16",
 }
-# Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
+# Keep MuonH state on pinned host memory. The pooled-wave hero needs the room for its
+# all-to-all buffers; the ragged transport has headroom but is held to the same setting so
+# the two backends stay comparable.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
@@ -72,17 +68,6 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # Held-out sets are added at weight 0 so they surface as tagged eval sets.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
-
-
-def resolve_splits_per_peer(requested: int | None, moe_implementation: str) -> int:
-    """Updates per peer for ``moe_implementation``, honoring an explicit ``requested`` value.
-
-    Only the ragged transport accepts a split count -- the model config rejects anything but 1 on
-    the others -- so the default follows the backend instead of sitting at a single number.
-    """
-    if requested is not None:
-        return requested
-    return HERO_RAGGED_SPLITS_PER_PEER if moe_implementation == RAGGED_MOE_IMPLEMENTATION else 1
 
 
 class HeroThroughputResult(Artifact):
@@ -107,7 +92,6 @@ def build_hero_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
-    ragged_all_to_all_splits_per_peer: int | None = None,
     master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -174,12 +158,6 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
-    model = dataclasses.replace(
-        model,
-        ragged_all_to_all_splits_per_peer=resolve_splits_per_peer(
-            ragged_all_to_all_splits_per_peer, model.moe_implementation
-        ),
-    )
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
@@ -454,17 +432,6 @@ def build_hero_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
-    "--ragged-all-to-all-splits-per-peer",
-    type=click.IntRange(min=1),
-    default=None,
-    help=(
-        "Split each peer transfer into this many ragged updates. Ragged backend only. The "
-        "device kernel balances CTAs by bytes, so splits only add granularity overhead there; "
-        "the one-shot kernel scales its grid with the update count and wants 64 at EP64. "
-        f"Defaults to {HERO_RAGGED_SPLITS_PER_PEER}."
-    ),
-)
-@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=MasterParamMode.FP32_PINNED_HOST.value,
@@ -479,7 +446,10 @@ def build_hero_run(
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
     show_default=True,
-    help="JAX processes per node. The ragged transport needs one process per GPU.",
+    help=(
+        "JAX processes per node. The default suits the pooled-wave hero; the ragged transport "
+        "needs one process per GPU, so pass the node's GPU count with it."
+    ),
 )
 @build_options
 def main(
@@ -504,7 +474,6 @@ def main(
     profile_start_step: int,
     training_data: str,
     moe_implementation: str | None,
-    ragged_all_to_all_splits_per_peer: int | None,
     master_params: str,
     processes_per_task: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -530,7 +499,6 @@ def main(
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
         moe_implementation=moe_implementation,
-        ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
     )

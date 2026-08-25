@@ -964,7 +964,6 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
     num_experts = shards * local_experts
     assignments = tokens * topk
     capacity = int(0.7 * assignments)  # force drops
-    splits = 2
 
     rng = np.random.default_rng(0)
     selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
@@ -988,7 +987,6 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
             jnp.asarray(clipped),
             jnp.asarray(s),
             local_expert_size=local_experts,
-            splits_per_group=splits,
         )
         for s in range(shards)
     ]
@@ -1054,7 +1052,6 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
                 jnp.asarray(clipped),
                 jnp.asarray(s),
                 local_expert_size=local_experts,
-                splits_per_group=2,
             )
             for s in range(shards)
         ]
@@ -1080,23 +1077,6 @@ def test_ragged_expert_gemms_fall_back_off_the_quack_kernel_s_domain(monkeypatch
 
     monkeypatch.setattr("levanter.grug._moe.ep_ragged_all_to_all._quack_grouped_gemm_available", lambda: False)
     assert _select_expert_mlp(jax.nn.silu) is _ragged_dot_expert_mlp
-
-
-def test_split_peer_transfers_are_rejected_outside_the_ragged_backend():
-    with pytest.raises(ValueError, match="only applies to the ragged all-to-all"):
-        moe_mlp(
-            *_make_inputs(
-                key=jax.random.key(0),
-                tokens=8,
-                hidden_dim=8,
-                intermediate_dim=8,
-                num_experts=4,
-                topk=2,
-            ),
-            implementation="ring",
-            mesh=None,
-            ragged_all_to_all_splits_per_peer=2,
-        )
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])

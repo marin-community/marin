@@ -89,43 +89,6 @@ def test_moe_backend_override_reaches_the_model_and_the_run_tags():
     assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
 
 
-@pytest.mark.parametrize(
-    ("moe_implementation", "expected_splits"),
-    [
-        ("ragged_all_to_all", launch.HERO_RAGGED_SPLITS_PER_PEER),
-        # The model config rejects any split count but 1 on the other transports, so a flat
-        # default would refuse to build the pooled-wave hero at all.
-        ("fixed_pooled_wave_all_to_all", 1),
-        ("fixed_all_to_all", 1),
-    ],
-)
-def test_splits_per_peer_defaults_to_the_backend(moe_implementation, expected_splits):
-    step = launch.build_hero_run(
-        run_id="splits-default",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation=moe_implementation,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.model.ragged_all_to_all_splits_per_peer == expected_splits
-
-
-def test_splits_per_peer_honors_an_explicit_value():
-    step = launch.build_hero_run(
-        run_id="splits-explicit",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation="ragged_all_to_all",
-        ragged_all_to_all_splits_per_peer=8,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.model.ragged_all_to_all_splits_per_peer == 8
-
-
 def test_disabling_the_master_keeps_fp32_weights_on_device():
     step = launch.build_hero_run(
         run_id="fp32-device-params",

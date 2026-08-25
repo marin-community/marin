@@ -12,11 +12,6 @@ A. Ground truth. At a capacity factor high enough that nothing is dropped, every
    forward and gradients against an exact fp32 dense reference. The EP ``ring`` implementation is
    recorded as a diagnostic only: measured 2026-08-21, it deviates from dense by 0.8-4.5x relative
    at this shape (its gradients contain NaN), so it cannot serve as a reference.
-
-B. Split invariance. ``ragged_all_to_all_splits_per_peer`` divides each peer transfer into N
-   ragged updates. It moves the same bytes to the same places, so the result must not depend on
-   it -- including under skewed routing, where padding and drops are present and the per-split
-   offset arithmetic is doing real work.
 """
 
 import dataclasses
@@ -48,12 +43,10 @@ INTERMEDIATE_DIM = 96
 NUM_EXPERTS = 8
 TOPK = 2
 SEEDS = (0, 1, 2, 3)
-SPLITS_UNDER_TEST = (8, 32)
 # Capacity high enough that no assignment is clipped, so the dropless dense reference applies.
 # At the 4-GPU mesh (EP size 2) this equals the entire global assignment count, so nothing can
 # drop; larger factors make `ring`'s top_k selection ask for more rows than exist and fail.
 NO_DROP_CAPACITY = 2.0
-SKEWED_CAPACITY = 1.0
 
 # Gradients are compared on the MEDIAN relative difference, not the max. Both paths compute the
 # same mathematical gradient, so every observed difference is bf16 reduction-order noise: weight
@@ -74,14 +67,10 @@ class SeedRow(BaseModel):
     max_grad_vs_dense: float
     median_grad_vs_dense: float
     dropped_no_drop_case: int
-    max_out_splits: dict[str, float]
-    median_grad_splits: dict[str, float]
-    max_grad_splits: dict[str, float]
-    dropped_skewed: int
 
 
 class RaggedEpResult(Artifact):
-    """Per-seed deviations for the ragged-EP ground-truth and split-invariance checks."""
+    """Per-seed deviations for the ragged-EP ground-truth check."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -160,9 +149,7 @@ def _run() -> list[SeedRow]:
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
     expert_sharding = NamedSharding(mesh, P("expert", None, None))
 
-    def loss_and_grad(impl, x, sel, cw, w13, w2, *, capacity_factor, splits=1):
-        extra = {"ragged_all_to_all_splits_per_peer": splits} if impl == "ragged_all_to_all" else {}
-
+    def loss_and_grad(impl, x, sel, cw, w13, w2, *, capacity_factor):
         def loss(x, w13, w2):
             out, dropped = moe_mlp(
                 x,
@@ -174,7 +161,6 @@ def _run() -> list[SeedRow]:
                 mesh=None,
                 report_capacity_overflow=True,
                 capacity_factor=capacity_factor,
-                **extra,
             )
             return (out * out).sum(), (out, dropped)
 
@@ -205,19 +191,6 @@ def _run() -> list[SeedRow]:
                 "ring", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
             )
 
-            # B. split invariance: skewed routing at capacity 1.0, so padding and drops are present.
-            xs, sels, cws, w13s, w2s = reshard(*_inputs(jax.random.key(seed), tokens, skew=True))
-            o1, g1, d1 = loss_and_grad(
-                "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY, splits=1
-            )
-            split_out, split_grad = {}, {}
-            for splits in SPLITS_UNDER_TEST:
-                o_n, g_n, _ = loss_and_grad(
-                    "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY, splits=splits
-                )
-                split_out[str(splits)] = float(jnp.max(jnp.abs(o_n - o1)))
-                split_grad[str(splits)] = _graddiff(g_n, g1)
-
         max_g, med_g = _graddiff(g_ragged, g_dense)
         rows.append(
             SeedRow(
@@ -227,10 +200,6 @@ def _run() -> list[SeedRow]:
                 max_grad_vs_dense=max_g,
                 median_grad_vs_dense=med_g,
                 dropped_no_drop_case=dropped + dropped_ring,
-                max_out_splits=split_out,
-                median_grad_splits={k: v[1] for k, v in split_grad.items()},
-                max_grad_splits={k: v[0] for k, v in split_grad.items()},
-                dropped_skewed=d1,
             )
         )
         logger.info("ragged_ep_seed %s", rows[-1].model_dump_json())
@@ -244,15 +213,9 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         r.ragged_vs_dense <= TOLERANCE and r.median_grad_vs_dense <= TOLERANCE and r.dropped_no_drop_case == 0
         for r in rows
     )
-    splits_ok = all(
-        all(v <= TOLERANCE for v in r.max_out_splits.values())
-        and all(v <= TOLERANCE for v in r.median_grad_splits.values())
-        for r in rows
-    )
     verdict = {
-        "ragged_correct": bool(ground_truth_ok and splits_ok),
+        "ragged_correct": bool(ground_truth_ok),
         "matches_dense_no_drop": ground_truth_ok,
-        "split_invariant": splits_ok,
     }
     logger.info("ragged_ep_result %s verdict %s", json.dumps(payload), json.dumps(verdict))
     output_dir = StoragePath(config.output_path)

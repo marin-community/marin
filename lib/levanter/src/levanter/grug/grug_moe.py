@@ -73,7 +73,6 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
-    ragged_all_to_all_splits_per_peer: int = eqx.field(static=True, default=1)
 
     @staticmethod
     def init(
@@ -90,7 +89,6 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
-        ragged_all_to_all_splits_per_peer: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -114,7 +112,6 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
-            ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         )
 
     @named_call
@@ -142,7 +139,6 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
-            ragged_all_to_all_splits_per_peer=self.ragged_all_to_all_splits_per_peer,
         )
 
 
@@ -162,7 +158,6 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-    ragged_all_to_all_splits_per_peer: int = 1,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -211,16 +206,6 @@ def moe_mlp(
             f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
         )
 
-    if ragged_all_to_all_splits_per_peer <= 0:
-        raise ValueError(
-            f"ragged_all_to_all_splits_per_peer must be positive, got {ragged_all_to_all_splits_per_peer}"
-        )
-    if ragged_all_to_all_splits_per_peer != 1 and resolved_implementation != "ragged_all_to_all":
-        raise ValueError(
-            "ragged_all_to_all_splits_per_peer only applies to the ragged all-to-all implementation, "
-            f"got {resolved_implementation!r}"
-        )
-
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
 
@@ -257,10 +242,7 @@ def moe_mlp(
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = partial(
-                _moe_mlp_ep_ragged_a2a_local,
-                splits_per_peer=ragged_all_to_all_splits_per_peer,
-            )
+            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":

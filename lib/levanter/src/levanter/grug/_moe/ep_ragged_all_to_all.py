@@ -115,7 +115,6 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
-    splits_per_peer: int = 1,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -130,10 +129,6 @@ def _moe_mlp_ep_ragged_a2a_local(
     assignments_per_shard = tokens_per_shard * topk
     local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
     local_capacity = max(local_experts, local_capacity)
-
-    # One a2a update per (peer, local expert, split): reuse the peer-granular splits knob as
-    # a per-expert-group split count with a comparable total update budget.
-    splits_per_group = max(1, splits_per_peer // local_experts)
 
     # Local experts are processed in sequential chunks so only one chunk's transport buffers
     # are live at a time. The a2a outputs cannot be rematerialized (XLA never recomputes
@@ -171,7 +166,6 @@ def _moe_mlp_ep_ragged_a2a_local(
                 clipped_group_sizes,
                 shard_id,
                 local_expert_size=local_experts,
-                splits_per_group=splits_per_group,
             )
             # Serialize chunks: without this barrier the scheduler may issue every chunk's
             # dispatch up front, which resurrects the simultaneous-buffer peak chunking
