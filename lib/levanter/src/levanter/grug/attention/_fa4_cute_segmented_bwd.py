@@ -668,11 +668,22 @@ class SegmentedFlashAttentionBackwardSm80:
             m_block_min = 0
             if cutlass.const_expr(self.is_causal):
                 if cutlass.const_expr(mQOffset is None):
-                    # Upstream right-aligns a short query sequence against the keys.
+                    # Upstream right-aligns a short query sequence against the keys, which keeps
+                    # the first query inside the query tiles this CTA can address.
                     first_query = n_block * self.n_block_size + seqlen.seqlen_q - seqlen.seqlen_k
+                    m_block_min = max(first_query // self.m_block_size, m_block_min)
                 else:
                     first_query = n_block * self.n_block_size - q_offset
-                m_block_min = max(first_query // self.m_block_size, m_block_min)
+                    # The backward grid spans the whole key sequence, so a key block past this
+                    # shard's queries maps beyond the local query tiles. Clamp onto the last tile
+                    # instead of leaving the CTA to address a tile that does not exist: the
+                    # mainloop prologue loads stage 0 unconditionally, and the LSE/dPsum copies
+                    # are unpredicated over buffers sized to the local query count. Every score in
+                    # that tile is masked, so it contributes nothing. Exiting early is not an
+                    # option either -- at qhead_per_kvhead == 1 the epilogue writes dK/dV straight
+                    # to the output with no pre-zeroed accumulator behind it.
+                    m_block_min = max(first_query // self.m_block_size, m_block_min)
+                    m_block_min = min(m_block_min, m_block_max - 1)
             # Grug divergence from upstream FA4: use packed lower bounds to skip
             # query blocks that cannot attend to this key block. The fine-grained
             # per-score predicate below handles boundaries inside a query tile.
