@@ -618,6 +618,7 @@ def tree_serialize_leaves_tensorstore(
     on_local_commit: Optional[Callable[[str], None]] = None,
     on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
+    debug_log_flush: Callable[[logging.Logger], None] | None = flush_debug_output,
     write_config: Optional[TensorStoreWriteConfig] = None,
 ) -> int:
     """Serialize a PyTree and return the peak host bytes staged by this process."""
@@ -652,7 +653,8 @@ def tree_serialize_leaves_tensorstore(
             largest_path or "<none>",
             _format_gib(largest_array_bytes),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     plans = [plan_array_write(path, array, write_config) for path, array in zip(paths, arrays)]
     _log_write_share(paths, arrays, plans, total_array_bytes)
@@ -684,7 +686,8 @@ def tree_serialize_leaves_tensorstore(
             split,
             len(plans),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     staged_host_bytes = _serialize_arrays(
         arrays,
@@ -699,7 +702,8 @@ def tree_serialize_leaves_tensorstore(
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     if manager_was_none:
         manager.wait_until_finished()

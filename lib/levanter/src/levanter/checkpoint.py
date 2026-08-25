@@ -873,6 +873,7 @@ def save_checkpoint(
             on_local_commit=on_local_commit,
             on_staged=on_staged,
             debug_checkpointer=checkpoint_debug.enabled,
+            debug_log_flush=flush_debug_output if checkpoint_debug.flush_logs else None,
             write_config=write_config,
         )
     except Exception:

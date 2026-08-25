@@ -16,6 +16,7 @@ import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
 import levanter.checkpoint as checkpoint_module
+import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
 import pytest
@@ -486,6 +487,11 @@ def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypa
     telemetry.shutdown(0)
     transport = RecordingTelemetryTransport()
     monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(
+        tensorstore_serialization,
+        "flush_debug_output",
+        lambda logger: pytest.fail("flush_logs=False forced TensorStore log output"),
+    )
     telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
 
     try:
