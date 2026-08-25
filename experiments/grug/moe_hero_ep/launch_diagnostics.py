@@ -60,6 +60,40 @@ DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 
+def validate_mesh_axes(
+    *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
+) -> None:
+    """Reject mesh shapes and batch sizes that would only fail once the fleet is allocated.
+
+    ``compact_grug_mesh`` gives ``data`` whatever the fixed axes leave free, so a bad
+    ``--context-axis-size`` or ``--expert-axis-size`` surfaces as a mesh-construction failure on
+    the allocated fleet. Both checks run here instead: the axis sizes have to divide the fleet's
+    device count, and the global batch has to divide over the axes the data loader shards it on
+    (``replica_dcn``, ``data``, ``expert``) or the loader refuses the batch after startup.
+
+    ``device_count`` is the whole fleet, so the small-scale ablation launcher reuses this check
+    for the fleets it names.
+    """
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
+    if expert_axis_size <= 0:
+        raise ValueError(f"expert_axis_size must be positive, got {expert_axis_size}")
+    fixed = dp_racks * context_axis_size * expert_axis_size * HERO_MODEL_AXIS_SIZE
+    if device_count % fixed != 0:
+        raise ValueError(
+            f"device count ({device_count}) must be divisible by replica ({dp_racks}) * "
+            f"context ({context_axis_size}) * expert ({expert_axis_size}) * model "
+            f"({HERO_MODEL_AXIS_SIZE})"
+        )
+    data_axis_size = device_count // fixed
+    batch_axes_product = dp_racks * data_axis_size * expert_axis_size
+    if batch_size % batch_axes_product != 0:
+        raise ValueError(
+            f"batch_size={batch_size} must be divisible by the batch axes replica ({dp_racks}) * "
+            f"data ({data_axis_size}) * expert ({expert_axis_size}) = {batch_axes_product}"
+        )
+
+
 def build_diagnostic_run(
     *,
     run_id: str,
