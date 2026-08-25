@@ -35,6 +35,8 @@ from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_P
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.resource_client import ResourceClient
+from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
@@ -299,6 +301,30 @@ def verbose_job(smoke_cluster):
 def capabilities(smoke_cluster) -> ClusterCapabilities:
     """Discover cluster capabilities from live workers for topology-dependent tests."""
     return discover_capabilities(smoke_cluster.controller_client)
+
+
+def test_resource_reads_return_workload_snapshots(smoke_cluster):
+    job = smoke_cluster.submit(TestJobs.quick, "smoke-resource-read")
+    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
+    resources = ResourceClient(ResourceServiceClientSync(address=smoke_cluster.url, timeout_ms=30_000))
+    try:
+        job_response = resources.get(
+            "job",
+            controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire()),
+            controller_pb2.Controller.GetJobStatusResponse,
+        )
+        task_response = resources.list(
+            "task",
+            controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire()),
+            controller_pb2.Controller.ListTasksResponse,
+        )
+    finally:
+        resources.close()
+
+    assert job_response.job.state == job_pb2.JOB_STATE_SUCCEEDED
+    assert [(task.task_id, task.state) for task in task_response.tasks] == [
+        (job.job_id.task(0).to_wire(), job_pb2.TASK_STATE_SUCCEEDED)
+    ]
 
 
 # ============================================================================

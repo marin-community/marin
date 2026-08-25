@@ -6,15 +6,17 @@
 import logging
 import re
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from google.protobuf.message import Message
 from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
@@ -38,10 +40,26 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
+from iris.rpc.resource_client import ResourceClient
+from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
+
+ReadResponse = TypeVar("ReadResponse", bound=Message)
+
+
+def _resource_read_with_legacy_fallback(
+    resource_read: Callable[[], ReadResponse],
+    legacy_read: Callable[[], ReadResponse],
+) -> ReadResponse:
+    try:
+        return resource_read()
+    except ConnectError as error:
+        if error.code != Code.UNIMPLEMENTED:
+            raise
+    return legacy_read()
 
 
 # How long to tolerate controller unavailability before giving up on monitoring.
@@ -118,6 +136,15 @@ class RemoteClusterClient:
             interceptors=interceptors,
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
+        )
+        self._resource_client = ResourceClient(
+            ResourceServiceClientSync(
+                address=controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
         )
         # Endpoint registry on its own service. EndpointClient owns the RPC stub
         # and the background lease renewal: register() keeps the endpoint alive
@@ -226,7 +253,10 @@ class RemoteClusterClient:
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus:
         def _call():
             request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id.to_wire())
-            response = self._client.get_job_status(request)
+            response = _resource_read_with_legacy_fallback(
+                lambda: self._resource_client.get("job", request, controller_pb2.Controller.GetJobStatusResponse),
+                lambda: self._client.get_job_status(request),
+            )
             return response.job
 
         return call_with_retry(f"get_job_status({job_id})", _call)
@@ -238,7 +268,10 @@ class RemoteClusterClient:
             request = controller_pb2.Controller.GetJobStateRequest(
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
-            response = self._client.get_job_state(request)
+            response = _resource_read_with_legacy_fallback(
+                lambda: self._resource_client.batch_get("job", request, controller_pb2.Controller.GetJobStateResponse),
+                lambda: self._client.get_job_state(request),
+            )
             return dict(response.states)
 
         return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
@@ -501,7 +534,10 @@ class RemoteClusterClient:
 
             def _call(q=page_query):
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
-                return self._client.list_jobs(request)
+                return _resource_read_with_legacy_fallback(
+                    lambda: self._resource_client.list("job", request, controller_pb2.Controller.ListJobsResponse),
+                    lambda: self._client.list_jobs(request),
+                )
 
             response = call_with_retry("list_jobs", _call)
             jobs.extend(response.jobs)
@@ -514,6 +550,7 @@ class RemoteClusterClient:
         del wait
         self._endpoint_client.close()
         self._log_client.close()
+        self._resource_client.close()
         self._client.close()
 
     def get_task_status(self, task_name: JobName, *, deadline: Deadline | None = None) -> job_pb2.TaskStatus:
@@ -539,7 +576,15 @@ class RemoteClusterClient:
         def _call():
             request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_name.to_wire())
             timeout_ms = min(self._timeout_ms, max(1, deadline.remaining_ms())) if deadline is not None else None
-            return self._client.get_task_status(request, timeout_ms=timeout_ms)
+            return _resource_read_with_legacy_fallback(
+                lambda: self._resource_client.get(
+                    "task",
+                    request,
+                    controller_pb2.Controller.GetTaskStatusResponse,
+                    timeout_ms=timeout_ms,
+                ),
+                lambda: self._client.get_task_status(request, timeout_ms=timeout_ms),
+            )
 
         if deadline is None:
             return call_with_retry(f"get_task_description({task_name})", _call)
@@ -561,7 +606,10 @@ class RemoteClusterClient:
 
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-            response = self._client.list_tasks(request)
+            response = _resource_read_with_legacy_fallback(
+                lambda: self._resource_client.list("task", request, controller_pb2.Controller.ListTasksResponse),
+                lambda: self._client.list_tasks(request),
+            )
             return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)

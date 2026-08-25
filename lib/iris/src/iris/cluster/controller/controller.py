@@ -129,6 +129,8 @@ from iris.cluster.types import (
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import SESSION_COOKIE
+from iris.rpc.resource_registry import ResourceRegistryBuilder
+from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,41 @@ _RPC_HANDLER_THREADS = 64
 _CONTROLLER_KEEPALIVE = 120
 _PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 _SYNCHRONOUS_PHASE_INTERVAL = 0.0
+
+
+def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
+    registry = ResourceRegistryBuilder()
+    registry.bind(
+        "/job/get",
+        controller_pb2.Controller.GetJobStatusRequest,
+        controller_pb2.Controller.GetJobStatusResponse,
+        service.get_job_status,
+    )
+    registry.bind(
+        "/job/list",
+        controller_pb2.Controller.ListJobsRequest,
+        controller_pb2.Controller.ListJobsResponse,
+        service.list_jobs,
+    )
+    registry.bind(
+        "/job/batch-get",
+        controller_pb2.Controller.GetJobStateRequest,
+        controller_pb2.Controller.GetJobStateResponse,
+        service.get_job_state,
+    )
+    registry.bind(
+        "/task/get",
+        controller_pb2.Controller.GetTaskStatusRequest,
+        controller_pb2.Controller.GetTaskStatusResponse,
+        service.get_task_status,
+    )
+    registry.bind(
+        "/task/list",
+        controller_pb2.Controller.ListTasksRequest,
+        controller_pb2.Controller.ListTasksResponse,
+        service.list_tasks,
+    )
+    return ResourceServiceImpl(registry.freeze())
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -520,6 +557,7 @@ class Controller:
                 parent_origin=config.federation_public_parent,
             ),
         )
+        self._resource_service = _resource_service(self._service)
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
         # Present only when this controller has peers and a signing key to mint with.
@@ -539,6 +577,7 @@ class Controller:
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
+            resource_service=self._resource_service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
