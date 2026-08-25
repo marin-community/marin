@@ -6,7 +6,7 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``metadata.msgpack``) records ``files -> [path, ...]`` and exact
+(``metadata.msgpack``) records ``files -> [{path, schema}, ...]`` and exact
 per-target-shard payload bytes (``shard_bytes``) used by reducers to size the
 external-sort decision.
 
@@ -42,6 +42,7 @@ import cloudpickle
 import humanfriendly
 import msgspec
 import polars as pl
+import pyarrow as pa
 from iris.env_resources import TaskResources
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath
@@ -88,8 +89,8 @@ class ListShard:
 
 _SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
-# Number of parallel small-file reads (sidecars, parquet schema footers) each
-# reducer issues while building its ScatterReader. These reads are GCS
+# Number of parallel sidecar reads each reducer issues while building its
+# ScatterReader. These reads are GCS
 # GET-bound, so a modest pool keeps latency low without thrashing. The bound is
 # per task, and a wave multiplies it: 2,048 reducers at 32 offered ~65,000
 # simultaneous connections, more than a pod has ephemeral ports (#8402).
@@ -242,18 +243,47 @@ class _SidecarFilesystem(Protocol):
 
 
 @dataclass(frozen=True)
+class _ChunkFile:
+    """A scatter Parquet file and the schema recorded when it was written."""
+
+    path: str
+    schema: pl.Schema
+
+    _path_field: ClassVar[str] = "path"
+    _schema_field: ClassVar[str] = "schema"
+
+    def to_metadata(self) -> dict[str, str | bytes]:
+        return {
+            self._path_field: self.path,
+            self._schema_field: self.schema.to_arrow().serialize().to_pybytes(),
+        }
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any]) -> "_ChunkFile":
+        schema = pa.ipc.read_schema(pa.BufferReader(metadata[cls._schema_field]))
+        return cls(path=str(metadata[cls._path_field]), schema=pl.Schema(schema))
+
+
+@dataclass(frozen=True)
+class _FrameWithSchema:
+    frame: pl.LazyFrame
+    schema: pl.Schema
+
+
+@dataclass(frozen=True)
 class _Sidecar:
     """One mapper's scatter metadata (``metadata.msgpack``).
 
-    ``files`` lists the combined Parquet paths written during flushes; each file
-    contains data for all target shards sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.
+    ``files`` lists the combined Parquet paths and schemas written during flushes;
+    each file contains data for all target shards sorted by
+    ``(_SHARD_COL, _SORT_KEY_COL)``.
     ``shard_bytes`` maps target shard index to exact payload bytes written for
     that shard across all files (used by reducers for the external-sort decision).
     ``path`` is the mapper output directory the sidecar lives under.
     """
 
     path: str
-    files: list[str]
+    files: list[_ChunkFile]
     shard_bytes: dict[int, int]
 
     _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
@@ -273,7 +303,7 @@ class _Sidecar:
         meta_path = self.meta_path(self.path)
         payload = self._encoder.encode(
             {
-                self._files_field: self.files,
+                self._files_field: [file.to_metadata() for file in self.files],
                 self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
             }
         )
@@ -292,7 +322,7 @@ class _Sidecar:
         raw_shard_bytes = data.get(cls._shard_bytes_field, {})
         return cls(
             path=data_path,
-            files=[str(f) for f in files],
+            files=[_ChunkFile.from_metadata(file) for file in files],
             shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
         )
 
@@ -311,26 +341,16 @@ class _Sidecar:
         return [s for s in ordered if s is not None]
 
 
-def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
-    """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
-
-    Different source shards may write the same column with different dtypes when
-    Polars infers from Python values — most commonly a sort_value field that is
-    Null on an all-None batch from one shard and Int64 from another.  This also
-    handles arbitrary user-column dtype drift when DataFrames are written directly.
-
-    collect_schema() reads only parquet file-footer metadata (no row data), so the
-    limit(0) concat derives the supertype schema without any further I/O and casting
-    is applied as a lazy expression.
-    """
+def _unify_frame_schemas(frames: list[_FrameWithSchema]) -> list[pl.LazyFrame]:
+    """Cast frames to a common supertype schema for sorted merging."""
     if len(frames) <= 1:
-        return frames
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        schemas = list(pool.map(pl.LazyFrame.collect_schema, frames))
-    if all(s == schemas[0] for s in schemas[1:]):
-        return frames
-    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
-    return [f.cast(dict(unified)) for f in frames]
+        return [frame.frame for frame in frames]
+    if all(frame.schema == frames[0].schema for frame in frames[1:]):
+        return [frame.frame for frame in frames]
+    # Build the supertype from sidecar schemas so drift such as Null versus
+    # Int64 is resolved without reading the Parquet footer for every input.
+    unified = pl.concat([pl.DataFrame(schema=frame.schema) for frame in frames], how="diagonal_relaxed").schema
+    return [frame.frame.cast(dict(unified)) for frame in frames]
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +361,7 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source shards.
 
-    ``_chunk_paths`` lists every combined Parquet file the mappers wrote. Each
+    ``_chunk_files`` lists every combined Parquet file the mappers wrote. Each
     file holds rows for *all* target shards, so :meth:`get_frames` filters each
     scan down to ``_target_shard``.
 
@@ -351,11 +371,11 @@ class ScatterReader:
 
     def __init__(
         self,
-        chunk_paths: list[str],
+        chunk_files: list[_ChunkFile],
         target_shard: int,
         shard_payload_bytes: float = 0.0,
     ) -> None:
-        self._chunk_paths = chunk_paths
+        self._chunk_files = chunk_files
         self._target_shard = target_shard
         self.shard_payload_bytes = shard_payload_bytes
 
@@ -368,7 +388,7 @@ class ScatterReader:
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
-        chunk_paths: list[str] = []
+        chunk_files: list[_ChunkFile] = []
         shard_payload_bytes = 0.0
 
         with log_time(
@@ -377,32 +397,37 @@ class ScatterReader:
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
             for sidecar in sidecars:
-                chunk_paths.extend(sidecar.files)
+                chunk_files.extend(sidecar.files)
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
 
         logger.info(
             "ScatterReader for shard %d: %d source shards, %d total chunks, shard_payload_bytes=%.0f",
             target_shard,
             len(sidecars),
-            len(chunk_paths),
+            len(chunk_files),
             shard_payload_bytes,
         )
         return cls(
-            chunk_paths=chunk_paths,
+            chunk_files=chunk_files,
             target_shard=target_shard,
             shard_payload_bytes=shard_payload_bytes,
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:
-        frames = [
-            scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
-            for path in self._chunk_paths
-        ]
+        frames: list[_FrameWithSchema] = []
+        for chunk_file in self._chunk_files:
+            frame = (
+                scan_parquet(chunk_file.path, schema=chunk_file.schema)
+                .filter(pl.col(_SHARD_COL) == self._target_shard)
+                .drop(_SHARD_COL)
+            )
+            schema = pl.Schema({name: dtype for name, dtype in chunk_file.schema.items() if name != _SHARD_COL})
+            frames.append(_FrameWithSchema(frame=frame, schema=schema))
         return _unify_frame_schemas(frames)
 
     @property
     def total_chunks(self) -> int:
-        return len(self._chunk_paths)
+        return len(self._chunk_files)
 
     def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
         """Merge sorted chunks using k-way merge, yielding items in global sort order.
@@ -529,7 +554,7 @@ class ScatterWriter:
         # frames (not Python items) keeps the writer format-agnostic: a future
         # RecordBatch/DataFrame-native pipeline can feed frames directly.
         self._frames: list[pl.DataFrame] = []
-        self._chunk_paths: list[str] = []
+        self._chunk_files: list[_ChunkFile] = []
         # Payload bytes written per target shard, recorded in the sidecar so
         # reducers know their shard's exact data size for the external-sort
         # decision without opening any chunk files.
@@ -586,7 +611,7 @@ class ScatterWriter:
         with open_url(chunk_path, "wb") as f:
             f.write(buf.getvalue())
 
-        self._chunk_paths.append(chunk_path)
+        self._chunk_files.append(_ChunkFile(path=chunk_path, schema=buffer_sorted.schema))
         self._n_chunks_written += 1
 
         if self._progress_log_limiter.should_run():
@@ -646,7 +671,7 @@ class ScatterWriter:
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _Sidecar(
                 path=self._data_path,
-                files=list(self._chunk_paths),
+                files=list(self._chunk_files),
                 shard_bytes=dict(self._shard_bytes),
             ).write()
 

@@ -30,6 +30,7 @@ from zephyr.shuffle import (
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
+    _ChunkFile,
     _dataframe_to_items,
     _items_to_dataframe,
     _Sidecar,
@@ -120,21 +121,26 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
         }
     ).lazy()
 
-    def scan_parquet(scan_path, *, storage_options):
-        calls.append((scan_path, storage_options))
+    def scan_parquet(scan_path, *, schema, storage_options):
+        calls.append((scan_path, schema, storage_options))
         return frame
 
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://cwlota.com")
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
-    reader = ScatterReader(chunk_paths=[path], target_shard=0)
+    schema = frame.collect_schema()
+    reader = ScatterReader(
+        chunk_files=[_ChunkFile(path=path, schema=schema)],
+        target_shard=0,
+    )
     rows = reader.get_frames()[0].collect().to_dicts()
 
     assert len(rows) == 1
     assert calls == [
         (
             path,
+            schema,
             {
                 "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
                 "aws_virtual_hosted_style_request": "true",
@@ -258,6 +264,42 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     # file but Int64 in shard 1's file; pl.merge_sorted requires identical schemas.
     merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
     assert sorted(x["v"] for x in merged) == [0, 1, 2, 3]
+
+
+def test_scatter_reader_uses_sidecar_schemas_at_scan_boundary(tmp_path, monkeypatch):
+    def sort_fn(item):
+        return item.get("priority")
+
+    paths = []
+    expected_schemas = []
+    for source_shard, items in [
+        (0, [{"k": "a", "v": 0}]),
+        (1, [{"k": "a", "v": 1, "priority": 5}]),
+    ]:
+        writer = ScatterWriter(
+            data_path=str(tmp_path / f"shard-{source_shard:04d}/scatter/"),
+            key_fn=_key,
+            source_shard=source_shard,
+            sort_fn=sort_fn,
+        )
+        frame = _items_to_dataframe(items, _key, sort_fn, 1)
+        expected_schemas.append(frame.schema)
+        writer.write(frame)
+        paths.extend(writer.close())
+
+    reader = ScatterReader.from_sidecars(paths, target_shard=0)
+    polars_scan_parquet = pl.scan_parquet
+    scanned_schemas = []
+
+    def scan_parquet(path, *, schema=None, **kwargs):
+        scanned_schemas.append(schema)
+        return polars_scan_parquet(path, schema=schema, **kwargs)
+
+    monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
+
+    merged = list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+    assert sorted(item["v"] for item in merged) == [0, 1]
+    assert scanned_schemas == expected_schemas
 
 
 def test_scatter_with_combiner(tmp_path):
@@ -408,7 +450,11 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(chunk_paths=[f"{data_path}c0000.parquet"], target_shard=513)
+    chunk_path = f"{data_path}c0000.parquet"
+    reader = ScatterReader(
+        chunk_files=[_ChunkFile(path=chunk_path, schema=pl.scan_parquet(chunk_path).collect_schema())],
+        target_shard=513,
+    )
     assert _read_shard(reader) == [{"k": 513}]
 
 
