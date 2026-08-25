@@ -402,7 +402,7 @@ def test_invalid_shutdown_budget_is_bounded(monkeypatch: pytest.MonkeyPatch, tim
     assert telemetry.runtime_status().configured is False
 
 
-def test_raising_log_handler_cannot_escape_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_raising_log_handler_cannot_escape_configuration() -> None:
     handler = RaisingHandler()
     telemetry.logger.addHandler(handler)
     try:

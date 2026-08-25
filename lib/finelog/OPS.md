@@ -182,7 +182,7 @@ storage namespace, and rows. HTTP ingestion, forwarding, and migration do not
 pre-extract their own routing keys. A forwarded physical namespace is
 preserved, while the production root `telemetry_v1` is classified row by row.
 Valid dotted semantic namespaces are ordinary client-selected scopes; Finelog
-does not reserve names from earlier design iterations.
+does not reserve any of them.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.

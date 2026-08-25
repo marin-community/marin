@@ -1,6 +1,7 @@
 //! In-place migration from the production telemetry root into semantic storage shards.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -133,7 +134,7 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
     if config.output_dir.exists()
         && !manifest_path.exists()
         && std::fs::read_dir(&config.output_dir)
-            .map_err(io_error("list existing output store"))?
+            .map_err(internal_error("list existing output store"))?
             .next()
             .is_some()
     {
@@ -141,7 +142,7 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
             "output_dir is non-empty and has no migration manifest",
         ));
     }
-    std::fs::create_dir_all(&config.output_dir).map_err(io_error("create output store"))?;
+    std::fs::create_dir_all(&config.output_dir).map_err(internal_error("create output store"))?;
 
     let mut manifest = if manifest_path.exists() {
         let manifest = read_manifest(&manifest_path)?;
@@ -203,7 +204,7 @@ pub fn prepare_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Sta
         return Err(validation_error("batch_rows must be positive"));
     }
     let store_dir = std::fs::canonicalize(&config.store_dir)
-        .map_err(io_error("resolve in-place telemetry store"))?;
+        .map_err(internal_error("resolve in-place telemetry store"))?;
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
     let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
@@ -221,7 +222,7 @@ pub fn prepare_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Sta
 /// Verify the current in-place phase without modifying the store.
 pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
     let store_dir = std::fs::canonicalize(&config.store_dir)
-        .map_err(io_error("resolve in-place telemetry store"))?;
+        .map_err(internal_error("resolve in-place telemetry store"))?;
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
     let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
@@ -238,7 +239,7 @@ pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
 /// Make the staged semantic rows queryable during a stopped-server cutover.
 pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
     let store_dir = std::fs::canonicalize(&config.store_dir)
-        .map_err(io_error("resolve in-place telemetry store"))?;
+        .map_err(internal_error("resolve in-place telemetry store"))?;
     let _store_lock = acquire_exclusive_store_lock(&store_dir)?;
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
     let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
@@ -280,7 +281,7 @@ pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Sta
 /// Stop Finelog before this command and restart it after the command returns.
 pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
     let store_dir = std::fs::canonicalize(&config.store_dir)
-        .map_err(io_error("resolve in-place telemetry store"))?;
+        .map_err(internal_error("resolve in-place telemetry store"))?;
     let _store_lock = acquire_exclusive_store_lock(&store_dir)?;
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
@@ -306,10 +307,10 @@ pub fn retire_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
             let destination = rollback_sources.join(namespace).join(filename);
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(io_error("create root rollback directory"))?;
+                    .map_err(internal_error("create root rollback directory"))?;
             }
             std::fs::rename(&source, &destination)
-                .map_err(io_error("move root segment into rollback"))?;
+                .map_err(internal_error("move root segment into rollback"))?;
         }
     }
     let retired_files = migration_source_namespaces()
@@ -341,20 +342,21 @@ fn snapshot_migration_sources(store_dir: &Path, source_dir: &Path) -> Result<(),
     let migration_dir = source_dir
         .parent()
         .ok_or_else(|| validation_error("migration source snapshot has no parent"))?;
-    std::fs::create_dir_all(migration_dir).map_err(io_error("create migration directory"))?;
+    std::fs::create_dir_all(migration_dir).map_err(internal_error("create migration directory"))?;
     let temporary = migration_dir.join(format!("{SOURCE_SNAPSHOT_DIRECTORY}.tmp"));
     for attempt in 0..SNAPSHOT_ATTEMPTS {
         if temporary.exists() {
             std::fs::remove_dir_all(&temporary)
-                .map_err(io_error("remove interrupted source snapshot"))?;
+                .map_err(internal_error("remove interrupted source snapshot"))?;
         }
-        std::fs::create_dir_all(&temporary).map_err(io_error("create source snapshot"))?;
+        std::fs::create_dir_all(&temporary).map_err(internal_error("create source snapshot"))?;
         copy_catalog_consistently(
             &store_dir.join(CATALOG_DB_FILENAME),
             &temporary.join(CATALOG_DB_FILENAME),
         )?;
         if link_catalog_snapshot_segments(store_dir, &temporary)? {
-            std::fs::rename(&temporary, source_dir).map_err(io_error("publish source snapshot"))?;
+            std::fs::rename(&temporary, source_dir)
+                .map_err(internal_error("publish source snapshot"))?;
             return Ok(());
         }
         if attempt + 1 == SNAPSHOT_ATTEMPTS {
@@ -393,7 +395,7 @@ fn link_catalog_snapshot_segments(
             let destination = snapshot_dir.join(namespace).join(filename);
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(io_error("create snapshot namespace directory"))?;
+                    .map_err(internal_error("create snapshot namespace directory"))?;
             }
             match std::fs::hard_link(source, destination) {
                 Ok(()) => {}
@@ -411,17 +413,17 @@ fn link_catalog_snapshot_segments(
 
 fn copy_catalog_consistently(source: &Path, destination: &Path) -> Result<(), StatsError> {
     if destination.exists() {
-        std::fs::remove_file(destination).map_err(io_error("remove old catalog snapshot"))?;
+        std::fs::remove_file(destination).map_err(internal_error("remove old catalog snapshot"))?;
     }
     let connection =
         rusqlite::Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(sqlite_error("open catalog for snapshot"))?;
+            .map_err(internal_error("open catalog for snapshot"))?;
     connection
         .execute(
             "VACUUM main INTO ?1",
             [destination.to_string_lossy().as_ref()],
         )
-        .map_err(sqlite_error("snapshot catalog"))?;
+        .map_err(internal_error("snapshot catalog"))?;
     Ok(())
 }
 
@@ -442,9 +444,9 @@ fn link_verified_file(
         )));
     }
     if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(io_error("create physical namespace"))?;
+        std::fs::create_dir_all(parent).map_err(internal_error("create physical namespace"))?;
     }
-    std::fs::hard_link(source, destination).map_err(io_error("publish migrated segment"))?;
+    std::fs::hard_link(source, destination).map_err(internal_error("publish migrated segment"))?;
     Ok(())
 }
 
@@ -489,7 +491,7 @@ fn replace_catalog_for_publish(
                 max_seq: output.max_seq,
                 row_count: output.rows,
                 byte_size: std::fs::metadata(&path)
-                    .map_err(io_error("stat published telemetry segment"))?
+                    .map_err(internal_error("stat published telemetry segment"))?
                     .len() as i64,
                 created_at_ms,
                 min_key_value: Some(output.min_timestamp_ms.to_string()),
@@ -524,9 +526,10 @@ fn reset_catalog_build_directory(migration_dir: &Path) -> Result<PathBuf, StatsE
     let build_dir = migration_dir.join(CATALOG_BUILD_DIRECTORY);
     if build_dir.exists() {
         std::fs::remove_dir_all(&build_dir)
-            .map_err(io_error("remove interrupted catalog build"))?;
+            .map_err(internal_error("remove interrupted catalog build"))?;
     }
-    std::fs::create_dir_all(&build_dir).map_err(io_error("create catalog build directory"))?;
+    std::fs::create_dir_all(&build_dir)
+        .map_err(internal_error("create catalog build directory"))?;
     Ok(build_dir)
 }
 
@@ -538,7 +541,7 @@ fn replace_catalog_file(
 ) -> Result<(), StatsError> {
     let rollback_dir = migration_dir.join(ROLLBACK_DIRECTORY);
     std::fs::create_dir_all(&rollback_dir)
-        .map_err(io_error("create catalog rollback directory"))?;
+        .map_err(internal_error("create catalog rollback directory"))?;
     let current = store_dir.join(CATALOG_DB_FILENAME);
     let candidate = build_dir.join(CATALOG_DB_FILENAME);
     let backup = catalog_backup_path(migration_dir, backup_name);
@@ -548,7 +551,7 @@ fn replace_catalog_file(
             backup.display()
         )));
     }
-    std::fs::rename(&current, &backup).map_err(io_error("save catalog rollback"))?;
+    std::fs::rename(&current, &backup).map_err(internal_error("save catalog rollback"))?;
     if let Err(publish_error) = std::fs::rename(&candidate, &current) {
         if let Err(rollback_error) = std::fs::rename(&backup, &current) {
             return Err(StatsError::Internal(format!(
@@ -563,7 +566,7 @@ fn replace_catalog_file(
     if journal.exists() {
         let backup_journal = rollback_dir.join(format!("{backup_name}.sqlite-journal"));
         std::fs::rename(&journal, backup_journal)
-            .map_err(io_error("save catalog rollback journal"))?;
+            .map_err(internal_error("save catalog rollback journal"))?;
     }
     Ok(())
 }
@@ -582,7 +585,7 @@ fn verify_published_catalog(
         store_dir.join(CATALOG_DB_FILENAME),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
-    .map_err(sqlite_error("open published catalog"))?;
+    .map_err(internal_error("open published catalog"))?;
     for output in manifest
         .source_segments
         .iter()
@@ -601,7 +604,7 @@ fn verify_published_catalog(
                 rusqlite::params![output.namespace, path.to_string_lossy(), output.rows],
                 |row| row.get(0),
             )
-            .map_err(sqlite_error("verify published telemetry catalog row"))?;
+            .map_err(internal_error("verify published telemetry catalog row"))?;
         if count != 1 {
             return Err(validation_error(format!(
                 "published telemetry catalog row is missing for {}",
@@ -617,7 +620,7 @@ fn verify_root_namespace_retired(store_dir: &Path) -> Result<(), StatsError> {
         store_dir.join(CATALOG_DB_FILENAME),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
-    .map_err(sqlite_error("open retired telemetry catalog"))?;
+    .map_err(internal_error("open retired telemetry catalog"))?;
     for namespace in migration_source_namespaces() {
         let count: i64 = connection
             .query_row(
@@ -625,7 +628,7 @@ fn verify_root_namespace_retired(store_dir: &Path) -> Result<(), StatsError> {
                 [namespace],
                 |row| row.get(0),
             )
-            .map_err(sqlite_error("verify retired telemetry namespace"))?;
+            .map_err(internal_error("verify retired telemetry namespace"))?;
         if count != 0 || !discover_segments(&store_dir.join(namespace)).is_empty() {
             return Err(validation_error(format!(
                 "root telemetry namespace {namespace:?} is still visible"
@@ -642,8 +645,8 @@ fn validate_config(config: &PrepareConfig) -> Result<(), StatsError> {
     if !config.final_log_dir.is_absolute() {
         return Err(validation_error("final_log_dir must be absolute"));
     }
-    let source =
-        std::fs::canonicalize(&config.source_dir).map_err(io_error("resolve source store"))?;
+    let source = std::fs::canonicalize(&config.source_dir)
+        .map_err(internal_error("resolve source store"))?;
     let output = absolute_path(&config.output_dir)?;
     if source == output || output.starts_with(&source) {
         return Err(validation_error(
@@ -666,7 +669,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, StatsError> {
     }
     std::env::current_dir()
         .map(|cwd| cwd.join(path))
-        .map_err(io_error("resolve relative path"))
+        .map_err(internal_error("resolve relative path"))
 }
 
 fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
@@ -674,10 +677,10 @@ fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
         source_dir.join(CATALOG_DB_FILENAME),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
-    .map_err(sqlite_error("open source catalog read-only"))?;
+    .map_err(internal_error("open source catalog read-only"))?;
     let check: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .map_err(sqlite_error("check source catalog"))?;
+        .map_err(internal_error("check source catalog"))?;
     if check != "ok" {
         return Err(validation_error(format!(
             "source catalog quick_check failed: {check}"
@@ -685,7 +688,7 @@ fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
     }
     let forwarding_rows: i64 = connection
         .query_row("SELECT COUNT(*) FROM forward_state", [], |row| row.get(0))
-        .map_err(sqlite_error("inspect forwarding state"))?;
+        .map_err(internal_error("inspect forwarding state"))?;
     if forwarding_rows != 0 {
         return Err(validation_error(
             "telemetry migration is hub-only; source catalog has forwarding state",
@@ -707,7 +710,8 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
             continue;
         }
         for path in discover_segments(&namespace_dir) {
-            let metadata = std::fs::metadata(&path).map_err(io_error("stat source segment"))?;
+            let metadata =
+                std::fs::metadata(&path).map_err(internal_error("stat source segment"))?;
             let stats = scan_source_segment(&path, namespace, config.batch_rows)?;
             let rows = stats.values().map(|item| item.rows).sum::<i64>();
             let footer = read_segment_footer(&path, Some("timestamp_ms")).ok_or_else(|| {
@@ -779,7 +783,7 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         version: MANIFEST_VERSION,
         policy_revision: POLICY_REVISION.to_string(),
         source_dir: std::fs::canonicalize(&config.source_dir)
-            .map_err(io_error("resolve source store"))?
+            .map_err(internal_error("resolve source store"))?
             .to_string_lossy()
             .into_owned(),
         source_catalog_sha256: file_sha256(&config.source_dir.join(CATALOG_DB_FILENAME))?,
@@ -803,7 +807,7 @@ fn scan_source_segment(
     let reader = parquet_reader(path, batch_rows)?;
     let mut stats: BTreeMap<String, DestinationStats> = BTreeMap::new();
     for batch in reader {
-        let batch = batch.map_err(arrow_error("read source batch"))?;
+        let batch = batch.map_err(internal_error("read source batch"))?;
         for partition in
             route_ingestion_batch(IngestionBatchSource::Stored(source_namespace), &batch)?
         {
@@ -889,20 +893,21 @@ fn write_source_outputs(
         let parent = final_path
             .parent()
             .ok_or_else(|| validation_error("output segment has no parent"))?;
-        std::fs::create_dir_all(parent).map_err(io_error("create output namespace"))?;
+        std::fs::create_dir_all(parent).map_err(internal_error("create output namespace"))?;
         let temporary_path = temporary_path(&final_path);
         if temporary_path.exists() {
             std::fs::remove_file(&temporary_path)
-                .map_err(io_error("remove interrupted output segment"))?;
+                .map_err(internal_error("remove interrupted output segment"))?;
         }
-        let file = File::create(&temporary_path).map_err(io_error("create output segment"))?;
+        let file =
+            File::create(&temporary_path).map_err(internal_error("create output segment"))?;
         let options =
             ArrowWriterOptions::new().with_properties(segment_writer_properties_with_max_rows(
                 usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
                     .expect("telemetry row-group limit fits usize"),
             )?);
         let writer = ArrowWriter::try_new_with_options(file, Arc::clone(target_schema), options)
-            .map_err(parquet_error("create output parquet writer"))?;
+            .map_err(internal_error("create output parquet writer"))?;
         writers.insert(
             output.namespace.clone(),
             DestinationWriter {
@@ -919,7 +924,7 @@ fn write_source_outputs(
 
     let reader = parquet_reader(source_path, config.batch_rows)?;
     for batch in reader {
-        let batch = batch.map_err(arrow_error("read source batch"))?;
+        let batch = batch.map_err(internal_error("read source batch"))?;
         for partition in route_ingestion_batch(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
@@ -933,7 +938,7 @@ fn write_source_outputs(
             writer
                 .writer
                 .write(&migrated)
-                .map_err(parquet_error("write migrated telemetry"))?;
+                .map_err(internal_error("write migrated telemetry"))?;
             writer.rows += migrated.num_rows() as i64;
             writer.next_seq += migrated.num_rows() as i64;
         }
@@ -950,10 +955,11 @@ fn write_source_outputs(
         let file = writer
             .writer
             .into_inner()
-            .map_err(parquet_error("close output segment"))?;
-        file.sync_all().map_err(io_error("fsync output segment"))?;
+            .map_err(internal_error("close output segment"))?;
+        file.sync_all()
+            .map_err(internal_error("fsync output segment"))?;
         std::fs::rename(&writer.temporary_path, &writer.final_path)
-            .map_err(io_error("publish output segment"))?;
+            .map_err(internal_error("publish output segment"))?;
         output.file_sha256 = Some(file_sha256(&writer.final_path)?);
     }
     Ok(())
@@ -993,7 +999,8 @@ fn align_migrated_batch(
                 columns.push(if array.data_type() == field.data_type() {
                     Arc::clone(array)
                 } else {
-                    cast(array, field.data_type()).map_err(arrow_error("align telemetry column"))?
+                    cast(array, field.data_type())
+                        .map_err(internal_error("align telemetry column"))?
                 });
             }
             Err(_) if field.is_nullable() => {
@@ -1008,7 +1015,7 @@ fn align_migrated_batch(
         }
     }
     RecordBatch::try_new(Arc::clone(target_schema), columns)
-        .map_err(arrow_error("build migrated telemetry batch"))
+        .map_err(internal_error("build migrated telemetry batch"))
 }
 
 fn verify_source_segments(
@@ -1016,7 +1023,7 @@ fn verify_source_segments(
     manifest: &MigrationManifest,
 ) -> Result<(), StatsError> {
     let canonical_source = std::fs::canonicalize(source_dir)
-        .map_err(io_error("resolve source store for verification"))?;
+        .map_err(internal_error("resolve source store for verification"))?;
     if canonical_source.to_string_lossy() != manifest.source_dir {
         return Err(validation_error(
             "source_dir differs from the migration manifest",
@@ -1054,7 +1061,7 @@ fn verify_source_segments(
     }
     for segment in &manifest.source_segments {
         let path = source_dir.join(&segment.relative_path);
-        let metadata = std::fs::metadata(&path).map_err(io_error("stat source segment"))?;
+        let metadata = std::fs::metadata(&path).map_err(internal_error("stat source segment"))?;
         if metadata.len() != segment.byte_size || file_sha256(&path)? != segment.file_sha256 {
             return Err(validation_error(format!(
                 "source segment changed after planning: {}",
@@ -1086,7 +1093,7 @@ fn verify_output_file(
     for batch in parquet_reader(path, batch_rows)? {
         update_batch_identity(
             &mut identity,
-            &batch.map_err(arrow_error("read output batch"))?,
+            &batch.map_err(internal_error("read output batch"))?,
         )?;
     }
     if digest_hex(identity) != output.identity_sha256 {
@@ -1155,7 +1162,7 @@ fn string_column(batch: &RecordBatch, name: &str) -> Result<StringArray, StatsEr
         .index_of(name)
         .map_err(|_| validation_error(format!("telemetry batch is missing {name:?}")))?;
     let values = cast(batch.column(index), &DataType::Utf8)
-        .map_err(arrow_error("cast telemetry string column"))?;
+        .map_err(internal_error("cast telemetry string column"))?;
     values
         .as_any()
         .downcast_ref::<StringArray>()
@@ -1179,7 +1186,7 @@ fn int64_column(batch: &RecordBatch, name: &str) -> Result<Int64Array, StatsErro
         .index_of(name)
         .map_err(|_| validation_error(format!("telemetry batch is missing {name:?}")))?;
     let values = cast(batch.column(index), &DataType::Int64)
-        .map_err(arrow_error("cast telemetry int64 column"))?;
+        .map_err(internal_error("cast telemetry int64 column"))?;
     values
         .as_any()
         .downcast_ref::<Int64Array>()
@@ -1191,22 +1198,22 @@ fn parquet_reader(
     path: &Path,
     batch_rows: usize,
 ) -> Result<impl Iterator<Item = Result<RecordBatch, arrow::error::ArrowError>>, StatsError> {
-    let file = File::open(path).map_err(io_error("open parquet segment"))?;
+    let file = File::open(path).map_err(internal_error("open parquet segment"))?;
     ParquetRecordBatchReaderBuilder::try_new(file)
-        .map_err(parquet_error("open parquet reader"))?
+        .map_err(internal_error("open parquet reader"))?
         .with_batch_size(batch_rows)
         .build()
-        .map_err(parquet_error("build parquet reader"))
+        .map_err(internal_error("build parquet reader"))
 }
 
 fn file_sha256(path: &Path) -> Result<String, StatsError> {
-    let mut file = File::open(path).map_err(io_error("open file for checksum"))?;
+    let mut file = File::open(path).map_err(internal_error("open file for checksum"))?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(io_error("read file for checksum"))?;
+            .map_err(internal_error("read file for checksum"))?;
         if read == 0 {
             break;
         }
@@ -1241,7 +1248,7 @@ fn validate_manifest_config(
 }
 
 fn read_manifest(path: &Path) -> Result<MigrationManifest, StatsError> {
-    let raw = std::fs::read(path).map_err(io_error("read migration manifest"))?;
+    let raw = std::fs::read(path).map_err(internal_error("read migration manifest"))?;
     serde_json::from_slice(&raw).map_err(|error| {
         validation_error(format!(
             "decode migration manifest {}: {error}",
@@ -1254,14 +1261,14 @@ fn write_manifest(path: &Path, manifest: &MigrationManifest) -> Result<(), Stats
     let bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|error| validation_error(format!("encode migration manifest: {error}")))?;
     let temporary = temporary_path(path);
-    let mut file = File::create(&temporary).map_err(io_error("create migration manifest"))?;
+    let mut file = File::create(&temporary).map_err(internal_error("create migration manifest"))?;
     file.write_all(&bytes)
-        .map_err(io_error("write migration manifest"))?;
+        .map_err(internal_error("write migration manifest"))?;
     file.write_all(b"\n")
-        .map_err(io_error("finish migration manifest"))?;
+        .map_err(internal_error("finish migration manifest"))?;
     file.sync_all()
-        .map_err(io_error("fsync migration manifest"))?;
-    std::fs::rename(&temporary, path).map_err(io_error("publish migration manifest"))?;
+        .map_err(internal_error("fsync migration manifest"))?;
+    std::fs::rename(&temporary, path).map_err(internal_error("publish migration manifest"))?;
     Ok(())
 }
 
@@ -1282,21 +1289,7 @@ fn validation_error(message: impl Into<String>) -> StatsError {
     StatsError::SchemaValidation(message.into())
 }
 
-fn io_error(context: &'static str) -> impl FnOnce(std::io::Error) -> StatsError {
-    move |error| StatsError::Internal(format!("{context}: {error}"))
-}
-
-fn sqlite_error(context: &'static str) -> impl FnOnce(rusqlite::Error) -> StatsError {
-    move |error| StatsError::Internal(format!("{context}: {error}"))
-}
-
-fn parquet_error(
-    context: &'static str,
-) -> impl FnOnce(parquet::errors::ParquetError) -> StatsError {
-    move |error| StatsError::Internal(format!("{context}: {error}"))
-}
-
-fn arrow_error(context: &'static str) -> impl FnOnce(arrow::error::ArrowError) -> StatsError {
+fn internal_error<E: Display>(context: &'static str) -> impl FnOnce(E) -> StatsError {
     move |error| StatsError::Internal(format!("{context}: {error}"))
 }
 
@@ -1391,7 +1384,10 @@ mod tests {
             .collect::<Vec<_>>();
         fields.push(Field::new("alert_tag", DataType::Utf8, nullable));
         let mut columns = batch.columns().to_vec();
-        columns.push(Arc::new(StringArray::from(vec![Some("hero"); batch.num_rows()])));
+        columns.push(Arc::new(StringArray::from(vec![
+            Some("hero");
+            batch.num_rows()
+        ])));
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
     }
 
@@ -1554,10 +1550,7 @@ mod tests {
             TELEMETRY_NAMESPACE,
             1,
             1,
-            &with_legacy_alert_tag(
-                telemetry_batch(&["levanter"], &["train_loss"], 1),
-                true,
-            ),
+            &with_legacy_alert_tag(telemetry_batch(&["levanter"], &["train_loss"], 1), true),
         );
         drop(catalog);
 
@@ -1596,10 +1589,7 @@ mod tests {
             TELEMETRY_NAMESPACE,
             1,
             1,
-            &with_legacy_alert_tag(
-                telemetry_batch(&["levanter"], &["train_loss"], 1),
-                false,
-            ),
+            &with_legacy_alert_tag(telemetry_batch(&["levanter"], &["train_loss"], 1), false),
         );
         drop(catalog);
 

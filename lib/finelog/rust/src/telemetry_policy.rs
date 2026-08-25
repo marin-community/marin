@@ -19,6 +19,7 @@ const SEMANTIC_NAMESPACE_PREFIX: &str = "telemetry_v1.";
 const STORAGE_NAMESPACE_PREFIX: &str = "telemetry_storage_v1.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const DEFAULT_STREAM_MAX_BYTES: i64 = 2 * GIBIBYTE;
+const IRIS_CONTROLLER_SERVICE: &str = "iris-controller";
 pub(crate) const LEVANTER_NAMESPACE: &str = "telemetry_v1.levanter";
 pub(crate) const NODE_AGENT_NAMESPACE: &str = "telemetry_v1.node_agent";
 pub(crate) const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
@@ -102,12 +103,12 @@ struct LogicalInferenceRule {
 
 const LOGICAL_INFERENCE_RULES: [LogicalInferenceRule; 6] = [
     LogicalInferenceRule {
-        service: "iris-controller",
+        service: IRIS_CONTROLLER_SERVICE,
         name_prefixes: &["rpc_", "proxy_"],
         logical_namespace: IRIS_RPC_NAMESPACE,
     },
     LogicalInferenceRule {
-        service: "iris-controller",
+        service: IRIS_CONTROLLER_SERVICE,
         name_prefixes: &[],
         logical_namespace: IRIS_NAMESPACE,
     },
@@ -217,8 +218,7 @@ impl TelemetryPolicy {
     ///
     /// The root carries no client-selected scope, so the owning service is the
     /// primary semantic boundary. Iris controller rows are narrower: only the
-    /// native RPC and proxy metric families belong to `iris.rpc`. Future policy
-    /// revisions may inspect any other normalized column through `record`.
+    /// native RPC and proxy metric families belong to `iris.rpc`.
     fn infer_logical_namespace(&self, record: &TelemetryRecord<'_>) -> Result<String, StatsError> {
         let service = record.required_string("service")?;
         let name = record.required_string("name")?;
