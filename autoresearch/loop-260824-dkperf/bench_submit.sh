@@ -23,5 +23,6 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e WHEEL "${WHEEL}" \
   -e FLAGS "${FLAGS}" \
   -e GANG 1 \
+  -e BENCH_UPDATES_PER_PEER "${BENCH_UPDATES_PER_PEER:-30}" \
   -- bash autoresearch/loop-260824-dkperf/bench_driver.sh
 echo "submitted ${NAME}"

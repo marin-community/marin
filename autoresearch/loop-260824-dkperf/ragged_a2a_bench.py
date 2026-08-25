@@ -21,7 +21,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 ROWS = 261_120  # rows sent per rank per call (~3.2 GB at HIDDEN=6144 bf16)
 HIDDEN = 6_144
-UPDATES_PER_PEER = 30
+UPDATES_PER_PEER = int(os.environ.get("BENCH_UPDATES_PER_PEER", "30"))
 WARMUP = 10
 ITERS = 50
 VALUE_MOD = 251  # keep row values exactly representable in bf16
