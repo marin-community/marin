@@ -18,6 +18,8 @@ recomputed from the override unless ``--num-steps`` is also set.
 """
 
 import dataclasses
+from collections.abc import Mapping
+from types import MappingProxyType
 
 import click
 from fray.cluster import ResourceConfig
@@ -78,7 +80,8 @@ from experiments.grug.moe_hero_ep.train import (
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
-H100_LADDER_NODES: dict[str, int] = {"d512": 1, "d768": 2, "d1024": 4, "d1536": 8}
+H100_D512_SIZE = "d512"
+H100_LADDER_NODES: Mapping[str, int] = MappingProxyType({H100_D512_SIZE: 1, "d768": 2, "d1024": 4, "d1536": 8})
 H100_GPUS_PER_NODE = 8
 H100_NODE_CPU = 32
 H100_NODE_RAM = "600g"
@@ -90,7 +93,7 @@ MAX_TASK_FAILURES = 3
 
 
 def _h100_ladder_model(size: str):
-    shape = H100_D512_SHAPE if size == "d512" else SMALL_SHAPES[size]
+    shape = H100_D512_SHAPE if size == H100_D512_SIZE else SMALL_SHAPES[size]
     return _small_model(
         shape,
         _EP_CAPACITY_FACTOR,
