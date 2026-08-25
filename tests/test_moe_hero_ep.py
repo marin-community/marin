@@ -227,6 +227,24 @@ def test_a_trainer_mesh_that_disagrees_with_the_grug_mesh_is_rejected_before_lau
             )
 
 
+def test_the_eval_batch_follows_the_train_batch_down_a_sequence_sweep():
+    # A fixed eval sequence count becomes 64x the training step's token load at seq 262144, and the
+    # evaluator's K/V (bf16[262144, 256, 6, 128], 96 GiB) exhausts HBM while the train step fits.
+    assert (
+        abl.eval_batch_size_for(batch_size=1024, batch_axes_product=64) == 256
+    ), "the 4096-sequence default must keep the historical eval batch"
+    assert abl.eval_batch_size_for(batch_size=1, batch_axes_product=1) == 1
+    # Whatever the count, the eval loader has to be able to shard it.
+    for batch_size, axes in ((1024, 64), (16, 16), (8, 4), (1, 1)):
+        assert abl.eval_batch_size_for(batch_size=batch_size, batch_axes_product=axes) % axes == 0
+
+
+def test_grug_batch_axes_product_excludes_the_context_axis():
+    # The batch rides replica_dcn x data x expert; `context` and `model` do not carry it.
+    assert launch.batch_axes_product(device_count=64, context_axis_size=1) == 64
+    assert launch.batch_axes_product(device_count=64, context_axis_size=4) == 16
+
+
 def test_hero_shape_carries_no_mesh_override_tags():
     step = launch.build_hero_run(run_id="hero-tags", dp_racks=1, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))

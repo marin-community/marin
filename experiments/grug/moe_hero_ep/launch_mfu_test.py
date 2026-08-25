@@ -72,6 +72,15 @@ def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
 
 
+def batch_axes_product(*, device_count: int, context_axis_size: int) -> int:
+    """Devices the global batch is spread over.
+
+    Grug shards the batch on ``replica_dcn x data x expert``, which is the whole fleet less the
+    axes that do not carry it: ``context`` and ``model``.
+    """
+    return device_count // (context_axis_size * HERO_MODEL_AXIS_SIZE)
+
+
 def validate_mesh_axes(
     *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
 ) -> None:
@@ -102,14 +111,14 @@ def validate_mesh_axes(
             f"({HERO_MODEL_AXIS_SIZE})"
         )
     data_axis_size = device_count // fixed
-    batch_axes_product = dp_racks * data_axis_size * expert_axis_size
-    if batch_size % batch_axes_product != 0:
+    batch_axes = batch_axes_product(device_count=device_count, context_axis_size=context_axis_size)
+    if batch_size % batch_axes != 0:
         raise ValueError(
             f"batch_size={batch_size} must be divisible by the batch axes replica ({dp_racks}) * "
-            f"data ({data_axis_size}) * expert ({expert_axis_size}) = {batch_axes_product}"
+            f"data ({data_axis_size}) * expert ({expert_axis_size}) = {batch_axes}"
         )
     trainer_axis_size = trainer_batch_axis_size(grug_trainer_mesh_config(context_axis_size), device_count)
-    if trainer_axis_size != batch_axes_product:
+    if trainer_axis_size != batch_axes:
         raise ValueError(
             f"TrainerConfig would spread the batch over {trainer_axis_size} devices while grug's "
             f"batch axes span {batch_axes_product}; its mesh config does not match the grug mesh at "

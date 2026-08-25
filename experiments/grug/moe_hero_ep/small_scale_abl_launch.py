@@ -47,6 +47,9 @@ from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HeroThroughputResult,
     validate_mesh_axes,
 )
+from experiments.grug.moe_hero_ep.launch_mfu_test import (
+    batch_axes_product as grug_batch_axes_product,
+)
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
@@ -70,7 +73,25 @@ TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
 _EP_CAPACITY_FACTOR = 1.15
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
-EVAL_BATCH_SIZE = 256
+# The eval batch is a fraction of the train batch, not a fixed sequence count. A sequence-length
+# sweep shrinks the train batch to hold tokens per step fixed, so a constant 256 sequences becomes an
+# ever larger multiple of the training step: at `--seq-len 262144` it is 67M tokens against a
+# 4.2M-token step, and the evaluator's K/V alone (`bf16[262144, 256, 6, 128]`, 96.00 GiB) exhausts
+# HBM while the training step itself fits. At the 4096 default this divisor reproduces the
+# historical 256.
+EVAL_BATCH_DIVISOR = 4
+
+
+def eval_batch_size_for(*, batch_size: int, batch_axes_product: int) -> int:
+    """Sequences per eval batch, rounded up to what the eval loader can shard.
+
+    The loader shards the eval batch over the same axes as the train batch, so a count that does not
+    divide them is refused only once the fleet is allocated.
+    """
+    target = max(1, batch_size // EVAL_BATCH_DIVISOR)
+    return math.ceil(target / batch_axes_product) * batch_axes_product
+
+
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -342,13 +363,15 @@ def build_small_run(
         expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     if seq_len % context_axis_size != 0:
         raise ValueError(f"context_axis_size={context_axis_size} must divide seq_len={seq_len}")
+    device_count = fleet.gpus_per_node * fleet.nodes * dp_racks
     validate_mesh_axes(
-        device_count=fleet.gpus_per_node * fleet.nodes * dp_racks,
+        device_count=device_count,
         dp_racks=dp_racks,
         batch_size=batch_size,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
     )
+    batch_axes_product = grug_batch_axes_product(device_count=device_count, context_axis_size=context_axis_size)
     # ``--transport-capacity-factor`` overrides the Flavor's sender-pool cap; ``None`` keeps the paired
     # 1.15 default. The two pooled-wave gates cap independently, so a run that sweeps only the receiver
     # (``--capacity-factor``) flattens once the sender gate takes over -- vary this to move that gate.
@@ -483,7 +506,7 @@ def build_small_run(
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
-                eval_batch_size=EVAL_BATCH_SIZE,
+                eval_batch_size=eval_batch_size_for(batch_size=batch_size, batch_axes_product=batch_axes_product),
                 steps_per_eval=steps_per_eval,
                 max_eval_batches=8,
                 eval_current=True,
