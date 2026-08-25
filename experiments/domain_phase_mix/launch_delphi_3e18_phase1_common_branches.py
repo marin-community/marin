@@ -1024,6 +1024,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--expected-branch-noise-design-sha256")
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run-output-dir", type=Path)
     return parser.parse_known_args()
 
 
@@ -1101,7 +1102,7 @@ def main() -> None:
         serializable_rows.append({**row, "prefix": asdict(prefix)})
 
     if args.dry_run:
-        dry_run_output = local_artifact_dir(deployment)
+        dry_run_output = args.dry_run_output_dir or local_artifact_dir(deployment)
         save_branch_manifest(
             SaveBranchManifestConfig(
                 experiment_name=experiment_name,
