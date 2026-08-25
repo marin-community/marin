@@ -131,7 +131,7 @@ from iris.cluster.types import (
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.auth import SESSION_COOKIE
-from iris.rpc.resource_registry import ResourceRegistryBuilder, batch_get_codec, get_codec, list_codec
+from iris.rpc.resource_registry import ResourceAccess, ResourceRegistryBuilder, batch_get_codec, get_codec, list_codec
 from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
             controller_pb2.Controller.GetJobStatusResponse,
         ),
         service.get_job_status,
+        access=ResourceAccess.DASHBOARD_READABLE,
     )
     registry.bind(
         f"/{JOB_RESOURCE_TYPE}/list",
@@ -172,6 +173,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
             ),
         ),
         service.list_jobs,
+        access=ResourceAccess.DASHBOARD_READABLE,
     )
     registry.bind(
         f"/{JOB_RESOURCE_TYPE}/batch-get",
@@ -181,6 +183,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
             resources=_job_state_snapshots,
         ),
         service.get_job_state,
+        access=ResourceAccess.DASHBOARD_READABLE,
     )
     registry.bind(
         f"/{TASK_RESOURCE_TYPE}/get",
@@ -189,6 +192,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
             controller_pb2.Controller.GetTaskStatusResponse,
         ),
         service.get_task_status,
+        access=ResourceAccess.DASHBOARD_READABLE,
     )
     registry.bind(
         f"/{TASK_RESOURCE_TYPE}/list",
@@ -199,6 +203,7 @@ def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
             page=lambda response: resource_pb2.PageInfo(total_count=len(response.tasks)),
         ),
         service.list_tasks,
+        access=ResourceAccess.DASHBOARD_READABLE,
     )
     return ResourceServiceImpl(registry.freeze())
 

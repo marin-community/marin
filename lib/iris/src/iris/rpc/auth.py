@@ -18,6 +18,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import VerifiedIdentity, require_identity
 
+from iris.rpc.resource_registry import ResourceAccess, ResourceVerb
+
 # Browser session cookie the dashboard sets; passed to rigging's auth
 # interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
 SESSION_COOKIE = "iris_session"
@@ -129,6 +131,15 @@ def authorize_resource_method(identity: VerifiedIdentity, method_name: str) -> N
         dashboard_methods=RESOURCE_READABLE_RPCS,
         federation_methods=frozenset(),
     )
+
+
+def authorize_resource_access(access: ResourceAccess, resource_type: str, verb: ResourceVerb) -> None:
+    identity = require_identity()
+    if identity.role == DASHBOARD_ROLE and access is not ResourceAccess.DASHBOARD_READABLE:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Read-only dashboard access cannot call {resource_type}/{verb.value}",
+        )
 
 
 def _authorize_method(

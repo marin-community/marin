@@ -3,7 +3,7 @@
 
 """Connect boundary for controller-registered resource operations."""
 
-from typing import TypeVar
+from typing import cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -12,9 +12,8 @@ from google.protobuf.any_pb2 import Any as AnyMessage
 from google.protobuf.message import Message
 
 from iris.rpc import resource_pb2
+from iris.rpc.auth import authorize_resource_access
 from iris.rpc.resource_registry import ResourceRegistry, ResourceVerb
-
-WireResponse = TypeVar("WireResponse", bound=Message)
 
 
 class ResourceServiceImpl:
@@ -24,21 +23,15 @@ class ResourceServiceImpl:
         self._registry = registry
 
     def get(self, request: resource_pb2.ResourceRequest, context: RequestContext) -> resource_pb2.GetResponse:
-        return self._invoke(
-            request.resource_type,
-            ResourceVerb.GET,
-            request.input,
-            context,
+        return cast(
             resource_pb2.GetResponse,
+            self._invoke(request.resource_type, ResourceVerb.GET, request.input, context),
         )
 
     def list(self, request: resource_pb2.ResourceRequest, context: RequestContext) -> resource_pb2.ListResponse:
-        return self._invoke(
-            request.resource_type,
-            ResourceVerb.LIST,
-            request.input,
-            context,
+        return cast(
             resource_pb2.ListResponse,
+            self._invoke(request.resource_type, ResourceVerb.LIST, request.input, context),
         )
 
     def batch_get(
@@ -46,12 +39,9 @@ class ResourceServiceImpl:
         request: resource_pb2.ResourceRequest,
         context: RequestContext,
     ) -> resource_pb2.BatchGetResponse:
-        return self._invoke(
-            request.resource_type,
-            ResourceVerb.BATCH_GET,
-            request.input,
-            context,
+        return cast(
             resource_pb2.BatchGetResponse,
+            self._invoke(request.resource_type, ResourceVerb.BATCH_GET, request.input, context),
         )
 
     def _invoke(
@@ -60,11 +50,9 @@ class ResourceServiceImpl:
         verb: ResourceVerb,
         payload: AnyMessage,
         context: RequestContext,
-        response_type: type[WireResponse],
-    ) -> WireResponse:
+    ) -> Message:
         if not resource_type:
             raise ConnectError(Code.INVALID_ARGUMENT, "resource_type is required")
-        response = self._registry.require(resource_type, verb).invoke(payload, context)
-        if not isinstance(response, response_type):
-            raise TypeError(f"resource codec returned {type(response).__name__}; expected {response_type.__name__}")
-        return response
+        binding = self._registry.require(resource_type, verb)
+        authorize_resource_access(binding.access, resource_type, verb)
+        return binding.invoke(payload, context)
