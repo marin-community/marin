@@ -8,3 +8,10 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 1	2026-08-24T22:0xZ	dkp-a1-mode-symmem	bench	dk g8x128 + mode=COLLECTIVES_SYMMETRIC_MEMORY	-	-	running	expected null (put-path guards fallback only)
 1	2026-08-24T22:0xZ	b1-ilp4	build	g8x128 + 4-way ILP unroll LSA copy	-	-	running	job ra2a-mw-build-g8x128ilp4-20260824
 1	2026-08-24T22:1xZ	b2-cta0bar8	build	fork 8844d77b43 cta0-delegated barrier, grid 8x128	-	-	running	job ra2a-mw-build-cta0bar8c-20260824
+1	2026-08-24T22:01Z	dkp-a1b-mode-symmem	bench	dk g8x128 + mode=symmetric	13.25	-	discard	no win vs same-night baselines (12.25-14.20 spread); enum value is lowercase "symmetric"
+1	2026-08-24T22:05Z	dkp-a2-gxl	bench	GXL backend via fallback path	-	-	crash	hung 25min after NCCL channel setup; GXL comm absent in our NCCL build; killed. Dead end.
+2	2026-08-24T23:28Z	dkp-b1-ilp4	bench	g8x128+4-way ILP unroll	13.43	-	inconclusive	13.45/13.43 two attempts (tight in-job); between-job variance swamps delta
+2	2026-08-25T00:00Z	dkp-b0-g8x-rebase	bench	g8x128 baseline re-run	14.20	-	baseline	SAME config as yesterdays 12.18: cross-night numbers NOT comparable
+2	2026-08-25T00:11Z	dkp-b2-cta0bar8	bench	cta0-delegated barrier, 8x128	12.73	-	promising	-1.5 vs adjacent 14.20 baseline but next baseline read 12.25; needs ladder
+2	2026-08-25T00:31Z	dkp-b0v-g8x	bench	g8x128 baseline, validating bench	12.25	-	baseline	VALIDATION OK; between-job spread 12.25-14.20 (64-of-72 co-tenancy)
+3	2026-08-25T00:5xZ	ladder-r1	bench	interleaved 2x(g8x,cta8,cta16,cta32)	-	-	running	paired medians; ladder.sh r1
