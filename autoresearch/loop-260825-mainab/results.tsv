@@ -1,0 +1,3 @@
+run	mfu	drops	loss@6019	peak_gib	notes
+ra2a-mab-01b-pooled-6k	22.71	2.67%	1.4777	149.88	pooled on rebased-main protocol, prod prio
+ra2a-mab-02-dk-6k	22.87	0.018%	1.4727	137.95	ragged dk, dkbal9 wheel, splits=1 default
