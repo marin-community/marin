@@ -356,3 +356,82 @@ def test_shared_and_routed_gradients_match_across_context_degree():
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         """
     )
+
+
+@pytest.mark.timeout(300)
+def test_a_context_axis_of_size_one_places_parameters_where_it_did_before():
+    # The parameter specs name "context" unconditionally. That is only safe because a length-1 axis
+    # partitions nothing: this pins the placement against the specs that predate the axis, which is
+    # what "no behavior change at context_axis_size == 1" has to mean for weights, and for the
+    # master and optimizer state that inherit their placement.
+    _run(
+        """
+        from jax.sharding import NamedSharding
+
+        mesh = mesh_of((1, 2, 1, 2, 1))
+        assert int(mesh.shape["context"]) == 1, mesh.shape
+        cases = (
+            ((4, 16, 8), P(hero._EXPERT_WEIGHT_AXES, None, None), P("expert", None, None)),
+            ((16, 8), P(hero._FSDP_AXES, "model"), P(("data", "expert"), "model")),
+            ((8, 16), P("model", hero._FSDP_AXES), P("model", ("data", "expert"))),
+        )
+        for shape, composite, legacy in cases:
+            assert NamedSharding(mesh, composite).devices_indices_map(shape) == NamedSharding(
+                mesh, legacy
+            ).devices_indices_map(shape), (shape, composite, legacy)
+        """
+    )
+
+
+@pytest.mark.timeout(300)
+def test_parameters_shard_over_context_without_changing_the_layer():
+    # EP x CP would otherwise hold a full expert bank per context shard, and the fp32 master plus
+    # Muon momentum that inherit its placement do not fit in node RAM at the hero shape. Sharding
+    # the bank over the composite has to be invisible to the layer: `moe_mlp` all-gathers the
+    # context group before its shard_map, so the same weights meet the same tokens.
+    _run(
+        """
+        config = moe_config()
+        x = jax.random.normal(jax.random.key(3), (4, 4, config.hidden_dim), dtype=jnp.float32)
+        cotangent = jax.random.normal(jax.random.key(4), (4, 4, config.hidden_dim), dtype=jnp.float32)
+
+        def run(mesh, seq_sharded):
+            with set_mesh(mesh):
+                routed = hero.MoEMLP.init(config, key=jax.random.key(0))
+                shared = hero.DenseMLP.init(
+                    config.hidden_dim, config.shared_expert_intermediate_dim,
+                    config.initializer_std, key=jax.random.key(1),
+                )
+
+                def forward(routed, shared, tokens):
+                    tokens = reshard(tokens, activation_spec(seq_sharded))
+                    out, _ = routed(tokens)
+                    return out + shared(tokens)
+
+                out = jax.jit(forward)(routed, shared, x)
+                grads = jax.jit(jax.grad(lambda r, s, t: jnp.sum(forward(r, s, t) * cotangent), argnums=(0, 1)))(
+                    routed, shared, x
+                )
+            expert_weight = routed.expert_mlp.w_gate
+            return {
+                "expert_spec": expert_weight.sharding.spec,
+                "dense_spec": shared.w_gate.sharding.spec,
+                "experts_per_shard": expert_weight.addressable_shards[0].data.shape[0],
+                "out": np.asarray(out),
+                "grads": [np.asarray(leaf) for leaf in jax.tree.leaves(grads)],
+            }
+
+        reference = run(mesh_of((1, 2, 1, 2, 1)), seq_sharded=False)
+        context = run(mesh_of((1, 1, 2, 2, 1)), seq_sharded=True)
+
+        assert reference["expert_spec"][0] == hero._EXPERT_WEIGHT_AXES, reference["expert_spec"]
+        assert reference["dense_spec"][0] == hero._FSDP_AXES, reference["dense_spec"]
+        # Four experts over expert=2 alone, then over expert=2 x context=2.
+        assert (reference["experts_per_shard"], context["experts_per_shard"]) == (2, 1), (
+            reference["experts_per_shard"], context["experts_per_shard"]
+        )
+        np.testing.assert_allclose(context["out"], reference["out"], rtol=1e-5, atol=1e-5)
+        for actual, expected in zip(context["grads"], reference["grads"], strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        """
+    )
