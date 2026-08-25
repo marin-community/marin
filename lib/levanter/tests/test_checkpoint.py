@@ -507,7 +507,6 @@ def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypa
     checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
     values_by_name = {record["name"]: record["value"] for record in checkpoint_records}
     assert values_by_name["checkpoint_staged_host_bytes"] == 32
-    assert values_by_name["checkpoint_total_duration_seconds"] >= 0
 
     phase_records = [record for record in checkpoint_records if record["name"] == "checkpoint_phase_duration_seconds"]
     assert {record["attributes"]["phase"] for record in phase_records} == {
@@ -517,6 +516,11 @@ def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypa
         "async_commit_in_flight",
         "metadata_write",
     }
+    total_record = next(
+        record for record in checkpoint_records if record["name"] == "checkpoint_total_duration_seconds"
+    )
+    assert total_record["attributes"]["status"] == "completed"
+    assert total_record["value"] >= max(record["value"] for record in phase_records)
     assert all(record["attributes"]["checkpoint_step"] == "7" for record in checkpoint_records)
     assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in checkpoint_records)
 

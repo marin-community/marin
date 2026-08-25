@@ -620,6 +620,7 @@ def tree_serialize_leaves_tensorstore(
     debug_checkpointer: bool = False,
     write_config: Optional[TensorStoreWriteConfig] = None,
 ) -> int:
+    """Serialize a PyTree and return the peak host bytes staged by this process."""
     write_config = write_config or TensorStoreWriteConfig()
 
     if manager is None:
@@ -720,6 +721,9 @@ def _serialize_arrays(
 
     Returns once this process has copied its data out. ``manager`` joins the commits and
     barriers on the other processes.
+
+    Returns:
+        The peak host bytes staged by this process.
     """
     manager.wait_until_finished()
 
