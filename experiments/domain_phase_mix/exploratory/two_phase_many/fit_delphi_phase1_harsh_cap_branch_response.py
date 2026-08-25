@@ -80,7 +80,9 @@ def feature_map(weights: np.ndarray, center: np.ndarray, kind: str) -> np.ndarra
     if kind == "direct":
         return weights - center
     if kind == "sqrt":
-        return np.sqrt(weights) - np.sqrt(center)
+        center_root = np.sqrt(center)
+        displacement = np.sqrt(weights) - center_root
+        return displacement - (displacement @ center_root)[:, None] * center_root
     raise ValueError(f"Unknown feature kind: {kind}")
 
 

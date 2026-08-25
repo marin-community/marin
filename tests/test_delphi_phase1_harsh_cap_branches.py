@@ -260,7 +260,9 @@ def test_local_response_is_tied_anchored_and_recovers_nonnegative_damage() -> No
     center = np.asarray([0.45, 0.35, 0.20])
     weights = generator.dirichlet(50.0 * center, size=80)
     coefficients = np.asarray([-0.010, 0.006, 0.004])
-    effects = (np.sqrt(weights) - np.sqrt(center)) @ coefficients + 0.08 * fit.hellinger(weights, center) ** 2
+    center_root = np.sqrt(center)
+    coefficients -= center_root * (center_root @ coefficients)
+    effects = fit.feature_map(weights, center, "sqrt") @ coefficients + 0.08 * fit.hellinger(weights, center) ** 2
 
     model = fit.fit_model(weights, effects, center, "sqrt", 1e-6)
     predictions = fit.predict(model, weights, center)
@@ -268,6 +270,8 @@ def test_local_response_is_tied_anchored_and_recovers_nonnegative_damage() -> No
     np.testing.assert_allclose(predictions, effects, atol=1e-6, rtol=0)
     np.testing.assert_allclose(fit.predict(model, center[None, :], center), [0.0], atol=1e-14, rtol=0)
     assert model.damage >= 0.0
+    design_matrix = np.column_stack([fit.feature_map(weights, center, "sqrt"), fit.hellinger(weights, center) ** 2])
+    assert np.linalg.matrix_rank(design_matrix) == len(center)
     folds = fit.geometric_fold_ids(weights, center, folds=5, seed=20260825)
     assert set(folds) == set(range(5))
     fold_predictions, selections = fit.fold_ensemble_predictions(weights, effects, center, weights[:4])
