@@ -23,3 +23,5 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 5	2026-08-25T03:0xZ	dkp-06-bal-6k	restore	hero 6k restore, bal wheel, s1	-	-	running	the skew-regime gate; stock dk 21.43(s1)/21.98(s64), oneshot 22.46-22.60
 5	2026-08-25T03:20Z	dkp-06-bal-6k	restore	hero 6k restore, bal wheel, s1	22.34	+0.36 vs dk-best	KEEP	vs stock dk 21.98(s64)/21.43(s1); oneshot 22.46-22.60; loss 1.4727 sane, drops ~0
 6	2026-08-25T03:2xZ	dkp-07-bal-6k-rep	restore	repeat draw of dkp-06	-	-	running	second draw for the parity claim
+6	2026-08-25T04:0xZ	dkp-07-bal-6k-rep	restore	repeat draw	22.58	-	KEEP	two draws 22.34/22.58 = mean 22.46, ON the oneshot band 22.46-22.60. PARITY.
+6	2026-08-25T04:1xZ	dkp-08-bal-6k-s64	restore	bal + splits=64 (mechanism null-check)	-	-	running	expect <= s1: balanced kernel should make splits unnecessary
