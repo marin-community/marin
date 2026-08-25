@@ -76,6 +76,24 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
+def validate_expert_weight_hidden_axis(
+    mesh: jax.sharding.AbstractMesh | jax.sharding.Mesh | None, axis: PspecAxis
+) -> None:
+    """Require every configured expert-weight hidden axis to exist on ``mesh``."""
+    if axis is None:
+        return
+    axes = axis if isinstance(axis, tuple) else (axis,)
+    if not axes:
+        raise ValueError("expert_weight_hidden_axis must not be an empty tuple")
+    if mesh is None or mesh.empty:
+        raise ValueError("expert_weight_hidden_axis requires a non-empty mesh")
+    missing = tuple(name for name in axes if name not in mesh.shape)
+    if missing:
+        raise ValueError(
+            f"expert_weight_hidden_axis references missing mesh axes {missing}; available axes are {tuple(mesh.shape)}"
+        )
+
+
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
     if implementation is None:
         return "ring"
