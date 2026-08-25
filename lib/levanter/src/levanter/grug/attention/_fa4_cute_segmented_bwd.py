@@ -37,7 +37,7 @@
 This file is intentionally close to upstream ``flash_attn.cute.flash_bwd``. The
 behavioral changes are limited to Grug packed-segment support:
 
-    valid[b, q] and lower_bounds[b, q] <= k <= q
+    valid[b, q] and lower_bounds[b, q] <= k <= q + q_offset
 
 Nontrivial differences from upstream FA4/CuTe:
 - The JAX boundary passes dense BSHD tensors and ``lower_bounds``/``valid``
@@ -46,6 +46,8 @@ Nontrivial differences from upstream FA4/CuTe:
   lower bounds before entering the mainloop.
 - ``apply_segment_mask`` injects the Grug segment/causal predicate into each
   score tile before exponentiation.
+- ``mQOffset`` (context parallelism) shifts every causal bound by the global position
+  of local query 0; upstream's right-aligned causal mask is disabled in that case.
 - Global-to-shared copies use ``CopyUniversalOp`` where JAX ``cutlass_call``
   exposes generic memrefs that upstream cp.async copy atoms reject.
 """
@@ -462,6 +464,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mdV: cute.Tensor,
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
+        mQOffset: Optional[cute.Tensor],
         softmax_scale: cutlass.Float32,
         mCuSeqlensQ: Optional[cute.Tensor] = None,
         mCuSeqlensK: Optional[cute.Tensor] = None,
@@ -514,6 +517,8 @@ class SegmentedFlashAttentionBackwardSm80:
             raise ValueError("lower_bounds must have shape [B, S]")
         if cutlass.const_expr(mValid.shape[0] != mQ.shape[0] or mValid.shape[1] != mQ.shape[1]):
             raise ValueError("valid must have shape [B, S]")
+        if cutlass.const_expr(mQOffset is None and mQ.shape[1] != mK.shape[1]):
+            raise ValueError("q and k sequence lengths must match without a context-parallel q offset")
         self.varlen_q = mCuSeqlensQ is not None
         self._setup_attributes()
         SharedStorage = self._get_shared_storage_cls()
@@ -562,6 +567,7 @@ class SegmentedFlashAttentionBackwardSm80:
             mdV,
             mLowerBounds,
             mValid,
+            mQOffset,
             mCuSeqlensQ,
             mCuSeqlensK,
             mSeqUsedQ,
@@ -608,6 +614,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mdV: cute.Tensor,
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
+        mQOffset: Optional[cute.Tensor],
         mCuSeqlensQ: Optional[cute.Tensor],
         mCuSeqlensK: Optional[cute.Tensor],
         mSeqUsedQ: Optional[cute.Tensor],
@@ -655,13 +662,28 @@ class SegmentedFlashAttentionBackwardSm80:
                 tile_n=self.n_block_size,
             )
 
+            # Context parallelism: local query i sits at global key position i + q_offset.
+            q_offset = 0 if cutlass.const_expr(mQOffset is None) else mQOffset[0]
             m_block_max = cute.ceil_div(seqlen.seqlen_q, self.m_block_size)
             m_block_min = 0
             if cutlass.const_expr(self.is_causal):
-                m_block_min = max(
-                    (n_block * self.n_block_size + seqlen.seqlen_q - seqlen.seqlen_k) // self.m_block_size,
-                    m_block_min,
-                )
+                if cutlass.const_expr(mQOffset is None):
+                    # Upstream right-aligns a short query sequence against the keys, which keeps
+                    # the first query inside the query tiles this CTA can address.
+                    first_query = n_block * self.n_block_size + seqlen.seqlen_q - seqlen.seqlen_k
+                    m_block_min = max(first_query // self.m_block_size, m_block_min)
+                else:
+                    first_query = n_block * self.n_block_size - q_offset
+                    # The backward grid spans the whole key sequence, so a key block past this
+                    # shard's queries maps beyond the local query tiles. Clamp onto the last tile
+                    # instead of leaving the CTA to address a tile that does not exist: the
+                    # mainloop prologue loads stage 0 unconditionally, and the LSE/dPsum copies
+                    # are unpredicated over buffers sized to the local query count. Every score in
+                    # that tile is masked, so it contributes nothing. Exiting early is not an
+                    # option either -- at qhead_per_kvhead == 1 the epilogue writes dK/dV straight
+                    # to the output with no pre-zeroed accumulator behind it.
+                    m_block_min = max(first_query // self.m_block_size, m_block_min)
+                    m_block_min = min(m_block_min, m_block_max - 1)
             # Grug divergence from upstream FA4: use packed lower bounds to skip
             # query blocks that cannot attend to this key block. The fine-grained
             # per-score predicate below handles boundaries inside a query tile.
@@ -989,9 +1011,22 @@ class SegmentedFlashAttentionBackwardSm80:
                     batch_idx=batch_idx,
                     head_idx=head_idx,
                     mask_seqlen=True,
-                    mask_causal=self.is_causal,
+                    # Upstream's causal mask right-aligns the query block against the keys,
+                    # which is not where a context-parallel shard sits. The segment mask below
+                    # applies the offset causal bound in that case.
+                    mask_causal=self.is_causal and mQOffset is None,
                 )
-                self.apply_segment_mask(acc_S, mLowerBounds, mValid, batch_idx, m_block, n_block, thr_mma_sdp)
+                self.apply_segment_mask(
+                    acc_S,
+                    mLowerBounds,
+                    mValid,
+                    batch_idx,
+                    m_block,
+                    n_block,
+                    thr_mma_sdp,
+                    q_offset,
+                    seqlen.seqlen_k,
+                )
 
             smem_pipe_read_q = cutlass.Int32(0)
             smem_pipe_read_do = cutlass.Int32(0)
@@ -1070,6 +1105,8 @@ class SegmentedFlashAttentionBackwardSm80:
         m_block: cutlass.Int32,
         n_block: cutlass.Int32,
         thr_mma: cute.TiledMma,
+        q_offset: cutlass.Int32 | int,
+        seqlen_k: cutlass.Int32,
     ):
         # Grug divergence from upstream FA4: this is the semantic mask. It
         # combines padding validity, packed segment start, and causal ordering
@@ -1084,18 +1121,18 @@ class SegmentedFlashAttentionBackwardSm80:
         tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma.partition_C(cS), transpose=self.SdP_swapAB)
         row_coord = 0 if cutlass.const_expr(not self.SdP_swapAB) else 1
         col_coord = 1 if cutlass.const_expr(not self.SdP_swapAB) else 0
-        seq_len = mLowerBounds.shape[1]
+        seq_len_q = mLowerBounds.shape[1]
         for r in cutlass.range(cute.size(tScS_mn.shape[0]), unroll_full=True):
             query_idx = tScS_mn[r, 0][row_coord] + m_block * self.m_block_size
-            query_in_bounds = cute.elem_less(query_idx, seq_len)
-            query_meta_idx = cutlass.min(query_idx, seq_len - 1)
+            query_in_bounds = cute.elem_less(query_idx, seq_len_q)
+            query_meta_idx = cutlass.min(query_idx, seq_len_q - 1)
             query_valid = mValid[batch_idx, query_meta_idx] != 0
             query_lower_bound = mLowerBounds[batch_idx, query_meta_idx]
             for c in cutlass.range(cute.size(tScS_mn.shape[1]), unroll_full=True):
                 key_idx = tScS_mn[0, c][col_coord] + n_block * self.n_block_size
-                key_in_bounds = cute.elem_less(key_idx, seq_len)
+                key_in_bounds = cute.elem_less(key_idx, seqlen_k)
                 key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
-                key_before_query = cute.elem_less(key_idx, query_idx + 1)
+                key_before_query = cute.elem_less(key_idx, query_idx + q_offset + 1)
                 if not (
                     query_in_bounds and query_valid and key_in_bounds and key_after_lower_bound and key_before_query
                 ):

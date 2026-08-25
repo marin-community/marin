@@ -106,15 +106,17 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 
 def _seq_axis(mesh: jax.sharding.AbstractMesh | None) -> str | None:
-    """The sequence-sharding (context-parallel) mesh axis, or ``None`` if the mesh lacks it.
+    """The sequence-sharding (context-parallel) mesh axis, or ``None`` when nothing splits the sequence.
 
     Unlike ``_mesh_axis_size``, which treats a missing axis as a caller bug, this tolerates one:
     the axis is new, and meshes built by tests and older tooling name only the axes they use. A
-    mesh without it simply has no sequence sharding to account for.
+    length-1 ``context`` counts as absent as well, so a mesh that carries the axis without
+    splitting anything keeps both the sequence-replicated attention path and the token tuple it
+    had before the axis existed.
     """
     if mesh is None or mesh.empty:
         return None
-    return _SEQ_AXIS_NAME if _SEQ_AXIS_NAME in mesh.shape else None
+    return _SEQ_AXIS_NAME if int(mesh.shape.get(_SEQ_AXIS_NAME, 1)) > 1 else None
 
 
 def _token_axes(mesh: jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
@@ -177,6 +179,19 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     if isinstance(sharding, NamedSharding):
         return sharding.spec
     return None
+
+
+def _sequence_axis_of(x: jax.Array) -> str | None:
+    spec = _partition_spec_of(x)
+    return spec[1] if spec is not None and len(spec) > 1 else None
+
+
+def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
+    """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
+    spec = _partition_spec_of(x)
+    if spec is None:
+        return x
+    return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -459,6 +474,8 @@ def _apply_rotary_embedding_fused(
             [second_factor, jnp.zeros((seq_len, padding), second_factor.dtype)],
             axis=-1,
         )
+    # These factors index global positions, so they stay correct once Q/K carry a
+    # context-sharded sequence axis: each shard multiplies by the rows it holds.
     first_factor = jnp.where(disable_rope, 1.0, first_factor)[None, :, None, :]
     second_factor = jnp.where(disable_rope, 0.0, second_factor)[None, :, None, :]
 
@@ -622,7 +639,18 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+        # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
+        # shard attends its own queries against the whole key sequence. The backends reject a
+        # sharded K/V sequence, and the output returns to the residual stream's layout.
+        seq_axis = _seq_axis(get_abstract_mesh())
+        residual_seq_axis = _sequence_axis_of(x)
+        if seq_axis is not None:
+            q = _reshard_sequence_axis(q, seq_axis)
+            k = _reshard_sequence_axis(k, None)
+            v = _reshard_sequence_axis(v, None)
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        if seq_axis is not None:
+            attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -1317,9 +1345,12 @@ class Transformer(eqx.Module):
         short_lower_bounds, _ = fa4_cute_segment_bounds(
             short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
         )
-        long_lower_bounds = _batch_reshard(long_lower_bounds)
-        short_lower_bounds = _batch_reshard(short_lower_bounds)
-        valid = _batch_reshard(valid)
+        # The bounds hold global key positions, so a context-parallel run splits them along
+        # the sequence exactly like Q.
+        bounds_spec = P(_BATCH_AXES, _seq_axis(get_abstract_mesh()))
+        long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
+        short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
+        valid = reshard(valid, bounds_spec)
 
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],

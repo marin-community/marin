@@ -659,6 +659,109 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
     assert result.returncode == 0, result.stderr
 
 
+def test_context_parallel_attention_matches_the_unsharded_block():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = """
+        import math
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import NamedSharding, PartitionSpec as P
+
+        import levanter.grug.attention._fa4_cute as fa4_cute
+        from levanter.grug.attention import AttentionMask
+        from levanter.grug.sharding import compact_grug_mesh
+
+        from experiments.grug.moe_hero_ep import model
+
+        BATCH, SEQ, HIDDEN = 8, 32, 32
+        BATCH_AXES = ("replica_dcn", "data", "expert")
+        local_q_lengths = []
+
+        def reference_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset=None):
+            # Stand-in for the CUTLASS kernel: local query i is at global position i + q_offset.
+            del kernel_config
+            local_q_lengths.append(q.shape[1])
+            offset = 0 if q_offset is None else q_offset[0]
+            q_positions = jnp.arange(q.shape[1], dtype=jnp.int32)[None, :, None] + offset
+            k_positions = jnp.arange(k.shape[1], dtype=jnp.int32)[None, None, :]
+            allowed = valid[:, :, None] & (lower_bounds[:, :, None] <= k_positions) & (k_positions <= q_positions)
+            repeats = q.shape[2] // k.shape[2]
+            k_full = jnp.repeat(k, repeats, axis=2)
+            v_full = jnp.repeat(v, repeats, axis=2)
+            scores = jnp.einsum("bqhd,bkhd->bhqk", q, k_full) * sm_scale
+            scores = jnp.where(allowed[:, None, :, :], scores, -1e30)
+            weights = jnp.where(allowed[:, None, :, :], jax.nn.softmax(scores, axis=-1), 0.0)
+            return jnp.einsum("bhqk,bkhd->bqhd", weights, v_full)
+
+        fa4_cute.fa4_cute_attention_forward = reference_forward
+        fa4_cute._segmented_kernel_config = lambda head_dim: None
+        jax.default_backend = lambda: "gpu"
+
+        cfg = model.GrugModelConfig(
+            vocab_size=128,
+            hidden_dim=HIDDEN,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            head_dim=8,
+            max_seq_len=SEQ,
+            sliding_window=5,
+            global_every=2,
+            capacity_factor=1.0,
+            initializer_std=0.5 / math.sqrt(HIDDEN),
+            qk_mult=1.3,
+            rope_fused=True,
+            attention_implementation="gpu_fa4_cute",
+            moe_implementation="fixed_all_to_all",
+        )
+        segment_ids = jnp.asarray([[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3] * BATCH, dtype=jnp.int32)
+        mask = AttentionMask.causal(sliding_window=cfg.sliding_window).with_segment_ids(segment_ids)
+        x = jax.random.normal(jax.random.key(1), (BATCH, SEQ, HIDDEN))
+        cotangent = jax.random.normal(jax.random.key(2), (BATCH, SEQ, HIDDEN))
+
+        def block(x_arg):
+            return model.CausalSelfAttention.init(cfg, key=jax.random.key(0))(x_arg, mask)
+
+        results = {}
+        # The last case is the layout the sibling context-sharded residual stream produces.
+        for context_axis_size, x_seq_axis in ((1, None), (4, None), (4, "context")):
+            mesh = compact_grug_mesh(context_axis_size=context_axis_size)
+            with jax.set_mesh(mesh):
+                sharding = NamedSharding(mesh, P(BATCH_AXES, x_seq_axis, None))
+                x_local = jax.device_put(x, sharding)
+                cotangent_local = jax.device_put(cotangent, sharding)
+                del local_q_lengths[:]
+                out = jax.jit(block)(x_local)
+                grad = jax.jit(jax.grad(lambda x_arg, ct: jnp.sum(block(x_arg) * ct)))(x_local, cotangent_local)
+            assert local_q_lengths[0] == SEQ // context_axis_size, (context_axis_size, local_q_lengths)
+            results[(context_axis_size, x_seq_axis)] = (np.asarray(out), np.asarray(grad))
+
+        expected_out, expected_grad = results[(1, None)]
+        for case, (out, grad) in results.items():
+            np.testing.assert_allclose(out, expected_out, rtol=1e-5, atol=1e-5, err_msg=f"out {case}")
+            np.testing.assert_allclose(grad, expected_grad, rtol=1e-5, atol=1e-5, err_msg=f"grad {case}")
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _explicit_mesh(*axis_sizes):
     return Mesh(
         np.asarray(jax.devices()).reshape(*axis_sizes),

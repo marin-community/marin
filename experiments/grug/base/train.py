@@ -76,7 +76,7 @@ class GrugTrainerConfig:
     # Sequence-dim (context-parallel) shard count for the mesh's `context` axis. This variant has
     # not been ported to context sharding: its model shards activations on the batch axes alone, so
     # a value above 1 only narrows `data` while every context shard keeps the same tokens. Leave it
-    # at 1; `experiments/grug/moe_hero_ep` is the variant that shards the sequence.
+    # at 1; `experiments/grug/moe_hero_ep` is the variant whose attention block shards the sequence.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
 

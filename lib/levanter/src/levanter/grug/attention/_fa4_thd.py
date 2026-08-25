@@ -258,6 +258,16 @@ def _segment_lengths_sharding(
     return None
 
 
+def _assert_sequence_axis_unsharded(q: Float[Array, "B S H D"]) -> None:
+    """Reject context-parallel queries: the THD path packs tokens with global positions."""
+    sharding = _sharding_of(q)
+    if isinstance(sharding, NamedSharding) and len(sharding.spec) > 1 and sharding.spec[1] is not None:
+        raise NotImplementedError(
+            "gpu_fa4_thd_attention does not support a sharded q sequence axis (context parallelism); "
+            f"got sharding {sharding.spec}. Use the gpu_fa4_cute backend instead."
+        )
+
+
 def _sharding_of(x: Array | None) -> jax.sharding.Sharding | None:
     if x is None:
         return None
@@ -821,6 +831,7 @@ def gpu_fa4_thd_attention(
     """
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_thd_attention requires the JAX GPU backend.")
+    _assert_sequence_axis_unsharded(q)
     _validate_simple_causal_self_attention(q, k, v, mask, backend_name="gpu_fa4_thd_attention")
     assert isinstance(mask, AttentionMask)
     if mask.thd_segment_metadata is None:
