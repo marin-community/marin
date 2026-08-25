@@ -23,8 +23,10 @@ from graphql_source import graphql_data
 _GRAPHQL_URL = "https://api.wandb.ai/graphql"
 _ENTITY = "marin-community"
 _PROJECT = "marin_moe"
-_REPORT_VIEW_ID = "VmlldzoxNzM1OTMxMQ=="
-_REPORT_URL = "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+_REPORT_VIEW_ID = "VmlldzoxNzc2MDM5Ng=="
+_REPORT_URL = (
+    "https://wandb.ai/marin-community/marin_moe/reports/535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
+)
 _TOTAL_TOKENS_KEY = "throughput/total_tokens"
 _SAMPLES = 800
 
