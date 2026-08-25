@@ -48,7 +48,6 @@ class CompletedAdamHHeuristic:
 
     max_grad_norm: float = 0.1
     z_loss_weight: float = 1.0e-07
-    nesterov: bool = False
 
     min_lr_ratio: float = 0.0
     warmup: float = 0.1
@@ -114,7 +113,6 @@ class CompletedAdamHHeuristic:
             max_grad_norm=self.max_grad_norm,
             lr_schedule=self.lr_schedule,
             decay=self.decay,
-            nesterov=self.nesterov,
         )
 
     def _compute_num_layers(self, hidden_size: int) -> int:
