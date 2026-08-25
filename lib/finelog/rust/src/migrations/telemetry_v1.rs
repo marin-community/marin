@@ -964,12 +964,17 @@ fn align_migrated_batch(
     target_schema: &SchemaRef,
     min_seq: i64,
 ) -> Result<RecordBatch, StatsError> {
+    // Catalog schema evolution is additive, so retired nullable columns remain
+    // in old Parquets after the current telemetry schema stops writing them.
+    // Project those columns away; an unknown required field still signals that
+    // the current layout cannot represent the source record.
     for field in source.schema().fields() {
         if field.name() != IMPLICIT_SEQ_COLUMN
             && target_schema.field_with_name(field.name()).is_err()
+            && !field.is_nullable()
         {
             return Err(validation_error(format!(
-                "source telemetry has unknown column {:?}",
+                "source telemetry has unknown required column {:?}",
                 field.name()
             )));
         }
@@ -1301,6 +1306,7 @@ mod tests {
     use std::time::Duration;
 
     use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{Field, Schema};
 
     use super::*;
     use crate::store::segment::write_segment_to_dir;
@@ -1374,6 +1380,19 @@ mod tests {
             })
             .collect();
         RecordBatch::try_new(schema, columns).unwrap()
+    }
+
+    fn with_legacy_alert_tag(batch: RecordBatch, nullable: bool) -> RecordBatch {
+        let mut fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        fields.push(Field::new("alert_tag", DataType::Utf8, nullable));
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::new(StringArray::from(vec![Some("hero"); batch.num_rows()])));
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
     }
 
     fn add_segment(
@@ -1523,6 +1542,74 @@ mod tests {
             .iter()
             .flat_map(|source| source.outputs.iter())
             .all(|output| staged_dir.join(&output.relative_path).is_file()));
+    }
+
+    #[test]
+    fn prepare_in_place_projects_legacy_optional_columns_into_current_schema() {
+        let dirs = TestDirs::new("legacy_optional_column");
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        add_segment(
+            &catalog,
+            &dirs.store,
+            TELEMETRY_NAMESPACE,
+            1,
+            1,
+            &with_legacy_alert_tag(
+                telemetry_batch(&["levanter"], &["train_loss"], 1),
+                true,
+            ),
+        );
+        drop(catalog);
+
+        let manifest = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+
+        assert_eq!(manifest.input_rows, 1);
+        assert_eq!(manifest.output_rows, 1);
+        let staged_path = dirs
+            .store
+            .join(MIGRATION_DIRECTORY)
+            .join(STAGED_DIRECTORY)
+            .join(&manifest.source_segments[0].outputs[0].relative_path);
+        let batch = parquet_reader(&staged_path, 2)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(batch.column_by_name("alert_tag").is_none());
+        assert_eq!(
+            string_column(&batch, "name").unwrap().value(0),
+            "train_loss"
+        );
+    }
+
+    #[test]
+    fn prepare_in_place_rejects_unknown_required_columns() {
+        let dirs = TestDirs::new("unknown_required_column");
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        add_segment(
+            &catalog,
+            &dirs.store,
+            TELEMETRY_NAMESPACE,
+            1,
+            1,
+            &with_legacy_alert_tag(
+                telemetry_batch(&["levanter"], &["train_loss"], 1),
+                false,
+            ),
+        );
+        drop(catalog);
+
+        assert!(matches!(
+            prepare_in_place(&InPlaceConfig {
+                store_dir: dirs.store.clone(),
+                batch_rows: 2,
+            }),
+            Err(StatsError::SchemaValidation(_))
+        ));
     }
 
     #[test]
