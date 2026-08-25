@@ -93,7 +93,6 @@ from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
-from hero_alert_context import HeroAlertContextAssembler
 from hero_health import (
     Signals,
     WatchedRun,
@@ -136,12 +135,23 @@ from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 logger = logging.getLogger(__name__)
 
 HERO_OPERATOR_INSTRUCTIONS = (
-    "Keep one durable view of the logical hero run across execution retries. Prefer stable discovery pointers over "
-    "assumptions: read docs/ops/hero-run-health-alerts.md, the alert's linked runbook, and lib/iris/OPS.md, then "
-    "inspect the current launcher, configuration, and applicable skills before choosing live probes. Checkpoint "
-    "paths, task layouts, and retry details may change during a run. Correlate execution boundaries, telemetry, "
-    "Iris task state and events, and task logs; distinguish the first causal failure from expected gang-scheduling "
-    "fallout."
+    "Start from this alert's logical run identity and gather current evidence before deciding whether it joins an "
+    "existing incident. Later alerts on this channel may refer to the same run across execution or coordinator "
+    "retries, so correlate them instead of assuming either a clean run or inherited evidence. Treat the alert's "
+    "cluster, run, and job labels as discovery leads, not a complete task inventory. Read "
+    "docs/ops/hero-run-health-alerts.md, the linked runbook, lib/iris/OPS.md, and the current launcher, configuration, "
+    "and applicable skills before probing; checkpoint paths, task layouts, and retry behavior can change during a "
+    "run. Use bounded Finelog queries to: (1) inspect telemetry_v1 for the labeled cluster and run_id with "
+    "service='levanter' and process_index='0', enumerate recent execution_uid values and their time bounds, and read "
+    "the latest relevant metrics per execution; (2) recover coordinator roots from execution UIDs of the form "
+    "iris:<task-id>:attempt:<n> using the current Iris root-job logic, including prior roots for this logical run; "
+    "(3) inspect recent iris.task_state rows for the exact root_job_id values; (4) inspect iris.task_event for each "
+    "literal root task subtree with prefix(task_id, '<root>/'), summing its count field when aggregating deduplicated "
+    "events; and (5) inspect log rows for literal key prefixes around execution boundaries and task events. If the "
+    "cluster label is unknown, resolve the real cluster before interpreting empty results. Examine stderr, "
+    "warning/error levels, and other abnormal output without relying on a fixed error-signature list or assuming the "
+    "first query is exhaustive. Compare ranks and tasks to distinguish the first causal failure from expected "
+    "gang-scheduling fallout, and gather additional live evidence as needed before concluding."
 )
 
 # Window macros a panel writes into its SQL, substituted with tz-naive UTC
@@ -870,7 +880,6 @@ def main() -> None:
     wandb_source = WandbSource(timeout=config.http_timeout)
     loom_alerts = None
     if config.loom_alerts is not None:
-        hero_context = HeroAlertContextAssembler(finelog_sources[_FINELOG_HUB_CLUSTER], max_rows=config.max_rows)
         loom_alerts = LoomAlertClient(
             config.loom_alerts,
             behaviors=(
@@ -886,7 +895,6 @@ def main() -> None:
                     session_title="Hero run operator",
                     operator_name="Marin hero-run operator",
                     instructions=HERO_OPERATOR_INSTRUCTIONS,
-                    context_factory=hero_context.assemble,
                 ),
             ),
         )

@@ -469,8 +469,10 @@ channel. `TrainingProgressStalled`, `TrainingLossSpike`,
 `TrainingTelemetryGone`, and `TrainingOptimizerUnstable` also carry the trusted
 `operator_behavior=hero` label, which selects the `operator:hero` channel. Loom
 therefore keeps a separate durable coordinator for Hero while both behaviors use
-the same `ops` policy profile and its shared concurrency pool. Either operator can
-delegate independent incidents to child Loom sessions.
+the same four-session `ops` policy pool. Every nonterminal session explicitly
+using `ops` counts toward that pool; an operator-launched child with no explicit
+profile uses Loom's `default` profile. The extra `ops` capacity covers handoffs or
+explicit same-profile delegation but is shared, not reserved per channel.
 Repeated notifications for the same alert fingerprint and start time reuse the
 same Loom run, and thread a
 short "still firing" note under the original announcement. The Slack thread key is
@@ -482,15 +484,15 @@ unreachable, and that failure is reported into the thread instead of only into
 Grafana's notification history. A Slack failure is logged and still opens the
 triage session.
 
-Before opening a hero run, the bridge attaches a bounded `operatorContext` snapshot.
-It covers recent execution UIDs and their newest telemetry, Iris root state and
-event groups, and warning/error log excerpts near execution and task-event
-boundaries. Log selection is generic: it retains messages localized to a minority
-of task attempts and deduplicates volatile rank, time, and address fields rather
-than grepping for known CUDA, NCCL, or exception strings. This is deliberately a
-first pass, not a diagnosis or exhaustive log search; the coordinator and any
-child session are instructed to collect more live evidence as needed. Collection
-failures are recorded in the context and never prevent Slack or Loom delivery.
+The Hero behavior receives static discovery and query guidance instead of a
+precomputed evidence snapshot. It tells the coordinator how to follow the alert's
+logical run across execution and coordinator retries, then query current
+`telemetry_v1`, `iris.task_state`, `iris.task_event`, and `log` rows. The guidance
+uses exact IDs and Finelog's literal `prefix` predicate, includes the deduplicated
+event `count`, and asks the coordinator to compare tasks and ranks rather than
+grep a fixed error-signature list. Live evidence stays out of the webhook path, so
+query latency, truncation, redaction, or an unknown cluster label cannot silently
+turn a partial snapshot into the operator's starting facts.
 
 Open threads are tracked for six hours in the bridge's memory, which is sound
 because Cloud Run runs this service at `min=max=1`. A revision rollover forgets

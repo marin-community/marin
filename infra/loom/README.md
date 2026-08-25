@@ -164,7 +164,11 @@ contact point begins sending alerts. The Grafana stack consumes the URL and
 profile from this stack's `workloadClients` output. `grafana-alerts` uses the
 single `ops` profile; the bridge assigns trusted alert behaviors to distinct Loom
 channels, so generic and Hero alerts keep separate durable coordinators while
-sharing the profile's two-session concurrency pool. The `marin-grafana` service
+sharing the profile's four-session concurrency pool. Every nonterminal session
+explicitly launched with `ops` consumes that pool; an agent-launched child with no
+explicit `--profile` uses Loom's `default` profile. Four leaves headroom for an
+`ops`-profile handoff or delegated investigation while both coordinators are live,
+but it does not reserve capacity for either channel. The `marin-grafana` service
 account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.

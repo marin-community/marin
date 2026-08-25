@@ -78,7 +78,6 @@ def client_for(
     *,
     runs: list[dict] | None = None,
     loom_status: int | None = None,
-    operator_context=None,
 ):
     """A client whose Slack and Loom legs are both mocked.
 
@@ -120,8 +119,10 @@ def client_for(
             channel="operator:hero",
             session_title="Hero run operator",
             operator_name="Marin hero-run operator",
-            instructions="Keep one durable view of the logical hero run across execution retries.",
-            context_factory=operator_context,
+            instructions=(
+                "Gather current evidence for the logical run with telemetry_v1, iris.task_state, "
+                "iris.task_event, and log queries."
+            ),
         ),
     )
     return LoomAlertClient(loom_config(), behaviors=behaviors, transport=httpx.MockTransport(handler))
@@ -235,16 +236,11 @@ def test_firing_alert_is_announced_then_delivered_on_that_thread():
     ]
 
 
-def test_hero_behavior_uses_a_separate_channel_and_first_pass_operator_context():
+def test_hero_behavior_uses_a_separate_channel_and_live_query_guidance():
     runs: list[dict] = []
     slack = FakeSlack()
 
-    async def context(alerts):
-        assert len(slack.roots) == 1, "Slack receives the alert before context collection starts"
-        assert alerts[0]["labels"]["notification"] == "hero-run"
-        return {"status": "complete", "evidence": ["bounded"]}
-
-    asyncio.run(client_for(slack, runs=runs, operator_context=context).submit(hero_stall_payload()))
+    asyncio.run(client_for(slack, runs=runs).submit(hero_stall_payload()))
 
     request = runs[0]
     assert request["profile"] == "ops"
@@ -252,8 +248,11 @@ def test_hero_behavior_uses_a_separate_channel_and_first_pass_operator_context()
     assert request["session"]["title"] == "Hero run operator"
     data = goal_data(request)
     assert data["operatorBehavior"] == "hero"
-    assert data["operatorContext"] == {"status": "complete", "evidence": ["bounded"]}
-    assert "heroContext" not in data
+    assert "operatorContext" not in data
+    assert "telemetry_v1" in request["session"]["goal"]
+    assert "iris.task_state" in request["session"]["goal"]
+    assert "iris.task_event" in request["session"]["goal"]
+    assert "log queries" in request["session"]["goal"]
 
 
 def test_operator_behavior_routes_independently_of_alert_name():
@@ -290,38 +289,6 @@ def test_mixed_operator_behaviors_use_the_default_operator():
 
     assert runs[0]["channel"] == "operator"
     assert goal_data(runs[0])["operatorBehavior"] == "default"
-
-
-def test_context_collection_failure_does_not_drop_the_hero_alert():
-    runs: list[dict] = []
-
-    async def unavailable(_alerts):
-        raise RuntimeError("finelog unavailable")
-
-    result = asyncio.run(client_for(FakeSlack(), runs=runs, operator_context=unavailable).submit(hero_stall_payload()))
-
-    assert result == {"id": "run-1", "session_id": "session-1"}
-    assert runs[0]["channel"] == "operator:hero"
-    assert goal_data(runs[0])["operatorContext"] == {
-        "status": "unavailable",
-        "error": "RuntimeError",
-        "note": "First-pass operator context collection failed; gather live evidence before concluding.",
-    }
-
-
-def test_context_collection_timeout_does_not_hold_open_delivery(monkeypatch):
-    runs: list[dict] = []
-    monkeypatch.setattr(loom_alerts, "OPERATOR_CONTEXT_TIMEOUT", 0.001)
-
-    async def never_finishes(_alerts):
-        await asyncio.Event().wait()
-
-    result = asyncio.run(
-        client_for(FakeSlack(), runs=runs, operator_context=never_finishes).submit(hero_stall_payload())
-    )
-
-    assert result == {"id": "run-1", "session_id": "session-1"}
-    assert goal_data(runs[0])["operatorContext"]["error"] == "TimeoutError"
 
 
 def test_a_webhook_retry_reuses_the_thread_without_announcing_again():
