@@ -12,6 +12,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from math import prod
 
 import equinox as eqx
 import jax
@@ -47,6 +48,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from levanter.utils.mesh import MeshConfig
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -213,6 +215,47 @@ class GrugTrainerConfig:
     # sharded over rather than the mesh.
     context_axis_size: int = 1
     sharding_dump_path: str | None = None
+
+
+def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
+    """`MeshConfig` that makes `TrainerConfig`'s batch arithmetic agree with the grug mesh.
+
+    Grug places every array itself, through `compact_grug_mesh` and raw `PartitionSpec`s, and never
+    calls `TrainerConfig.device_mesh`. But `TrainerConfig._validate_and_set_defaults` still divides
+    the global batch by its *own* `data_axis_size`, read off this config: the levanter default is
+    `{"data": -1}` with `batch -> (replica_dcn, replica, data)`, so `data` absorbs every device and
+    the trainer believes the batch is spread over all of them. Grug spreads it over
+    `replica_dcn x data x expert`, which is `device_count // (context x model)` -- the whole fleet
+    only while the sequence is unsharded.
+
+    Naming `context` here takes those devices out of the absorbing `data` axis, so the trainer's
+    `data_axis_size` becomes `device_count // context_axis_size`, which is what grug's `_BATCH_AXES`
+    actually spans (`model` is always 1 on this template). Without it, a context-parallel run whose
+    global batch is below the device count sets `per_device_parallelism` to zero and dies in
+    `ZeroDivisionError` at `trainer.initialize()`, after the fleet is allocated.
+
+    At `context_axis_size == 1` this adds a length-1 axis and changes nothing: `data` absorbs the
+    same devices, the batch mapping is untouched, and `data_axis_size` keeps the value every
+    existing hero run computed.
+    """
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
+    return MeshConfig(axes={"data": -1, "replica": 1, "model": 1, "context": context_axis_size})
+
+
+def trainer_batch_axis_size(mesh_config: MeshConfig, device_count: int) -> int:
+    """Devices `TrainerConfig` believes the global batch is spread over, for `mesh_config`.
+
+    This is `TrainerConfig.data_axis_size` computed ahead of the fleet: the product of the mesh axes
+    the compute mapping puts the batch on. The product is independent of the slice count -- the DCN
+    absorber contributes exactly `num_slices` and the ICI absorber `devices_per_slice / known_ici`
+    -- so evaluating at one slice gives the value any topology would.
+    """
+    ici, dcn = mesh_config.axis_shapes(device_count, 1)
+    totals = {name: ici.get(name, 1) * dcn.get(name, 1) for name in set(ici) | set(dcn)}
+    batch_axes = mesh_config.resolved_compute_mapping[mesh_config.batch_axis_name]
+    axes = batch_axes if isinstance(batch_axes, tuple) else (batch_axes,)
+    return prod(totals.get(axis, 1) for axis in axes)
 
 
 @dataclass(frozen=True)

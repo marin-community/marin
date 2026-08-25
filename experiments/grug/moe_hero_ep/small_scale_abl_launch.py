@@ -53,6 +53,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     TrainingDataMode,
+    grug_trainer_mesh_config,
     run_grug,
 )
 from experiments.marin_tokenizer import marin_tokenizer
@@ -425,6 +426,7 @@ def build_small_run(
             train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
+            mesh=grug_trainer_mesh_config(context_axis_size),
             mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",

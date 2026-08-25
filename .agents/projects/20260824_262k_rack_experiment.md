@@ -102,6 +102,57 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## Attempt 1 (2026-08-25 20:17 UTC): batch 16 is below the device count
+
+Run `lc262k-ep16cp4-08251317`, job `/mwittmann/lc262k-ep16cp4-08251317-coord`. The 16-node gang
+queued 14 minutes on Kueue, was admitted at 20:32:46, and every one of the 16 processes died three
+seconds later in `trainer.initialize()`:
+
+```
+  File "/app/experiments/grug/moe_hero_ep/train.py", line 828, in _run_grug_local
+    trainer.initialize()
+  File "/app/lib/levanter/src/levanter/trainer.py", line 1145, in _validate_and_set_defaults
+    elif self.train_batch_size % (self.per_device_parallelism * self.data_axis_size) != 0:
+ZeroDivisionError: integer modulo by zero
+```
+
+Grug builds its own `compact_grug_mesh` and never gives `TrainerConfig` a `MeshConfig`, so the
+trainer validates against the levanter default, where `axes={"data": -1}` hands `data` all 64
+devices and `batch` maps to `(replica_dcn, replica, data)`. `data_axis_size` is therefore 64, not
+the 16 that grug's own `_BATCH_AXES = ("replica_dcn", "data", "expert")` gives. At global batch 16
+`per_device_parallelism` falls to `16 // 64 == 0` and the next line divides by it.
+
+Nothing context-parallel is involved: any hero-template run whose global batch is below the fleet's
+device count hits this, and holding tokens/step fixed at 4,194,304 forces batch 16 at sequence
+262144. The hero has never gone below batch 1024. `validate_mesh_axes` did not catch it because it
+models grug's batch axes only and never sees levanter's default mesh.
+
+Setting `per_device_parallelism` alone does not fix it -- the same line then rejects
+`16 % (1 * 64) != 0`. The fix is to give `TrainerConfig` a `MeshConfig` that matches the compact
+grug mesh, with `compute_mapping={"batch": ["replica_dcn", "data", "expert"]}` and the real axis
+sizes, so `data_axis_size` is 16. Check the other `data_axis_size` consumers (microbatching,
+`per_device_eval_parallelism`) while doing it.
+
+The run never opened the checkpoint and never compiled, so the restore, the SPMD reshard warning,
+and the drop measurement are all still unmeasured. Rack occupancy was about two minutes; all 16
+tasks released (1 `failed`, 15 `cosched_failed`) and no GPUs stayed held.
+
+## The learning rate this probe actually applies
+
+`--schedule-steps 4470000` sizes the mixture budget correctly (18,748,538,880,000 tokens against
+the 18.75T target, ratio 0.99992, no cell slices empty), but it does not put the optimizer
+heuristic at the hero's budget. `build_hero_configs` reads `HERO_MODEL.max_seq_len`, which is 4096;
+the `--seq-len` override is applied to the model afterwards. The heuristic therefore sees
+4470000 x 16 x 4096 = 293B tokens and returns peak `learning_rate` 5.158e-4 against the hero's
+3.290e-3. Warmup is `0.01 * 4470000` = 44,700 steps, so at step 6000 the probe applies about
+6.9e-5 -- roughly 2 percent of the 3.274e-3 the step-6000 checkpoint was trained at.
+
+Throughput, drop rate, and memory do not depend on this, and a low rate is the conservative side of
+a restore. The loss trajectory does: **this run does not diagnose 262K training stability**, only
+throughput, memory, and routing. A stability read needs the heuristic computed at the real sequence
+length, or an explicit LR override matching the checkpoint's schedule the way the 67B cooldowns did
+with `GrugMoeMuonHResumeConfig`.
+
 ## Measurements to record
 
 `tokens/s`, s/step (raw elapsed stamps, not smoothed tqdm), MFU, `moe/drop_fraction` +

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import subprocess
@@ -21,6 +22,7 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, 
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
@@ -160,6 +162,69 @@ def test_mesh_axis_overrides_reach_the_trainer_and_the_run_tags():
     assert config.model.qk_mult == 1.84
     tags = config.trainer.trainer.tracker.tags
     assert {"context-4", "expert-axis-16", "seq-262144", "qk-mult-1.84"} <= set(tags)
+
+
+def _validated_trainer(step, device_count: int):
+    """Run `TrainerConfig`'s own batch validation for `step` as if `device_count` devices existed.
+
+    `_validate_and_set_defaults` is what `trainer.initialize()` calls before anything is placed, and
+    it is the only consumer of `TrainerConfig.data_axis_size` on the grug path. Faking the device
+    count is what lets a 64-device mesh be validated on CPU.
+    """
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    trainer = config.trainer.trainer
+    with patch("jax.device_count", return_value=device_count):
+        trainer._validate_and_set_defaults()
+        return trainer, trainer.data_axis_size
+
+
+def test_context_parallel_batch_below_the_device_count_validates():
+    # Batch 16 over 64 devices: with levanter's default mesh, `data` absorbs all 64, so
+    # `per_device_parallelism` floors to 0 and the next line raises `ZeroDivisionError` -- on an
+    # allocated 16-node gang. Naming `context` leaves grug's own 16 batch shards.
+    step = launch.build_hero_run(
+        run_id="cp4-ep16-validate",
+        dp_racks=1,
+        num_steps=1,
+        batch_size=16,
+        max_seq_len=262144,
+        context_axis_size=4,
+        expert_axis_size=16,
+        version="dev",
+    )
+
+    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+
+    assert data_axis_size == 16
+    assert trainer.per_device_parallelism == 1
+
+
+def test_the_hero_shape_validates_exactly_as_the_levanter_default_mesh_does():
+    # The context axis is length 1 on the hero, so the added axis must not move a single number the
+    # hero has always computed.
+    step = launch.build_hero_run(run_id="hero-validate", dp_racks=1, num_steps=1, version="dev")
+    trainer, data_axis_size = _validated_trainer(step, device_count=64)
+
+    default_mesh_trainer = dataclasses.replace(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).trainer.trainer,
+        mesh=MeshConfig(),
+    )
+    with patch("jax.device_count", return_value=64):
+        default_mesh_trainer._validate_and_set_defaults()
+
+    assert data_axis_size == default_mesh_trainer.data_axis_size == 64
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 16
+    assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
+
+
+def test_a_trainer_mesh_that_disagrees_with_the_grug_mesh_is_rejected_before_launch():
+    # The pre-allocation guard for the failure above: if the trainer's mesh config ever stops
+    # tracking the context axis, `validate_mesh_axes` has to say so before a rack is requested.
+    with patch.object(launch, "grug_trainer_mesh_config", return_value=MeshConfig()):
+        with pytest.raises(ValueError, match="TrainerConfig would spread the batch over 64 devices"):
+            launch.validate_mesh_axes(
+                device_count=64, dp_racks=1, batch_size=16, context_axis_size=4, expert_axis_size=16
+            )
 
 
 def test_hero_shape_carries_no_mesh_override_tags():
