@@ -96,6 +96,16 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+# The ragged transport runs on the device-initiated kernel and nothing else. Engagement needs both:
+# the kernel switch, and symmetric-buffer registration for the ragged op's operands. The scoped list
+# registers only those buffers, so every other collective keeps NCCL's host-launched kernels. Both
+# require the pinned jax/XLA build -- jaxlib vintages predating the flags abort at import on unknown
+# XLA_FLAGS entries. `ragged_ep_check.py` mirrors these; keep the two in step.
+RAGGED_REQUIRED_XLA_FLAGS = (
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+)
+_RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -163,20 +173,16 @@ def _apply_hero_ep_runtime_defaults(
         XLA_MEMORY_LIMIT_SLOP_FLAG,
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
-    if ragged:
-        # The ragged transport runs on the device-initiated kernel. Engagement needs both
-        # flags: the kernel switch, and symmetric-buffer registration for the ragged op's
-        # operands. The scoped list registers only ragged-all-to-all buffers, so every other
-        # collective keeps NCCL's host-launched kernels. An explicit XLA_FLAGS entry for the
-        # kernel switch selects the one-shot transport instead. Both flags require the pinned
-        # jax/XLA build: jaxlib vintages that predate them abort at import on unknown
-        # XLA_FLAGS entries.
-        flag_defaults += (
-            "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-            "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
-        )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if ragged:
+        # Unlike the defaults above, these are not overridable. Selecting the host-launched
+        # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
+        # branch no longer carries, so honoring a partial override would run a configuration
+        # nothing here measures. Drop any conflicting entry rather than relying on which
+        # occurrence XLA's parser keeps.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
+        xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 

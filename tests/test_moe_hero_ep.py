@@ -23,7 +23,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, ragged_ep_check, train
 from experiments.grug.moe_hero_ep import launch_mfu_test as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -87,6 +87,12 @@ def test_moe_backend_override_reaches_the_model_and_the_run_tags():
     # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
     # transport that has no such buffer would label the run with a setting it never read.
     assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
+
+
+def test_the_4gpu_guard_mirrors_the_hero_s_ragged_xla_flags():
+    # ragged_ep_check duplicates these rather than importing the training module. If the hero's
+    # set changes and the guard's does not, the guard silently validates a transport no run uses.
+    assert ragged_ep_check.RAGGED_TRANSPORT_XLA_FLAGS == train.RAGGED_REQUIRED_XLA_FLAGS
 
 
 def test_the_ragged_backend_requires_one_process_per_gpu():

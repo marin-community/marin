@@ -5,7 +5,8 @@
 
 The guard for the EP64 tuning loop: a hero arm costs a production rack, so any change to the
 transport's offset arithmetic or expert kernels earns one only after this passes. All-to-all is
-GPU-only, so this cannot run in CPU CI.
+GPU-only, so this cannot run in CPU CI. The run carries the hero's ragged XLA flags, so it
+exercises the device-initiated kernel the hero actually uses.
 
 A. Ground truth. At a capacity factor high enough that nothing is dropped, every token reaches
    every expert it selected, so the transport computes exactly the dense MoE. The gate compares
@@ -78,6 +79,15 @@ RING_DIAGNOSTIC_CAPACITY = 2.0
 # transport; gating on the median rejects a real backward bug, which shifts the whole distribution.
 # The max is recorded as a diagnostic.
 TOLERANCE = 5e-2
+
+# Mirrors `train.py`'s `RAGGED_REQUIRED_XLA_FLAGS`. Duplicated rather than imported so this guard
+# does not pull in the hero's training module, at the cost of having to be kept in step with it:
+# without these the check validates the host-launched one-shot kernel while every hero run uses the
+# device-initiated one, which is the opposite of what a transport guard is for.
+RAGGED_TRANSPORT_XLA_FLAGS = (
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+)
 
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256g", disk="128g", regions=[ANY_REGION])
 
@@ -264,7 +274,7 @@ def build_benchmark(*, version: str | None = None) -> ArtifactStep[RaggedEpResul
             run_benchmark,
             name="ragged-ep-check-gb200",
             resources=BENCHMARK_RESOURCES,
-            env_vars={"JAX_ENABLE_PGLE": "false"},
+            env_vars={"JAX_ENABLE_PGLE": "false", "XLA_FLAGS": " ".join(RAGGED_TRANSPORT_XLA_FLAGS)},
         ),
         build_config=build_config,
     )

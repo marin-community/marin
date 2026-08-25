@@ -38,6 +38,14 @@ from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_gr
 # GEMMs prefer different clusters: the gated gate/up GEMM stays at (2, 1, 1), while the plain
 # grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
 # All of this is scheduling, so none of it changes the computed function.
+#
+# These reach `_expert_mlp_cudnn` only. `_expert_mlp` -- the local FSDP path, used by the
+# `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
+# did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
+# tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
+# run d768, so the numbers do not transfer without re-measuring.
+# TODO: re-measure these at the FSDP ablation shapes and either extend the tuning to
+# `_expert_mlp` or record why the defaults win there.
 _QUACK_TILE_MN = (256, 256)
 _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
