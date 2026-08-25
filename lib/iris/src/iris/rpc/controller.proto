@@ -323,10 +323,12 @@ message Controller {
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
     string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+    iris.time.Duration lease_duration = 7;
   }
 
   message RegisterEndpointResponse {
     string endpoint_id = 1;
+    iris.time.Duration lease_duration = 2;
   }
 
   message UnregisterEndpointRequest {
@@ -587,4 +589,12 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
+}
+
+// Leased service-discovery endpoint registry. Endpoint clients renew through
+// this service while the registered process remains alive.
+service EndpointService {
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 }
