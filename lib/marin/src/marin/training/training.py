@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import importlib
 import json
 import logging
@@ -235,11 +236,20 @@ def _address_run_id(output_path: str | None, prefix: str | None) -> str | None:
     """
     if output_path is None or prefix is None:
         return None
-    root = prefix.rstrip("/")
-    if not output_path.startswith(root):
-        logger.warning("Output path %s is not under prefix %s; cannot derive a run ID", output_path, prefix)
+    try:
+        # Structural containment, not a string prefix: "gs://bucket/training/run" is not under
+        # "gs://bucket/train", and "gs://bucket-2/..." is not under "gs://bucket".
+        address = StoragePath(output_path).relative_to(StoragePath(prefix))
+    except ValueError:
+        address = ""
+    if not address:
+        logger.warning("Output path %s has no address under prefix %s; cannot derive a run ID", output_path, prefix)
         return None
-    return output_path.removeprefix(root).strip("/").replace("/", "-")
+    # A run id names a W&B run and a checkpoint directory, so it cannot keep the separator, and
+    # flattening it to "-" is not injective -- "a-b/c" and "a/b-c" both read "a-b-c". The digest
+    # keeps distinct addresses on distinct ids.
+    digest = hashlib.sha256(address.encode()).hexdigest()[:8]
+    return f"{address.replace('/', '-')}-{digest}"
 
 
 def _resolve_run_id(

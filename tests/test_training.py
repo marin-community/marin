@@ -23,6 +23,7 @@ from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _maybe_auto_resolve_dpo_schedule,
+    _prepare_training_run,
     _resolve_run_id,
     apply_output_path,
     data_local_temporary_checkpoint_base_path,
@@ -226,8 +227,8 @@ def test_resolve_run_id_names_the_artifact_address(trainer_config):
         prefix="gs://bucket",
         env_run_id=None,
     )
-    assert run_id == "checkpoints-dpo-2026.08.21"
-    assert updated.trainer.id == "checkpoints-dpo-2026.08.21"
+    assert run_id == "checkpoints-dpo-2026.08.21-46dc5676"
+    assert updated.trainer.id == "checkpoints-dpo-2026.08.21-46dc5676"
 
 
 def test_resolve_run_id_distinguishes_artifacts_built_at_one_version(trainer_config):
@@ -251,7 +252,7 @@ def test_resolve_run_id_prefers_the_address_over_the_environment(trainer_config,
         prefix="gs://bucket",
         env_run_id="inherited",
     )
-    assert run_id == "checkpoints-sft-2026.08.21"
+    assert run_id == "checkpoints-sft-2026.08.21-1d745316"
 
 
 def test_resolve_run_id_declines_a_path_outside_the_prefix(trainer_config):
@@ -266,14 +267,44 @@ def test_resolve_run_id_declines_a_path_outside_the_prefix(trainer_config):
     assert run_id == "from-env"
 
 
-def test_both_pod_configs_carry_the_prefix(trainer_config):
-    """``_prepare_training_run`` is generic over both pod configs and reads ``config.prefix``, so a
-    field on only one of them raises AttributeError on every DPO run."""
-    for pod_config in (
-        TrainLmOnPodConfig(train_config=object(), resources=ResourceConfig.with_cpu(), prefix="gs://bucket"),
-        TrainDpoOnPodConfig(train_config=object(), resources=ResourceConfig.with_cpu(), prefix="gs://bucket"),
-    ):
-        assert pod_config.prefix == "gs://bucket"
+def test_resolve_run_id_declines_a_sibling_of_the_prefix(trainer_config):
+    """Containment is structural, not textual: a path whose first segment merely starts with the
+    prefix's last one is a different artifact, and must take the fallback."""
+    _, run_id = _resolve_run_id(
+        _no_id(trainer_config),
+        output_path="gs://bucket/training/run",
+        prefix="gs://bucket/train",
+        env_run_id="from-env",
+    )
+    assert run_id == "from-env"
+
+
+def test_resolve_run_id_separates_a_hyphen_from_a_path_boundary(trainer_config):
+    """Flattening "/" to "-" alone maps "a-b/c" and "a/b-c" onto one id, which is the collision this
+    derivation exists to prevent."""
+
+    def resolved(output_path: str) -> str:
+        return _resolve_run_id(_no_id(trainer_config), output_path=output_path, prefix="gs://bucket", env_run_id=None)[1]
+
+    assert resolved("gs://bucket/a-b/c/dev") != resolved("gs://bucket/a/b-c/dev")
+
+
+@pytest.mark.parametrize("pod_config_cls", [TrainLmOnPodConfig, TrainDpoOnPodConfig])
+def test_prepare_training_run_derives_the_run_id_from_the_prefix(trainer_config, pod_config_cls):
+    """``_prepare_training_run`` is generic over both pod configs, so a prefix that only one of them
+    forwards leaves the other silently resolving its run id from the inherited environment."""
+    train_config_cls = train_lm.TrainLmConfig if pod_config_cls is TrainLmOnPodConfig else TrainDpoConfig
+    config = pod_config_cls(
+        train_config=train_config_cls(trainer=dataclasses.replace(trainer_config, id=None)),
+        resources=ResourceConfig.with_cpu(),
+        output_path="gs://bucket/checkpoints/dpo/2026.08.21",
+        prefix="gs://bucket",
+        env_vars={"RUN_ID": "inherited"},
+    )
+
+    _, train_config, _ = _prepare_training_run(config)
+
+    assert train_config.trainer.id == "checkpoints-dpo-2026.08.21-46dc5676"
 
 
 def test_resolve_run_id_prefers_explicit_id_over_the_address(trainer_config):
