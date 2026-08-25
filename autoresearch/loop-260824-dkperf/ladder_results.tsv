@@ -27,3 +27,6 @@
 18:00	dkp-ab1b-patched	per-call: 9.56 ms   payload/rank: 3.21 GB   egress: 336 GB/s	      1 VALIDATION OK;
 18:03	dkp-ab2b-stock	per-call: 22.46 ms   payload/rank: 3.21 GB   egress: 143 GB/s	      1 VALIDATION OK;
 18:07	dkp-ab2b-patched	per-call: 9.61 ms   payload/rank: 3.21 GB   egress: 334 GB/s	      1 VALIDATION OK;
+21:11	dkp-stk-u1	per-call: 11.00 ms   payload/rank: 3.21 GB   egress: 292 GB/s	      1 VALIDATION OK;
+21:15	dkp-stk-u3	per-call: 13.00 ms   payload/rank: 3.21 GB   egress: 247 GB/s	      1 VALIDATION OK;
+21:18	dkp-stk-u120	per-call: 22.75 ms   payload/rank: 3.21 GB   egress: 141 GB/s	      1 VALIDATION OK;
