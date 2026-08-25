@@ -18,6 +18,7 @@ import fsspec
 import jax
 import pandas as pd
 from fray.cluster import ResourceConfig
+from iris.runtime.jax_init import initialize_jax
 from levanter.data.text.datasets import DatasetComponent
 from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main, get_git_commit
@@ -169,6 +170,7 @@ def candidate_specs(
     for candidate_position, candidate_id in enumerate(CANDIDATE_IDS):
         weights = {bucket: candidates[candidate_id][bucket] for bucket in runtime_buckets}
         phase_weights = {"phase_0": weights, "phase_1": weights}
+        _, _, phase_tv = base._weight_diagnostics(phase_weights)
         max_epoch, q95_epoch = exposure_diagnostics[candidate_id]
         for repeat_position, repeat in enumerate(REPEAT_SEEDS):
             run_order = candidate_position * len(REPEAT_SEEDS) + repeat_position
@@ -190,7 +192,7 @@ def candidate_specs(
                     trainer_seed=repeat,
                     max_simulated_epoch=max_epoch,
                     q95_simulated_epoch=q95_epoch,
-                    mean_phase_tv_to_proportional=0.0,
+                    mean_phase_tv_to_proportional=phase_tv,
                     expected_checkpoint_step=replay.EXPECTED_PREFIX_HF_STEP,
                     phase_weights=phase_weights,
                 )
@@ -200,7 +202,7 @@ def candidate_specs(
 
 def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> None:
     """Train one prefix and bind the permanent checkpoint to frozen inputs."""
-    replay.run_phase_0_prefix(config.prefix_config)
+    initialize_jax()
     devices = jax.devices()
     if (
         jax.default_backend() != "tpu"
@@ -213,6 +215,7 @@ def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> No
             f"backend={jax.default_backend()}, global={jax.device_count()}, local={jax.local_device_count()}, "
             f"kinds={[device.device_kind for device in devices]}"
         )
+    replay.run_phase_0_prefix(config.prefix_config)
     run_spec = config.prefix_config.run_spec
     checkpoint_uri = os.path.join(
         config.prefix_config.output_path,
@@ -448,7 +451,7 @@ def main() -> None:
                 "source panel bucket set and data-loader implementation",
                 "model architecture and optimizer configuration",
                 "3007-update optimizer schedule horizon",
-                "batch size, sequence length, precision, and logical mesh",
+                "global batch size, sequence length, and precision",
             ],
             "deliberate_changes": [
                 "phase-0 weights follow the frozen cap-4/cap-6 KL ladder",
