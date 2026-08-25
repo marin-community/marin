@@ -6,12 +6,19 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+import fsspec
 import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_harsh_cap_branches as launch
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     design_delphi_phase1_harsh_cap_branches_20260825 as design,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    fit_delphi_phase1_harsh_cap_branch_response as fit,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    materialize_delphi_phase1_harsh_cap_branches as materialize,
 )
 
 
@@ -161,3 +168,130 @@ def test_manifest_write_is_idempotent(tmp_path: Path) -> None:
     launch.save_manifest(config)
 
     assert (tmp_path / "manifest.json").read_bytes() == first
+
+
+def test_default_materialization_does_not_open_referee_metrics() -> None:
+    fs = fsspec.filesystem("memory")
+    experiment_root = "memory://harsh-branches"
+    base_row = {
+        "run_id": 973_000,
+        "prefix_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+        "prefix_repeat_seed": 0,
+        "continuation_id": "fit_000",
+        "fit_budget": True,
+        "data_seed": design.FIT_DATA_SEED,
+        "trainer_seed": 0,
+        "source": "test",
+        "prefix": {
+            "candidate_id": "cap4_shared_bounded_ensemble_kl0",
+            "repeat_seed": 0,
+            "checkpoint_uri": "gs://marin-us-east5/prefix/checkpoints/step-2399",
+            "provenance_sha256": "prefix-provenance",
+        },
+        "phase_weights": {"phase_0": {"a": 1.0}, "phase_1": {"a": 1.0}},
+    }
+    rows = [
+        {**base_row, "run_order": 0, "run_name": "fit", "role": "fixed_prefix_response_fit"},
+        {
+            **base_row,
+            "run_order": 1,
+            "run_id": 973_001,
+            "run_name": "referee",
+            "continuation_id": "referee_000",
+            "role": "sealed_geometry_referee",
+            "fit_budget": False,
+        },
+    ]
+    manifest = {
+        "experiment_name": "experiment",
+        "prefix_replay_code_commit": "prefix-commit",
+        "candidate_weights_sha256": "candidates",
+        "candidate_aliases_sha256": "aliases",
+        "continuation_weights_sha256": "weights",
+        "design_manifest_sha256": "design",
+        "code_commit": "branch-commit",
+        "prefix_hardware": asdict(launch.TPU_HARDWARE),
+        "continuation_hardware": asdict(launch.TPU_HARDWARE),
+        "branch_rows": rows,
+    }
+    for row in rows:
+        output_path = f"/harsh-branches/{row['run_name']}"
+        provenance = {
+            **materialize.expected_provenance(row, manifest),
+            "observed_continuation_hardware": {
+                "platform": "tpu",
+                "device_kind": "TPU v6 lite",
+                "global_device_count": 8,
+                "local_device_count": 8,
+            },
+            "terminal_checkpoint_uri": f"memory://{output_path}/checkpoints/step-{materialize.TERMINAL_STEP}",
+        }
+        fs.makedirs(output_path, exist_ok=True)
+        with fs.open(f"{output_path}/{launch.BRANCH_PROVENANCE_FILENAME}", "w") as handle:
+            json.dump(provenance, handle)
+        if row["role"] != "sealed_geometry_referee":
+            fs.makedirs(f"{output_path}/checkpoints", exist_ok=True)
+            with fs.open(f"{output_path}/checkpoints/eval_metrics.jsonl", "w") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "step": materialize.TERMINAL_STEP,
+                            "eval/uncheatable_eval/bpb": 0.99,
+                        }
+                    )
+                    + "\n"
+                )
+
+    results, _, referees, missing = materialize.materialize(
+        experiment_root,
+        manifest,
+        open_referee=False,
+    )
+
+    assert results.run_name.tolist() == ["fit"]
+    assert referees[["run_name", "outcome_opened"]].to_dict("records") == [
+        {"run_name": "referee", "outcome_opened": False}
+    ]
+    assert missing == []
+
+
+def test_local_response_is_tied_anchored_and_recovers_nonnegative_damage() -> None:
+    generator = np.random.default_rng(20260825)
+    center = np.asarray([0.45, 0.35, 0.20])
+    weights = generator.dirichlet(50.0 * center, size=80)
+    coefficients = np.asarray([-0.010, 0.006, 0.004])
+    effects = (np.sqrt(weights) - np.sqrt(center)) @ coefficients + 0.08 * fit.hellinger(weights, center) ** 2
+
+    model = fit.fit_model(weights, effects, center, "sqrt", 1e-6)
+    predictions = fit.predict(model, weights, center)
+
+    np.testing.assert_allclose(predictions, effects, atol=1e-6, rtol=0)
+    np.testing.assert_allclose(fit.predict(model, center[None, :], center), [0.0], atol=1e-14, rtol=0)
+    assert model.damage >= 0.0
+    folds = fit.geometric_fold_ids(weights, center, folds=5, seed=20260825)
+    assert set(folds) == set(range(5))
+    fold_predictions, selections = fit.fold_ensemble_predictions(weights, effects, center, weights[:4])
+    assert fold_predictions.shape == (fit.OUTER_FOLDS, 4)
+    assert len(selections) == fit.OUTER_FOLDS
+
+
+def test_control_baselines_use_matched_seed_for_effects_and_four_seed_mean_for_level() -> None:
+    results = pd.DataFrame(
+        [
+            {
+                "role": "common_random_tied_control",
+                "prefix_repeat_seed": 0,
+                "bpb": 0.990,
+            },
+            *[{"role": "fresh_tied_control", "prefix_repeat_seed": 0, "bpb": value} for value in (0.982, 0.984, 0.986)],
+            *[
+                {"role": "prefix_state_tied_control", "prefix_repeat_seed": 1, "bpb": value}
+                for value in (0.985, 0.986, 0.987, 0.988)
+            ],
+        ]
+    )
+
+    baselines = fit.control_baselines(results)
+
+    assert baselines["matched_tied_bpb"] == 0.990
+    assert baselines["expected_tied_bpb"] == np.mean([0.990, 0.982, 0.984, 0.986])

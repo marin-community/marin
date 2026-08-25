@@ -305,7 +305,7 @@ def load_design(
     weights = pd.read_csv(weights_path)
     if len(summary) != len(candidate_ids) * ROWS_PER_PREFIX:
         raise ValueError("Branch summary row count changed")
-    rows = []
+    rows: list[dict[str, object]] = []
     for summary_row in summary.itertuples(index=False):
         candidate_id = str(summary_row.prefix_candidate_id)
         continuation_id = str(summary_row.continuation_id)
@@ -354,7 +354,7 @@ def enrich_rows(
     branch_run_id_base: int,
 ) -> list[dict[str, object]]:
     checkpoints = {(row.candidate_id, row.repeat_seed): row for row in prefixes}
-    enriched = []
+    enriched: list[dict[str, object]] = []
     for run_order, row in enumerate(rows):
         identity = (str(row["prefix_candidate_id"]), int(row["prefix_repeat_seed"]))
         source = specs[identity]
@@ -609,7 +609,10 @@ def main() -> None:
         args.expected_candidate_sha256,
         args.prefix_replay_code_commit,
     )
-    candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in selected_payload["selected_aliases"])
+    selected_aliases = selected_payload.get("selected_aliases")
+    if not isinstance(selected_aliases, list) or not all(isinstance(row, dict) for row in selected_aliases):
+        raise ValueError("Selected-prefix aliases are malformed")
+    candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in selected_aliases)
     panel_label = "_".join(candidate_id.split("_", maxsplit=1)[0] for candidate_id in candidate_ids)
     experiment_name = f"{EXPERIMENT_PREFIX}_{panel_label}"
     specs = source_prefix_specs(args.candidate_weights, args.expected_candidate_sha256, args.analysis_output_path)
