@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import huggingface_hub
 from fray.types import ResourceConfig
+from fsspec.spec import AbstractFileSystem
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
 from rigging.filesystem.atomic import atomic_rename
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 HF_PROTOCOL_PREFIX = "hf://"
 HF_BUCKET_PATH_PREFIX = "buckets/"
 HF_DATASET_REPO_TYPE_PREFIX = "datasets"
+DOWNLOAD_SUCCESS_METRICS_TEMPLATE = ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"
 
 # HF returns 401 when no credentials are sent and 403 when the caller's token
 # lacks access (e.g. gated dataset, accept-license required). Neither is fixed
@@ -118,15 +120,24 @@ class DownloadConfig:
     hashes. Use this to pin mutable Hugging Face bucket contents."""
 
 
+@dataclass(frozen=True)
+class HfRepoFile:
+    """Repository file metadata needed to plan and validate a transfer."""
+
+    size: int | None
+    xet_hash: str | None
+
+
+@dataclass(frozen=True)
+class HfRepoListing:
+    """Selected repository files keyed by resolved path, plus their source root."""
+
+    source_root: str
+    files: dict[str, HfRepoFile]
+
+
 def _strip_hf_protocol(path: str) -> str:
     return path.removeprefix(HF_PROTOCOL_PREFIX).lstrip("/")
-
-
-def _resolve_hf_source_path(cfg: DownloadConfig) -> str:
-    source_path = (
-        os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id) if cfg.hf_repo_type_prefix else cfg.hf_dataset_id
-    )
-    return _strip_hf_protocol(source_path)
 
 
 def _assert_bucket_support_available(source_path: str) -> None:
@@ -138,6 +149,60 @@ def _assert_bucket_support_available(source_path: str) -> None:
             f"Bucket paths require huggingface_hub>=1.6.0, found {huggingface_hub.__version__}. "
             "Upgrade the runtime environment to a buckets-capable huggingface_hub version."
         )
+
+
+def _list_source_files(
+    *,
+    source_fs: AbstractFileSystem,
+    source_root: str,
+    file_globs: list[str],
+    source_name: str,
+    revision: str | None,
+) -> dict[str, HfRepoFile]:
+    list_kwargs = {"revision": revision} if revision is not None else {}
+    raw_file_info: dict[str, dict] = {}
+    if not file_globs:
+        listing = source_fs.find(source_root, detail=True, **list_kwargs)
+        if not isinstance(listing, dict):
+            raise TypeError("filesystem find(detail=True) returned paths without file metadata")
+        raw_file_info.update(listing)
+    else:
+        for file_glob in file_globs:
+            listing = source_fs.glob(os.path.join(source_root, file_glob), detail=True, **list_kwargs)
+            if not isinstance(listing, dict):
+                raise TypeError("filesystem glob(detail=True) returned paths without file metadata")
+            raw_file_info.update(listing)
+    if not raw_file_info:
+        raise ValueError(f"No files found for `{source_name}`. Used glob patterns: {file_globs}")
+    return {
+        path: HfRepoFile(size=metadata.get("size"), xet_hash=metadata.get("xet_hash"))
+        for path, metadata in raw_file_info.items()
+    }
+
+
+def list_hf_repo_files(
+    *,
+    hf_dataset_id: str,
+    revision: str,
+    hf_urls_glob: list[str] | None = None,
+    hf_repo_type_prefix: str = HF_DATASET_REPO_TYPE_PREFIX,
+    token: str | None = None,
+) -> HfRepoListing:
+    """Return the resolved source root and selected file metadata for one repository."""
+
+    source_path = os.path.join(hf_repo_type_prefix, hf_dataset_id) if hf_repo_type_prefix else hf_dataset_id
+    source_path = _strip_hf_protocol(source_path)
+    _assert_bucket_support_available(source_path)
+    fs_kwargs = {"token": token} if token is not None else {}
+    source_fs, source_root = url_to_fs(f"hf://{source_path}", **fs_kwargs)
+    files = _list_source_files(
+        source_fs=source_fs,
+        source_root=source_root,
+        file_globs=hf_urls_glob or [],
+        source_name=hf_dataset_id,
+        revision=revision,
+    )
+    return HfRepoListing(source_root=source_root, files=files)
 
 
 def _relative_path_in_source(file_path: str, source_path: str) -> str:
@@ -168,16 +233,14 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
     return normalized_file.split("/", 3)[-1]
 
 
-def _source_xet_fingerprint(source_path: str, file_info: dict[str, dict]) -> str:
+def _source_xet_fingerprint(source_path: str, file_info: dict[str, HfRepoFile]) -> str:
     """Fingerprint an HF source tree from relative paths, sizes, and Xet hashes."""
     entries: list[str] = []
     for file_path, info in file_info.items():
         relative_path = _relative_path_in_source(file_path, source_path)
-        size = info.get("size")
-        xet_hash = info.get("xet_hash")
-        if size is None or not xet_hash:
+        if info.size is None or not info.xet_hash:
             raise ValueError(f"Cannot fingerprint {file_path}: Hugging Face did not return size and Xet hash metadata")
-        entries.append(f"{relative_path}\t{size}\t{xet_hash}")
+        entries.append(f"{relative_path}\t{info.size}\t{info.xet_hash}")
     return hashlib.sha256("\n".join(sorted(entries)).encode()).hexdigest()
 
 
@@ -337,30 +400,24 @@ def download_hf(cfg: DownloadConfig) -> None:
     # by HfFileSystem; tests can set source_url_override to a local/fsspec path.
     logger.info("Identifying files to download...")
     if cfg.source_url_override is not None:
-        source_url = cfg.source_url_override
-        source_fs, source_root = url_to_fs(source_url)
-        list_kwargs: dict = {}
+        source_fs, source_root = url_to_fs(cfg.source_url_override)
+        file_info = _list_source_files(
+            source_fs=source_fs,
+            source_root=source_root,
+            file_globs=cfg.hf_urls_glob,
+            source_name=cfg.hf_dataset_id,
+            revision=None,
+        )
     else:
-        hf_source_path = _resolve_hf_source_path(cfg)
-        _assert_bucket_support_available(hf_source_path)
-        source_url = f"hf://{hf_source_path}"
-        source_fs, source_root = url_to_fs(source_url)
-        list_kwargs = {"revision": cfg.revision}
-
-    # `detail=True` carries the sizes (download validation) and Xet hashes (source
-    # fingerprinting) in the listing itself, avoiding a per-file `info()` round
-    # trip. Overlapping glob patterns collapse into one task per path.
-    file_info: dict[str, dict] = {}
-    if not cfg.hf_urls_glob:
-        file_info.update(source_fs.find(source_root, detail=True, **list_kwargs))
-    else:
-        for url_glob in cfg.hf_urls_glob:
-            pattern = os.path.join(source_root, url_glob)
-            file_info.update(source_fs.glob(pattern, detail=True, **list_kwargs))
+        listing = list_hf_repo_files(
+            hf_dataset_id=cfg.hf_dataset_id,
+            revision=cfg.revision,
+            hf_urls_glob=cfg.hf_urls_glob,
+            hf_repo_type_prefix=cfg.hf_repo_type_prefix,
+        )
+        source_root = listing.source_root
+        file_info = listing.files
     files = sorted(file_info)
-
-    if not files:
-        raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
     source_xet_fingerprint = None
     if cfg.expected_source_xet_fingerprint is not None:
@@ -384,7 +441,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             FileDownloadTask(
                 source_url=worker_source_url,
                 destination_path=prefix_join(output_path, relative_file_path),
-                expected_size=file_info[file].get("size"),
+                expected_size=file_info[file].size,
                 read_timeout_seconds=cfg.read_timeout_seconds,
                 progress_log_interval_seconds=cfg.progress_log_interval_seconds,
                 read_chunk_size_mib=cfg.read_chunk_size_mib,
@@ -392,14 +449,14 @@ def download_hf(cfg: DownloadConfig) -> None:
         )
 
     total_files = len(download_tasks)
-    total_size_gb = sum(info["size"] for info in file_info.values() if info.get("size") is not None) / (1024**3)
+    total_size_gb = sum(info.size for info in file_info.values() if info.size is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
     pipeline = (
         Dataset.from_list(download_tasks)
         .map(stream_file_to_fsspec)
         .write_jsonl(
-            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+            prefix_join(cfg.gcs_output_path, DOWNLOAD_SUCCESS_METRICS_TEMPLATE),
             skip_existing=True,
         )
     )

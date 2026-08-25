@@ -18,14 +18,21 @@ from dataclasses import dataclass, field
 import draccus
 import polars as pl
 from fray.types import ResourceConfig
-from huggingface_hub import HfFileSystem, get_token
+from huggingface_hub import get_token
 from polars.io.partition import FileProviderArgs
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.parquet_scan import storage_options_for_path
 
-from marin.datakit.download.huggingface import _relative_path_in_source
+from marin.datakit.download.huggingface import (
+    DOWNLOAD_SUCCESS_METRICS_TEMPLATE,
+    HF_PROTOCOL_PREFIX,
+    _relative_path_in_source,
+    list_hf_repo_files,
+)
 from marin.utilities.validation_utils import write_provenance_json
 
 logger = logging.getLogger(__name__)
@@ -47,7 +54,7 @@ _HEX_PREFIX = re.compile(rf"^[0-9a-f]{{{BLOB_PREFIX_HEX_WIDTH}}}$")
 class StackV2DownloadConfig:
     """Configuration for the direct Hugging Face-to-object-store transfer."""
 
-    output_path: str
+    output_path: str = field(default_factory=lambda: marin_temp_bucket(ttl_days=30, prefix="stack-v2"))
     revision: str = HF_REVISION
     max_workers: int = DEFAULT_MAX_WORKERS
     max_files: int | None = None
@@ -65,7 +72,6 @@ class StackV2ParquetTask:
     source_url: str
     relative_source_path: str
     output_path: str
-    expected_size: int | None = None
 
     @property
     def source_id(self) -> str:
@@ -74,11 +80,10 @@ class StackV2ParquetTask:
 
 @dataclass(frozen=True)
 class StackV2DownloadResult:
-    """Metrics emitted after one source parquet is fully partitioned."""
+    """Completion record emitted after one source parquet is fully partitioned."""
 
     source_url: str
     relative_source_path: str
-    expected_size: int | None
 
 
 @dataclass(frozen=True)
@@ -107,16 +112,14 @@ def _hf_token() -> str:
 def list_stack_v2_tasks(cfg: StackV2DownloadConfig) -> list[StackV2ParquetTask]:
     """List the pinned parquet files and make one Zephyr task per file."""
 
-    source_root = f"datasets/{HF_DATASET_ID}"
-    source_fs = HfFileSystem(token=_hf_token())
-    listing = source_fs.glob(
-        f"{source_root}/{HF_PARQUET_GLOB}",
-        detail=True,
+    listing = list_hf_repo_files(
+        hf_dataset_id=HF_DATASET_ID,
         revision=cfg.revision,
+        hf_urls_glob=[HF_PARQUET_GLOB],
+        token=_hf_token(),
     )
-    if not isinstance(listing, dict):
-        raise TypeError("HfFileSystem.glob(detail=True) returned paths without file metadata")
-    file_info = listing
+    source_root = listing.source_root
+    file_info = listing.files
     files = sorted(file_info)
     if cfg.max_files is not None:
         files = files[: cfg.max_files]
@@ -126,17 +129,16 @@ def list_stack_v2_tasks(cfg: StackV2DownloadConfig) -> list[StackV2ParquetTask]:
     data_output_path = prefix_join(cfg.output_path, "data")
     return [
         StackV2ParquetTask(
-            source_url=f"hf://{file}",
+            source_url=f"{HF_PROTOCOL_PREFIX}{file}",
             relative_source_path=_relative_path_in_source(file, source_root),
             output_path=data_output_path,
-            expected_size=file_info[file].get("size"),
         )
         for file in files
     ]
 
 
 def _input_storage_options(source_url: str) -> dict[str, object] | None:
-    if not source_url.startswith("hf://"):
+    if not source_url.startswith(HF_PROTOCOL_PREFIX):
         return None
     return {"token": _hf_token(), "max_retries": OBJECT_STORE_MAX_RETRIES}
 
@@ -151,6 +153,8 @@ def partition_stack_v2_parquet(task: StackV2ParquetTask) -> StackV2DownloadResul
         low_memory=True,
         parallel="row_groups",
     ).with_columns(pl.col("blob_id").str.slice(0, BLOB_PREFIX_HEX_WIDTH).str.to_lowercase().alias(BLOB_PREFIX_COLUMN))
+    output_storage_options: dict[str, object] = dict(storage_options_for_path(task.output_path) or {})
+    output_storage_options["max_retries"] = OBJECT_STORE_MAX_RETRIES
 
     source.sink_parquet(
         pl.PartitionBy(
@@ -163,13 +167,12 @@ def partition_stack_v2_parquet(task: StackV2ParquetTask) -> StackV2DownloadResul
         statistics=True,
         mkdir=True,
         engine="streaming",
-        storage_options={"max_retries": OBJECT_STORE_MAX_RETRIES},
+        storage_options=output_storage_options,
     )
     logger.info("Partitioned %s into %s", task.source_url, task.output_path)
     return StackV2DownloadResult(
         source_url=task.source_url,
         relative_source_path=task.relative_source_path,
-        expected_size=task.expected_size,
     )
 
 
@@ -180,7 +183,7 @@ def build_stack_v2_pipeline(tasks: list[StackV2ParquetTask], output_path: str) -
         Dataset.from_list(tasks)
         .map(partition_stack_v2_parquet)
         .write_jsonl(
-            prefix_join(output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+            prefix_join(output_path, DOWNLOAD_SUCCESS_METRICS_TEMPLATE),
             skip_existing=True,
         )
     )
