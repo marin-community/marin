@@ -85,7 +85,7 @@ def test_finelog_health_does_not_mask_programming_errors():
 # --- IrisSource ------------------------------------------------------------
 
 
-def test_jobs_splits_inflight_from_terminal_and_names_states():
+def test_job_counts_splits_inflight_from_terminal_and_names_states():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/ExecuteRawQuery")
         return httpx.Response(
@@ -96,7 +96,7 @@ def test_jobs_splits_inflight_from_terminal_and_names_states():
             },
         )
 
-    assert _iris(handler).jobs() == [
+    assert _iris(handler).job_counts() == [
         {"bucket": "inflight", "state": "running", "count": 5},
         {"bucket": "last24h", "state": "succeeded", "count": 10},
         {"bucket": "last24h", "state": "killed", "count": 2},
@@ -202,7 +202,7 @@ def test_peers_reports_controller_heartbeat_reachability():
 
 def test_controller_non_200_raises_upstream_error():
     with pytest.raises(UpstreamError) as excinfo:
-        _iris(lambda request: httpx.Response(503)).jobs()
+        _iris(lambda request: httpx.Response(503)).job_counts()
     assert excinfo.value.source == "iris"
     assert excinfo.value.status_code == 502
 
@@ -472,7 +472,7 @@ class _FakeIris:
     def target(self):
         return self._target
 
-    def jobs(self):
+    def job_counts(self):
         if self._raises:
             raise self._raises
         return self._rows
@@ -492,7 +492,7 @@ def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
 
 def test_iris_endpoint_returns_rows():
     client = _app(_FakeIris(TARGET, rows=[{"bucket": "inflight", "state": "running", "count": 3}]))
-    assert client.get("/iris/marin/jobs").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
+    assert client.get("/iris/marin/job_counts").json() == [{"bucket": "inflight", "state": "running", "count": 3}]
 
 
 def test_iris_peers_endpoint_returns_heartbeat_rows():
@@ -502,13 +502,13 @@ def test_iris_peers_endpoint_returns_heartbeat_rows():
 
 def test_dead_controller_fails_loud_not_empty():
     client = _app(_FakeIris(TARGET, raises=UpstreamError("iris", "controller unreachable", status_code=504)))
-    resp = client.get("/iris/marin/jobs")
+    resp = client.get("/iris/marin/job_counts")
     assert resp.status_code == 504
     assert resp.json()["source"] == "iris"
 
 
 def test_unknown_cluster_on_iris_route_is_400():
-    assert _app(_FakeIris(TARGET)).get("/iris/nope/jobs").status_code == 400
+    assert _app(_FakeIris(TARGET)).get("/iris/nope/job_counts").status_code == 400
 
 
 def test_nightlies_endpoint_returns_linked_long_cells():

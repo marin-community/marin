@@ -39,7 +39,7 @@ test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their
   const frames = [
     frame('W', [{
       cluster: 'cw-us-east-02a', namespace: 'iris', pod: 'train-0', node: 'gpu-1', job: '/alice/train',
-      task: '/alice/train/0', phase: 'Running', ready: true, priority_class: 'production', age_seconds: 120,
+      task: '/alice/train/0', phase: 'Running', ready: true, priority_class: 'iris-production', age_seconds: 120,
       cpu_request_millicores: 8000, memory_request_bytes: 68719476736, gpu_request_count: 2, gpu_variant: 'H100',
     }, {
       cluster: 'cw-us-east-02a', namespace: 'iris', pod: 'eval-0', node: '', job: '/bob/eval',
@@ -51,6 +51,7 @@ test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their
       gpu_capacity: 4, gpu_allocatable: 4, cpu_allocatable: '32', memory_allocatable: '256Gi', ready: true,
       unschedulable: false,
     }]),
+    frame('J', [{ job: '/alice/train' }]),
     frame('T', [{
       cluster: 'cw-us-east-02a', task: '/alice/train/0', pod: 'train-0', cpu_millicores: 3500,
       memory_bytes: 34359738368, sampled_at: Date.now(),
@@ -68,7 +69,15 @@ test('cluster capacity rolls tasks into jobs and packs requested GPUs onto their
   expect(within(totals).getByText('2/4')).toBeInTheDocument();
   expect(within(totals).getByText('tasks waiting').parentElement).toHaveTextContent('1');
   const jobs = screen.getByRole('region', { name: 'Active jobs' });
-  expect(within(jobs).getByText('/alice/train')).toBeInTheDocument();
+  const trainJob = within(jobs).getByRole('row', { name: /alice\/train/ });
+  expect(within(trainJob).getByText('/alice/train')).toBeInTheDocument();
+  expect(within(trainJob).getByText('production')).toBeInTheDocument();
+  expect(within(trainJob).getByRole('link', { name: 'Open' })).toHaveAttribute(
+    'href',
+    'https://iris.oa.dev/#/job/%2Falice%2Ftrain?cluster=cw-us-east-02a'
+  );
+  const directJob = within(jobs).getByRole('row', { name: /bob\/eval/ });
+  expect(within(directJob).queryByRole('link', { name: 'Open' })).not.toBeInTheDocument();
   expect(within(jobs).getByText('3.50 cores')).toBeInTheDocument();
   const slots = screen.getByRole('list', { name: 'GPU slots on gpu-1' });
   expect(within(slots).getAllByRole('listitem', { name: '/alice/train GPU' })).toHaveLength(2);
