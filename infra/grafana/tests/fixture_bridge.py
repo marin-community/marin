@@ -290,13 +290,13 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             }
             for region, healthy, chips in (("us-east5", 84, 512), ("us-central2", 51, 256), ("cw-us-east", 37, 0))
         ]
-    if path == "/iris/marin/jobs":
+    if path == "/iris/marin/job_counts":
         return [
             {"bucket": "inflight", "state": "running", "count": 43},
             {"bucket": "last24h", "state": "succeeded", "count": 318},
             {"bucket": "last24h", "state": "failed", "count": 9},
         ]
-    if path == "/iris/marin/active_job_ids":
+    if path == "/iris/marin/jobs":
         return [{"job": job} for job in ("/alice/llama", "/bob/eval", "/carol/embed", "/ops/loader", "/dave/train")]
     if path == "/finelog/marin/fleet_health":
         return [

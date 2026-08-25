@@ -228,7 +228,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/iris/marin/active_job_ids",
+          "url": "/iris/marin/jobs",
           "url_options": {
             "method": "GET",
             "params": [

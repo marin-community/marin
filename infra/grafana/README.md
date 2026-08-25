@@ -38,7 +38,8 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
-GET /iris/{cluster}/jobs | workers | health      live controller RPCs
+GET /iris/{cluster}/job_counts | jobs | workers | health
+                                                    live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
@@ -282,7 +283,7 @@ fragments shared with `home.json`. The active panels pin a fixed two-minute wind
 (`timeFrom: 2m`) so a finished job — which stops emitting with no final zero row —
 ages out rather than lingering as active. GCE controllers (marin, marin-dev) emit
 no `iris.task_state` (their DB is directly `ExecuteRawQuery`-able), so their
-job-state counts come from the live `/iris/{cluster}/jobs` endpoint in its own row,
+job-state counts come from the live `/iris/{cluster}/job_counts` endpoint in its own row,
 and their per-task resource history sits in a collapsed row below. The `$job`
 selector scopes the active-jobs table and the waiting-task series; with every job
 selected the latter is the fleet backlog broken out by job, and narrowed to one
