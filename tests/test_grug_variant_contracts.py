@@ -24,7 +24,8 @@ import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DatasetComponent, DirectDatasetComponent, LmDataConfig
@@ -140,6 +141,25 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     field_names = {field.name for field in dataclasses.fields(model_config_cls)}
     kwargs = {k: v for k, v in base_kwargs.items() if k in field_names}
     return model_config_cls(**kwargs)
+
+
+def test_grug_moe_stores_expert_hidden_weights_on_configured_axis():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 2, 1, 2),
+        axis_names=("replica_dcn", "data", "expert", "model", "context"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    cfg = dataclasses.replace(cfg, expert_weight_hidden_axis="context")
+    key = jax.random.PRNGKey(0)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        mlp = eqx.filter_eval_shape(model_module.MoEMLP.init, cfg, key=key)
+
+    assert mlp.expert_mlp.w_gate.sharding.spec == P("expert", "context", "model")
+    assert mlp.expert_mlp.w_up.sharding.spec == P("expert", "context", "model")
+    assert mlp.expert_mlp.w_down.sharding.spec == P("expert", "model", "context")
 
 
 def test_grug_moe_layer_masks_preserve_thd_segment_metadata():

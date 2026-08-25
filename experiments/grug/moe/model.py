@@ -38,7 +38,9 @@ from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
+    MoEExpertMlpPspecs,
     MoeImplementation,
+    PspecAxis,
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -179,6 +181,12 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    expert_weight_hidden_axis: PspecAxis = "data"
+    """Mesh axis used to shard routed-expert hidden dimensions for storage.
+
+    This does not change expert ownership or the EP collective group, which
+    remain on ``expert``.
+    """
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -591,6 +599,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
                 split_w_gate_up=cfg.split_w_gate_up,
+                pspecs=MoEExpertMlpPspecs(hidden=cfg.expert_weight_hidden_axis),
             ),
             cfg=cfg,
         )

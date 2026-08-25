@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import os
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -428,6 +432,107 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
 
     assert mlp.w_gate_up.sharding.spec == P(None, "data", "model")
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
+
+
+def test_moe_ep_auxiliary_hidden_sharding_matches_dense_value_and_gradients():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import MoEExpertMlp, MoEExpertMlpPspecs, moe_mlp
+
+        assert jax.device_count() == 4
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2),
+            axis_names=("expert", "context"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit),
+        )
+        x = jax.random.normal(jax.random.key(0), (4, 4))
+        selected_experts = jnp.asarray(
+            [[0, 1], [1, 2], [2, 3], [3, 0]],
+            dtype=jnp.int32,
+        )
+        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
+        cotangent = jax.random.normal(jax.random.key(2), (4, 4))
+
+        with jax.set_mesh(mesh):
+            mlp = MoEExpertMlp.init(
+                num_experts=4,
+                hidden_dim=4,
+                intermediate_dim=3,
+                initializer_std=0.02,
+                key=jax.random.key(3),
+                implementation="ring",
+                pspecs=MoEExpertMlpPspecs(expert="expert", hidden="context", intermediate=None),
+            )
+
+        assert mlp.w_gate.sharding.spec == P("expert", "context", None)
+        assert mlp.w_up.sharding.spec == P("expert", "context", None)
+        assert mlp.w_down.sharding.spec == P("expert", None, "context")
+        assert mlp.w_gate.addressable_shards[0].data.shape == (2, 2, 3)
+
+        def dense_output(x, w_gate, w_up, w_down):
+            gate = jnp.einsum("th,tkhi->tki", x, w_gate[selected_experts])
+            up = jnp.einsum("th,tkhi->tki", x, w_up[selected_experts])
+            expert_output = jnp.einsum("tki,tkih->tkh", jax.nn.silu(gate) * up, w_down[selected_experts])
+            return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+
+        def ep_output(x, w_gate, w_up, w_down):
+            return moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                jnp.concatenate([w_gate, w_up], axis=-1),
+                w_down,
+                activation=jax.nn.silu,
+                implementation="ring",
+                mesh=mesh,
+            )
+
+        weights = (mlp.w_gate, mlp.w_up, mlp.w_down)
+        dense_weights = tuple(jnp.asarray(np.asarray(weight)) for weight in weights)
+        expected = dense_output(x, *dense_weights)
+        expected_gradients = jax.grad(
+            lambda x, *weights: jnp.sum(dense_output(x, *weights) * cotangent),
+            argnums=(0, 1, 2, 3),
+        )(x, *dense_weights)
+
+        token_sharding = NamedSharding(mesh, P("expert", None))
+        x = jax.device_put(x, token_sharding)
+        selected_experts = jax.device_put(selected_experts, token_sharding)
+        combine_weights = jax.device_put(combine_weights, token_sharding)
+        cotangent = jax.device_put(cotangent, token_sharding)
+        with jax.set_mesh(mesh):
+            actual = ep_output(x, *weights)
+            actual_gradients = jax.grad(
+                lambda x, *weights: jnp.sum(ep_output(x, *weights) * cotangent),
+                argnums=(0, 1, 2, 3),
+            )(x, *weights)
+
+        assert actual.sharding.spec == P("expert")
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+            np.testing.assert_allclose(
+                np.asarray(actual_gradient),
+                np.asarray(expected_gradient),
+                rtol=1e-5,
+                atol=1e-5,
+            )
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
