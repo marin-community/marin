@@ -714,11 +714,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
             if self.name == ZEPHYR_PROGRESS_TIME_METRIC:
                 emitted.append((value, attributes))
 
-    class Writer:
-        def gauge(self, name, **_kwargs):
-            return Gauge(name)
-
-    monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     start_test_stage(coordinator, [task])
     coordinator._publish_telemetry()
     assert emitted[-1][0] == 1_000.0
@@ -763,11 +759,7 @@ def test_progress_metric_isolated_between_executions(coordinator, monkeypatch):
         def set(self, value, *, attributes=None):
             emitted.append((self.name, value, attributes))
 
-    class Writer:
-        def gauge(self, name, **_kwargs):
-            return Gauge(name)
-
-    monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     coordinator._publish_telemetry()
     progress = {attributes["run"]: value for name, value, attributes in emitted if name == ZEPHYR_PROGRESS_TIME_METRIC}
     assert progress == {"run-1": 1_000.0, "run-2": 2_000.0}

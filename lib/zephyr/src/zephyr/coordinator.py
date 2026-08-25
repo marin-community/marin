@@ -51,7 +51,6 @@ MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-_TELEMETER = telemetry.writer("zephyr")
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -532,8 +531,8 @@ class ZephyrCoordinator:
             attributes = {**_SNAPSHOT_ATTRIBUTES, "run": execution_id}
             for name, value in counters.items():
                 metric_name = re.sub(r"[^a-zA-Z0-9_]", "_", name.removeprefix("zephyr/"))
-                _TELEMETER.gauge(metric_name).set(value, attributes=attributes)
-            _TELEMETER.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(
+                telemetry.gauge(metric_name).set(value, attributes=attributes)
+            telemetry.gauge(ZEPHYR_PROGRESS_TIME_METRIC, unit="s").set(
                 progress_time_seconds,
                 attributes=attributes,
             )

@@ -131,7 +131,7 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
 
 # Human-readable list of the dataclass field types finelog can infer a column
 # from, for the unsupported-type error message.
-_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str]"
+_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str], list[float], list[int]"
 
 
 def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
@@ -146,6 +146,12 @@ def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
         return primitive
     if typing.get_origin(inner) is dict and typing.get_args(inner) == (str, str):
         return stats_pb2.COLUMN_TYPE_MAP
+    if typing.get_origin(inner) is list:
+        element_type = typing.get_args(inner)
+        if element_type == (float,):
+            return stats_pb2.COLUMN_TYPE_FLOAT64_LIST
+        if element_type == (int,):
+            return stats_pb2.COLUMN_TYPE_INT64_LIST
     return None
 
 

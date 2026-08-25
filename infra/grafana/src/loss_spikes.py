@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from math import isfinite
 
 import pyarrow as pa
-from hero_runs import LEVANTER_TELEMETRY_TABLE, HeroRun, RunIdentity, as_number, run_id_predicate, sql_epoch_ms
+from hero_runs import LEVANTER_METRICS_TABLE, HeroRun, RunIdentity, as_number, run_id_predicate, sql_epoch_ms
 from vllm_observability import sql_string
 
 _LOSS_METRIC = "train_loss"
@@ -68,10 +68,10 @@ def loss_window_query(now: datetime, runs: Sequence[RunIdentity], executions: Se
     end = sql_epoch_ms(now)
     recent_ms = sql_epoch_ms(now - _RECENT_WINDOW)
     return (
-        f"WITH telemetry AS (SELECT * FROM {LEVANTER_TELEMETRY_TABLE}), samples AS ("
+        f"WITH telemetry AS (SELECT * FROM {LEVANTER_METRICS_TABLE}), samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, value, timestamp_ms "
         "FROM telemetry "
-        f"WHERE service = 'levanter' AND name = '{_LOSS_METRIC}' "
+        f"WHERE name = '{_LOSS_METRIC}' "
         f"AND {run_predicate} "
         f"{execution_predicate}"
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"

@@ -4,7 +4,7 @@
 """Bounded finelog queries and alert projections for hero-run health.
 
 Beyond the progress and loss rules: the telemetry path itself, the optimizer, MoE
-routing, throughput, evaluation, and Iris retries. One `telemetry_v1.levanter` scan per
+routing, throughput, evaluation, and Iris retries. One `levanter.metrics` scan per
 bridge cache interval feeds all three projections. The telemetry and optimizer
 ones page; the health one announces in Slack without opening a triage session.
 See docs/ops/hero-run-health-alerts.md.
@@ -18,7 +18,7 @@ from math import isfinite
 import pyarrow as pa
 from hero_runs import (
     HERO_ROOT_PATTERNS,
-    LEVANTER_TELEMETRY_TABLE,
+    LEVANTER_METRICS_TABLE,
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
@@ -143,8 +143,8 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
         "ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn "
-        f"FROM {LEVANTER_TELEMETRY_TABLE} "
-        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+        f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
         f"AND {run_predicate} AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
         "), execution AS ("
@@ -152,11 +152,11 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "), samples AS ("
         "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
         "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
-        f"FROM {LEVANTER_TELEMETRY_TABLE} AS telemetry JOIN execution "
+        f"FROM {LEVANTER_METRICS_TABLE} AS telemetry JOIN execution "
         "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
         "AND telemetry.run_id = execution.run_id "
         "AND telemetry.execution_uid = execution.execution_uid "
-        f"WHERE telemetry.service = 'levanter' AND telemetry.name IN ({metric_names}) "
+        f"WHERE telemetry.name IN ({metric_names}) "
         f"AND telemetry.timestamp_ms >= {liveness_since} AND telemetry.timestamp_ms < {end} "
         f"AND (telemetry.name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
         f"OR telemetry.timestamp_ms >= {signal_since})"

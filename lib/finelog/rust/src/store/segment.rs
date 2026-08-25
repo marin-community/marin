@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::errors::StatsError;
+use crate::partition_policy::SegmentPartition;
 use crate::store::types::{parse_seg_filename, seg_filename};
 
 /// Encoded size at which the parquet writer closes a row group.
@@ -64,6 +65,7 @@ pub const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 pub const LAYOUT_VERSION: u32 = 1;
 const LAYOUT_VERSION_KEY: &str = "finelog.layout_version";
 const SEGMENT_ID_KEY: &str = "finelog.segment_id";
+const PARTITION_KEY: &str = "finelog.partition";
 
 /// Rows per batch when streaming a segment through a re-encode. Bounds the
 /// rewrite's memory to one batch rather than the whole segment, which for a
@@ -88,41 +90,68 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 pub fn segment_writer_properties_with_max_rows(
     max_row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, max_row_group_rows, Uuid::new_v4())
+    segment_writer_properties_with_partition(max_row_group_rows, None)
+}
+
+pub fn segment_writer_properties_with_partition(
+    max_row_group_rows: usize,
+    partition: Option<&SegmentPartition>,
+) -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(
+        TARGET_ROW_GROUP_BYTES,
+        max_row_group_rows,
+        Uuid::new_v4(),
+        partition,
+    )
 }
 
 pub(crate) fn parquet_writer_properties(
     target_row_group_bytes: usize,
     max_row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {
-    parquet_writer_properties_with_id(target_row_group_bytes, max_row_group_rows, Uuid::new_v4())
+    parquet_writer_properties_with_id(
+        target_row_group_bytes,
+        max_row_group_rows,
+        Uuid::new_v4(),
+        None,
+    )
 }
 
 fn parquet_writer_properties_with_id(
     target_row_group_bytes: usize,
     max_row_group_rows: usize,
     segment_id: Uuid,
+    partition: Option<&SegmentPartition>,
 ) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
+    let mut metadata = vec![
+        KeyValue::new(LAYOUT_VERSION_KEY.to_string(), LAYOUT_VERSION.to_string()),
+        KeyValue::new(SEGMENT_ID_KEY.to_string(), segment_id.to_string()),
+    ];
+    if let Some(partition) = partition {
+        metadata.push(KeyValue::new(
+            PARTITION_KEY.to_string(),
+            serde_json::to_string(partition).map_err(|error| {
+                StatsError::Internal(format!("serialize segment partition: {error}"))
+            })?,
+        ));
+    }
     Ok(WriterProperties::builder()
         .set_max_row_group_bytes(Some(target_row_group_bytes))
         .set_max_row_group_row_count(Some(max_row_group_rows))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false)
-        .set_key_value_metadata(Some(vec![
-            KeyValue::new(LAYOUT_VERSION_KEY.to_string(), LAYOUT_VERSION.to_string()),
-            KeyValue::new(SEGMENT_ID_KEY.to_string(), segment_id.to_string()),
-        ]))
+        .set_key_value_metadata(Some(metadata))
         .build())
 }
 
 /// Per-segment metadata recovered from filename + parquet footer.
 ///
-/// `min_seq` comes from the FILENAME (`seg_L{level}_{min_seq}`); `max_seq` is
-/// `min_seq + row_count - 1`. `min_key_value`/`max_key_value` are the parquet
-/// column statistics for the key column when it is an Int64 column carrying
-/// statistics, else `None`.
+/// `min_seq`/`max_seq` come from Parquet statistics because partitioned files
+/// contain sparse namespace-wide sequence ranges. Files written before `seq`
+/// statistics were available fall back to the filename and row count.
+/// `min_key_value`/`max_key_value` are the Parquet statistics for an Int64 key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentMetadata {
     pub level: i32,
@@ -131,6 +160,7 @@ pub struct SegmentMetadata {
     pub row_count: i64,
     pub min_key_value: Option<i64>,
     pub max_key_value: Option<i64>,
+    pub partition: Option<SegmentPartition>,
 }
 
 /// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1).
@@ -291,6 +321,14 @@ fn segment_id_of(meta: &ParquetMetaData) -> Option<Uuid> {
         .and_then(|value| Uuid::parse_str(value).ok())
 }
 
+fn partition_of(meta: &ParquetMetaData) -> Option<SegmentPartition> {
+    meta.file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == PARTITION_KEY))
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|value| serde_json::from_str(value).ok())
+}
+
 /// Immutable logical identity stamped into a segment's Parquet metadata.
 pub fn segment_id(path: &Path) -> Option<Uuid> {
     let file = std::fs::File::open(path).ok()?;
@@ -363,6 +401,7 @@ pub fn stage_rewritten_segment(
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| StatsError::Internal(format!("read {}: {e}", path.display())))?;
     let segment_id = segment_id_of(builder.metadata()).unwrap_or_else(Uuid::new_v4);
+    let partition = partition_of(builder.metadata());
     let schema = Arc::clone(builder.schema());
     let reader = builder
         .with_batch_size(REWRITE_BATCH_ROWS)
@@ -376,6 +415,7 @@ pub fn stage_rewritten_segment(
         TARGET_ROW_GROUP_BYTES,
         max_row_group_rows,
         segment_id,
+        partition.as_ref(),
     )?);
     let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
         .map_err(|e| StatsError::Internal(format!("parquet writer init: {e}")))?;
@@ -398,39 +438,52 @@ pub fn stage_rewritten_segment(
     Ok((staging, size))
 }
 
-/// Read a segment's footer metadata: row count from the footer, `min_seq` from
-/// the FILENAME, `max_seq = min_seq + row_count - 1`, and the Int64 key-column
-/// min/max from row-group statistics.
+/// Read a segment's footer metadata, including actual seq statistics and the
+/// optional hidden partition stamp.
 ///
 /// Returns `None` for an unparseable filename or footer-read failure (the caller
 /// treats that as an empty/discardable segment).
 pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<SegmentMetadata> {
     let name = path.file_name()?.to_str()?;
-    let (level, min_seq) = parse_seg_filename(name)?;
+    let (level, filename_min_seq) = parse_seg_filename(name)?;
     let file = std::fs::File::open(path).ok()?;
     let reader = SerializedFileReader::new(file).ok()?;
-    let md = reader.metadata();
+    segment_metadata_from_parquet(reader.metadata(), level, filename_min_seq, key_column)
+}
+
+pub(crate) fn segment_metadata_from_parquet(
+    md: &ParquetMetaData,
+    level: i32,
+    filename_min_seq: i64,
+    key_column: Option<&str>,
+) -> Option<SegmentMetadata> {
+    let partition = partition_of(md);
     let num_rows = md.file_metadata().num_rows();
     if num_rows <= 0 {
         return Some(SegmentMetadata {
             level,
-            min_seq,
-            max_seq: min_seq,
+            min_seq: filename_min_seq,
+            max_seq: filename_min_seq,
             row_count: 0,
             min_key_value: None,
             max_key_value: None,
+            partition,
         });
     }
+    let (seq_min, seq_max) = metadata_int64_bounds(md, "seq")?;
+    let min_seq = seq_min.unwrap_or(filename_min_seq);
+    let max_seq = seq_max.unwrap_or(filename_min_seq + num_rows - 1);
     let (min_key, max_key) = key_column
-        .and_then(|kc| key_int64_bounds(&reader, kc))
+        .and_then(|kc| metadata_int64_bounds(md, kc))
         .unwrap_or((None, None));
     Some(SegmentMetadata {
         level,
         min_seq,
-        max_seq: min_seq + num_rows - 1,
+        max_seq,
         row_count: num_rows,
         min_key_value: min_key,
         max_key_value: max_key,
+        partition,
     })
 }
 
@@ -440,7 +493,13 @@ fn key_int64_bounds(
     reader: &SerializedFileReader<std::fs::File>,
     key_column: &str,
 ) -> Option<(Option<i64>, Option<i64>)> {
-    let md = reader.metadata();
+    metadata_int64_bounds(reader.metadata(), key_column)
+}
+
+fn metadata_int64_bounds(
+    md: &ParquetMetaData,
+    key_column: &str,
+) -> Option<(Option<i64>, Option<i64>)> {
     let schema = md.file_metadata().schema_descr();
     let col_idx = (0..schema.num_columns()).find(|&i| schema.column(i).name() == key_column)?;
     let mut lo: Option<i64> = None;

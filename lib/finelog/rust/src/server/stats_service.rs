@@ -13,6 +13,7 @@ use connectrpc::{ConnectError, RequestContext, ServiceResult};
 use datafusion::error::DataFusionError;
 
 use crate::errors::StatsError;
+use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
     DropTableResponse, GetTableSchemaResponse, ListNamespacesResponse, NamespaceInfo,
     OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedListNamespacesRequestView,
@@ -139,12 +140,14 @@ impl StatsService for StatsServiceImpl {
             .as_option()
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
-        let policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        let requested_policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
         let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
-        let ns = namespace.clone();
+        let requested_namespace = namespace.clone();
         let (effective, effective_policy, ignored_columns) = run_blocking(move || {
+            let ns = registration_namespace_for(&requested_namespace)?;
+            let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
             if forwarded_telemetry {
                 match store.get_table_schema(&ns) {
                     Ok(effective) => {

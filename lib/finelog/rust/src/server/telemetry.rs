@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::policies::{eager_storage_namespaces_for, route_ingestion_batch, storage_policy_for};
+use crate::policies::{eager_storage_namespaces_for, schema_for_namespace, storage_policy_for};
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
@@ -33,7 +33,7 @@ use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
-use crate::telemetry_policy::{matches_telemetry_namespace, TELEMETRY_NAMESPACE};
+use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
 pub const DEFAULT_DEDUPE_CAPACITY: usize = 10_000;
@@ -101,8 +101,6 @@ const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 7] = [
 struct TelemetryBatch {
     version: u32,
     batch_id: String,
-    #[serde(default)]
-    namespace: Option<String>,
     resource: Resource,
     records: Vec<TelemetryRecord>,
 }
@@ -381,7 +379,12 @@ impl TelemetryState {
                 let registered_namespace = namespace.clone();
                 match tokio::task::spawn_blocking(move || {
                     let policy = storage_policy_for(&namespace)?;
-                    store.register_table(&namespace, telemetry_schema(), policy)
+                    let schema = schema_for_namespace(&namespace).ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "no server-owned schema is registered for {namespace:?}"
+                        ))
+                    })?;
+                    store.register_table(&namespace, schema, policy)
                 })
                 .await
                 {
@@ -534,15 +537,17 @@ async fn complete_request(
     body: bytes::Bytes,
     origin_cluster: Option<String>,
 ) -> Result<TelemetryAck, ApiError> {
-    let prepared = tokio::task::spawn_blocking(move || prepare_batch(&batch_id_header, &body))
-        .await
-        .map_err(|join| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ERROR_CODE_INTERNAL,
-                format!("telemetry normalization task failed: {join}"),
-            )
-        })??;
+    let prepare_store = Arc::clone(&state.store);
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare_batch(&prepare_store, &batch_id_header, &body))
+            .await
+            .map_err(|join| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ERROR_CODE_INTERNAL,
+                    format!("telemetry normalization task failed: {join}"),
+                )
+            })??;
     for shard in &prepared.shards {
         state.ensure_namespace_registered(&shard.namespace).await?;
     }
@@ -619,7 +624,11 @@ fn required_header(headers: &HeaderMap, name: &str, max_bytes: usize) -> Result<
     Ok(value.to_string())
 }
 
-fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, ApiError> {
+fn prepare_batch(
+    store: &Store,
+    idempotency_key: &str,
+    body: &[u8],
+) -> Result<PreparedBatch, ApiError> {
     let header_id = Uuid::parse_str(idempotency_key)
         .map_err(|_| ApiError::bad_request("Idempotency-Key must be a UUID"))?;
     let batch: TelemetryBatch = serde_json::from_slice(body)
@@ -631,38 +640,30 @@ fn prepare_batch(idempotency_key: &str, body: &[u8]) -> Result<PreparedBatch, Ap
             "Idempotency-Key must equal the body batch_id",
         ));
     }
-    let logical_namespace = batch
-        .namespace
-        .clone()
-        .unwrap_or_else(|| TELEMETRY_NAMESPACE.to_string());
-    if !matches_telemetry_namespace(&logical_namespace) {
-        return Err(ApiError::bad_request(
-            "namespace is not in the telemetry schema family",
-        ));
-    }
     validate_batch(&batch)?;
     let records = batch.records.iter().enumerate().collect::<Vec<_>>();
     let normalized = normalize_record_batch(&batch, &records)?;
-    let shards = route_ingestion_batch(
-        IngestionBatchSource::Declared(&logical_namespace),
-        &normalized,
-    )
-    .map_err(telemetry_policy_error)?
-    .into_iter()
-    .map(|partition| {
-        let schema = partition.batch.schema();
-        Ok(PreparedShard {
-            namespace: partition.destination.physical_namespace,
-            ipc: encode_ipc(&schema, &[partition.batch]).map_err(|error| {
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ERROR_CODE_INTERNAL,
-                    format!("could not encode telemetry: {error}"),
-                )
-            })?,
+    let shards = store
+        .route_ingestion_batch(
+            IngestionBatchSource::Declared(TELEMETRY_NAMESPACE),
+            &normalized,
+        )
+        .map_err(telemetry_policy_error)?
+        .into_iter()
+        .map(|partition| {
+            let schema = partition.batch.schema();
+            Ok(PreparedShard {
+                namespace: partition.destination.logical_namespace,
+                ipc: encode_ipc(&schema, &[partition.batch]).map_err(|error| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ERROR_CODE_INTERNAL,
+                        format!("could not encode telemetry: {error}"),
+                    )
+                })?,
+            })
         })
-    })
-    .collect::<Result<Vec<_>, ApiError>>()?;
+        .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(PreparedBatch {
         batch_id: body_id,
         batch_id_text: batch.batch_id,

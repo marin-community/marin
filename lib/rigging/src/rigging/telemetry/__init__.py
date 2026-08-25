@@ -7,7 +7,6 @@ import atexit
 import enum
 import logging
 import math
-import re
 import threading
 import time
 import uuid
@@ -38,17 +37,6 @@ _MAX_REQUEST_BYTES = 4 << 20
 _MAX_SHUTDOWN_TIMEOUT = 5.0
 _REJECTION_WARNING_INTERVAL = 60.0
 _EVENT_KIND = "event"
-_TELEMETRY_NAMESPACE = "telemetry_v1"
-_SCOPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
-
-
-def _namespace_for(scope: str) -> str:
-    if not _SCOPE_PATTERN.fullmatch(scope):
-        raise ValueError("scope must be one or more dotted lowercase components")
-    namespace = f"{_TELEMETRY_NAMESPACE}.{scope}"
-    if len(namespace) > 64:
-        raise ValueError("scope produces a Finelog namespace longer than 64 characters")
-    return namespace
 
 
 class TelemetryRole(StrEnum):
@@ -87,7 +75,6 @@ class TelemetryStatus:
 class _Config:
     endpoint: str
     service: str
-    scope: str
     attributes: dict[str, str]
     max_queue_records: int
     max_queue_bytes: int
@@ -102,7 +89,6 @@ class _Config:
         if not self.endpoint.startswith(("http://", "https://")):
             raise ValueError("endpoint must use http:// or https://")
         serialization.validate_string(self.service, "service")
-        _namespace_for(self.scope)
         serialization.validate_attributes(self.attributes)
         limits = (
             self.max_queue_records,
@@ -130,17 +116,9 @@ class _Handle:
     name: str
     kind: str
     unit: str
-    scope: str | None
 
     def _emit_value(self, value: float, attributes: Mapping[str, str] | None) -> None:
-        _emit(
-            self.kind,
-            self.name,
-            value=value,
-            unit=self.unit,
-            attributes=attributes,
-            scope=self.scope,
-        )
+        _emit(self.kind, self.name, value=value, unit=self.unit, attributes=attributes)
 
 
 class Counter(_Handle):
@@ -157,48 +135,11 @@ class Gauge(_Handle):
         self._emit_value(value, attributes)
 
 
-class Scalar(_Handle):
-    """A scalar whose updates emit current values."""
-
-    def update(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
-        self._emit_value(value, attributes)
-
-
 class Histogram(_Handle):
     """A histogram whose calls emit individual observations."""
 
     def record(self, value: float, *, attributes: Mapping[str, str] | None = None) -> None:
         self._emit_value(value, attributes)
-
-
-@dataclass(frozen=True)
-class Writer:
-    """Declare instruments under one semantic telemetry scope."""
-
-    scope: str
-
-    def counter(self, name: str, *, unit: str = "") -> Counter:
-        return Counter(name, "counter", unit, self.scope)
-
-    def gauge(self, name: str, *, unit: str = "") -> Gauge:
-        return Gauge(name, "gauge", unit, self.scope)
-
-    def scalar(self, name: str, *, unit: str = "") -> Scalar:
-        return Scalar(name, "gauge", unit, self.scope)
-
-    def histogram(
-        self,
-        name: str,
-        *,
-        unit: str = "",
-    ) -> Histogram:
-        return Histogram(name, "histogram", unit, self.scope)
-
-
-def writer(scope: str) -> Writer:
-    """Return an immutable instrument factory for ``scope``."""
-    _namespace_for(scope)
-    return Writer(scope)
 
 
 def snapshot_attributes(source_kind: str, temporality: str) -> dict[str, str]:
@@ -300,7 +241,6 @@ class _PendingBatch:
 
 @dataclass(frozen=True)
 class _QueuedRecord:
-    namespace: str
     body: bytes
     enqueued_at: float
 
@@ -331,10 +271,10 @@ class _Runtime:
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
 
-    def emit(self, record: bytes, namespace: str) -> bool:
+    def emit(self, record: bytes) -> bool:
         """Return whether ``record`` was queued; a false result is counted as lost."""
         with self._condition:
-            if self._stop or len(record) + self._empty_envelope_size(namespace) > self.config.max_batch_bytes:
+            if self._stop or len(record) + self._empty_envelope_size() > self.config.max_batch_bytes:
                 self._lost_records += 1
                 return False
             if (
@@ -343,7 +283,7 @@ class _Runtime:
             ):
                 self._lost_records += 1
                 return False
-            queued = _QueuedRecord(namespace, record, time.monotonic())
+            queued = _QueuedRecord(record, time.monotonic())
             self._records.append(queued)
             if self._oldest_queued_at is None:
                 self._oldest_queued_at = queued.enqueued_at
@@ -414,13 +354,8 @@ class _Runtime:
                 return None
             batch_id = str(uuid.uuid4())
             selected: list[_QueuedRecord] = []
-            namespace = self._records[0].namespace
-            body_size = self._empty_envelope_size(namespace)
-            while (
-                self._records
-                and self._records[0].namespace == namespace
-                and len(selected) < self.config.max_batch_records
-            ):
+            body_size = self._empty_envelope_size()
+            while self._records and len(selected) < self.config.max_batch_records:
                 record = self._records[0]
                 extra = len(record.body) + (1 if selected else 0)
                 if selected and body_size + extra > self.config.max_batch_bytes:
@@ -436,18 +371,15 @@ class _Runtime:
             if not selected:
                 return None
         bodies = [record.body for record in selected]
-        body = self._batch_body(batch_id, bodies, namespace)
+        body = self._batch_body(batch_id, bodies)
         return _PendingBatch(batch_id, body, len(selected), sum(map(len, bodies)))
 
-    def _batch_body(self, batch_id: str, records: list[bytes], namespace: str) -> bytes:
+    def _batch_body(self, batch_id: str, records: list[bytes]) -> bytes:
         resource = serialization.json_bytes({"attributes": self.config.attributes, "service": self.config.service})
-        encoded_namespace = namespace.encode()
         return b"".join(
             (
                 b'{"batch_id":"',
                 batch_id.encode(),
-                b'","namespace":"',
-                encoded_namespace,
                 b'","records":[',
                 b",".join(records),
                 b'],"resource":',
@@ -456,9 +388,8 @@ class _Runtime:
             )
         )
 
-    def _empty_envelope_size(self, namespace: str | None = None) -> int:
-        resolved = namespace or _namespace_for(self.config.scope)
-        return len(self._batch_body(str(uuid.UUID(int=0)), [], resolved))
+    def _empty_envelope_size(self) -> int:
+        return len(self._batch_body(str(uuid.UUID(int=0)), []))
 
     def max_record_bytes(self) -> int:
         return min(self.config.max_queue_bytes, self.config.max_batch_bytes - self._empty_envelope_size())
@@ -547,17 +478,17 @@ _runtime: _Runtime | None = None
 
 def counter(name: str, *, unit: str = "") -> Counter:
     """Declare a counter that emits deltas when configured."""
-    return Counter(name, "counter", unit, None)
+    return Counter(name, "counter", unit)
 
 
 def gauge(name: str, *, unit: str = "") -> Gauge:
     """Declare a gauge that emits current values when configured."""
-    return Gauge(name, "gauge", unit, None)
+    return Gauge(name, "gauge", unit)
 
 
 def histogram(name: str, *, unit: str = "") -> Histogram:
     """Declare a histogram that emits individual observations when configured."""
-    return Histogram(name, "histogram", unit, None)
+    return Histogram(name, "histogram", unit)
 
 
 def event(
@@ -574,7 +505,6 @@ def configure(
     *,
     endpoint: str,
     service: str,
-    scope: str,
     attributes: Mapping[str, str] | None = None,
     max_queue_records: int = DEFAULT_MAX_QUEUE_RECORDS,
     max_queue_bytes: int = DEFAULT_MAX_QUEUE_BYTES,
@@ -591,7 +521,6 @@ def configure(
         config = _Config(
             endpoint=endpoint,
             service=service,
-            scope=scope,
             attributes=dict(attributes or {}),
             max_queue_records=max_queue_records,
             max_queue_bytes=max_queue_bytes,
@@ -691,21 +620,11 @@ def _emit(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-    scope: str | None = None,
 ) -> None:
     runtime = _runtime
     if runtime is None:
         return
-    _emit_to_runtime(
-        runtime,
-        kind,
-        name,
-        value=value,
-        body=body,
-        unit=unit,
-        attributes=attributes,
-        scope=scope,
-    )
+    _emit_to_runtime(runtime, kind, name, value=value, body=body, unit=unit, attributes=attributes)
 
 
 def _emit_to_runtime(
@@ -717,7 +636,6 @@ def _emit_to_runtime(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-    scope: str | None = None,
 ) -> bool:
     """Return whether one validated record was queued in the selected runtime."""
     try:
@@ -744,8 +662,7 @@ def _emit_to_runtime(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        namespace = _namespace_for(scope or runtime.config.scope)
-        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()), namespace)
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
         runtime.count_lost()
         return False

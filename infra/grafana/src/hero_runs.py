@@ -30,7 +30,7 @@ PHASE_ENROLLMENT_LOOKBACK = timedelta(minutes=60)
 # Silence this long is the telemetry path or the process. `TrainingTelemetryGone`
 # owns that case; the other projections defer rather than page for it again.
 TELEMETRY_GONE_AGE = timedelta(minutes=10)
-LEVANTER_TELEMETRY_TABLE = '"telemetry_v1.levanter"'
+LEVANTER_METRICS_TABLE = '"levanter.metrics"'
 
 HERO_RUN_PREFIX = "hero-"
 _COORDINATOR_MARKER = "-coord"
@@ -128,8 +128,8 @@ def phase_enrollment_query(now: datetime) -> str:
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
         "run_id, job_id, timestamp_ms, seq "
-        f"FROM {LEVANTER_TELEMETRY_TABLE} "
-        f"WHERE service = 'levanter' AND name = '{PHASE_METRIC}' AND process_index = '0' "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+        f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
         f"AND run_id LIKE '{HERO_RUN_PREFIX}%' AND job_id IS NOT NULL "
         f"AND timestamp_ms >= {start} AND timestamp_ms < {end}"
         "), ranked AS ("

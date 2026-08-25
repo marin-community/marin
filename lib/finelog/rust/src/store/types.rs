@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::partition_policy::SegmentPartition;
+
 /// Where a segment's bytes currently live. Wire/catalog strings: LOCAL/REMOTE/BOTH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentLocation {
@@ -48,6 +50,7 @@ pub struct SegmentRow {
     pub created_at_ms: i64,
     pub min_key_value: Option<String>,
     pub max_key_value: Option<String>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 
@@ -69,6 +72,7 @@ pub struct LocalSegment {
     pub created_at_ms: i64,
     pub min_key_value: Option<i64>,
     pub max_key_value: Option<i64>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 

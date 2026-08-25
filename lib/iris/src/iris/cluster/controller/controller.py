@@ -776,7 +776,6 @@ class Controller:
         telemetry.configure(
             endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
             service="iris-controller",
-            scope="iris.rpc",
             attributes={"role": "controller"},
         )
         self._native_proxy_metrics = install_native_proxy_metrics(self._native_proxy)

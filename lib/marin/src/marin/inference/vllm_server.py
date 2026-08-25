@@ -1093,7 +1093,6 @@ def _configure_vllm_telemetry(
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     runtime_telemetry.configure(
         _VLLM_METRICS_SERVICE,
-        scope="vllm",
         attributes={"role": telemetry.TelemetryRole.INFERENCE.value},
     )
     if not telemetry.runtime_status().configured:
@@ -1109,7 +1108,7 @@ def _configure_vllm_telemetry(
         ),
     )
     metrics_collector.start()
-    logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
+    logger.info("Forwarding vLLM metrics from %s to Finelog telemetry", metrics_url)
     nccl_probe = nccl.start() if _starts_nccl_ras_probe(launcher) else None
     return dataclasses.replace(
         handle,

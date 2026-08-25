@@ -24,7 +24,7 @@ from rigging import telemetry
 
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
-from iris.cluster.node_agent import SERVICE_NAME, TELEMETRY_SCOPE
+from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
@@ -781,7 +781,6 @@ def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_nam
         telemetry.configure(
             endpoint=endpoint,
             service=SERVICE_NAME,
-            scope=TELEMETRY_SCOPE,
             attributes={
                 "node_name": target.name,
                 "node_uid": target.node_uid,

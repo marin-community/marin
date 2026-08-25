@@ -154,35 +154,34 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-`policies.rs` holds ordered matcher lists for programmable ingestion and
-storage policies. The first matching rule wins. The ingestion fallback is
-identity: the logical and physical namespaces remain the requested table and
-the batch is unchanged. The storage fallback inherits the cluster defaults.
-Telemetry is the first policy registered in both lists.
+`policies.rs` is the ordered registry for programmable schema policies. The
+first matching rule owns logical routing, retention, and optional hidden
+partitioning for that namespace family. Schemas without a matching rule keep
+identity ingestion and the cluster's default storage policy.
 
-Rigging writers send a semantic stream name. For example,
-`telemetry.writer("levanter").scalar("train_loss")` writes the
-`telemetry_v1.levanter` stream while the metric name remains `train_loss`.
-Finelog maps that stable name to the server-owned
-Levanter storage shards. Status metrics (`train_loss`, `step`, `global_step`,
-`phase`, and `progress_time_seconds`) and detailed metrics are separate
-physical tables; histogram records always use the detailed shard even if their
-name matches a status metric. Query registration exposes one semantic name over
-both physical shards. Neither clients nor SQL name a retention
-class. Moving a metric between physical shards therefore changes one Finelog
-policy and leaves writers and dashboards alone. Requests outside the configured
-`telemetry_v1.<scope>` form are rejected. Client-defined semantic scopes use a
-2 GiB physical table unless Finelog has a more specific routing policy. The
-unscoped root form is classified from the complete normalized row by the same
-policy. Known services use the policy's semantic inference rules;
-an unmapped service gets a normalized `telemetry_v1.<service>` stream rather
-than entering a catch-all namespace. The policy accepts the complete Arrow
-record batch and returns partitions containing the logical namespace, physical
-storage namespace, and rows. HTTP ingestion, forwarding, and migration do not
-pre-extract their own routing keys. A forwarded physical namespace is
-preserved, while the production root `telemetry_v1` is classified row by row.
-Valid dotted semantic namespaces are ordinary client-selected scopes; Finelog
-does not reserve any of them.
+The `/v1/telemetry` protocol remains for automatically sampled service state. It
+accepts resource and record data, not a caller-selected namespace. Finelog gives
+the complete normalized Arrow batch to the telemetry policy, which classifies
+rows by service and metric name. Node-agent samples go to
+`telemetry_v1.node_agent`; Iris controller `rpc_` and `proxy_` samples go to
+`telemetry_v1.iris.rpc`; vLLM samples go to `telemetry_v1.vllm`; and an unmapped
+service receives a normalized `telemetry_v1.<service>` namespace. Levanter NCCL
+RAS samples remain automated telemetry in `telemetry_v1.levanter`.
+
+Levanter's explicitly collected training values use the generic typed-table API
+instead. A writer registers `levanter.metrics.<run_id>` and includes the same
+`run_id` in every row. Finelog rejects a mismatch, then canonicalizes the alias
+to the one SQL table `levanter.metrics`. The suffix is a writer assertion, not a
+server-maintained list or a separate SQL schema. Legacy Levanter gauge rows sent
+through `/v1/telemetry` are recognized from their complete record and converted
+to the same typed metric table while clients roll out.
+
+`levanter.metrics` uses exact hidden `run_id` partitions (spec 1). Partitions are
+segment metadata, not SQL namespaces: queries name `levanter.metrics` and use an
+exact `run_id` predicate. The planner prunes other current-spec run partitions.
+It retains unpartitioned, malformed, or older-spec files, so a rolling
+conversion cannot hide rows. A partition transform change requires a new spec
+id rather than reinterpreting existing metadata.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -193,20 +192,19 @@ An explicit field wins over an attribute and replaces the same key in
 both conflicting values. Selectors and groupings should use the structured
 columns.
 
-An existing physical `telemetry_v1` root retains up to 50 GiB until migration
+An existing `telemetry_v1` root retains up to 50 GiB until migration
 retirement; a retired or fresh store does not recreate that table.
-The internal storage shards have independent limits: Levanter status has 22
-GiB, Levanter detail has 10 GiB, node-agent telemetry has 15 GiB, Iris RPC has
-1 GiB, and vLLM has 2 GiB. These server-owned shards total 50 GiB. Changing an
-allocation or routing rule does not change a writer or query namespace.
+Semantic namespaces have independent limits: typed Levanter metrics and
+Levanter automated telemetry each have 32 GiB, node-agent telemetry has 15 GiB,
+Iris RPC has 1 GiB, vLLM has 2 GiB, and other telemetry services have 2 GiB.
+Hidden run partitions share the `levanter.metrics` retention budget.
 
 ### Migrate the root telemetry hot set
 
 `finelog-migrate` rewrites the `telemetry_v1` hot set inside the existing hub store. It
-uses the same full-batch layout policy as HTTP ingestion and forwarding. Deploy that
-policy to the whole Finelog fleet first: recognized old clients and forwarding
-backlogs then stop adding root rows even before those clients send semantic
-names themselves.
+uses the same full-batch schema policy as HTTP ingestion and forwarding. Deploy
+that policy to the whole Finelog fleet first: edge stores then classify new HTTP
+records before forwarding, while hubs classify any remaining root backlog.
 
 The migrator rejects stores with forwarding cursors, so run it on the `marin`
 or `marin-dev` hub, not a `cw-*` sender. Preparation may run while Finelog is
@@ -225,18 +223,38 @@ finelog-migrate verify-telemetry-v1 \
   --store-dir /var/cache/finelog
 ```
 
-The staged manifest
-records every source checksum, destination sequence range, row count, stable
-row-identity checksum, output checksum, and the source catalog checksum.
-Re-running preparation resumes from verified outputs.
+Planning reads only the catalog and Parquet footers and writes the initial
+manifest before conversion starts. It does not decode, classify, checksum, or
+partition records. Treat planning over a local hot store as a sub-second
+operation; stop and investigate filesystem or catalog access if the plan itself
+takes longer. The conversion first builds a narrow historical-step index from
+the immutable source snapshot, then gives complete record batches to the schema
+policy. This is necessary because compacted telemetry is sorted by metric name,
+not by event time. The policy resolves the latest preceding step by execution,
+process, timestamp, and sequence, regardless of the physical Parquet row order.
+Rows before an execution's first observed step retain `NULL`.
+
+Conversion updates the manifest after each source segment is durable. A
+completed manifest records every source checksum, destination sequence range,
+row count, stable row-identity checksum, output checksum, and the source catalog
+checksum. Re-running preparation resumes from verified completed source
+segments. Wrap operational invocations in an explicit deadline; the current
+hot-store rehearsal completed preparation in under two minutes:
+
+```bash
+timeout 15m finelog-migrate prepare-telemetry-v1 \
+  --store-dir /var/cache/finelog
+timeout 5m finelog-migrate verify-telemetry-v1 \
+  --store-dir /var/cache/finelog
+```
 
 Publish is the first short cutover. Stop Finelog, publish, and restart it:
 
 ```bash
-finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
+timeout 2m finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
-Publish hard-links the staged Parquets into their physical namespace directories
+Publish hard-links the staged Parquets into their semantic namespace directories
 and replaces a catalog derived from the latest live catalog. It leaves the
 root namespace queryable. Old root-only queries and new semantic-only queries
 therefore each see one copy of the rows; a root-plus-semantic union would count
@@ -244,12 +262,12 @@ them twice. Deploy the semantic-only Grafana and Iris queries after publish.
 Publish verifies every linked file and catalog row before recording the phase.
 After the server restarts, ordinary compaction may replace those L0 paths;
 subsequent verification checks the immutable staged outputs and registered
-physical namespaces instead of requiring the original live filenames.
+semantic namespaces instead of requiring the original live filenames.
 
 Once those queries are live, stop Finelog for the second short cutover:
 
 ```bash
-finelog-migrate retire-telemetry-v1 --store-dir /var/cache/finelog
+timeout 2m finelog-migrate retire-telemetry-v1 --store-dir /var/cache/finelog
 ```
 
 Retirement moves root local files into the migration rollback directory and
@@ -264,20 +282,23 @@ lock rejects either command if it is.
 The rollout order is:
 
 1. Deploy the row-aware Finelog policy to the hubs and every forwarding edge.
-2. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on each hub while it is serving.
-3. Stop the hub, run `publish-telemetry-v1`, and restart it.
-4. Deploy the semantic-only Grafana and Iris queries and verify their panels.
-5. Stop the hub, run `retire-telemetry-v1`, and restart it.
-6. Let client-scoped writers roll out independently. Old root requests are
-   already classified by the server policy, so they do not postpone retirement.
+2. Start the Levanter client rollout. Old gauge records and new typed records
+   converge on `levanter.metrics`, so this may overlap the remaining steps.
+3. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on each hub while it is serving.
+4. Stop the hub, run `publish-telemetry-v1`, and restart it.
+5. Deploy the semantic-only Grafana and Iris queries and verify their panels.
+6. Stop the hub, run `retire-telemetry-v1`, and restart it.
+7. Keep watching root row count after retirement. Any reappearance means a hub
+   is still running the old policy. Remove legacy Levanter inference only after
+   the direct typed-client rollout is complete.
 
-`GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
+`GET /api/segments?namespace=levanter.metrics&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
 section counters; either condition is a safe scan fallback but should trigger a
 local rebuild investigation. A time bound remains the fastest containment:
-`telemetry_v1` is keyed on `timestamp_ms`, so bounded queries can prune before
-any secondary method runs.
+telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
+before any secondary method runs.
 
 `finelog query` applies a client deadline just past the server's own 10s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
@@ -487,8 +508,9 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-The existing root table and each internal storage shard are registered on boot. When the
-binary's schema and a catalog entry disagree in a way no merge can reconcile
+The known semantic telemetry namespaces are registered on boot; an existing
+root is registered only until it is retired. When the binary's schema and a
+catalog entry disagree in a way no merge can reconcile
 (a column type change), writes to that namespace return 400 until one of them
 changes, across restarts.
 

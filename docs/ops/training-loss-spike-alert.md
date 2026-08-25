@@ -8,7 +8,7 @@ Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md
 
 ## What fires it
 
-The bridge reads `train_loss` from `service=levanter` telemetry for the enrolled run IDs over one bounded hour and reduces it, in SQL, to two windows per run: a baseline covering `[now-60m, now-5m)` and a recent window covering the last five minutes.
+The bridge reads `train_loss` from `levanter.metrics` for the enrolled run IDs over one bounded hour and reduces it, in SQL, to two windows per run: a baseline covering `[now-60m, now-5m)` and a recent window covering the last five minutes.
 
 The run alerts when either condition holds:
 
@@ -38,9 +38,8 @@ Verify what the rule saw with a bounded Finelog query:
 SELECT
   to_timestamp_millis(timestamp_ms) AS observed_at,
   value AS train_loss
-FROM "telemetry_v1.levanter"
-WHERE service = 'levanter'
-  AND name = 'train_loss'
+FROM "levanter.metrics"
+WHERE name = 'train_loss'
   AND run_id = '<hero-run-id>'
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
 ORDER BY timestamp_ms DESC

@@ -4,10 +4,10 @@ use crate::errors::StatsError;
 use crate::store::policy::StoragePolicy;
 
 pub(crate) trait NamespaceStoragePolicy: Sync {
-    /// Resolve the persisted retention policy for one physical namespace.
+    /// Resolve the persisted retention policy for one logical namespace.
     fn storage_policy(&self, namespace: &str) -> Result<StoragePolicy, StatsError>;
 
-    /// Physical namespaces that the server must register before first use.
+    /// Logical namespaces that the server must register before first use.
     fn eager_namespaces(&self) -> Vec<&str> {
         Vec::new()
     }

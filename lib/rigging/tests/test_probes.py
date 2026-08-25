@@ -33,7 +33,6 @@ def _configure(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     telemetry.configure(
         endpoint="http://finelog.test/v1/telemetry",
         service="probe-test",
-        scope="test",
         retry_initial=0.001,
         retry_maximum=0.002,
     )

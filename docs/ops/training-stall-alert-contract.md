@@ -17,13 +17,13 @@ The first case is labeled `training_stalled`; the second is `initializing_stale`
 
 A run whose newest sample of any of these metrics is more than ten minutes old is labeled `telemetry_gone` and emits a zero. Levanter republishes phase every minute, so silence that long is the telemetry path or the process rather than a slow step, and [`TrainingTelemetryGone`](hero-run-health-alerts.md) names it. Deferring keeps one incident to one page. A run that has published nothing at all is still this rule's `initializing_stale` case, which allows the full startup budget.
 
-The bridge derives `hero-20260819` from the root job, then queries the structured `run_id` column with exact equality from `telemetry_v1.levanter`. With concurrent hero runs it emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; `step` and `progress_time_seconds` from older task attempts cannot keep the run healthy. Iris derives `execution_uid` from the controller-minted `attempt_uid`, which stays unique if a new controller uses the same numeric task attempt. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
+The bridge derives `hero-20260819` from the root job, then queries the structured `run_id` column with exact equality from `levanter.metrics`. Finelog uses that predicate to prune exact run partitions. With concurrent hero runs the bridge emits one `run_id IN (...)` predicate rather than a broad pattern scan. The newest `phase` row in the trailing hour selects one `execution_uid`; the indexed `step` column and `progress_time_seconds` from older task attempts cannot keep the run healthy. Iris derives `execution_uid` from the controller-minted `attempt_uid`, which stays unique if a new controller uses the same numeric task attempt. Progress spans 30 minutes so a sample remains observable after crossing the 15-minute stall threshold.
 
 Initialization and missing-progress grace start at the later of the current contiguous Iris running interval and the selected telemetry execution. A coordinator restart or trainer retry therefore receives a new initialization window. A hard hang retains its training execution anchor for one hour. All states remain instances of `TrainingProgressStalled`, and notification grouping excludes phase and reason, so later reclassification cannot open a second Slack group.
 
-`iris.task_state.root_job_id` names the coordinator root, while `telemetry_v1.job_id` names the descendant trainer. For example, the root `/rav/hero-20260819-coord` owns telemetry from `/rav/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
+`iris.task_state.root_job_id` names the coordinator root, while `levanter.metrics.job_id` names the descendant trainer. For example, the root `/rav/hero-20260819-coord` owns metrics from `/rav/hero-20260819-coord/grug-train-hero-20260819`. The bridge joins on origin cluster, exact `run_id`, and this descendant relationship. Alert labels use the coordinator root. No task-to-node mapping or GPU-utilization condition is required.
 
-The required `service=levanter` telemetry records are `step`, `progress_time_seconds`, and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run. The hero launchers already pass their trainer ID into telemetry as `run_id`; W&B retains its separate `hero` tag.
+The required Levanter metric records are `progress_time_seconds` and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). Each row carries `step` as a typed column; there is no separate step record. `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run. The hero launchers already pass their trainer ID into telemetry as `run_id`; W&B retains its separate `hero` tag.
 
 Verify enrollment after launch with a bounded Finelog query:
 
@@ -33,13 +33,13 @@ SELECT
   run_id,
   job_id,
   execution_uid,
+  step,
   name,
   value,
   to_timestamp_millis(timestamp_ms) AS observed_at
-FROM "telemetry_v1.levanter"
-WHERE service = 'levanter'
-  AND run_id = '<hero-run-id>'
-  AND name IN ('phase', 'step', 'progress_time_seconds')
+FROM "levanter.metrics"
+WHERE run_id = '<hero-run-id>'
+  AND name IN ('phase', 'progress_time_seconds')
   AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
 ORDER BY timestamp_ms DESC, seq DESC
 LIMIT 20;

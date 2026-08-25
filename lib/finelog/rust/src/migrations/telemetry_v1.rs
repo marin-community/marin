@@ -1,4 +1,4 @@
-//! In-place migration from the production telemetry root into semantic storage shards.
+//! In-place migration from the production telemetry root into semantic namespaces.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
@@ -13,25 +13,30 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
+use parquet::arrow::ProjectionMask;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::policies::{eager_storage_namespaces_for, route_ingestion_batch, storage_policy_for};
-use crate::server::telemetry::{telemetry_schema, TELEMETRY_MAX_ROW_GROUP_ROWS};
+use crate::partition_policy::SegmentPartition;
+use crate::policies::{
+    eager_storage_namespaces_for, physical_partition_policy_for, schema_for_namespace,
+    storage_policy_for, PolicyRegistry,
+};
+use crate::server::telemetry::TELEMETRY_MAX_ROW_GROUP_ROWS;
 use crate::store::catalog::{Catalog, CATALOG_DB_FILENAME};
 use crate::store::schema::{schema_to_arrow, stored_form, IMPLICIT_SEQ_COLUMN};
 use crate::store::segment::{
-    discover_segments, read_segment_footer, segment_writer_properties_with_max_rows,
+    discover_segments, read_segment_footer, segment_writer_properties_with_partition,
 };
 use crate::store::store::acquire_exclusive_store_lock;
 use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
-const MANIFEST_VERSION: u32 = 1;
-const POLICY_REVISION: &str = "semantic-storage-v4";
+const MANIFEST_VERSION: u32 = 5;
+const POLICY_REVISION: &str = "typed-levanter-run-partition-v2-step-index";
 const MIGRATION_SOURCE_NAMESPACES: [&str; 1] = [TELEMETRY_NAMESPACE];
 const OUTPUT_LEVEL: i32 = 0;
 const MIGRATION_DIRECTORY: &str = ".finelog-telemetry-v1-migration";
@@ -40,10 +45,22 @@ const STAGED_DIRECTORY: &str = "staged";
 const ROLLBACK_DIRECTORY: &str = "rollback";
 const CATALOG_BUILD_DIRECTORY: &str = "catalog-build";
 const MIGRATED_SEQ_START: i64 = -4_000_000_000_000_000_000;
+const MIGRATED_SEQ_ROWS_PER_OUTPUT: i64 = 10_000_000_000;
+const MIGRATED_SEQ_OUTPUTS_PER_SOURCE: i64 = 100_000;
+const MIGRATED_SEQ_ROWS_PER_SOURCE: i64 =
+    MIGRATED_SEQ_ROWS_PER_OUTPUT * MIGRATED_SEQ_OUTPUTS_PER_SOURCE;
 const SNAPSHOT_ATTEMPTS: usize = 8;
 
 fn migration_source_namespaces() -> impl Iterator<Item = &'static str> {
     MIGRATION_SOURCE_NAMESPACES.iter().copied()
+}
+
+fn migration_schema_for(namespace: &str) -> Result<crate::store::schema::Schema, StatsError> {
+    schema_for_namespace(namespace).ok_or_else(|| {
+        validation_error(format!(
+            "migration policy produced namespace {namespace:?} without a registered schema"
+        ))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +96,7 @@ pub struct MigrationManifest {
     pub phase: MigrationPhase,
     pub input_rows: i64,
     pub output_rows: i64,
+    pub suppressed_rows: i64,
     pub source_segments: Vec<SourceSegment>,
     #[serde(default)]
     pub published_files: Vec<String>,
@@ -91,14 +109,20 @@ pub struct SourceSegment {
     pub namespace: String,
     pub relative_path: String,
     pub byte_size: u64,
-    pub file_sha256: String,
+    pub file_sha256: Option<String>,
     pub rows: i64,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub suppressed_rows: i64,
     pub outputs: Vec<PlannedOutput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedOutput {
     pub namespace: String,
+    #[serde(default)]
+    pub partition: Option<SegmentPartition>,
     pub relative_path: String,
     pub min_seq: i64,
     pub max_seq: i64,
@@ -109,21 +133,23 @@ pub struct PlannedOutput {
     pub file_sha256: Option<String>,
 }
 
-#[derive(Default)]
-struct DestinationStats {
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct MigrationDestination {
+    namespace: String,
+    partition: Option<SegmentPartition>,
+}
+
+struct DestinationWriter {
+    destination: MigrationDestination,
+    min_seq: i64,
+    next_seq: i64,
     rows: i64,
     min_timestamp_ms: Option<i64>,
     max_timestamp_ms: Option<i64>,
     identity: Sha256,
-}
-
-struct DestinationWriter {
-    output_index: usize,
-    next_seq: i64,
-    rows: i64,
-    identity: Sha256,
     temporary_path: PathBuf,
     final_path: PathBuf,
+    target_schema: SchemaRef,
     writer: ArrowWriter<File>,
 }
 
@@ -158,6 +184,21 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
         return verify_store(&config.source_dir, &config.output_dir, config.batch_rows);
     }
     write_planned_outputs(config, &mut manifest)?;
+    if manifest
+        .source_segments
+        .iter()
+        .any(|source| !source.complete)
+    {
+        return Err(validation_error(
+            "migration finished writing with incomplete source segments",
+        ));
+    }
+    if manifest.input_rows != manifest.output_rows + manifest.suppressed_rows {
+        return Err(validation_error(format!(
+            "migration row mismatch: {} source rows, {} output rows, {} intentionally suppressed rows",
+            manifest.input_rows, manifest.output_rows, manifest.suppressed_rows
+        )));
+    }
     manifest.complete = true;
     manifest.phase = MigrationPhase::Staged;
     write_manifest(&manifest_path, &manifest)?;
@@ -185,10 +226,10 @@ pub fn verify_store(
             verify_output_file(&path, output, batch_rows)?;
         }
     }
-    if manifest.input_rows != manifest.output_rows {
+    if manifest.input_rows != manifest.output_rows + manifest.suppressed_rows {
         return Err(validation_error(format!(
-            "migration row mismatch: {} source rows, {} output rows",
-            manifest.input_rows, manifest.output_rows
+            "migration row mismatch: {} source rows, {} output rows, {} intentionally suppressed rows",
+            manifest.input_rows, manifest.output_rows, manifest.suppressed_rows
         )));
     }
     Ok(manifest)
@@ -443,7 +484,7 @@ fn link_verified_file(
         )));
     }
     if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(internal_error("create physical namespace"))?;
+        std::fs::create_dir_all(parent).map_err(internal_error("create output namespace"))?;
     }
     std::fs::hard_link(source, destination).map_err(internal_error("publish migrated segment"))?;
     Ok(())
@@ -460,9 +501,8 @@ fn replace_catalog_for_publish(
         &build_dir.join(CATALOG_DB_FILENAME),
     )?;
     let catalog = Catalog::open(Some(&build_dir))?;
-    let stored_schema = stored_form(telemetry_schema());
     for namespace in eager_storage_namespaces_for(TELEMETRY_NAMESPACE) {
-        catalog.upsert(namespace, &stored_schema)?;
+        catalog.upsert(namespace, &stored_form(migration_schema_for(namespace)?))?;
         catalog.upsert_policy(namespace, &storage_policy_for(namespace)?)?;
     }
     let output_namespaces: BTreeSet<_> = manifest
@@ -472,7 +512,7 @@ fn replace_catalog_for_publish(
         .map(|output| output.namespace.as_str())
         .collect();
     for namespace in output_namespaces {
-        catalog.upsert(namespace, &stored_schema)?;
+        catalog.upsert(namespace, &stored_form(migration_schema_for(namespace)?))?;
         catalog.upsert_policy(namespace, &storage_policy_for(namespace)?)?;
     }
     let created_at_ms = now_ms()?;
@@ -495,6 +535,7 @@ fn replace_catalog_for_publish(
                 created_at_ms,
                 min_key_value: Some(output.min_timestamp_ms.to_string()),
                 max_key_value: Some(output.max_timestamp_ms.to_string()),
+                partition: output.partition.clone(),
                 location: SegmentLocation::Local,
             })
         })
@@ -746,10 +787,8 @@ fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
 }
 
 fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsError> {
-    let mut next_seq = BTreeMap::new();
     let mut source_segments = Vec::new();
     let mut input_rows = 0_i64;
-    let mut output_rows = 0_i64;
 
     for namespace in migration_source_namespaces() {
         let namespace_dir = config.source_dir.join(namespace);
@@ -759,58 +798,10 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         for path in discover_segments(&namespace_dir) {
             let metadata =
                 std::fs::metadata(&path).map_err(internal_error("stat source segment"))?;
-            let stats = scan_source_segment(&path, namespace, config.batch_rows)?;
-            let rows = stats.values().map(|item| item.rows).sum::<i64>();
             let footer = read_segment_footer(&path, Some("timestamp_ms")).ok_or_else(|| {
                 validation_error(format!("could not read source segment {}", path.display()))
             })?;
-            if rows != footer.row_count {
-                return Err(validation_error(format!(
-                    "classified {rows}/{} rows in {}",
-                    footer.row_count,
-                    path.display()
-                )));
-            }
-            let mut outputs = Vec::new();
-            for (destination, item) in stats {
-                if item.rows == 0 {
-                    continue;
-                }
-                let min_seq = *next_seq
-                    .entry(destination.clone())
-                    .or_insert(MIGRATED_SEQ_START);
-                let max_seq = min_seq + item.rows - 1;
-                next_seq.insert(destination.clone(), max_seq + 1);
-                let relative_path = Path::new(&destination)
-                    .join(seg_filename(OUTPUT_LEVEL, min_seq))
-                    .to_string_lossy()
-                    .into_owned();
-                let min_timestamp_ms = item.min_timestamp_ms.ok_or_else(|| {
-                    validation_error(format!(
-                        "destination {destination:?} has rows but no minimum timestamp"
-                    ))
-                })?;
-                let max_timestamp_ms = item.max_timestamp_ms.ok_or_else(|| {
-                    validation_error(format!(
-                        "destination {destination:?} has rows but no maximum timestamp"
-                    ))
-                })?;
-                debug_assert_ne!(destination, TELEMETRY_NAMESPACE);
-                outputs.push(PlannedOutput {
-                    namespace: destination,
-                    relative_path,
-                    min_seq,
-                    max_seq,
-                    rows: item.rows,
-                    min_timestamp_ms,
-                    max_timestamp_ms,
-                    identity_sha256: digest_hex(item.identity),
-                    file_sha256: None,
-                });
-            }
-            outputs.sort_by(|left, right| left.namespace.cmp(&right.namespace));
-            input_rows += rows;
-            output_rows += outputs.iter().map(|output| output.rows).sum::<i64>();
+            input_rows += footer.row_count;
             let relative_path = path
                 .strip_prefix(&config.source_dir)
                 .map_err(|_| validation_error("source segment escaped source_dir"))?
@@ -820,9 +811,11 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
                 namespace: namespace.to_string(),
                 relative_path,
                 byte_size: metadata.len(),
-                file_sha256: file_sha256(&path)?,
-                rows,
-                outputs,
+                file_sha256: None,
+                rows: footer.row_count,
+                complete: false,
+                suppressed_rows: 0,
+                outputs: Vec::new(),
             });
         }
     }
@@ -838,166 +831,220 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         complete: false,
         phase: MigrationPhase::Staged,
         input_rows,
-        output_rows,
+        output_rows: 0,
+        suppressed_rows: 0,
         source_segments,
         published_files: Vec::new(),
         retired_files: Vec::new(),
     })
 }
 
-fn scan_source_segment(
-    path: &Path,
-    source_namespace: &str,
-    batch_rows: usize,
-) -> Result<BTreeMap<String, DestinationStats>, StatsError> {
-    let reader = parquet_reader(path, batch_rows)?;
-    let mut stats: BTreeMap<String, DestinationStats> = BTreeMap::new();
-    for batch in reader {
-        let batch = batch.map_err(internal_error("read source batch"))?;
-        for partition in
-            route_ingestion_batch(IngestionBatchSource::Stored(source_namespace), &batch)?
-        {
-            let destination = partition.destination.physical_namespace;
-            let batch_ids = string_column(&partition.batch, "batch_id")?;
-            let record_indices = int64_column(&partition.batch, "record_index")?;
-            let timestamps = int64_column(&partition.batch, "timestamp_ms")?;
-            let clusters = optional_string_column(&partition.batch, "cluster")?;
-            let item = stats.entry(destination).or_default();
-            for row in 0..partition.batch.num_rows() {
-                let timestamp = timestamps.value(row);
-                item.rows += 1;
-                item.min_timestamp_ms = Some(
-                    item.min_timestamp_ms
-                        .map_or(timestamp, |value| value.min(timestamp)),
-                );
-                item.max_timestamp_ms = Some(
-                    item.max_timestamp_ms
-                        .map_or(timestamp, |value| value.max(timestamp)),
-                );
-                update_identity(
-                    &mut item.identity,
-                    clusters
-                        .as_ref()
-                        .and_then(|values| (!values.is_null(row)).then(|| values.value(row))),
-                    batch_ids.value(row),
-                    record_indices.value(row),
-                );
-            }
-        }
-    }
-    Ok(stats)
-}
-
 fn write_planned_outputs(
     config: &PrepareConfig,
     manifest: &mut MigrationManifest,
 ) -> Result<(), StatsError> {
-    let target_schema = schema_to_arrow(&stored_form(telemetry_schema()));
+    let policies = PolicyRegistry::default();
+    index_migration_state(config, manifest, &policies)?;
     let manifest_path = config.output_dir.join(MANIFEST_FILENAME);
     for source_index in 0..manifest.source_segments.len() {
         let source_path = config
             .source_dir
             .join(&manifest.source_segments[source_index].relative_path);
         write_source_outputs(
+            &policies,
+            source_index,
             &source_path,
             config,
-            &target_schema,
             &mut manifest.source_segments[source_index],
         )?;
+        manifest.output_rows = manifest
+            .source_segments
+            .iter()
+            .map(|source| source.outputs.iter().map(|output| output.rows).sum::<i64>())
+            .sum();
+        manifest.suppressed_rows = manifest
+            .source_segments
+            .iter()
+            .map(|source| source.suppressed_rows)
+            .sum();
         write_manifest(&manifest_path, manifest)?;
     }
     Ok(())
 }
 
+fn index_migration_state(
+    config: &PrepareConfig,
+    manifest: &MigrationManifest,
+    policies: &PolicyRegistry,
+) -> Result<(), StatsError> {
+    const INDEX_COLUMNS: [&str; 10] = [
+        "service",
+        "name",
+        "value",
+        "timestamp_ms",
+        "seq",
+        "record_index",
+        "process_index",
+        "execution_uid",
+        "resource_attributes_json",
+        "attributes_json",
+    ];
+    for source in &manifest.source_segments {
+        let source_path = config.source_dir.join(&source.relative_path);
+        for batch in parquet_reader_projected(&source_path, config.batch_rows, &INDEX_COLUMNS)? {
+            policies.index_migration_batch(
+                IngestionBatchSource::Stored(source.namespace.as_str()),
+                &batch.map_err(internal_error("read migration index batch"))?,
+            )?;
+        }
+    }
+    policies.finish_migration_index();
+    Ok(())
+}
+
 fn write_source_outputs(
+    policies: &PolicyRegistry,
+    source_index: usize,
     source_path: &Path,
     config: &PrepareConfig,
-    target_schema: &SchemaRef,
     source: &mut SourceSegment,
 ) -> Result<(), StatsError> {
-    for output in &mut source.outputs {
-        let path = config.output_dir.join(&output.relative_path);
-        if path.exists() {
-            verify_output_file(&path, output, config.batch_rows)?;
-            output.file_sha256 = Some(file_sha256(&path)?);
+    if source.complete {
+        for output in &source.outputs {
+            verify_output_file(
+                &config.output_dir.join(&output.relative_path),
+                output,
+                config.batch_rows,
+            )?;
         }
-    }
-    let missing: BTreeSet<usize> = source
-        .outputs
-        .iter()
-        .enumerate()
-        .filter_map(|(index, output)| output.file_sha256.is_none().then_some(index))
-        .collect();
-    if missing.is_empty() {
         return Ok(());
     }
-
-    let mut writers = BTreeMap::new();
-    for index in missing {
-        let output = &source.outputs[index];
-        let final_path = config.output_dir.join(&output.relative_path);
-        let parent = final_path
-            .parent()
-            .ok_or_else(|| validation_error("output segment has no parent"))?;
-        std::fs::create_dir_all(parent).map_err(internal_error("create output namespace"))?;
-        let temporary_path = temporary_path(&final_path);
-        if temporary_path.exists() {
-            std::fs::remove_file(&temporary_path)
-                .map_err(internal_error("remove interrupted output segment"))?;
-        }
-        let file =
-            File::create(&temporary_path).map_err(internal_error("create output segment"))?;
-        let options =
-            ArrowWriterOptions::new().with_properties(segment_writer_properties_with_max_rows(
-                usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
-                    .expect("telemetry row-group limit fits usize"),
-            )?);
-        let writer = ArrowWriter::try_new_with_options(file, Arc::clone(target_schema), options)
-            .map_err(internal_error("create output parquet writer"))?;
-        writers.insert(
-            output.namespace.clone(),
-            DestinationWriter {
-                output_index: index,
-                next_seq: output.min_seq,
-                rows: 0,
-                identity: Sha256::new(),
-                temporary_path,
-                final_path,
-                writer,
-            },
-        );
+    if !source.outputs.is_empty() {
+        return Err(validation_error(
+            "incomplete metadata-only migration source has planned outputs",
+        ));
     }
 
+    let source_index = i64::try_from(source_index)
+        .map_err(|_| validation_error("migration has too many source segments"))?;
+    let source_offset = source_index
+        .checked_mul(MIGRATED_SEQ_ROWS_PER_SOURCE)
+        .and_then(|offset| MIGRATED_SEQ_START.checked_add(offset))
+        .filter(|min_seq| *min_seq < 0)
+        .ok_or_else(|| validation_error("migration has too many source segments"))?;
+
+    let mut writers = BTreeMap::new();
     let reader = parquet_reader(source_path, config.batch_rows)?;
     for batch in reader {
         let batch = batch.map_err(internal_error("read source batch"))?;
-        for partition in route_ingestion_batch(
+        for partition in policies.route_ingestion_batch(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
         )? {
-            let namespace = partition.destination.physical_namespace;
-            let Some(writer) = writers.get_mut(&namespace) else {
-                continue;
-            };
-            let migrated = align_migrated_batch(&partition.batch, target_schema, writer.next_seq)?;
-            update_batch_identity(&mut writer.identity, &migrated)?;
-            writer
-                .writer
-                .write(&migrated)
-                .map_err(internal_error("write migrated telemetry"))?;
-            writer.rows += migrated.num_rows() as i64;
-            writer.next_seq += migrated.num_rows() as i64;
+            for (destination, batch) in physical_migration_batches(
+                partition.destination.logical_namespace,
+                partition.batch,
+            )? {
+                if !writers.contains_key(&destination) {
+                    let output_index = i64::try_from(writers.len())
+                        .map_err(|_| validation_error("source produced too many outputs"))?;
+                    if output_index >= MIGRATED_SEQ_OUTPUTS_PER_SOURCE {
+                        return Err(validation_error("source produced too many outputs"));
+                    }
+                    let min_seq = output_index
+                        .checked_mul(MIGRATED_SEQ_ROWS_PER_OUTPUT)
+                        .and_then(|offset| source_offset.checked_add(offset))
+                        .ok_or_else(|| validation_error("migrated sequence range overflowed"))?;
+                    let relative_path =
+                        Path::new(&destination.namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
+                    let final_path = config.output_dir.join(relative_path);
+                    let parent = final_path
+                        .parent()
+                        .ok_or_else(|| validation_error("output segment has no parent"))?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(internal_error("create output namespace"))?;
+                    let temporary_path = temporary_path(&final_path);
+                    for interrupted_path in [&temporary_path, &final_path] {
+                        if interrupted_path.exists() {
+                            std::fs::remove_file(interrupted_path)
+                                .map_err(internal_error("remove interrupted output segment"))?;
+                        }
+                    }
+                    let file = File::create(&temporary_path)
+                        .map_err(internal_error("create output segment"))?;
+                    let target_schema = schema_to_arrow(&stored_form(migration_schema_for(
+                        &destination.namespace,
+                    )?));
+                    let options = ArrowWriterOptions::new().with_properties(
+                        segment_writer_properties_with_partition(
+                            usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
+                                .expect("telemetry row-group limit fits usize"),
+                            destination.partition.as_ref(),
+                        )?,
+                    );
+                    let writer = ArrowWriter::try_new_with_options(
+                        file,
+                        Arc::clone(&target_schema),
+                        options,
+                    )
+                    .map_err(internal_error("create output parquet writer"))?;
+                    writers.insert(
+                        destination.clone(),
+                        DestinationWriter {
+                            destination: destination.clone(),
+                            min_seq,
+                            next_seq: min_seq,
+                            rows: 0,
+                            min_timestamp_ms: None,
+                            max_timestamp_ms: None,
+                            identity: Sha256::new(),
+                            temporary_path,
+                            final_path,
+                            target_schema,
+                            writer,
+                        },
+                    );
+                }
+                let writer = writers
+                    .get_mut(&destination)
+                    .expect("destination writer was just created");
+                let batch_rows = i64::try_from(batch.num_rows())
+                    .map_err(|_| validation_error("migration batch has too many rows"))?;
+                if writer.rows + batch_rows > MIGRATED_SEQ_ROWS_PER_OUTPUT {
+                    return Err(validation_error(
+                        "migration output exceeded its reserved sequence range",
+                    ));
+                }
+                let migrated =
+                    align_migrated_batch(&batch, &writer.target_schema, writer.next_seq)?;
+                let timestamps = int64_column(&migrated, "timestamp_ms")?;
+                if let Some(batch_min) = timestamps.iter().flatten().min() {
+                    writer.min_timestamp_ms = Some(
+                        writer
+                            .min_timestamp_ms
+                            .map_or(batch_min, |current| current.min(batch_min)),
+                    );
+                }
+                if let Some(batch_max) = timestamps.iter().flatten().max() {
+                    writer.max_timestamp_ms = Some(
+                        writer
+                            .max_timestamp_ms
+                            .map_or(batch_max, |current| current.max(batch_max)),
+                    );
+                }
+                update_batch_identity(&mut writer.identity, &migrated)?;
+                writer
+                    .writer
+                    .write(&migrated)
+                    .map_err(internal_error("write migrated telemetry"))?;
+                writer.rows += migrated.num_rows() as i64;
+                writer.next_seq += migrated.num_rows() as i64;
+            }
         }
     }
 
-    for (_namespace, writer) in writers {
-        let output = &mut source.outputs[writer.output_index];
-        if writer.rows != output.rows || digest_hex(writer.identity) != output.identity_sha256 {
-            return Err(validation_error(format!(
-                "output {} did not match its plan",
-                output.relative_path
-            )));
-        }
+    let mut outputs = Vec::with_capacity(writers.len());
+    for (_destination, writer) in writers {
         let file = writer
             .writer
             .into_inner()
@@ -1006,9 +1053,73 @@ fn write_source_outputs(
             .map_err(internal_error("fsync output segment"))?;
         std::fs::rename(&writer.temporary_path, &writer.final_path)
             .map_err(internal_error("publish output segment"))?;
-        output.file_sha256 = Some(file_sha256(&writer.final_path)?);
+        let relative_path = writer
+            .final_path
+            .strip_prefix(&config.output_dir)
+            .map_err(|_| validation_error("output segment escaped output_dir"))?
+            .to_string_lossy()
+            .into_owned();
+        outputs.push(PlannedOutput {
+            namespace: writer.destination.namespace,
+            partition: writer.destination.partition,
+            relative_path,
+            min_seq: writer.min_seq,
+            max_seq: writer.next_seq - 1,
+            rows: writer.rows,
+            min_timestamp_ms: writer
+                .min_timestamp_ms
+                .ok_or_else(|| validation_error("migrated output has no timestamp"))?,
+            max_timestamp_ms: writer
+                .max_timestamp_ms
+                .ok_or_else(|| validation_error("migrated output has no timestamp"))?,
+            identity_sha256: digest_hex(writer.identity),
+            file_sha256: Some(file_sha256(&writer.final_path)?),
+        });
     }
+    outputs.sort_by(|left, right| {
+        (&left.namespace, &left.partition).cmp(&(&right.namespace, &right.partition))
+    });
+    let output_rows = outputs.iter().map(|output| output.rows).sum::<i64>();
+    if output_rows > source.rows {
+        return Err(validation_error(format!(
+            "source {} produced more rows than it contained",
+            source.relative_path
+        )));
+    }
+    source.file_sha256 = Some(file_sha256(source_path)?);
+    source.suppressed_rows = source.rows - output_rows;
+    source.outputs = outputs;
+    source.complete = true;
     Ok(())
+}
+
+fn physical_migration_batches(
+    namespace: String,
+    batch: RecordBatch,
+) -> Result<Vec<(MigrationDestination, RecordBatch)>, StatsError> {
+    let Some(policy) = physical_partition_policy_for(&namespace) else {
+        return Ok(vec![(
+            MigrationDestination {
+                namespace,
+                partition: None,
+            },
+            batch,
+        )]);
+    };
+    Ok(policy
+        .partition_batches(&[batch])?
+        .into_iter()
+        .flat_map(|output| {
+            let destination = MigrationDestination {
+                namespace: namespace.clone(),
+                partition: Some(output.partition),
+            };
+            output
+                .batches
+                .into_iter()
+                .map(move |batch| (destination.clone(), batch))
+        })
+        .collect())
 }
 
 fn align_migrated_batch(
@@ -1108,11 +1219,27 @@ fn verify_source_segments(
     for segment in &manifest.source_segments {
         let path = source_dir.join(&segment.relative_path);
         let metadata = std::fs::metadata(&path).map_err(internal_error("stat source segment"))?;
-        if metadata.len() != segment.byte_size || file_sha256(&path)? != segment.file_sha256 {
+        if metadata.len() != segment.byte_size {
             return Err(validation_error(format!(
                 "source segment changed after planning: {}",
                 path.display()
             )));
+        }
+        match &segment.file_sha256 {
+            Some(expected) if &file_sha256(&path)? != expected => {
+                return Err(validation_error(format!(
+                    "source segment changed after planning: {}",
+                    path.display()
+                )));
+            }
+            Some(_) => {}
+            None if segment.complete || manifest.complete => {
+                return Err(validation_error(format!(
+                    "completed source segment has no checksum: {}",
+                    path.display()
+                )));
+            }
+            None => {}
         }
     }
     Ok(())
@@ -1129,6 +1256,7 @@ fn verify_output_file(
     if footer.row_count != output.rows
         || footer.min_seq != output.min_seq
         || footer.max_seq != output.max_seq
+        || footer.partition != output.partition
     {
         return Err(validation_error(format!(
             "output segment metadata differs from plan: {}",
@@ -1252,6 +1380,28 @@ fn parquet_reader(
         .map_err(internal_error("build parquet reader"))
 }
 
+fn parquet_reader_projected(
+    path: &Path,
+    batch_rows: usize,
+    columns: &[&str],
+) -> Result<impl Iterator<Item = Result<RecordBatch, arrow::error::ArrowError>>, StatsError> {
+    let file = File::open(path).map_err(internal_error("open projected parquet segment"))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(internal_error("open projected parquet reader"))?;
+    let projection = {
+        let parquet_schema = builder.parquet_schema();
+        let indices = (0..parquet_schema.num_columns())
+            .filter(|index| columns.contains(&parquet_schema.column(*index).name()))
+            .collect::<Vec<_>>();
+        ProjectionMask::leaves(parquet_schema, indices)
+    };
+    builder
+        .with_projection(projection)
+        .with_batch_size(batch_rows)
+        .build()
+        .map_err(internal_error("build projected parquet reader"))
+}
+
 fn file_sha256(path: &Path) -> Result<String, StatsError> {
     let mut file = File::open(path).map_err(internal_error("open file for checksum"))?;
     let mut digest = Sha256::new();
@@ -1344,15 +1494,16 @@ mod tests {
     use std::fs::{self, OpenOptions};
     use std::time::Duration;
 
-    use arrow::array::{Float64Array, Int32Array};
+    use arrow::array::{Float64Array, Int32Array, UInt32Array};
     use arrow::datatypes::{Field, Schema};
 
     use super::*;
+    use crate::server::telemetry::telemetry_schema;
     use crate::store::segment::write_segment_to_dir;
     use crate::store::store::{ServeMode, Store};
     use crate::telemetry_policy::{
-        IRIS_RPC_NAMESPACE, LEVANTER_DETAIL_STORAGE_NAMESPACE, LEVANTER_NAMESPACE,
-        LEVANTER_STATUS_STORAGE_NAMESPACE, NODE_AGENT_NAMESPACE, VLLM_NAMESPACE, ZEPHYR_NAMESPACE,
+        IRIS_RPC_NAMESPACE, LEVANTER_NAMESPACE, NODE_AGENT_NAMESPACE, VLLM_NAMESPACE,
+        ZEPHYR_NAMESPACE,
     };
 
     struct TestDirs {
@@ -1421,6 +1572,43 @@ mod tests {
         RecordBatch::try_new(schema, columns).unwrap()
     }
 
+    fn legacy_levanter_batch(names: &[&str], values: &[f64], min_seq: i64) -> RecordBatch {
+        assert_eq!(names.len(), values.len());
+        let rows = names.len();
+        let schema = schema_to_arrow(&stored_form(telemetry_schema()));
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|field| -> ArrayRef {
+                match field.name().as_str() {
+                    "seq" => Arc::new(Int64Array::from_iter_values(min_seq..min_seq + rows as i64)),
+                    "schema_version" => Arc::new(Int32Array::from(vec![1; rows])),
+                    "timestamp_ms" => Arc::new(Int64Array::from_iter_values(
+                        (0..rows).map(|row| 1_800_000_000_000_i64 + row as i64),
+                    )),
+                    "batch_id" => Arc::new(StringArray::from(vec!["legacy-batch"; rows])),
+                    "record_index" => Arc::new(Int64Array::from_iter_values(0..rows as i64)),
+                    "service" => Arc::new(StringArray::from(vec!["levanter"; rows])),
+                    "process_index" => Arc::new(StringArray::from(vec![Some("0"); rows])),
+                    "kind" => Arc::new(StringArray::from(vec!["gauge"; rows])),
+                    "name" => Arc::new(StringArray::from(names.to_vec())),
+                    "value" => Arc::new(Float64Array::from(values.to_vec())),
+                    "resource_attributes_json" => Arc::new(StringArray::from(vec![
+                        "{\"execution_uid\":\"attempt-1\",\"root_run_uid\":\"run/+long\",\"job_id\":\"/job\",\"node_name\":\"node-a\",\"process_index\":\"0\"}";
+                        rows
+                    ])),
+                    "attributes_json" => Arc::new(StringArray::from(vec![
+                        "{\"source_kind\":\"gauge\"}";
+                        rows
+                    ])),
+                    "cluster" => Arc::new(StringArray::from(vec![Some("marin"); rows])),
+                    _ => new_null_array(field.data_type(), rows),
+                }
+            })
+            .collect();
+        RecordBatch::try_new(schema, columns).unwrap()
+    }
+
     fn with_legacy_alert_tag(batch: RecordBatch, nullable: bool) -> RecordBatch {
         let mut fields = batch
             .schema()
@@ -1464,6 +1652,7 @@ mod tests {
                 created_at_ms: now_ms().unwrap(),
                 min_key_value: footer.min_key_value.map(|value| value.to_string()),
                 max_key_value: footer.max_key_value.map(|value| value.to_string()),
+                partition: footer.partition,
                 location: SegmentLocation::Both,
             })
             .unwrap();
@@ -1525,14 +1714,14 @@ mod tests {
         add_segment(
             &catalog,
             &dirs.store,
-            "telemetry_storage_v1.levanter.detail",
+            LEVANTER_NAMESPACE,
             1,
             1,
             &telemetry_batch(&["levanter"], &["existing_detail"], 1),
         );
         add_orphan_segment(
             &dirs.store,
-            "telemetry_storage_v1.levanter.detail",
+            LEVANTER_NAMESPACE,
             0,
             100,
             &telemetry_batch(&["levanter"], &["orphan_detail"], 100),
@@ -1577,6 +1766,14 @@ mod tests {
             .iter()
             .flat_map(|source| source.outputs.iter())
             .all(|output| output.min_seq < 0 && output.max_seq < 0));
+        let levanter_outputs = manifest
+            .source_segments
+            .iter()
+            .flat_map(|source| source.outputs.iter())
+            .filter(|output| output.namespace == LEVANTER_NAMESPACE)
+            .collect::<Vec<_>>();
+        assert_eq!(levanter_outputs.len(), 1);
+        assert!(levanter_outputs[0].partition.is_none());
         let staged_dir = dirs.store.join(MIGRATION_DIRECTORY).join(STAGED_DIRECTORY);
         assert!(manifest
             .source_segments
@@ -1625,6 +1822,76 @@ mod tests {
     }
 
     #[test]
+    fn prepare_in_place_indexes_steps_independently_of_physical_row_order() {
+        let dirs = TestDirs::new("legacy_levanter_metrics");
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        let chronological =
+            legacy_levanter_batch(&["step", "global_step", "train_loss"], &[7.0, 8.0, 0.25], 1);
+        let physical_order = UInt32Array::from(vec![2, 0, 1]);
+        let reordered = RecordBatch::try_new(
+            chronological.schema(),
+            chronological
+                .columns()
+                .iter()
+                .map(|column| arrow::compute::take(column, &physical_order, None).unwrap())
+                .collect(),
+        )
+        .unwrap();
+        add_segment(&catalog, &dirs.store, TELEMETRY_NAMESPACE, 1, 1, &reordered);
+        drop(catalog);
+
+        let manifest = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+
+        assert_eq!(manifest.input_rows, 3);
+        assert_eq!(manifest.output_rows, 1);
+        assert_eq!(manifest.suppressed_rows, 2);
+        let output = &manifest.source_segments[0].outputs[0];
+        assert_eq!(
+            output.namespace,
+            crate::levanter_metrics_policy::LEVANTER_METRICS_NAMESPACE
+        );
+        assert_eq!(output.rows, 1);
+        assert_eq!(
+            output
+                .partition
+                .as_ref()
+                .and_then(|partition| partition.value("run_id")),
+            Some("run/+long")
+        );
+
+        let staged_path = dirs
+            .store
+            .join(MIGRATION_DIRECTORY)
+            .join(STAGED_DIRECTORY)
+            .join(&output.relative_path);
+        let batch = ParquetRecordBatchReaderBuilder::try_new(File::open(staged_path).unwrap())
+            .unwrap()
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let names = batch
+            .column_by_name("name")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let steps = batch
+            .column_by_name("step")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(names.value(0), "train_loss");
+        assert_eq!(steps.value(0), 8);
+    }
+
+    #[test]
     fn prepare_in_place_rejects_unknown_required_columns() {
         let dirs = TestDirs::new("unknown_required_column");
         let catalog = Catalog::open(Some(&dirs.store)).unwrap();
@@ -1645,6 +1912,38 @@ mod tests {
             }),
             Err(StatsError::SchemaValidation(_))
         ));
+    }
+
+    #[test]
+    fn migration_plan_reads_metadata_without_evaluating_rows() {
+        let dirs = TestDirs::new("metadata_only_plan");
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        add_segment(
+            &catalog,
+            &dirs.store,
+            TELEMETRY_NAMESPACE,
+            1,
+            1,
+            &with_legacy_alert_tag(telemetry_batch(&["levanter"], &["train_loss"], 1), false),
+        );
+        drop(catalog);
+        let output_dir = dirs.root.join("staged");
+        let config = PrepareConfig {
+            source_dir: dirs.store.clone(),
+            output_dir,
+            final_log_dir: dirs.store.clone(),
+            batch_rows: 2,
+        };
+
+        let manifest = plan_migration(&config).unwrap();
+
+        assert_eq!(manifest.input_rows, 1);
+        assert_eq!(manifest.output_rows, 0);
+        assert!(!manifest.complete);
+        assert_eq!(manifest.source_segments.len(), 1);
+        assert!(!manifest.source_segments[0].complete);
+        assert!(manifest.source_segments[0].file_sha256.is_none());
+        assert!(manifest.source_segments[0].outputs.is_empty());
     }
 
     #[test]
@@ -1703,6 +2002,7 @@ mod tests {
                 created_at_ms: now_ms().unwrap(),
                 min_key_value: Some(rewritten.min_timestamp_ms.to_string()),
                 max_key_value: Some(rewritten.max_timestamp_ms.to_string()),
+                partition: None,
                 location: SegmentLocation::Local,
             })
             .unwrap();
@@ -1740,8 +2040,6 @@ mod tests {
         assert!(provider_names.contains(VLLM_NAMESPACE));
         assert!(provider_names.contains(ZEPHYR_NAMESPACE));
         assert!(provider_names.contains("telemetry_v1.unowned_service"));
-        assert!(!provider_names.contains(LEVANTER_STATUS_STORAGE_NAMESPACE));
-        assert!(!provider_names.contains(LEVANTER_DETAIL_STORAGE_NAMESPACE));
 
         store.shutdown(Duration::from_secs(1)).await;
         drop(store);

@@ -291,7 +291,7 @@ job it is that job's queue over time.
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
 single-value selector puts the newest hero run first. It uses `run_id` across
 clusters. The status strip uses one 15-minute query over the semantic
-`telemetry_v1.levanter` stream for ten fields. The strip includes the two hero
+`levanter.metrics` table for ten fields. The strip includes the two hero
 alert inputs: time
 since the last completed step and
 train loss, plus step time, throughput, schedule progress, and token count.
@@ -332,7 +332,7 @@ entropy and 400 bias.
 
 The two loss panels read different stores on purpose. The step-axis panel reads
 W&B through `/wandb/history`, because finelog evicts telemetry segments once
-`telemetry_v1.levanter` passes its storage policy and a finelog query only scans locally
+`levanter.metrics` passes its storage policy and a finelog query only scans locally
 resident segments. A run that outlives that window therefore has no step 0 left in
 finelog, while its W&B run keeps the whole history and spans every restart under
 one id. W&B samples the series and the bridge caches it for a minute, so this
@@ -394,7 +394,7 @@ These three watch a wider enrolment: a run that either the Iris rollup or fresh
 Levanter `phase` telemetry reports. The stall and loss rules enroll from
 `iris.task_state` alone, so a break in that path stops them watching a training
 run with no signal that it happened, which is what `iris_state_stale` reports.
-One `telemetry_v1.levanter` scan per cache interval feeds all three, reduced over the
+One `levanter.metrics` scan per cache interval feeds all three, reduced over the
 newest execution process zero reports so a retry cannot mix two attempts; the
 loss-jump check filters its two windows to that execution for the same reason.
 `TrainingProgressStalled` labels a silent run `telemetry_gone` and emits a zero

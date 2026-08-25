@@ -8,30 +8,30 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import IntEnum
 from time import time
 from typing import Any, Optional
 
 import jax
 import numpy as np
+from finelog.client import FlushResult
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.telemetry.probes import nccl, nccl_client
 
 from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import Tracker, TrackerConfig, get_tracker
+from levanter.tracker.finelog_metrics import LevanterMetricsWriter
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import NoopTracker
 
 logger = logging.getLogger(__name__)
 
-_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-_EVERY_STEP_METRICS = frozenset({"train_loss", "step", "phase", "progress_time_seconds", "global_step"})
+_EVERY_STEP_METRICS = frozenset({"train_loss", "phase", "progress_time_seconds"})
+_STEP_METRICS = frozenset({"step", "global_step"})
 _DETAIL_LOG_INTERVAL = 10
 _TELEMETRY_SERVICE = "levanter"
-_TELEMETRY_SCOPE = "levanter"
-_TELEMETER = telemetry.writer(_TELEMETRY_SCOPE)
 
 
 class TrainingPhase(IntEnum):
@@ -44,11 +44,6 @@ class TrainingPhase(IntEnum):
 
 def _metric_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
-
-
-def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> None:
-    metric_name = _metric_name(name)
-    _TELEMETER.scalar(metric_name).update(value, attributes=attributes)
 
 
 # Keep this well under the reader's enrollment window. Telemetry is best-effort and
@@ -69,7 +64,14 @@ class _PhaseHeartbeat:
     that row recent so the reader can bound its scan.
     """
 
-    def __init__(self, interval: float = _PHASE_HEARTBEAT_SECONDS) -> None:
+    def __init__(
+        self,
+        writer: LevanterMetricsWriter,
+        current_step: Callable[[], int | None],
+        interval: float = _PHASE_HEARTBEAT_SECONDS,
+    ) -> None:
+        self._writer = writer
+        self._current_step = current_step
         self._interval = interval
         self._lock = threading.Lock()
         self._phase: TrainingPhase | None = None
@@ -86,7 +88,7 @@ class _PhaseHeartbeat:
             if self._phase == phase:
                 return
             self._phase = phase
-        _set("phase", float(phase))
+        self._writer.scalar("phase", float(phase), step=self._current_step())
 
     def start(self) -> None:
         with self._lock:
@@ -110,15 +112,7 @@ class _PhaseHeartbeat:
             with self._lock:
                 phase = self._phase
             if phase is not None:
-                _set("phase", float(phase))
-
-
-_HEARTBEAT = _PhaseHeartbeat()
-
-
-def set_training_phase(phase: TrainingPhase) -> None:
-    """Publish the current training phase for stalled-training detection."""
-    _HEARTBEAT.publish(phase)
+                self._writer.scalar("phase", float(phase), step=self._current_step())
 
 
 def _as_scalar(value: Any) -> float | None:
@@ -168,53 +162,51 @@ class TelemetryTracker(Tracker):
 
     name: str = "telemetry"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        writer: LevanterMetricsWriter,
+        *,
+        heartbeat_interval: float = _PHASE_HEARTBEAT_SECONDS,
+    ) -> None:
+        self._writer = writer
+        self._step: int | None = None
+        self._heartbeat = _PhaseHeartbeat(writer, self._current_step, heartbeat_interval)
         self._nccl_ras_probe = _start_nccl_ras_probe()
-        _set("progress_time_seconds", 0)
-        set_training_phase(TrainingPhase.INITIALIZING)
-        _HEARTBEAT.start()
+        self._publish_scalar("progress_time_seconds", 0)
+        self._heartbeat.publish(TrainingPhase.INITIALIZING)
+        self._heartbeat.start()
+
+    def _publish_scalar(self, key: str, value: float) -> None:
+        self._writer.scalar(_metric_name(key), value, step=self._step)
+
+    def _current_step(self) -> int | None:
+        return self._step
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
         for key, value in metrics.items():
+            metric_name = _metric_name(key)
+            if metric_name in _STEP_METRICS:
+                continue
             if isinstance(value, SummaryStats):
-                self._publish_summary(key, value)
+                self._writer.summary(metric_name, value, step=self._step)
                 continue
             scalar = _as_scalar(value)
             if scalar is not None:
-                _set(key, scalar)
+                self._writer.scalar(metric_name, scalar, step=self._step)
 
     def _publish_every_step(self, metrics: Mapping[str, object]) -> None:
         self._publish({key: value for key, value in metrics.items() if _metric_name(key) in _EVERY_STEP_METRICS})
-
-    def _publish_summary(self, key: str, stats: SummaryStats) -> None:
-        """Export a summary's reduced moments as gauges."""
-        # Histogram buckets stay out. A row per bin, per metric, per step is a row
-        # count the telemetry store does not absorb — a six-layer MoE router emitted
-        # 774 a step. The W&B tracker still records the full bucket shape.
-        reduced = {
-            "mean": stats.mean,
-            "min": stats.min,
-            "max": stats.max,
-            "variance": stats.variance,
-            "rms": stats.rms,
-            "count": stats.num,
-            "sum": stats.sum,
-        }
-        for suffix, value in reduced.items():
-            scalar = _as_scalar(value)
-            if scalar is not None:
-                _set(f"{key}_{suffix}", scalar)
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         pass
 
     def log(self, metrics, *, step: Optional[int], commit: Optional[bool] = None):
         if step is not None:
-            _set("step", float(step))
+            self._step = step
             loss = _as_scalar(metrics.get("train/loss"))
             if loss is not None:
-                _set("progress_time_seconds", time())
-                set_training_phase(TrainingPhase.TRAINING)
+                self._publish_scalar("progress_time_seconds", time())
+                self._heartbeat.publish(TrainingPhase.TRAINING)
         if step is None or step % _DETAIL_LOG_INTERVAL == 0:
             self._publish(metrics)
         else:
@@ -232,17 +224,19 @@ class TelemetryTracker(Tracker):
                 self._nccl_ras_probe.shutdown()
             except Exception:
                 logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
-        set_training_phase(TrainingPhase.FINISHED)
+        self._heartbeat.publish(TrainingPhase.FINISHED)
         # The run is over, so there is nothing left to keep enrolled. FINISHED is
         # already published above, and republishing it for the process's remaining
         # lifetime tells the reader nothing new.
-        _HEARTBEAT.stop()
+        self._heartbeat.stop()
+        self._writer.close()
 
     def capture_stall_diagnostics(self) -> None:
         """Stop periodic RAS polling, publish a fresh stall sample, and flush telemetry."""
         if self._nccl_ras_probe is not None:
             self._nccl_ras_probe.capture_stall(_NCCL_STALL_CAPTURE_SECONDS)
-        if not telemetry.flush(_STALL_TELEMETRY_FLUSH_SECONDS):
+        typed_flushed = self._writer.flush(_STALL_TELEMETRY_FLUSH_SECONDS) == FlushResult.SUCCEEDED
+        if not typed_flushed or not telemetry.flush(_STALL_TELEMETRY_FLUSH_SECONDS):
             logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
 
 
@@ -259,10 +253,15 @@ class TelemetryConfig(TrackerConfig):
         process_index = jax.process_index()
         runtime_telemetry.configure(
             _TELEMETRY_SERVICE,
-            scope=_TELEMETRY_SCOPE,
             run_id=run_id,
             process_index=process_index,
         )
         if process_index == 0:
-            return TelemetryTracker()
+            try:
+                writer = LevanterMetricsWriter.from_iris(run_id, process_index)
+            except Exception:
+                logger.warning("could not configure direct Levanter metrics", exc_info=True)
+                return _NonPublishingTelemetryTracker()
+            if writer is not None:
+                return TelemetryTracker(writer)
         return _NonPublishingTelemetryTracker()

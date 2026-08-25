@@ -25,6 +25,8 @@ from finelog.errors import (
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.schema import (
+    FLOAT64_LIST,
+    INT64_LIST,
     MAP_STRING_STRING,
     Column,
     CoveringProjection,
@@ -860,6 +862,25 @@ def test_schema_from_dataclass_infers_dict_str_str_as_map():
     assert types["labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["optional_labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["timestamp_ms"] == stats_pb2.COLUMN_TYPE_INT64
+
+
+def test_schema_from_dataclass_infers_numeric_lists():
+    @dataclass
+    class Histogram:
+        bucket_limits: list[float]
+        bucket_counts: list[int]
+        optional_counts: list[int] | None
+        timestamp_ms: int
+
+    schema = schema_from_dataclass(Histogram)
+    types = {column.name: column.type for column in schema.columns}
+    assert types["bucket_limits"] == stats_pb2.COLUMN_TYPE_FLOAT64_LIST
+    assert types["bucket_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+    assert types["optional_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+
+    arrow = schema_to_arrow(schema)
+    assert arrow.field("bucket_limits").type == FLOAT64_LIST
+    assert arrow.field("bucket_counts").type == INT64_LIST
 
 
 def test_schema_to_arrow_maps_map_column_to_native_map():

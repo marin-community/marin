@@ -1,11 +1,18 @@
-//! Ordered registration of programmable ingestion and storage policies.
+//! Ordered registration of programmable schema policies.
 
 use arrow::record_batch::RecordBatch;
+use std::sync::Mutex;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::{
-    IngestionBatchSource, IngestionPolicy, RoutedIngestionBatch, IDENTITY_INGESTION_POLICY,
+    IngestionBatchSource, IngestionPolicy, IngestionState, RoutedIngestionBatch,
+    IDENTITY_INGESTION_POLICY,
 };
+use crate::levanter_metrics_policy::{
+    levanter_metrics_schema, matches_levanter_metrics_namespace, LevanterMetricsPolicy,
+    LEVANTER_METRICS_POLICY,
+};
+use crate::partition_policy::PhysicalPartitionPolicy;
 use crate::storage_policy::{NamespaceStoragePolicy, DEFAULT_NAMESPACE_STORAGE_POLICY};
 use crate::store::policy::StoragePolicy;
 use crate::telemetry_policy::{matches_telemetry_namespace, TELEMETRY_POLICY};
@@ -21,17 +28,23 @@ impl<P: ?Sized + 'static> PolicyRule<P> {
     }
 }
 
-// Rules are evaluated in declaration order. Keep the identity/default policies
-// as explicit fallbacks rather than catch-all matchers in these lists.
-static INGESTION_POLICIES: [PolicyRule<dyn IngestionPolicy>; 1] = [PolicyRule::new(
-    matches_telemetry_namespace,
-    &TELEMETRY_POLICY,
-)];
+trait SchemaPolicy: IngestionPolicy + NamespaceStoragePolicy {
+    fn registration_namespace(&self, namespace: &str) -> Result<String, StatsError> {
+        Ok(namespace.to_string())
+    }
 
-static STORAGE_POLICIES: [PolicyRule<dyn NamespaceStoragePolicy>; 1] = [PolicyRule::new(
-    matches_telemetry_namespace,
-    &TELEMETRY_POLICY,
-)];
+    fn physical_partition_policy(
+        &self,
+        namespace: &str,
+    ) -> Option<&'static dyn PhysicalPartitionPolicy>;
+}
+
+// Rules are evaluated in declaration order. Each rule owns the complete policy
+// for a namespace family: logical routing, retention, and hidden partitioning.
+static SCHEMA_POLICIES: [PolicyRule<dyn SchemaPolicy>; 2] = [
+    PolicyRule::new(matches_levanter_metrics_namespace, &LEVANTER_METRICS_POLICY),
+    PolicyRule::new(matches_telemetry_namespace, &TELEMETRY_POLICY),
+];
 
 fn matching_policy<P: ?Sized + 'static>(
     rules: &'static [PolicyRule<P>],
@@ -43,25 +56,110 @@ fn matching_policy<P: ?Sized + 'static>(
         .map(|rule| rule.policy)
 }
 
-pub(crate) fn route_ingestion_batch(
-    source: IngestionBatchSource<'_>,
-    batch: &RecordBatch,
-) -> Result<Vec<RoutedIngestionBatch>, StatsError> {
-    matching_policy(&INGESTION_POLICIES, source.namespace())
-        .unwrap_or(&IDENTITY_INGESTION_POLICY)
-        .route_batch(source, batch)
+#[derive(Debug, Default)]
+pub(crate) struct PolicyRegistry {
+    ingestion_state: Mutex<IngestionState>,
+}
+
+impl PolicyRegistry {
+    pub(crate) fn route_ingestion_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: &RecordBatch,
+    ) -> Result<Vec<RoutedIngestionBatch>, StatsError> {
+        let mut state = self.ingestion_state.lock().unwrap();
+        match matching_policy(&SCHEMA_POLICIES, source.namespace()) {
+            Some(policy) => policy.route_batch(source, batch, &mut state),
+            None => IDENTITY_INGESTION_POLICY.route_batch(source, batch, &mut state),
+        }
+    }
+
+    pub(crate) fn index_migration_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: &RecordBatch,
+    ) -> Result<(), StatsError> {
+        let mut state = self.ingestion_state.lock().unwrap();
+        match matching_policy(&SCHEMA_POLICIES, source.namespace()) {
+            Some(policy) => policy.index_migration_batch(source, batch, &mut state),
+            None => IDENTITY_INGESTION_POLICY.index_migration_batch(source, batch, &mut state),
+        }
+    }
+
+    pub(crate) fn finish_migration_index(&self) {
+        self.ingestion_state
+            .lock()
+            .unwrap()
+            .finish_migration_index();
+    }
 }
 
 pub(crate) fn storage_policy_for(namespace: &str) -> Result<StoragePolicy, StatsError> {
-    matching_policy(&STORAGE_POLICIES, namespace)
-        .unwrap_or(&DEFAULT_NAMESPACE_STORAGE_POLICY)
-        .storage_policy(namespace)
+    match matching_policy(&SCHEMA_POLICIES, namespace) {
+        Some(policy) => policy.storage_policy(namespace),
+        None => DEFAULT_NAMESPACE_STORAGE_POLICY.storage_policy(namespace),
+    }
+}
+
+pub(crate) fn managed_storage_policy_for(
+    namespace: &str,
+) -> Result<Option<StoragePolicy>, StatsError> {
+    matching_policy(&SCHEMA_POLICIES, namespace)
+        .map(|policy| policy.storage_policy(namespace))
+        .transpose()
+}
+
+pub(crate) fn registration_namespace_for(namespace: &str) -> Result<String, StatsError> {
+    match matching_policy(&SCHEMA_POLICIES, namespace) {
+        Some(policy) => policy.registration_namespace(namespace),
+        None => Ok(namespace.to_string()),
+    }
+}
+
+pub(crate) fn schema_for_namespace(namespace: &str) -> Option<crate::store::schema::Schema> {
+    if matches_levanter_metrics_namespace(namespace) {
+        return Some(levanter_metrics_schema());
+    }
+    if matches_telemetry_namespace(namespace) {
+        return Some(crate::server::telemetry::telemetry_schema());
+    }
+    None
+}
+
+pub(crate) fn physical_partition_policy_for(
+    namespace: &str,
+) -> Option<&'static dyn PhysicalPartitionPolicy> {
+    matching_policy(&SCHEMA_POLICIES, namespace)
+        .and_then(|policy| policy.physical_partition_policy(namespace))
 }
 
 pub(crate) fn eager_storage_namespaces_for(namespace: &str) -> Vec<&'static str> {
-    matching_policy(&STORAGE_POLICIES, namespace)
-        .unwrap_or(&DEFAULT_NAMESPACE_STORAGE_POLICY)
-        .eager_namespaces()
+    match matching_policy(&SCHEMA_POLICIES, namespace) {
+        Some(policy) => policy.eager_namespaces(),
+        None => DEFAULT_NAMESPACE_STORAGE_POLICY.eager_namespaces(),
+    }
+}
+
+impl SchemaPolicy for crate::telemetry_policy::TelemetryPolicy {
+    fn physical_partition_policy(
+        &self,
+        namespace: &str,
+    ) -> Option<&'static dyn PhysicalPartitionPolicy> {
+        self.physical_partition_policy(namespace)
+    }
+}
+
+impl SchemaPolicy for LevanterMetricsPolicy {
+    fn registration_namespace(&self, namespace: &str) -> Result<String, StatsError> {
+        self.registration_namespace(namespace)
+    }
+
+    fn physical_partition_policy(
+        &self,
+        namespace: &str,
+    ) -> Option<&'static dyn PhysicalPartitionPolicy> {
+        self.physical_partition_policy(namespace)
+    }
 }
 
 #[cfg(test)]
@@ -85,11 +183,11 @@ mod tests {
         )
         .unwrap();
 
-        let routed =
-            route_ingestion_batch(IngestionBatchSource::Declared("experiments"), &batch).unwrap();
+        let routed = PolicyRegistry::default()
+            .route_ingestion_batch(IngestionBatchSource::Declared("experiments"), &batch)
+            .unwrap();
         assert_eq!(routed.len(), 1);
         assert_eq!(routed[0].destination.logical_namespace, "experiments");
-        assert_eq!(routed[0].destination.physical_namespace, "experiments");
         assert_eq!(routed[0].batch, batch);
         assert_eq!(
             storage_policy_for("experiments").unwrap(),

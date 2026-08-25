@@ -470,11 +470,7 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
         def set(self, value, *, attributes=None):
             emitted.append((value, attributes))
 
-    class Writer:
-        def gauge(self, _name, **_kwargs):
-            return Gauge()
-
-    monkeypatch.setattr(coordinator_module, "_TELEMETER", Writer())
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda _name, **_kwargs: Gauge())
     coord._publish_telemetry()
 
     assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted

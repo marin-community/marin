@@ -69,7 +69,7 @@ def _panel_sql(dashboard: dict) -> list[str]:
 
 
 def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
-    database.execute('CREATE VIEW "telemetry_v1.levanter" AS SELECT * FROM telemetry_v1')
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
 
 
 def _load(path: Path) -> dict:
@@ -972,7 +972,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE "telemetry_v1.levanter"(
+        CREATE TABLE "levanter.metrics"(
             service VARCHAR,
             run_id VARCHAR,
             cluster VARCHAR,
@@ -988,7 +988,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO \"telemetry_v1.levanter\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
             ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),

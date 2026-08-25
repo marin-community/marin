@@ -125,7 +125,6 @@ def configure(monkeypatch: pytest.MonkeyPatch, transport: RecordingTransport, **
     options = {
         "endpoint": "http://finelog.test/v1/telemetry",
         "service": "test-service",
-        "scope": "test",
         "retry_initial": 0.001,
         "retry_maximum": 0.002,
     }
@@ -180,7 +179,7 @@ def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.
 
 
 def test_invalid_configuration_stays_inert() -> None:
-    telemetry.configure(endpoint="file:///tmp/telemetry", service="test", scope="test")
+    telemetry.configure(endpoint="file:///tmp/telemetry", service="test")
     telemetry.counter("requests").add()
 
     assert telemetry.runtime_status().configured is False
@@ -195,21 +194,6 @@ def test_custom_resource_role_is_exported(monkeypatch: pytest.MonkeyPatch) -> No
     assert transport.accepted.wait(1)
     payload = json.loads(transport.requests[0][1])
     assert payload["resource"]["attributes"]["role"] == "skyrl_driver"
-
-
-def test_writer_scope_selects_namespace_without_changing_metric_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = RecordingTransport()
-    configure(monkeypatch, transport, scope="levanter")
-    levanter = telemetry.writer("levanter")
-
-    levanter.counter("calls").add()
-    levanter.scalar("loss").update(1.5)
-    levanter.histogram("latency").record(0.5)
-    assert telemetry.flush(1.0)
-
-    payloads = [json.loads(request[1]) for request in transport.requests]
-    assert [payload["namespace"] for payload in payloads] == ["telemetry_v1.levanter"]
-    assert [record["name"] for payload in payloads for record in payload["records"]] == ["calls", "loss", "latency"]
 
 
 def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,7 +213,7 @@ def test_retry_reuses_exact_batch_id_and_body(monkeypatch: pytest.MonkeyPatch) -
     assert len({request[1] for request in delivery_requests}) == 1
     payload = json.loads(transport.requests[0][1])
     assert payload["batch_id"] == transport.requests[0][2]
-    assert payload["namespace"] == "telemetry_v1.test"
+    assert "namespace" not in payload
     assert payload["records"][0]["value"] == 2
     assert status.export_attempts == 3
     assert status.export_failures == 2
@@ -406,7 +390,7 @@ def test_raising_log_handler_cannot_escape_configuration() -> None:
     handler = RaisingHandler()
     telemetry.logger.addHandler(handler)
     try:
-        telemetry.configure(endpoint="invalid", service="test", scope="test")
+        telemetry.configure(endpoint="invalid", service="test")
     finally:
         telemetry.logger.removeHandler(handler)
 
@@ -443,7 +427,6 @@ def test_same_configuration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> No
     options = {
         "endpoint": "http://finelog.test/v1/telemetry",
         "service": "test-service",
-        "scope": "test",
         "retry_initial": 0.001,
         "retry_maximum": 0.002,
     }
