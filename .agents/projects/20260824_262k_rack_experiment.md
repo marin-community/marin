@@ -102,6 +102,45 @@ cell, so this is specific to the long context. Reproduced twice on hardware, at
 rack run: raise the schedule the budget is computed from, drop the simulated-epoching budget for
 this probe, or drop the cells that cannot fill one sequence.
 
+## The residual stream is sequence-replicated, and SConv is why it cannot simply be sharded
+
+**Verified.** Under a CP4 mesh the hero model's residual carries
+`P(('replica_dcn','data','expert'), None, None)` at the embedding output, at every `_activation_spec`
+round trip through the MoE, and at the final hidden -- identical to the CP1 case. The sequence
+dimension is replicated end to end. `_activation_spec`'s own docstring says as much
+("seq-replicated today"), and `_embedding_gather` hardcodes `out_specs=P(_BATCH_AXES, None, None)`.
+Neither sibling branch establishes the layout: the MoE branch returns the caller's spec by design,
+and the FA4 branch reshards only `q`, inside the attention block.
+
+This is the composition gap, and it is the right size. At the rack mesh the batch axes span 16 with a
+global batch of 16, so a block input is `[1, 262144, 6144]` bf16 = 3.0 GiB replicated against
+0.75 GiB context-sharded. Across 48 layers that is roughly 108 GiB of block inputs alone, the order
+of the ~230 GiB long context added at hero width. Forcing the sharded layout at the embedding does
+propagate cleanly: `_activation_spec` then carries
+`P(('replica_dcn','data','expert'), 'context', None)` through the MoE to the final hidden.
+
+**The fix is blocked on SConv.** The hero runs `sconv=True`, `sconv_kernel=4`,
+`sconv_sites=('k','attn','mlp')` -- three calls per layer, 144 across the model. `short_conv` is
+shard-local along the sequence with no halo exchange, and its Pallas wrapper refuses a sharded
+sequence rather than hide the gather:
+
+```
+short_conv requires an unsharded sequence axis for x;
+got P(('replica_dcn', 'data', 'expert'), 'context', None).
+```
+
+`_assert_local_axes` raises exactly this on a context-sharded activation, and its docstring is
+explicit that the point is "to refuse to paper over a real all-gather with a silent reshard". So a
+context-sharded residual either fails at every SConv site or is gathered back three times per layer,
+which re-materializes the full-sequence activation and returns the memory the change was for.
+
+The missing capability is a left halo of `sconv_kernel - 1` = 3 tokens from the left neighbour in the
+context group. The traffic is trivial (3 x 6144 x 2 B = 36 KB per call per boundary); the capability
+simply does not exist, and it lives in a shared levanter kernel rather than in this branch. **That is
+a design change, so it is reported rather than attempted.** The CPU verification above does not trip
+the guard, because CPU falls back to `short_conv_reference` and never enters the Pallas wrapper; the
+guard was exercised directly instead.
+
 ## Attribution of the OOM (2026-08-25, one GB200 node, no rack)
 
 **There is no sequence-squared buffer.** Three d768 arms on one `gb200-1node` tray, each holding
