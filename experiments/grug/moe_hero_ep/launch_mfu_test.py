@@ -47,6 +47,8 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
+# The hero has never used tensor parallelism, and nothing here exposes a knob for it.
+HERO_MODEL_AXIS_SIZE = 1
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
@@ -66,6 +68,36 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 # Held-out sets are added at weight 0 so they surface as tagged eval sets.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
     return list(paloma_datasets(tokenizer=marin_tokenizer).values())
+
+
+def _validate_mesh_axes(*, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int) -> None:
+    """Reject mesh shapes and batch sizes that would only fail once the rack is allocated.
+
+    ``compact_grug_mesh`` gives ``data`` whatever the fixed axes leave free, so a bad
+    ``--context-axis-size`` or ``--expert-axis-size`` surfaces as a mesh-construction failure on
+    the allocated rack. Both checks run here instead: the axis sizes have to divide the rack's
+    device count, and the global batch has to divide over the axes the data loader shards it on
+    (``replica_dcn``, ``data``, ``expert``) or the loader refuses the batch after startup.
+    """
+    if context_axis_size <= 0:
+        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
+    if expert_axis_size <= 0:
+        raise ValueError(f"expert_axis_size must be positive, got {expert_axis_size}")
+    devices = HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks
+    fixed = dp_racks * context_axis_size * expert_axis_size * HERO_MODEL_AXIS_SIZE
+    if devices % fixed != 0:
+        raise ValueError(
+            f"device count ({devices}) must be divisible by replica ({dp_racks}) * "
+            f"context ({context_axis_size}) * expert ({expert_axis_size}) * model "
+            f"({HERO_MODEL_AXIS_SIZE})"
+        )
+    data_axis_size = devices // fixed
+    batch_axes_product = dp_racks * data_axis_size * expert_axis_size
+    if batch_size % batch_axes_product != 0:
+        raise ValueError(
+            f"batch_size={batch_size} must be divisible by the batch axes replica ({dp_racks}) * "
+            f"data ({data_axis_size}) * expert ({expert_axis_size}) = {batch_axes_product}"
+        )
 
 
 class HeroThroughputResult(Artifact):
@@ -89,7 +121,10 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     max_seq_len: int | None = None,
+    qk_mult: float | None = None,
     latent_dim: int | None = None,
+    context_axis_size: int = 1,
+    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
     moe_implementation: str | None = None,
     master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
     restore_from: str | None = None,
@@ -153,6 +188,7 @@ def build_hero_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("max_seq_len", max_seq_len),
+            ("qk_mult", qk_mult),
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
         )
@@ -160,11 +196,17 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    _validate_mesh_axes(
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
     # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
     # is already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
-    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must be divisible by {expert_axis_size}")
+    local_experts = model.num_experts // expert_axis_size
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
@@ -178,6 +220,14 @@ def build_hero_run(
     transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
+    # Mesh and attention overrides are tagged only when they move off the hero shape, so a run at
+    # the hero settings keeps the tag set every earlier hero run carries.
+    shape_tags = (
+        *((f"context-{context_axis_size}",) if context_axis_size != 1 else ()),
+        *((f"expert-axis-{expert_axis_size}",) if expert_axis_size != HERO_EP_EXPERT_AXIS_SIZE else ()),
+        *((f"seq-{model.max_seq_len}",) if max_seq_len is not None else ()),
+        *((f"qk-mult-{model.qk_mult:g}",) if qk_mult is not None else ()),
+    )
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -190,7 +240,8 @@ def build_hero_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=expert_axis_size,
+        context_axis_size=context_axis_size,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
@@ -241,6 +292,7 @@ def build_hero_run(
                     *transport_capacity_tags,
                     wave_tag,
                     size_tag,
+                    *shape_tags,
                     "gb200",
                     HARRIER_MIX_2026_08_17_1_TAG,
                     "MHEP",
@@ -371,6 +423,35 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help=(
+        "Override the query scale applied before attention. Long-context runs raise it with the "
+        "sequence, e.g. the YaRN mscale recipe 1.3 * (0.1 * ln(seq / 4096) + 1)."
+    ),
+)
+@click.option(
+    "--context-axis-size",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help=(
+        "Context-parallel shard count for the sequence dim. Attention shards Q over it and "
+        "all-gathers K/V; `data` narrows by the same factor."
+    ),
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=HERO_EP_EXPERT_AXIS_SIZE,
+    show_default=True,
+    help=(
+        "Devices in the expert-parallel group. Lower it to free devices for --context-axis-size; "
+        "the expert bank must stay divisible by it."
+    ),
+)
+@click.option(
     "--latent-dim",
     type=click.IntRange(min=1),
     default=None,
@@ -495,6 +576,9 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     seq_len: int | None,
+    qk_mult: float | None,
+    context_axis_size: int,
+    expert_axis_size: int,
     latent_dim: int | None,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -523,6 +607,9 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         max_seq_len=seq_len,
+        qk_mult=qk_mult,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
         latent_dim=latent_dim,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),

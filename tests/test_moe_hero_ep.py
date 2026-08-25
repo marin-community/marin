@@ -131,14 +131,60 @@ def test_sequence_length_override_holds_tokens_per_step_when_the_batch_is_halved
     baseline = launch.build_hero_run(run_id="seq-baseline", dp_racks=1, num_steps=1, version="dev")
     baseline_config = baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args, baseline.deps))
     step = launch.build_hero_run(
-        run_id="long-seq", dp_racks=1, num_steps=1, batch_size=16, max_seq_len=262144, version="dev"
+        run_id="long-seq", dp_racks=1, num_steps=1, batch_size=64, max_seq_len=65536, version="dev"
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert config.model.max_seq_len == 262144
+    assert config.model.max_seq_len == 65536
     assert config.trainer.trainer.train_batch_size * config.model.max_seq_len == (
         baseline_config.trainer.trainer.train_batch_size * baseline_config.model.max_seq_len
     )
+
+
+def test_mesh_axis_overrides_reach_the_trainer_and_the_run_tags():
+    step = launch.build_hero_run(
+        run_id="cp4-ep16",
+        dp_racks=1,
+        num_steps=1,
+        batch_size=16,
+        max_seq_len=262144,
+        context_axis_size=4,
+        expert_axis_size=16,
+        qk_mult=1.84,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.context_axis_size == 4
+    assert config.trainer.expert_axis_size == 16
+    assert config.model.qk_mult == 1.84
+    tags = config.trainer.trainer.tracker.tags
+    assert {"context-4", "expert-axis-16", "seq-262144", "qk-mult-1.84"} <= set(tags)
+
+
+def test_hero_shape_carries_no_mesh_override_tags():
+    step = launch.build_hero_run(run_id="hero-tags", dp_racks=1, num_steps=1, version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    tags = config.trainer.trainer.tracker.tags
+    assert not [tag for tag in tags if tag.startswith(("context-", "expert-axis-", "seq-", "qk-mult-"))]
+    assert config.trainer.context_axis_size == 1
+    assert config.trainer.expert_axis_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        # 64 devices over replica 1 x context 5 x expert 64 leaves no whole `data` axis.
+        ({"context_axis_size": 5}, "must be divisible by replica"),
+        # replica 1 x data 4 x expert 16 = 64 batch shards, and the hero batch of 1024 divides it,
+        # but a batch of 24 does not.
+        ({"context_axis_size": 1, "expert_axis_size": 16, "batch_size": 24}, "must be divisible by the batch axes"),
+    ],
+)
+def test_mesh_overrides_that_cannot_be_built_are_rejected_before_launch(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        launch.build_hero_run(run_id="bad-mesh", dp_racks=1, num_steps=1, version="dev", **kwargs)
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
