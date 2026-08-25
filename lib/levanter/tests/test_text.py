@@ -812,12 +812,20 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         ex = packed_ds[0]
         assert ex.tokens.shape == (Pos.size,)
         assert ex.loss_weight.shape == (Pos.size,)
+        assert ex.attn_mask.segment_ids is not None
         assert ex.attn_mask.segment_ids[0].shape == (Pos.size,)
 
         assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
-        # test no packing
-        packed_ds = ChatDataset(ds, Pos, max_segments_per_example=1).as_sync_dataset()
+        # test no packing through the component configuration path
+        unpacked_component = DatasetComponent(format=ChatLmDatasetFormat(messages_field="messages", pack=False))
+        packed_ds = dataset_for_component(
+            unpacked_component,
+            Pos,
+            ds,
+            eos_id=tokenizer.eos_token_id,
+            block_cross_document_attention=True,
+        ).as_sync_dataset()
 
         # we supplied two conversations, so we should still have two examples
         assert len(packed_ds) == 2
@@ -826,6 +834,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             # basic structural checks
             assert ex.tokens.shape == (Pos.size,)
             assert ex.loss_weight.shape == (Pos.size,)
+            assert ex.attn_mask.segment_ids is not None
             assert ex.attn_mask.segment_ids[0].shape == (Pos.size,)
 
             # loss_weight should coincide with assistant tokens only

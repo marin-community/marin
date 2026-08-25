@@ -533,9 +533,10 @@ def dataset_for_component(
         effective_pack = pack
         if effective_pack == "pad":
             raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
+        if isinstance(effective_pack, bool):
+            max_segments = 64 if effective_pack else 1
+        else:
+            max_segments = effective_pack
         mask_user_turns = fmt.mask_user_turns
         return ChatDataset(
             cache,
