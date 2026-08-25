@@ -3,18 +3,30 @@
 
 from pathlib import Path
 
+import marin.datakit.download.blob_id as blob_id
 import marin.datakit.download.stack_v2 as stack_v2
 import polars as pl
 import pytest
 from fray.local_backend import LocalClient
-from marin.datakit.download.huggingface import HfRepoFile, HfRepoListing
-from marin.datakit.download.stack_v2 import (
-    StackV2ParquetTask,
-    build_stack_v2_pipeline,
-    partition_stack_v2_parquet,
+from marin.datakit.download.blob_id import (
+    BlobIdParquetTask,
+    build_blob_id_partition_pipeline,
+    partition_parquet_by_blob_id,
 )
+from marin.datakit.download.huggingface import HfRepoFile, HfRepoListing
 from zephyr.context import ZephyrContext
 from zephyr.plan import compute_plan
+
+
+def _stack_task(source_url: str, relative_source_path: str, output_path: str) -> BlobIdParquetTask:
+    return BlobIdParquetTask(
+        source_url=source_url,
+        relative_source_path=relative_source_path,
+        output_path=output_path,
+        dataset_id=stack_v2.HF_DATASET_ID,
+        revision=stack_v2.HF_REVISION,
+        require_token=True,
+    )
 
 
 def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -42,10 +54,10 @@ def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.M
     def fail_if_workers_start(**_kwargs):
         pytest.fail("Zephyr workers started before gated content access was validated")
 
-    monkeypatch.setattr(stack_v2, "list_hf_repo_files", lambda **_kwargs: listing)
-    monkeypatch.setattr(stack_v2, "get_hf_file_metadata", reject_file_access)
-    monkeypatch.setattr(stack_v2, "_hf_token", lambda: "hf-test-token")
-    monkeypatch.setattr(stack_v2, "ZephyrContext", fail_if_workers_start)
+    monkeypatch.setattr(blob_id, "list_hf_repo_files", lambda **_kwargs: listing)
+    monkeypatch.setattr(blob_id, "get_hf_file_metadata", reject_file_access)
+    monkeypatch.setattr(blob_id, "get_token", lambda: "hf-test-token")
+    monkeypatch.setattr(blob_id, "ZephyrContext", fail_if_workers_start)
 
     with pytest.raises(PermissionError, match="gate not accepted"):
         stack_v2.download_stack_v2(cfg)
@@ -56,7 +68,7 @@ def test_driver_rejects_gated_content_before_workers_start(monkeypatch: pytest.M
 def test_partition_resolves_hf_url_once_before_polars_scan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     source_path = tmp_path / "source.parquet"
     pl.DataFrame({"blob_id": ["00abcdef"], "path": ["a.py"]}).write_parquet(source_path)
-    task = StackV2ParquetTask(
+    task = _stack_task(
         source_url=(
             "hf://datasets/bigcode/the-stack-v2@" f"{stack_v2.HF_REVISION}/data/Python/train-00000-of-00001.parquet"
         ),
@@ -78,11 +90,11 @@ def test_partition_resolves_hf_url_once_before_polars_scan(monkeypatch: pytest.M
         scanned_paths.append((path, kwargs))
         return original_scan_parquet(path, **kwargs)
 
-    monkeypatch.setattr(stack_v2, "get_hf_file_metadata", resolve_file)
-    monkeypatch.setattr(stack_v2, "_hf_token", lambda: "hf-test-token")
-    monkeypatch.setattr(stack_v2.pl, "scan_parquet", capture_scan)
+    monkeypatch.setattr(blob_id, "get_hf_file_metadata", resolve_file)
+    monkeypatch.setattr(blob_id, "get_token", lambda: "hf-test-token")
+    monkeypatch.setattr(blob_id.pl, "scan_parquet", capture_scan)
 
-    partition_stack_v2_parquet(task)
+    partition_parquet_by_blob_id(task)
 
     assert metadata_calls == [
         (
@@ -97,19 +109,19 @@ def test_partition_resolves_hf_url_once_before_polars_scan(monkeypatch: pytest.M
     assert scanned_paths[0][1]["storage_options"] is None
 
 
-def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: Path):
+def test_partition_parquet_streams_directly_to_blob_prefixes(tmp_path: Path):
     source_path = tmp_path / "source.parquet"
     source = pl.DataFrame(
         {
-            "blob_id": ["00abcdef", "Fe012345", "ff987654", "00fedcba"],
-            "path": ["a.py", "b.rs", "c.go", "d.java"],
+            "blob_id": ["00abcdef", "Fe012345", "ff987654", "00fedcba", None],
+            "path": ["a.py", "b.rs", "c.go", "d.java", "missing-source.py"],
         }
     )
     source.write_parquet(source_path)
 
     output_path = tmp_path / "partitioned"
-    partition_stack_v2_parquet(
-        StackV2ParquetTask(
+    partition_parquet_by_blob_id(
+        _stack_task(
             source_url=str(source_path),
             relative_source_path="data/Python/train-00000.parquet",
             output_path=str(output_path),
@@ -121,19 +133,20 @@ def test_partition_stack_v2_parquet_streams_directly_to_blob_prefixes(tmp_path: 
         "blob_prefix=00",
         "blob_prefix=fe",
         "blob_prefix=ff",
+        "blob_prefix=null",
     }
     written = pl.concat(pl.read_parquet(path) for path in parquet_paths).sort("blob_id")
     assert written.columns == source.columns
     assert written.to_dicts() == source.sort("blob_id").to_dicts()
 
 
-def test_partition_stack_v2_parquet_rejects_non_hex_blob_prefix(tmp_path: Path):
+def test_partition_parquet_rejects_non_hex_blob_prefix(tmp_path: Path):
     source_path = tmp_path / "source.parquet"
     pl.DataFrame({"blob_id": ["zz-not-a-hash"], "path": ["bad.py"]}).write_parquet(source_path)
 
     with pytest.raises(ValueError, match="blob_id must start with 2 hexadecimal characters"):
-        partition_stack_v2_parquet(
-            StackV2ParquetTask(
+        partition_parquet_by_blob_id(
+            _stack_task(
                 source_url=str(source_path),
                 relative_source_path="data/Python/train-00000.parquet",
                 output_path=str(tmp_path / "partitioned"),
@@ -141,9 +154,9 @@ def test_partition_stack_v2_parquet_rejects_non_hex_blob_prefix(tmp_path: Path):
         )
 
 
-def test_stack_v2_pipeline_assigns_one_zephyr_shard_per_parquet_file(tmp_path: Path):
+def test_pipeline_assigns_one_zephyr_shard_per_parquet_file(tmp_path: Path):
     tasks = [
-        StackV2ParquetTask(
+        _stack_task(
             source_url=str(tmp_path / f"source-{index}.parquet"),
             relative_source_path=f"data/Python/train-{index:05d}.parquet",
             output_path=str(tmp_path / "partitioned"),
@@ -151,19 +164,19 @@ def test_stack_v2_pipeline_assigns_one_zephyr_shard_per_parquet_file(tmp_path: P
         for index in range(3)
     ]
 
-    plan = compute_plan(build_stack_v2_pipeline(tasks, str(tmp_path / "output")))
+    plan = compute_plan(build_blob_id_partition_pipeline(tasks, str(tmp_path / "output")))
 
     assert plan.num_shards == len(tasks)
     assert [item.data for item in plan.source_items] == tasks
 
 
-def test_stack_v2_pipeline_executes_partitioning_and_metrics(tmp_path: Path):
+def test_pipeline_executes_partitioning_and_metrics(tmp_path: Path):
     tasks = []
     for index, prefix in enumerate(("00", "ff")):
         source_path = tmp_path / f"source-{index}.parquet"
         pl.DataFrame({"blob_id": [f"{prefix}abcdef"], "path": [f"{index}.py"]}).write_parquet(source_path)
         tasks.append(
-            StackV2ParquetTask(
+            _stack_task(
                 source_url=str(source_path),
                 relative_source_path=f"data/Python/train-{index:05d}.parquet",
                 output_path=str(tmp_path / "output" / "data"),
@@ -175,7 +188,7 @@ def test_stack_v2_pipeline_executes_partitioning_and_metrics(tmp_path: Path):
         max_workers=2,
         chunk_storage_prefix=str(tmp_path / "zephyr"),
     )
-    context.execute(build_stack_v2_pipeline(tasks, str(tmp_path / "output")))
+    context.execute(build_blob_id_partition_pipeline(tasks, str(tmp_path / "output")))
 
     assert len(list((tmp_path / "output" / "data").glob("blob_prefix=*/*.parquet"))) == 2
     assert len(list((tmp_path / "output" / ".metrics").glob("success-part-*.jsonl"))) == 2
