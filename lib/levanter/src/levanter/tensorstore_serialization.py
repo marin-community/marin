@@ -714,11 +714,10 @@ def _serialize_arrays(
     gate = _HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
-    async def issue_write(num_bytes: int, stage, open_store, write_to_store):
+    async def issue_write(num_bytes: int, stage, store_future, write_to_store):
         await gate.acquire(num_bytes)
         try:
             data = await stage()
-            store_future = open_store()
         except BaseException:
             gate.release(num_bytes)
             raise
@@ -747,7 +746,7 @@ def _serialize_arrays(
         store_future.add_done_callback(store_opened)
         store_future.force()
 
-    async def write_host_array(open_store, array):
+    async def write_host_array(store_future, array):
         # Unsharded and identical everywhere, so process 0 writes all of it.
         if jax.process_index() != 0:
             return
@@ -759,9 +758,9 @@ def _serialize_arrays(
         def write_to_store(store, data):
             return store.write(data, can_reference_source_data_indefinitely=True)
 
-        await issue_write(_estimate_array_nbytes(array), stage, open_store, write_to_store)
+        await issue_write(_estimate_array_nbytes(array), stage, store_future, write_to_store)
 
-    async def write_shard(open_store, shard, plan):
+    async def write_shard(store_future, shard, plan):
         region = _shard_write_region(shard, plan)
         if region is None:
             return
@@ -776,23 +775,18 @@ def _serialize_arrays(
         await issue_write(
             _estimate_array_nbytes(shard.data) // plan.write_replicas,
             stage,
-            open_store,
+            store_future,
             write_to_store,
         )
 
     async def write_one(array, tspec, plan):
-        store_future = None
-
-        def open_store():
-            nonlocal store_future
-            if store_future is None:
-                store_future = ts.open(ts.Spec(tspec), create=True, open=True, context=context)
-            return store_future
+        # Opening may overlap staging, but no writer waits on this future before taking its snapshot.
+        store_future = ts.open(ts.Spec(tspec), create=True, open=True, context=context)
 
         if not isinstance(array, jax.Array):
-            await write_host_array(open_store, array)
+            await write_host_array(store_future, array)
             return
-        await asyncio.gather(*(write_shard(open_store, shard, plan) for shard in array.addressable_shards))
+        await asyncio.gather(*(write_shard(store_future, shard, plan) for shard in array.addressable_shards))
 
     async def write_all():
         await asyncio.gather(*(write_one(a, s, p) for a, s, p in zip(arrays, tspecs, plans)))

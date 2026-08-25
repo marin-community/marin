@@ -322,9 +322,13 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     asyncio.run(scenario())
 
 
-def test_serialization_returns_after_staging_before_tensorstore_open_completes(monkeypatch, tmp_path):
-    source = jnp.arange(8, dtype=jnp.float32)
-    open_promise, open_future = ts.Promise.new()
+def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monkeypatch, tmp_path):
+    source = {
+        "first": np.arange(8, dtype=np.float32),
+        "second": np.arange(8, dtype=np.float32) + 100,
+    }
+    expected = {name: value.copy() for name, value in source.items()}
+    open_promises_and_futures = [ts.Promise.new() for _ in source]
     commit_promise, commit_future = ts.Promise.new()
     writes = []
     write_started = threading.Event()
@@ -338,7 +342,8 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
             write_started.set()
             return SimpleNamespace(commit=commit_future)
 
-    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *args, **kwargs: open_future)
+    open_futures = iter(future for _, future in open_promises_and_futures)
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *args, **kwargs: next(open_futures))
 
     manager = array_ser.GlobalAsyncCheckpointManager()
     returned = threading.Event()
@@ -356,8 +361,11 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
     serializer.start()
     try:
         assert returned.wait(timeout=_ASYNC_TEST_TIMEOUT), "serialization waited for TensorStore to open after staging"
+        for value in source.values():
+            value.fill(-1)
     finally:
-        open_promise.set_result(FakeStore())
+        for open_promise, _ in open_promises_and_futures:
+            open_promise.set_result(FakeStore())
         assert write_started.wait(timeout=_ASYNC_TEST_TIMEOUT)
         commit_promise.set_result(None)
         serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
@@ -365,7 +373,9 @@ def test_serialization_returns_after_staging_before_tensorstore_open_completes(m
 
     assert not serializer.is_alive()
     assert errors == []
-    np.testing.assert_array_equal(writes, [np.asarray(source)])
+    writes_by_first_value = {int(value[0]): value for value in writes}
+    for value in expected.values():
+        np.testing.assert_array_equal(writes_by_first_value[int(value[0])], value)
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
