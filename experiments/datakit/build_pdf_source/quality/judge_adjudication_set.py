@@ -15,18 +15,28 @@ manufactures signal out of noise instead. So every verdict carries a strict rank
 extractions *and* a ``margin`` saying whether the gap is real. The ranking supplies the power; the
 margin supplies the honesty, and :data:`DECISIVE_MARGINS` is what the decisive-verdict rate counts.
 
-Three judging arms, all over the same packets:
+Three judging passes, all over the same packets:
 
 ``canonical``
-    Every packet, dialect-neutral presentation. This is the arm the headline verdict comes from.
+    Every packet, dialect-neutral presentation. This is the pass the headline verdict comes from.
 ``native``
     The style-control packets only, each route in its own serialization. Paired with the same
-    document's canonical verdict, so the difference between the two arms *is* the style effect --
-    the documents, the pages, the blinding and the label assignment are all held fixed and only the
-    presentation moves.
+    document's canonical verdict, so the difference between the two *is* the style effect -- the
+    documents, the pages, the blinding and the label assignment are all held fixed and only the
+    presentation moves. Re-measured rather than carried over: 1.17.0 recovers tables the previous
+    build did not, and a dialect effect measured on a dialect that changed is not a measurement.
 ``second judge``
     The style-control packets again under :data:`SECOND_JUDGE`, canonical presentation, so the
     headline has an inter-judge agreement number attached rather than resting on one model's taste.
+
+**Results are reported per :class:`~...build_adjudication_set.Arm` and are never pooled.** The
+paired arm re-judges the documents the 1.14.1 pass judged, with the pages and the blinding frozen,
+so its statistic is a *change*: :func:`paired_shift` counts the documents whose inspector-versus-
+Docling call flipped in each direction and tests them with McNemar's exact form, which conditions
+on the discordant pairs and throws away nothing that the pairing bought. The extension arm is fresh
+documents in the strata the previous allocation under-served; it has no 1.14.1 verdict to be paired
+against, so it contributes width to the per-stratum intervals and nothing to the before-and-after.
+One number spanning both would average a paired contrast against an unpaired estimate.
 
 The judge is ``openai/gpt-5.6-luna`` at medium reasoning effort over OpenRouter, keyed by
 ``OR_KEY_SCALE_UP``, following the oracle sample's precedent. Every verdict is written to its own
@@ -47,17 +57,22 @@ import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from itertools import pairwise
+from math import comb
 
 import httpx
 import numpy as np
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.build_pdf_source.quality.build_adjudication_set import (
+    BASELINE_KEY_PATH,
+    BASELINE_PREFIX,
     BLIND_LABELS,
     KEY_PATH,
+    LIBRARY_VERSION,
     OUTPUT_PREFIX,
     PACKETS_PREFIX,
     ROUTES,
+    Arm,
     Presentation,
 )
 from experiments.datakit.build_pdf_source.quality.build_route_study import storage
@@ -67,6 +82,9 @@ logger = logging.getLogger(__name__)
 VERDICT_PREFIX = f"{OUTPUT_PREFIX}/verdicts"
 REPORT_PATH = f"{OUTPUT_PREFIX}/adjudication_report.json"
 HUMAN_PACKET_PREFIX = f"{OUTPUT_PREFIX}/human_subset"
+
+# The 1.14.1 verdicts, read but never rewritten: they are the other half of the paired head-to-head.
+BASELINE_VERDICT_PREFIX = f"{BASELINE_PREFIX}/verdicts"
 
 JUDGE_MODEL = "openai/gpt-5.6-luna"
 # A different vendor's model, so inter-judge agreement is not two samples of one model's taste.
@@ -139,12 +157,12 @@ class Task:
     model: str
 
     @property
-    def arm(self) -> str:
+    def slot(self) -> str:
         return f"{self.model.replace('/', '_')}/{self.presentation}"
 
     @property
     def path(self) -> str:
-        return f"{VERDICT_PREFIX}/{self.arm}/{self.packet_id}.json"
+        return f"{VERDICT_PREFIX}/{self.slot}/{self.packet_id}.json"
 
 
 def _image_part(payload: bytes) -> dict:
@@ -408,14 +426,85 @@ def inter_judge(entries: dict, primary: dict[str, dict], second: dict[str, dict]
     }
 
 
-def load_verdicts(fs, model: str, presentation: Presentation) -> dict[str, dict]:
-    arm = f"{model.replace('/', '_')}/{presentation}"
+def load_verdicts(fs, model: str, presentation: Presentation, prefix: str = VERDICT_PREFIX) -> dict[str, dict]:
+    slot = f"{model.replace('/', '_')}/{presentation}"
     verdicts = {}
-    for path in fs.glob(f"{VERDICT_PREFIX}/{arm}/*.json"):
+    for path in fs.glob(f"{prefix}/{slot}/*.json"):
         with fs.open(path, "r") as stream:
             result = json.load(stream)
         verdicts[result["packet_id"]] = result
     return verdicts
+
+
+def _mcnemar(discordant_up: int, discordant_down: int) -> float:
+    """Two-sided exact binomial p for a paired change, conditioned on the discordant pairs.
+
+    The right test for a before-and-after on the *same* documents: the packets whose verdict did not
+    move carry no information about whether it moved, and pooling them into two independent
+    proportions throws the pairing away -- which is the one thing worth having here, since the
+    published pass measured split-draw noise larger than several of the effects at issue.
+    """
+    total = discordant_up + discordant_down
+    if total == 0:
+        return 1.0
+    smaller = min(discordant_up, discordant_down)
+    tail = sum(comb(total, k) for k in range(smaller + 1)) / 2**total
+    return min(1.0, 2 * tail)
+
+
+def paired_shift(
+    baseline_entries: dict[str, dict],
+    baseline: dict[str, dict],
+    entries: dict[str, dict],
+    candidate: dict[str, dict],
+    key: str | None = None,
+) -> dict:
+    """How the head-to-head moved on the documents judged under both builds.
+
+    Each side is unblinded with **its own** key. The packets are built to carry identical blinding,
+    but reading the label mapping from the key that belongs to each verdict is what makes that a
+    checkable property rather than an assumption -- and a silent mismatch here would invert results
+    rather than break them.
+
+    ``inspector_over_docling`` is the pairwise call the report leads on, so the paired statistic is
+    the count of documents whose call flipped in each direction, tested with McNemar's exact form.
+    """
+    shared = sorted(set(baseline) & set(candidate) & set(baseline_entries) & set(entries))
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for packet_id in shared:
+        grouped["ALL"].append(packet_id)
+        if key is not None:
+            grouped[str(entries[packet_id][key])].append(packet_id)
+
+    output = {}
+    for name, packets in sorted(grouped.items()):
+        gained = lost = held = 0
+        wins_before = wins_after = 0
+        domains = set()
+        for packet_id in packets:
+            before = unblind(baseline_entries[packet_id], baseline[packet_id]["verdict"])
+            after = unblind(entries[packet_id], candidate[packet_id]["verdict"])
+            ahead_before = before.index("inspector") < before.index("docling")
+            ahead_after = after.index("inspector") < after.index("docling")
+            wins_before += ahead_before
+            wins_after += ahead_after
+            gained += ahead_after and not ahead_before
+            lost += ahead_before and not ahead_after
+            held += ahead_after == ahead_before
+            domains.add(entries[packet_id].get("domain", ""))
+        count = len(packets)
+        output[name] = {
+            "documents": count,
+            "domains": len(domains),
+            "inspector_over_docling_before": wins_before / max(count, 1),
+            "inspector_over_docling_after": wins_after / max(count, 1),
+            "delta": (wins_after - wins_before) / max(count, 1),
+            "flipped_to_inspector": gained,
+            "flipped_to_docling": lost,
+            "unchanged": held,
+            "mcnemar_p": _mcnemar(gained, lost),
+        }
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -495,31 +584,59 @@ def main() -> None:
     second = load_verdicts(fs, SECOND_JUDGE, Presentation.CANONICAL)
     logger.info("verdicts: %d canonical, %d native, %d second judge", len(canonical), len(native), len(second))
 
-    overall = Tally()
-    for packet_id, result in canonical.items():
-        overall.add(unblind(entries[packet_id], result["verdict"]), result["verdict"]["margin"] in DECISIVE_MARGINS)
-    low, high = _wilson(overall.inspector_over_docling, overall.pairs)
+    with fs.open(BASELINE_KEY_PATH, "r") as stream:
+        baseline_entries = {entry["packet_id"]: entry for entry in json.load(stream)}
+    baseline_canonical = load_verdicts(fs, JUDGE_MODEL, Presentation.CANONICAL, BASELINE_VERDICT_PREFIX)
+    logger.info("baseline verdicts: %d canonical over %d packets", len(baseline_canonical), len(baseline_entries))
+
+    # The two arms are reported separately and never pooled. The paired arm is the same documents
+    # the baseline judged, so it carries the before-and-after; the extension is fresh documents in
+    # strata the baseline under-sampled, so it carries width but no pair. One number over both
+    # would be a weighted average of a paired contrast and an unpaired estimate.
+    arms = {
+        str(arm): {packet: result for packet, result in canonical.items() if entries[packet]["arm"] == str(arm)}
+        for arm in Arm
+    }
 
     report = {
+        "library_version": LIBRARY_VERSION,
         "packets_judged": len(canonical),
         "judge": JUDGE_MODEL,
         "second_judge": SECOND_JUDGE,
-        "overall": {**overall.summary(), "inspector_over_docling_ci95": [low, high]},
-        "by_stratum": tally_by(entries, canonical, "stratum"),
-        "by_pdf_type": tally_by(
-            {
-                name: {**entry, "pdf_type": entry["document_metrics"]["inspector_pdf_type"]}
-                for name, entry in entries.items()
-            },
-            canonical,
-            "pdf_type",
-        ),
+        "by_arm": {},
+        # The head-to-head as it moved between builds, on the documents judged under both, with the
+        # pages and the blinding held fixed. This is the number the re-run exists to produce.
+        "paired_shift": {
+            "overall": paired_shift(baseline_entries, baseline_canonical, entries, arms[str(Arm.PAIRED)]),
+            "by_stratum": paired_shift(
+                baseline_entries, baseline_canonical, entries, arms[str(Arm.PAIRED)], key="stratum"
+            ),
+        },
         "style_effect": style_effect(entries, canonical, native),
         "inter_judge": inter_judge(entries, canonical, second),
-        "proxy_label": proxy_label_check(entries, canonical),
         "margins": dict(Counter(result["verdict"]["margin"] for result in canonical.values())),
         "cost": sum(result.get("cost") or 0.0 for result in (*canonical.values(), *native.values(), *second.values())),
     }
+    for name, verdicts in arms.items():
+        if not verdicts:
+            continue
+        tally = Tally()
+        for packet_id, result in verdicts.items():
+            tally.add(unblind(entries[packet_id], result["verdict"]), result["verdict"]["margin"] in DECISIVE_MARGINS)
+        low, high = _wilson(tally.inspector_over_docling, tally.pairs)
+        report["by_arm"][name] = {
+            "overall": {**tally.summary(), "inspector_over_docling_ci95": [low, high]},
+            "by_stratum": tally_by(entries, verdicts, "stratum"),
+            "by_pdf_type": tally_by(
+                {
+                    packet: {**entry, "pdf_type": entry["document_metrics"]["inspector_pdf_type"]}
+                    for packet, entry in entries.items()
+                },
+                verdicts,
+                "pdf_type",
+            ),
+            "proxy_label": proxy_label_check(entries, verdicts),
+        }
     with fs.open(REPORT_PATH, "w") as stream:
         json.dump(report, stream, indent=2, default=float)
 

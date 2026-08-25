@@ -53,7 +53,15 @@ a misleading ``PanicException``. The container cgroup is the memory bound instea
 the GIL, so an unpinned thread pool sized to the whole node would have each of a worker's co-tenant
 tasks contending for every core and would make the reported timings a measurement of the scheduler.
 
-    uv run iris --cluster=marin job run --target-cluster cw-us-east-08a \\
+**The table is keyed by library build, and one build may not write another's.** Every quantity here
+is a property of a specific wheel: 1.17.0 rewrote RTL ordering, table recovery and column detection,
+so the evaluation is run as a *pair* -- 1.14.1's table stays at :data:`BASELINE_PREFIX` and this one
+is written beside it -- and per-document deltas between the two are the measurement. Shards skip
+themselves when their output already exists, which is what makes a resumable run cheap and would
+also make a half-1.14.1, half-1.17.0 table invisible, so :func:`check_library_version` refuses the
+mismatch in the driver before any work is dispatched and again in every worker.
+
+    uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \\
         --job-name pdf-inspector-study --extra pdf \\
         --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources \\
         -- python -m experiments.datakit.build_pdf_source.quality.build_inspector_study
@@ -69,6 +77,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from importlib.metadata import version
 from urllib.parse import urlparse
 
 import polars as pl
@@ -93,7 +102,18 @@ logger = logging.getLogger(__name__)
 
 # The sample and its shard listing come from the study this one extends, so both tables are built
 # over the same shards in the same order and their part files line up.
-OUTPUT_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_study"
+STUDY_ROOT = "s3://marin-us-east-02a/marin/data/pdf_quality"
+
+# The library build this table measures, and the only one it may be written by. Every number in the
+# evaluation is a property of a specific wheel -- 1.17.0 rewrote RTL ordering, table recovery and
+# column detection, and the whole point of a paired re-run is to attribute a moved number to that.
+# A table labelled with one version and filled by another would silently destroy the pairing, and
+# the shard-level skip-if-exists means a mixed table would not even be obvious, so this is asserted
+# in the driver before any work is dispatched and again in every worker that imports the library.
+LIBRARY_VERSION = "1.17.0"
+# 1.14.1's table is the baseline and stays where it is; each build gets its own prefix.
+BASELINE_PREFIX = f"{STUDY_ROOT}/cc_focus_2026_22_inspector_study"
+OUTPUT_PREFIX = f"{BASELINE_PREFIX}_{LIBRARY_VERSION.replace('.', '_')}"
 
 MODULE_NAME = "experiments.datakit.build_pdf_source.quality.build_inspector_study"
 STUDY_OP = "study"
@@ -186,6 +206,16 @@ _NULLABLE_SIGNALS = {
         for name in ("milliseconds", "ms_per_page")
     },
 }
+
+
+def check_library_version() -> None:
+    """Refuse to write a table labelled with one build of the library from another."""
+    installed = version("pdf-inspector")
+    if installed != LIBRARY_VERSION:
+        raise RuntimeError(
+            f"{OUTPUT_PREFIX} is the {LIBRARY_VERSION} table but pdf-inspector {installed} is "
+            "installed; bump LIBRARY_VERSION so this build gets a prefix of its own"
+        )
 
 
 def output_schema() -> dict[str, pl.DataType]:
@@ -281,6 +311,7 @@ def worker_main() -> None:
 
     import pdf_inspector  # noqa: PLC0415 - the whole point is to import it out of process
 
+    check_library_version()
     faulthandler.enable()
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     while True:
@@ -447,9 +478,10 @@ def study_shard(work: tuple[int, str]) -> int:
 
 def main() -> None:
     configure_logging(logging.INFO)
+    check_library_version()
     storage()
     work = shards()
-    logger.info("inspector study: %d shards -> %s", len(work), OUTPUT_PREFIX)
+    logger.info("inspector study: pdf-inspector %s, %d shards -> %s", LIBRARY_VERSION, len(work), OUTPUT_PREFIX)
 
     outcome = ZephyrContext(
         name="pdf-inspector-study",

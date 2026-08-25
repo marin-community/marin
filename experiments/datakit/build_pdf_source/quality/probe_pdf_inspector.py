@@ -138,8 +138,8 @@ from importlib.metadata import version
 
 import fsspec
 import polars as pl
-from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)

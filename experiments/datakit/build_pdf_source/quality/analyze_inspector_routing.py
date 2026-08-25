@@ -69,6 +69,10 @@ from experiments.datakit.build_pdf_source.quality.analyze_route_study import (
     route_frontier,
     route_ok,
 )
+from experiments.datakit.build_pdf_source.quality.build_inspector_study import LIBRARY_VERSION
+from experiments.datakit.build_pdf_source.quality.build_inspector_study import (
+    OUTPUT_PREFIX as INSPECTOR_STUDY_PREFIX_1_17_0,
+)
 from experiments.datakit.build_pdf_source.quality.route_feature_names import FEATURE_NAMES
 from experiments.datakit.build_pdf_source.quality.train_route_model import (
     Split,
@@ -81,8 +85,12 @@ from experiments.datakit.build_pdf_source.quality.train_route_model import (
 logger = logging.getLogger(__name__)
 
 ROUTE_STUDY_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_route_study"
-INSPECTOR_STUDY_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_study"
-RESULT_PATH = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_routing.json"
+# The Stage 1 table for the build under evaluation, and the file this analysis writes beside it.
+# Both are version-keyed: the routing frontier is a property of the extractor that produced the
+# label, so overwriting the 1.14.1 result with the 1.17.0 one would destroy the comparison.
+INSPECTOR_STUDY_PREFIX = INSPECTOR_STUDY_PREFIX_1_17_0
+_VERSION_SLUG = LIBRARY_VERSION.replace(".", "_")
+RESULT_PATH = f"s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_routing_{_VERSION_SLUG}.json"
 
 # The published operating points: what the shipped router spends, and what the incumbent spent.
 SHIPPED_BUDGET = 0.50
@@ -116,10 +124,12 @@ DOCLING_MS_PER_PAGE = 1000.0
 OCR_REASONS = ("no_text", "scanned", "suspected_garbled_text", "vector_text")
 PDF_TYPES = ("text_based", "scanned", "image_based", "mixed")
 
-# Signals ``detect_pdf_bytes`` reports but does not populate: constant over all 100,000 documents
-# (Stage 1). Asserted rather than assumed, and excluded from the cheap feature set -- a constant
-# column is not a feature, and carrying it would make the cheap arm look richer than it is.
-CONSTANT_DETECT_SIGNALS = (
+# Signals ``detect_pdf_bytes`` declares but did not populate in 1.14.1: constant over all 100,000
+# documents. A constant column is not a feature, and carrying one would make the cheap arm look
+# richer than it is, so they are measured per run rather than assumed either way -- if a build
+# starts populating one, the cheap tier genuinely gained a signal and :func:`varying_detect_signals`
+# puts it back in the feature set instead of aborting the analysis.
+DECLARED_DETECT_SIGNALS = (
     "inspector_has_encoding_issues",
     "inspector_detect_is_complex_layout",
     "inspector_detect_pages_with_tables",
@@ -153,8 +163,16 @@ EXTRACT_FEATURES = (
     "inspector_markdown_chars_per_page",
 )
 
-# Feature columns that arrive as booleans and have to reach XGBoost as numbers.
-BOOLEAN_FEATURES = ("inspector_has_title", "inspector_extract_is_complex_layout")
+# Feature columns that arrive as booleans and have to reach XGBoost as numbers. The two declared
+# detect booleans are cast unconditionally even in a build that leaves them constant: casting a
+# column nobody selects is free, and the alternative is a cast that goes missing exactly in the run
+# where the signal first becomes real.
+BOOLEAN_FEATURES = (
+    "inspector_has_title",
+    "inspector_extract_is_complex_layout",
+    "inspector_has_encoding_issues",
+    "inspector_detect_is_complex_layout",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +194,6 @@ def joined(fs: fsspec.AbstractFileSystem) -> pl.DataFrame:
     frame = route.drop("url", "num_pages", "pdf_bytes", "docling_missing").join(inspector, on="source_id", how="inner")
     logger.info("joined %d rows", frame.height)
 
-    for name in CONSTANT_DETECT_SIGNALS:
-        distinct = frame[name].drop_nulls().n_unique()
-        if distinct > 1:
-            raise ValueError(f"{name} was constant in Stage 1 and is not any more ({distinct} values)")
-
     inspector_missing = pl.col("inspector_vlm_bigram_recall_mean").is_null()
     docling_missing = pl.col("docling_vlm_bigram_recall_mean").is_null()
     return frame.with_columns(
@@ -189,6 +202,22 @@ def joined(fs: fsspec.AbstractFileSystem) -> pl.DataFrame:
         inspector_ok_unigram=route_ok("inspector_vlm", inspector_missing, metric="unigram"),
         docling_ok_unigram=route_ok("docling_vlm", docling_missing, metric="unigram"),
     )
+
+
+def varying_detect_signals(frame: pl.DataFrame) -> tuple[str, ...]:
+    """Which of the declared-but-empty detect signals this build actually populates.
+
+    1.14.1 left all four constant, so the cheap tier carried nothing about layout and the extract
+    tier's ~10x cost was the only way to get it. Whether that is still true is a result: a signal
+    that starts varying moves capability from the expensive tier to the cheap one.
+    """
+    varying = []
+    for name in DECLARED_DETECT_SIGNALS:
+        distinct = frame[name].drop_nulls().n_unique()
+        logger.info("detect signal %s: %d distinct values", name, distinct)
+        if distinct > 1:
+            varying.append(name)
+    return tuple(varying)
 
 
 def ocr_reason_names(frame: pl.DataFrame) -> tuple[str, ...]:
@@ -578,9 +607,13 @@ def main() -> None:
     frame = with_features(frame, reasons)
 
     route_signals = [name for name in FEATURE_NAMES if name in frame.columns]
-    detect = list(DETECT_FEATURES) + [
-        f"inspector_reason_{name}" for name in reasons if f"inspector_reason_{name}" not in DETECT_FEATURES
-    ]
+    varying = varying_detect_signals(frame)
+    logger.info("detect signals this build populates: %s", varying or "(none, as in 1.14.1)")
+    detect = (
+        list(DETECT_FEATURES)
+        + [f"inspector_reason_{name}" for name in reasons if f"inspector_reason_{name}" not in DETECT_FEATURES]
+        + list(varying)
+    )
     extract = list(EXTRACT_FEATURES)
 
     rows = usable(frame, route_signals)

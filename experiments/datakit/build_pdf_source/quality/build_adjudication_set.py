@@ -59,6 +59,26 @@ disjoint and per-stratum counts mean what they say. Documents are drawn at most 
 domain: the crawl holds ~9.8% exact-duplicate PDFs and many more near-duplicates from the same
 publisher, so an unconstrained draw would spend the sample on one publisher's template.
 
+**This build produces two arms, and they are never pooled.** The evaluation is a paired re-run
+against pdf-inspector 1.17.0, whose RTL ordering, table recovery and column detection are all
+rewritten, and the prior pass measured ~0.012 of split-draw noise -- larger than several of the
+effects at issue, which makes an unpaired before-and-after uninterpretable.
+
+:attr:`Arm.PAIRED`
+    The baseline's own 345 packets, rebuilt. :func:`paired_requests` takes the pages shown and the
+    label each route hides behind straight from the baseline ``key.json``, and :func:`frozen_pages`
+    re-reads those same pages from each route's current output. Page *selection* is the thing that
+    would otherwise move on its own -- :func:`informative_pages` ranks pages by how badly the cheap
+    routes did on them, and that ranking changes when the extractor changes -- so a re-selected
+    packet would confound a moved verdict with a moved page. Everything a judge sees is held fixed
+    except the text pdf-inspector produced.
+:attr:`Arm.EXTENSION`
+    Fresh documents, disjoint from the paired arm, in the strata the paired allocation
+    under-served. See :data:`EXTENSION_TARGETS` for what is grown and what deliberately is not.
+
+Both arms are written under a version-keyed prefix; the 1.14.1 packets, key and verdicts stay
+exactly where they are, because they are the other half of the comparison.
+
     uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \\
         --job-name pdf-adjudication-set --extra pdf \\
         --cpu 8 --memory 24GB --disk 16GB --enable-extra-resources \\
@@ -74,8 +94,10 @@ import logging
 import random
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib.metadata import version
 from pathlib import Path
 
 import polars as pl
@@ -94,9 +116,21 @@ from experiments.datakit.build_pdf_source.quality.probe_pdf_inspector import WOR
 
 logger = logging.getLogger(__name__)
 
-ROUTE_STUDY_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_route_study"
-INSPECTOR_STUDY_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_study"
-OUTPUT_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_adjudication"
+STUDY_ROOT = "s3://marin-us-east-02a/marin/data/pdf_quality"
+ROUTE_STUDY_PREFIX = f"{STUDY_ROOT}/cc_focus_2026_22_route_study"
+# Stratum membership is read from the *baseline* inspector study on purpose. Strata are a property
+# of the documents, and the paired arm's 345 packets were assigned from this table; drawing the
+# extension from 1.17.0's table instead would silently redefine `table_heavy` between the two arms
+# -- the extraction changed, so `inspector_extract_pages_with_tables` changed with it -- and the
+# comparison would then be partly a comparison of what the word means.
+INSPECTOR_STUDY_PREFIX = f"{STUDY_ROOT}/cc_focus_2026_22_inspector_study"
+
+# The 1.14.1 packets and verdicts, left intact: this is the baseline half of the paired comparison.
+BASELINE_PREFIX = f"{STUDY_ROOT}/cc_focus_2026_22_adjudication"
+BASELINE_KEY_PATH = f"{BASELINE_PREFIX}/key.json"
+
+LIBRARY_VERSION = "1.17.0"
+OUTPUT_PREFIX = f"{BASELINE_PREFIX}_{LIBRARY_VERSION.replace('.', '_')}"
 
 PACKETS_PREFIX = f"{OUTPUT_PREFIX}/packets"
 KEY_SHARD_PREFIX = f"{OUTPUT_PREFIX}/key_parts"
@@ -129,6 +163,43 @@ STYLE_CONTROL_SIZE = 90
 # Documents packaged for human adjudication. Small enough to be judged by a person in one sitting,
 # stratified so the axes that decide the question are all present.
 HUMAN_SUBSET_SIZE = 45
+
+# Seed for the extension draw. Distinct from SAMPLE_SEED so the extension is a fresh draw rather
+# than a continuation of a shuffle whose head is already spent.
+EXTENSION_SEED = 20260825
+# How many *additional* documents each stratum gets, on top of whatever the paired arm holds.
+#
+# The paired arm's allocation was badly matched to the corpus by page. Measured page shares:
+# latin_text_baseline 43.92%, encoding_damage 21.08%, math_dense 8.46%, table_heavy 8.10%,
+# cjk 2.45%, multicolumn 2.29%, rtl 0.30%. `encoding_damage` ran at n=30 for a fifth of all pages
+# while `cjk` ran at n=50 for 2.45%, and `table_heavy` -- one of the two significant losses, and
+# the stratum the upstream table work targets -- ran at n=30 with a CI 0.30 wide.
+#
+# `rtl` is deliberately absent. It is 0.30% of pages but the axis the RTL fixes are most testable
+# on, and it cannot be grown: 258 usable RTL documents remain, on 16 domains, every one of which
+# has already spent its MAX_PER_DOMAIN allowance on the paired arm. The cap that binds is domain
+# diversity, not document count, so the honest move is to leave it at its paired size and keep
+# reporting the domain count beside it. `cjk` is not extended either; at 2.45% of pages it is
+# already the most over-sampled stratum in the draw.
+EXTENSION_TARGETS = {
+    "table_heavy": 90,
+    "encoding_damage": 90,
+    "latin_text_baseline": 80,
+}
+
+
+class Arm(StrEnum):
+    """Which half of the comparison a packet belongs to.
+
+    The two are reported separately and never pooled. ``paired`` re-judges the baseline's own
+    documents with the pages, the blinding and the label assignment all held fixed, so a moved
+    verdict is attributable to the extraction and to nothing else. ``extension`` is fresh documents
+    in the strata the baseline under-sampled, which buys width where the intervals were widest but
+    has no 1.14.1 verdict to be paired against.
+    """
+
+    PAIRED = "paired"
+    EXTENSION = "extension"
 
 
 class Presentation(StrEnum):
@@ -176,6 +247,74 @@ def _aligned_to_vlm(cheap_pages: list[str], vlm_pages: list[str]) -> dict[int, i
     }
 
 
+def _scored_page(
+    vlm_index: int,
+    vlm_page: str,
+    pages_by_route: dict[str, list[str]],
+    aligned: dict[str, dict[int, int]],
+    reason: str,
+) -> PageChoice | None:
+    """One page's per-route alignment and recalls, or ``None`` if no route read anything on it.
+
+    A page every route left empty adjudicates nothing, and on a scanned document it would be most
+    of what a judge is shown.
+    """
+    cheap = [route for route in ROUTES if route != "vlm"]
+    source_index: dict[str, int | None] = {route: aligned[route].get(vlm_index) for route in cheap}
+    source_index["vlm"] = vlm_index
+    recalls = {}
+    any_content = bool(route_agreement.markdown_streams(vlm_page).tokens)
+    for route in cheap:
+        index = source_index[route]
+        page_text = pages_by_route[route][index] if index is not None else ""
+        measured = route_agreement.page_agreement(
+            vlm_page, page_text, route_agreement.VLM, route_agreement.ROUTES_BY_NAME[route]
+        )
+        recalls[route] = measured.bigram_recall
+        any_content = any_content or measured.candidate_tokens > 0
+    if not any_content:
+        return None
+    return PageChoice(page_index=vlm_index, source_index=source_index, reason=reason, recalls=recalls)
+
+
+def _alignments(pages_by_route: dict[str, list[str]]) -> dict[str, dict[int, int]]:
+    vlm_pages = pages_by_route["vlm"]
+    return {route: _aligned_to_vlm(pages_by_route[route], vlm_pages) for route in ROUTES if route != "vlm"}
+
+
+def frozen_pages(pages_by_route: dict[str, list[str]], page_indices: list[int]) -> list[PageChoice]:
+    """The pages a baseline packet showed, re-read from each route's current output.
+
+    The paired arm exists to attribute a moved verdict to the extraction, so everything else has to
+    be held fixed -- and page *selection* is the thing most obviously not fixed, because
+    :func:`informative_pages` ranks pages by how badly the cheap routes did on them and 1.17.0 does
+    differently. Re-selecting would confound a changed verdict with a changed page.
+
+    What is *not* frozen is each route's index for a page. Alignment is content-based, so a route
+    whose page list changed is re-aligned against the same VLM page; the page a judge sees is the
+    same sheet of paper, and the text beside it is whatever that route reads off it now.
+    """
+    vlm_pages = pages_by_route["vlm"]
+    aligned = _alignments(pages_by_route)
+    chosen = []
+    for vlm_index in page_indices:
+        if vlm_index >= len(vlm_pages):
+            continue
+        choice = _scored_page(vlm_index, vlm_pages[vlm_index], pages_by_route, aligned, reason="paired")
+        # Kept even when every route now reads it as empty: dropping a page here would silently
+        # shorten a packet relative to the baseline one it is paired with.
+        chosen.append(
+            choice
+            or PageChoice(
+                page_index=vlm_index,
+                source_index={**{route: aligned[route].get(vlm_index) for route in aligned}, "vlm": vlm_index},
+                reason="paired",
+                recalls={},
+            )
+        )
+    return chosen
+
+
 def informative_pages(pages_by_route: dict[str, list[str]], count: int) -> list[PageChoice]:
     """Pick the pages worth adjudicating: where the routes are furthest apart, plus a control.
 
@@ -189,28 +328,12 @@ def informative_pages(pages_by_route: dict[str, list[str]], count: int) -> list[
     would be most of what gets shown.
     """
     vlm_pages = pages_by_route["vlm"]
-    cheap = [route for route in ROUTES if route != "vlm"]
-    aligned = {route: _aligned_to_vlm(pages_by_route[route], vlm_pages) for route in cheap}
-
-    scored: list[PageChoice] = []
-    for vlm_index, vlm_page in enumerate(vlm_pages):
-        source_index = {route: aligned[route].get(vlm_index) for route in cheap}
-        source_index["vlm"] = vlm_index
-        recalls = {}
-        any_content = bool(route_agreement.markdown_streams(vlm_page).tokens)
-        for route in cheap:
-            index = source_index[route]
-            page_text = pages_by_route[route][index] if index is not None else ""
-            measured = route_agreement.page_agreement(
-                vlm_page, page_text, route_agreement.VLM, route_agreement.ROUTES_BY_NAME[route]
-            )
-            recalls[route] = measured.bigram_recall
-            any_content = any_content or measured.candidate_tokens > 0
-        if not any_content:
-            continue
-        scored.append(
-            PageChoice(page_index=vlm_index, source_index=source_index, reason="disagreement", recalls=recalls)
-        )
+    aligned = _alignments(pages_by_route)
+    scored = [
+        choice
+        for vlm_index, vlm_page in enumerate(vlm_pages)
+        if (choice := _scored_page(vlm_index, vlm_page, pages_by_route, aligned, reason="disagreement")) is not None
+    ]
     if not scored:
         return []
 
@@ -398,6 +521,69 @@ def select(frame: pl.DataFrame, seed: int) -> pl.DataFrame:
     )
 
 
+def extend(frame: pl.DataFrame, baseline: list[dict], seed: int) -> pl.DataFrame:
+    """Draw the extension: fresh documents in the strata the paired arm under-sampled.
+
+    Disjoint from the paired arm by construction -- its documents are removed from the pool -- and
+    the per-domain cap is applied *across both arms*, so a domain that already gave the paired arm
+    two documents gives the extension none. Without that, the extension would quietly re-sample the
+    publishers the paired arm already leaned on and report the near-duplicates as independent.
+
+    A stratum absent from :data:`EXTENSION_TARGETS` is not extended, and a stratum that cannot fill
+    its target takes what exists and says so.
+    """
+    spent: Counter[tuple[str, str]] = Counter((entry["stratum"], entry["domain"]) for entry in baseline)
+    used = [entry["source_id"] for entry in baseline]
+
+    pool = frame.with_columns(stratum=stratum_of()).filter(~pl.col("source_id").is_in(used))
+    pool = pool.sample(fraction=1.0, shuffle=True, seed=seed)
+    allowance = pl.struct("stratum", "domain").map_elements(
+        lambda key: MAX_PER_DOMAIN - spent[(key["stratum"], key["domain"])], return_dtype=pl.Int64
+    )
+    pool = pool.with_columns(_rank=pl.int_range(pl.len()).over("domain", "stratum"), _allowance=allowance)
+    pool = pool.filter(pl.col("_rank") < pl.col("_allowance"))
+
+    drawn = []
+    for stratum in STRATA:
+        target = EXTENSION_TARGETS.get(stratum.name, 0)
+        if not target:
+            continue
+        rows = pool.filter(pl.col("stratum") == stratum.name).head(target)
+        if rows.height < target:
+            logger.warning("extension stratum %s: %d available, %d wanted", stratum.name, rows.height, target)
+        drawn.append(rows)
+    selection = pl.concat(drawn, how="vertical")
+    return selection.with_columns(
+        packet_id=pl.format("ext_{}", pl.int_range(pl.len()).cast(pl.String).str.zfill(4)),
+        # The extension is judged in the canonical presentation only. The style effect and the
+        # inter-judge number are paired measurements against the baseline's own verdicts, and the
+        # extension has no baseline verdict to pair with.
+        style_control=pl.lit(False),
+        human_subset=pl.lit(False),
+    )
+
+
+def paired_requests(baseline: list[dict]) -> list[dict]:
+    """The baseline's packets, restated as build requests with their pages and blinding frozen."""
+    return [
+        {
+            "source_id": entry["source_id"],
+            "packet_id": entry["packet_id"],
+            "domain": entry["domain"],
+            "stratum": entry["stratum"],
+            "style_control": entry["style_control"],
+            "human_subset": entry["human_subset"],
+            "arm": str(Arm.PAIRED),
+            # The key stores label -> route, because that is what an unblinding reads; the renderer
+            # wants route -> label.
+            "frozen_labels": {route: label for label, route in entry["labels"].items()},
+            "frozen_page_indices": [page["page_index"] for page in entry["pages"]],
+            **{name: value for name, value in entry["document_metrics"].items()},
+        }
+        for entry in baseline
+    ]
+
+
 # ---------------------------------------------------------------------------
 # One document's packet
 # ---------------------------------------------------------------------------
@@ -449,17 +635,28 @@ def document_markdown(
 
 
 def write_document(row: dict, inspector_pages: list[str] | None, destination: Path, rng: random.Random) -> dict:
-    """Write one document's packet in both presentations and return its blinding key entry."""
+    """Write one document's packet in both presentations and return its blinding key entry.
+
+    A row carrying ``frozen_labels`` and ``frozen_page_indices`` is a paired rebuild of a baseline
+    packet: the pages shown and the label each route hides behind are taken from the baseline key
+    rather than drawn, so the only thing that differs between the two packets is what the extractor
+    read. Everything else is the ordinary draw.
+    """
     pages_by_route = {
         "vlm": route_agreement.split_pages(row["text"], row["page_offsets"]),
         "docling": route_agreement.split_pages(row["docling_text"], row["docling_page_offsets"]),
         "inspector": inspector_pages if inspector_pages is not None else [],
     }
-    choices = informative_pages(pages_by_route, PAGES_PER_DOCUMENT)
+    frozen_labels = row.get("frozen_labels")
+    if frozen_labels:
+        choices = frozen_pages(pages_by_route, row["frozen_page_indices"])
+        labels = dict(frozen_labels)
+    else:
+        choices = informative_pages(pages_by_route, PAGES_PER_DOCUMENT)
+        labels = dict(zip(ROUTES, rng.sample(list(BLIND_LABELS), len(BLIND_LABELS)), strict=True))
     if not choices:
         raise ValueError("no informative pages")
 
-    labels = dict(zip(ROUTES, rng.sample(list(BLIND_LABELS), len(BLIND_LABELS)), strict=True))
     destination.mkdir(parents=True, exist_ok=True)
 
     images: dict[int, str] = {}
@@ -483,6 +680,7 @@ def write_document(row: dict, inspector_pages: list[str] | None, destination: Pa
         "packet_id": row["packet_id"],
         "source_id": row["source_id"],
         "url": row["url"],
+        "arm": row["arm"],
         # Carried so the analysis can report a stratum's domain count beside its document count:
         # near-duplicates cluster by publisher, so domains are the independent unit and documents
         # are not.
@@ -656,19 +854,26 @@ def study_frame(fs) -> pl.DataFrame:
 
 def main() -> None:
     configure_logging(logging.INFO)
+    installed = version("pdf-inspector")
+    if installed != LIBRARY_VERSION:
+        raise RuntimeError(f"{OUTPUT_PREFIX} is the {LIBRARY_VERSION} packet set; pdf-inspector {installed} installed")
     fs = storage()
+
+    with fs.open(BASELINE_KEY_PATH, "r") as stream:
+        baseline = json.load(stream)
+    paired = paired_requests(baseline)
+    logger.info("paired arm: %d baseline packets to rebuild against %s", len(paired), installed)
 
     frame = usable(study_frame(fs))
     logger.info("usable %d documents, %d domains", frame.height, frame["domain"].n_unique())
-    selection = select(frame, SAMPLE_SEED)
+    extension = extend(frame, baseline, EXTENSION_SEED)
     logger.info(
-        "selected %d documents across %d strata: %s",
-        selection.height,
-        selection["stratum"].n_unique(),
-        dict(selection["stratum"].value_counts().iter_rows()),
+        "extension arm: %d documents across %s",
+        extension.height,
+        dict(extension["stratum"].value_counts().iter_rows()),
     )
     with fs.open(SELECTION_PATH, "wb") as stream:
-        selection.write_parquet(stream)
+        extension.write_parquet(stream)
 
     carried = [
         "source_id",
@@ -690,8 +895,8 @@ def main() -> None:
     ]
     # One task per sample shard. Which shard holds a given document is not knowable without reading
     # it, so every task carries the whole draw and keeps the rows its own shard turns out to have;
-    # at 360 rows of identifiers that broadcast is far cheaper than an index pass over 130 GB.
-    wanted = selection.select(carried).to_dicts()
+    # at ~600 rows of identifiers that broadcast is far cheaper than an index pass over 130 GB.
+    wanted = paired + [{**row, "arm": str(Arm.EXTENSION)} for row in extension.select(carried).to_dicts()]
     work = [(index, shard, wanted) for index, shard in shards()]
     logger.info("adjudication set: %d shards -> %s", len(work), PACKETS_PREFIX)
 
@@ -716,9 +921,18 @@ def main() -> None:
 
     with fs.open(KEY_PATH, "w") as stream:
         json.dump(entries, stream, indent=2)
+    by_arm = Counter(entry["arm"] for entry in entries)
     manifest = {
+        "library_version": installed,
+        "baseline_key": BASELINE_KEY_PATH,
         "packets": len(entries),
-        "requested": selection.height,
+        "requested": len(wanted),
+        "by_arm": dict(by_arm),
+        # A paired packet that failed to rebuild breaks its pair, so the count is checked rather
+        # than reported: a head-to-head against a baseline verdict whose packet no longer exists is
+        # not paired, and the judge reads this to know how many pairs it should find.
+        "paired_requested": len(paired),
+        "paired_built": by_arm[str(Arm.PAIRED)],
         "excluded": excluded,
         "render_dpi": RENDER_DPI,
         "pages_per_document": PAGES_PER_DOCUMENT,
@@ -726,7 +940,14 @@ def main() -> None:
         "presentations": [str(presentation) for presentation in Presentation],
         "style_control": sum(entry["style_control"] for entry in entries),
         "human_subset": sorted(entry["packet_id"] for entry in entries if entry["human_subset"]),
-        "by_stratum": {stratum.name: sum(entry["stratum"] == stratum.name for entry in entries) for stratum in STRATA},
+        "by_stratum": {
+            stratum.name: {
+                arm: sum(entry["stratum"] == stratum.name and entry["arm"] == arm for entry in entries)
+                for arm in (str(Arm.PAIRED), str(Arm.EXTENSION))
+            }
+            for stratum in STRATA
+        },
+        "extension_targets": EXTENSION_TARGETS,
         "strata": [{"name": s.name, "target": s.target, "rationale": s.rationale} for s in STRATA],
     }
     with fs.open(MANIFEST_PATH, "w") as stream:
