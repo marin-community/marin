@@ -53,7 +53,7 @@ PRE_EXTENSION_STEP = 141_000
 TRAINING_OFFSETS = (250, 500, 750, 1_000)
 SENSITIVITY_CONTEXT_CAPS = (8_192, 32_768)
 AGGREGATE_CONTEXT_CAP = 262_144
-CONTEXT_PARALLEL_TPU_SHAPE = "v4-128-cp4"
+CONTEXT_PARALLEL_TPU_SHAPES = ("v4-64-cp2", "v4-128-cp4")
 
 
 @dataclass(frozen=True)
@@ -264,7 +264,16 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
             context_axis_size=1,
             preemptible=True,
         )
-    if tpu_variant == CONTEXT_PARALLEL_TPU_SHAPE:
+    if tpu_variant == "v4-64-cp2":
+        return _MrcrEvaluationShape(
+            "v4-64",
+            output_suffix="v464cp2",
+            eval_batch_size=16,
+            data_axis_size=16,
+            context_axis_size=2,
+            preemptible=True,
+        )
+    if tpu_variant == "v4-128-cp4":
         return _MrcrEvaluationShape(
             "v4-128",
             output_suffix="v4128cp4",
@@ -383,8 +392,8 @@ def build_default_steps(
 
     cells = evaluation_cells(selection)
     bounded_262k_selections = ("aggregate_262k", "aggregate_262k_probe")
-    if selection in bounded_262k_selections and tpu_variant != CONTEXT_PARALLEL_TPU_SHAPE:
-        raise ValueError(f"{selection} requires {CONTEXT_PARALLEL_TPU_SHAPE}")
+    if selection in bounded_262k_selections and tpu_variant not in CONTEXT_PARALLEL_TPU_SHAPES:
+        raise ValueError(f"{selection} requires a context-parallel TPU shape")
     if tpu_variant != DEFAULT_TPU_VARIANT and selection not in ("smoke", *bounded_262k_selections):
         raise ValueError("Noncanonical TPU shapes are limited to the bounded smoke selection")
     variants = tuple(dict.fromkeys(cell.prompt_variant for cell in cells))
