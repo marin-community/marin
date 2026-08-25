@@ -18,3 +18,6 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 4	2026-08-25T01:41Z	usweep	bench	dk U=1: 7.95ms/404GBs = ONE-SHOT SPEED; U=120: 20.4; oneshot U=1: 24.2	7.95	-	keep-insight	Granularity is the whole dk gap; transports have opposite U preferences
 4	2026-08-25T02:0xZ	b3-dkbal	build	work-proportional CTA assignment (fork ragged-a2a-dk-balanced 06df0ee8a6)	-	-	running	subsumes ctas_per_unit; targets skew regime without splits
 4	2026-08-25T01:59Z	ucurve	bench	dk U=2/3/6/15: 8.34/8.30/8.16/8.56; cliff at U=30 (12.2) = wave quantization (units>grid, 2nd wave 62% occupied x1.5); U=120 7 waves 20.4	8.30	-	keep-insight	skewed hero units starve under fixed assignment; balanced kernel targets both
+5	2026-08-25T02:19Z	balscreen	bench	bal U=1/3/30/120: 8.66/8.31/10.90/14.17 (stock: 7.95/8.30/12.2/20.4)	8.31	-	keep	big gains at high U, tie at training U=3, all VALIDATION OK
+5	2026-08-25T02:5xZ	dkp-05-bal-synth	synth	hero synthetic, bal wheel, s1	22.51	-0.11	parity	vs dk 22.62 / oneshot 22.77; uniform regime as bench predicted
+5	2026-08-25T03:0xZ	dkp-06-bal-6k	restore	hero 6k restore, bal wheel, s1	-	-	running	the skew-regime gate; stock dk 21.43(s1)/21.98(s64), oneshot 22.46-22.60
