@@ -18,11 +18,13 @@ import jax.tree_util as jtu
 import numpy as np
 import optax
 import pytest
+from rigging import telemetry
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
 from rigging.filesystem.storage_path import StoragePath
+from rigging.testing import RecordingTelemetryTransport
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
@@ -477,6 +479,46 @@ def test_checkpointer_config_propagates_debug_settings():
     assert checkpointer.debug.top_allocations == 5
     assert checkpointer.debug.force_gc_before_serialize is False
     assert checkpointer.debug.flush_logs is False
+
+
+def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        save_checkpoint(
+            {"weight": np.arange(8, dtype=np.float32)},
+            step=7,
+            checkpoint_path=tmp_path / "checkpoint",
+            debug=CheckpointDebugConfig(
+                enabled=True,
+                tracemalloc_frames=None,
+                force_gc_before_serialize=False,
+                top_allocations=0,
+                flush_logs=False,
+            ),
+        )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+    values_by_name = {record["name"]: record["value"] for record in checkpoint_records}
+    assert values_by_name["checkpoint_staged_host_bytes"] == 32
+    assert values_by_name["checkpoint_total_duration_seconds"] >= 0
+
+    phase_records = [record for record in checkpoint_records if record["name"] == "checkpoint_phase_duration_seconds"]
+    assert {record["attributes"]["phase"] for record in phase_records} == {
+        "starting",
+        "filesystem_ready",
+        "tensorstore_serialize",
+        "async_commit_in_flight",
+        "metadata_write",
+    }
+    assert all(record["attributes"]["checkpoint_step"] == "7" for record in checkpoint_records)
+    assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in checkpoint_records)
 
 
 def test_debug_checkpointer_state_providers_register_and_unregister():

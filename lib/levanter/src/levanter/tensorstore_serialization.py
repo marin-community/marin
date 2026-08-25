@@ -615,9 +615,10 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
+    on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
     write_config: Optional[TensorStoreWriteConfig] = None,
-):
+) -> int:
     write_config = write_config or TensorStoreWriteConfig()
 
     if manager is None:
@@ -683,7 +684,7 @@ def tree_serialize_leaves_tensorstore(
         )
         flush_debug_output(logger)
 
-    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback)
+    staged_host_bytes = _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback, on_staged)
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
@@ -691,6 +692,8 @@ def tree_serialize_leaves_tensorstore(
 
     if manager_was_none:
         manager.wait_until_finished()
+
+    return staged_host_bytes
 
 
 def _serialize_arrays(
@@ -700,7 +703,8 @@ def _serialize_arrays(
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
     commit_callback: Callable,
-) -> None:
+    on_staged: Optional[Callable[[int], None]],
+) -> int:
     """Write every array according to its plan and start the asynchronous commit.
 
     Returns once this process has copied its data out. ``manager`` joins the commits and
@@ -799,12 +803,16 @@ def _serialize_arrays(
         len(commit_futures),
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
+    staged_host_bytes = gate.peak_bytes
 
     _trim_host_memory_after_commits(commit_futures)
 
     # Private to AsyncManager. Its own `serialize` calls these.
     manager._add_futures(commit_futures)
+    if on_staged is not None:
+        on_staged(staged_host_bytes)
     manager._start_async_commit(commit_callback)
+    return staged_host_bytes
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:

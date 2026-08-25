@@ -182,6 +182,56 @@ rolls through it.
 | `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
 | `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
 
+#### Checkpoint Telemetry
+
+Checkpoint debug mode publishes numeric data from each JAX process to Finelog. Use this low-cost configuration for a long run:
+
+```yaml
+checkpointer:
+  debug:
+    enabled: true
+    tracemalloc_frames: null
+    force_gc_before_serialize: false
+    top_allocations: 0
+    flush_logs: false
+```
+
+This configuration does not start `tracemalloc` or force Python garbage collection. It publishes these gauges:
+
+| Metric | Value |
+|--------|-------|
+| `checkpoint_phase_duration_seconds` | Time in one checkpoint phase. |
+| `checkpoint_total_duration_seconds` | Time from checkpoint start through metadata commit. |
+| `checkpoint_staged_host_bytes` | Peak host bytes staged by one process. |
+| `checkpoint_process_peak_rss_bytes` | Peak resident memory for one process. |
+
+The phase metric uses the `phase` attribute. All metrics use `checkpoint_step`. Finelog also records the run, job, process, node, and cluster fields.
+
+Use a short run that saves at least one checkpoint for a cluster smoke test. Then query the regional Finelog deployment:
+
+```bash
+uv run finelog query <cluster> --format table <<'SQL'
+SELECT to_timestamp_millis(timestamp_ms) AS ts,
+       process_index,
+       name,
+       value,
+       json_get(attributes_json, 'checkpoint_step') AS checkpoint_step,
+       json_get(attributes_json, 'phase') AS phase
+FROM telemetry_v1
+WHERE run_id = '<run-id>'
+  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '2 hours') * 1000 AS BIGINT)
+  AND name IN (
+    'checkpoint_phase_duration_seconds',
+    'checkpoint_total_duration_seconds',
+    'checkpoint_staged_host_bytes',
+    'checkpoint_process_peak_rss_bytes'
+  )
+ORDER BY timestamp_ms, process_index, name
+SQL
+```
+
+The checkpoint is complete when each process reports `checkpoint_total_duration_seconds`. Compare the maximum phase time across processes to find the checkpoint straggler.
+
 ### JAX Compilation Cache Configuration
 
 Levanter allows you to configure JAX's persistent compilation cache. This can significantly speed up startup times by caching compiled JAX functions.
