@@ -45,6 +45,7 @@ from experiments.grug.moe_hero_ep.launch_mfu_test import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HeroThroughputResult,
+    validate_mesh_axes,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
@@ -105,6 +106,10 @@ class Target:
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
+    # One GB200 tray. Too small to reproduce any drop dynamic -- it exists so a mesh change
+    # (context parallelism above all) runs end to end on real Blackwell hardware before a rack
+    # slot is spent on it.
+    "gb200-1node": Target("GB200", HERO_GPUS_PER_NODE, 1, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: under pooled-wave the receiver cell pools over all senders and is
     # shard-count-independent, so only the sender pool tracks the fleet. The sender cell is per
     # (destination shard, wave) and shrinks as 1/shards^2 -- ~50,244 rows at EP8 against ~785 at EP64
@@ -271,6 +276,8 @@ def build_small_run(
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
     watch_interval: int = 10,
+    context_axis_size: int = 1,
+    expert_axis_size_override: int | None = None,
     dp_racks: int = 1,
     steps_per_eval: int = 1000,
     version: str | None = None,
@@ -289,6 +296,12 @@ def build_small_run(
     expert-parallel within each rack), which the widest ladder rung needs to hold its batch.
     ``steps_per_eval`` sets both the eval cadence and the permanent-checkpoint cadence, so a
     checkpoint-reload eval job finds a saved state at every eval step.
+
+    ``context_axis_size`` shards the sequence over the ``context`` axis. It takes devices from the
+    axes around it, so a run that keeps expert parallelism as well has to name
+    ``expert_axis_size_override`` rather than let ``--flavor``/``--target`` span the whole fleet.
+    ``num_train_steps_override`` replaces the token budget with an explicit step count, which is
+    what a smoke wants.
     """
     if tokens_per_active_param <= 0:
         raise ValueError(f"tokens_per_active_param must be positive, got {tokens_per_active_param}")
@@ -315,7 +328,19 @@ def build_small_run(
     # rack count, so a wider rung on more racks keeps the same per-rack load as a one-rack rung.
     global_tokens_per_step = tokens_per_step * dp_racks
     batch_size = global_tokens_per_step // seq_len
-    expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    if expert_axis_size_override is not None:
+        expert_axis_size = expert_axis_size_override
+    else:
+        expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    if seq_len % context_axis_size != 0:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide seq_len={seq_len}")
+    validate_mesh_axes(
+        device_count=fleet.gpus_per_node * fleet.nodes * dp_racks,
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
     # ``--transport-capacity-factor`` overrides the Flavor's sender-pool cap; ``None`` keeps the paired
     # 1.15 default. The two pooled-wave gates cap independently, so a run that sweeps only the receiver
     # (``--capacity-factor``) flattens once the sender gate takes over -- vary this to move that gate.
@@ -360,6 +385,7 @@ def build_small_run(
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
         save_checkpoints=True,
         expert_axis_size=expert_axis_size,
+        context_axis_size=context_axis_size,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
@@ -410,6 +436,10 @@ def build_small_run(
                     flavor,
                     target,
                     "MHEP",
+                    # Only tagged off the fleet-spanning default, so a plain rung keeps the tag set
+                    # every earlier ablation carries.
+                    *((f"context-{context_axis_size}",) if context_axis_size != 1 else ()),
+                    *((f"expert-axis-{expert_axis_size}",) if expert_axis_size_override is not None else ()),
                 ],
                 group="moe-hero-ep-small-abl",
                 name=run_id,
@@ -563,6 +593,26 @@ def build_small_run(
     help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
 )
 @click.option(
+    "--context-axis-size",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Context-parallel axis width. Must divide --seq-len and the fleet's device count.",
+)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the expert axis the --flavor and --target imply. Needed when --context-axis-size "
+    "claims devices the expert axis would otherwise span.",
+)
+@click.option(
+    "--num-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Train this many steps instead of the --tokens-per-active-param budget. For smokes.",
+)
+@click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
     default=1,
@@ -594,6 +644,9 @@ def main(
     qb_hist_bins: int,
     tokens_per_active_param: int,
     watch_interval: int,
+    context_axis_size: int,
+    expert_axis_size: int | None,
+    num_steps: int | None,
     dp_racks: int,
     steps_per_eval: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -613,7 +666,10 @@ def main(
         qb_use_histogram=qb_histogram,
         qb_hist_bins=qb_hist_bins,
         tokens_per_active_param=tokens_per_active_param,
+        num_train_steps_override=num_steps,
         watch_interval=watch_interval,
+        context_axis_size=context_axis_size,
+        expert_axis_size_override=expert_axis_size,
         dp_racks=dp_racks,
         steps_per_eval=steps_per_eval,
     )
