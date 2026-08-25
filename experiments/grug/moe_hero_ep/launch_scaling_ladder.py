@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hero-shape scaling ladder: one recipe, five widths.
+"""Hero-shape scaling ladders on GB200 and H100.
 
 Every rung trains the *same* EP hero recipe -- 384 routed experts, top-8, hidden/2-wide experts in a
 hidden/2 latent, pooled-wave transport, the Harrier 2026.08.18 two-phase mixture on the Marin
@@ -19,11 +19,23 @@ uniform across the ladder so a rung predicts the d6144 hero. ``d6144`` is the he
 Train batch is 1024 x racks (constant per-rack load); eval batch is 64 x racks (one sequence per
 device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
 analytic estimate (forward+backward, including attention and the latent-MoE correction).
+
+The H100 ladder extends the same recipe downward. Its global token batch is the largest power-of-two
+sequence batch no greater than ``training_tokens ** 0.6``. d384 uses EP4 because EP8 underfills the
+devices at this width, d512 uses EP8, and d768 uses two data-parallel EP8 replicas to stay
+comfortably below a 12-hour wall-time target. The hardware mapping changes only the expert/replica
+topology, accelerator kernels, and per-device eval batch:
+
+    size   H100 GPUs  EP per task  global batch  steps  tokens
+    d384       4           4            128       12162   6.4B
+    d512       8           8            256       15721    16B
+    d768      16           8            512       22840    48B
 """
 
 import dataclasses
 import os
 from datetime import timedelta
+from enum import StrEnum
 
 import click
 import jmp
@@ -32,6 +44,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.grug.grug_moe import MoeImplementation
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
@@ -92,6 +105,8 @@ HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 
 LADDER_RACKS: dict[str, int] = {"d768": 1, "d1024": 2, "d1536": 6, "d2048": 11, "d6144": 11}
+H100_LADDER_NODES: dict[str, int] = {"d384": 1, "d512": 1, "d768": 2}
+H100_LADDER_GPUS_PER_TASK: dict[str, int] = {"d384": 4, "d512": 8, "d768": 8}
 QB_HIST_BINS = 10_000
 # Gradient and parameter norm logs every 10 steps on every rung.
 WATCH_INTERVAL = 10
@@ -111,6 +126,85 @@ RESUME_SAVE_INTERVAL = timedelta(hours=1)
 # The two counters are separate gates and the job fails when either one trips.
 LADDER_MAX_RETRIES_FAILURE = 1000
 LADDER_MAX_TASK_FAILURES = 1000
+# H100 rungs are short diagnostics without the hero's multi-day exposure to routine hardware faults.
+# Keep retries bounded so a deterministic numerical failure cannot turn into a persistent restart loop.
+H100_MAX_RETRIES_FAILURE = 3
+H100_MAX_TASK_FAILURES = 3
+
+
+class LadderTarget(StrEnum):
+    GB200_RACK = "gb200-rack"
+    H100 = "h100"
+
+
+@dataclasses.dataclass(frozen=True)
+class LadderExecution:
+    accelerator: str
+    gpus_per_task: int
+    task_count: int
+    cpu: int
+    ram: str
+    disk: str
+    expert_axis_size: int
+    replica_axis_size: int
+    eval_batch_size: int
+    dropless_eval_moe_implementation: MoeImplementation
+    max_retries_failure: int
+    max_task_failures: int
+    tags: tuple[str, ...]
+
+
+def _ladder_execution(size: str, target: LadderTarget) -> LadderExecution:
+    if target == LadderTarget.GB200_RACK:
+        if size not in LADDER_RACKS:
+            raise ValueError(f"size must be one of {sorted(LADDER_RACKS)} for {target}, got {size!r}")
+        dp_racks = LADDER_RACKS[size]
+        return LadderExecution(
+            accelerator="GB200",
+            gpus_per_task=HERO_GPUS_PER_NODE,
+            task_count=HERO_EP_NODES * dp_racks,
+            cpu=120,
+            ram="890g",
+            disk="1t",
+            expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+            replica_axis_size=dp_racks,
+            eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+            dropless_eval_moe_implementation="sonic_cute",
+            max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
+            max_task_failures=LADDER_MAX_TASK_FAILURES,
+            tags=(f"racks-{dp_racks}", "gb200"),
+        )
+
+    if size not in H100_LADDER_NODES:
+        raise ValueError(f"size must be one of {sorted(H100_LADDER_NODES)} for {target}, got {size!r}")
+    nodes = H100_LADDER_NODES[size]
+    gpus_per_task = H100_LADDER_GPUS_PER_TASK[size]
+    return LadderExecution(
+        accelerator="H100",
+        gpus_per_task=gpus_per_task,
+        task_count=nodes,
+        cpu=32,
+        ram="600g",
+        disk="900g",
+        expert_axis_size=gpus_per_task,
+        replica_axis_size=nodes,
+        eval_batch_size=gpus_per_task * nodes,
+        dropless_eval_moe_implementation="sonic",
+        max_retries_failure=H100_MAX_RETRIES_FAILURE,
+        max_task_failures=H100_MAX_TASK_FAILURES,
+        tags=(f"h100-nodes-{nodes}", "h100", f"ep{gpus_per_task}"),
+    )
+
+
+def _h100_ladder_batch_size(training_tokens: int, global_device_count: int) -> int:
+    """Largest power-of-two sequence batch within the token-budget scaling ceiling."""
+    max_sequences = int(training_tokens**0.6) // SEQ_LEN
+    if max_sequences < global_device_count:
+        raise ValueError(f"token batch ceiling permits {max_sequences} sequences for {global_device_count} devices")
+    batch_size = 1 << (max_sequences.bit_length() - 1)
+    assert batch_size % global_device_count == 0
+    assert batch_size * SEQ_LEN <= training_tokens**0.6
+    return batch_size
 
 
 def _ladder_model(size: str):
@@ -140,35 +234,43 @@ def build_ladder_run(
     *,
     run_id: str,
     size: str,
+    target: LadderTarget = LadderTarget.GB200_RACK,
     num_steps: int | None = None,
+    batch_size: int | None = None,
     checkpoint_every: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
+    """One scaling-ladder rung at width ``size`` on the selected hardware target.
 
     ``num_steps`` defaults to the steps needed to train ``TOKENS_PER_ACTIVE_PARAM`` tokens per active
-    parameter at the rung's (rack-scaled) batch. Every eval scores the held-out set both as-trained
-    and dropless. The narrow rungs eval every 5% of the run and keep only the forced final
-    checkpoint; the d6144 hero evals every 3000 steps and keeps a permanent checkpoint every 6000.
-    ``checkpoint_every`` overrides that cadence for any rung. A rolling temporary checkpoint every
+    parameter at the rung's batch. ``batch_size`` overrides the hardware target's canonical batch
+    for a one-off comparison. Every eval scores the held-out set both as-trained and dropless. The
+    narrow rungs eval every 5% of the run and keep only the forced final checkpoint; the d6144 hero
+    evals every 3000 steps and keeps a permanent checkpoint every 6000. ``checkpoint_every``
+    overrides that cadence for any rung. A rolling temporary checkpoint every
     ``RESUME_SAVE_INTERVAL`` on region-local storage covers a crash or a preemption, and a rung
     resumes from the newest checkpoint it finds.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
-    if size not in LADDER_RACKS:
-        raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
-
-    dp_racks = LADDER_RACKS[size]
-    # Weak scaling: batch grows with racks so per-rack token load (and the pooled-wave drop dynamics)
-    # stays constant across rungs. Eval batch is one sequence per device (64 per rack).
-    batch_size = HERO_EP_BATCH_SIZE * dp_racks
-    eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
+    execution = _ladder_execution(size, target)
+    model = _ladder_model(size)
+    training_tokens = TOKENS_PER_ACTIVE_PARAM * _active_params(model)
+    global_device_count = execution.gpus_per_task * execution.task_count
+    if batch_size is None and target == LadderTarget.H100:
+        batch_size = _h100_ladder_batch_size(
+            training_tokens,
+            global_device_count=global_device_count,
+        )
+    elif batch_size is None:
+        batch_size = HERO_EP_BATCH_SIZE * execution.replica_axis_size
+    elif batch_size <= 0 or batch_size % global_device_count != 0:
+        raise ValueError(f"batch_size must be positive and divisible by {global_device_count}, got {batch_size}")
+    eval_batch_size = execution.eval_batch_size
     global_tokens_per_step = batch_size * SEQ_LEN
 
-    model = _ladder_model(size)
     if num_steps is None:
-        num_steps = max(1, round(TOKENS_PER_ACTIVE_PARAM * _active_params(model) / global_tokens_per_step))
+        num_steps = max(1, round(training_tokens / global_tokens_per_step))
     elif num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     flops_per_example, _ = _compute_flops(model_config=model)
@@ -198,11 +300,11 @@ def build_ladder_run(
                 hidden_dim=model.hidden_dim,
                 seq_len=SEQ_LEN,
             ),
-            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
+            use_syrk=True,  # SM90/SM100 symmetric GEMM for MuonH Newton-Schulz
         )
 
-    # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host so the pooled all-to-all buffers keep their HBM.
+    # Uniform hero trainer: expert-parallel within each topology group, replicated across groups,
+    # with MuonH state offloaded to FP32 pinned host so pooled all-to-all buffers retain HBM.
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
@@ -212,17 +314,17 @@ def build_ladder_run(
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
-        replica_axis_size=dp_racks,
+        expert_axis_size=execution.expert_axis_size,
+        replica_axis_size=execution.replica_axis_size,
         sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_NODE,
-        cpu=120,
-        ram="890g",
-        disk="1t",
-        replicas=HERO_EP_NODES * dp_racks,
+        execution.accelerator,
+        count=execution.gpus_per_task,
+        cpu=execution.cpu,
+        ram=execution.ram,
+        disk=execution.disk,
+        replicas=execution.task_count,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -250,8 +352,7 @@ def build_ladder_run(
                     "ep",
                     "scaling-ladder",
                     f"shape-{size}",
-                    f"racks-{dp_racks}",
-                    "gb200",
+                    *execution.tags,
                     HARRIER_MIX_2026_08_18_TAG,
                 ],
                 group="moe-hero-ep-scaling-ladder",
@@ -307,14 +408,15 @@ def build_ladder_run(
                 eval_ema=False,
                 compute_bpb=True,
                 dropless_eval=True,
+                dropless_eval_moe_implementation=execution.dropless_eval_moe_implementation,
                 # The hero is the run whose full loss curve we report, so give it a baseline point
                 # at the start of the curve.
                 eval_at_first_step=size == "d6144",
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_GPUS_PER_NODE,
-            max_retries_failure=LADDER_MAX_RETRIES_FAILURE,
-            max_task_failures=LADDER_MAX_TASK_FAILURES,
+            processes_per_task=execution.gpus_per_task,
+            max_retries_failure=execution.max_retries_failure,
+            max_task_failures=execution.max_task_failures,
         )
 
     return ArtifactStep(
@@ -330,12 +432,30 @@ def build_ladder_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option("--size", required=True, type=click.Choice(sorted(LADDER_RACKS)), help="Ladder rung width.")
+@click.option(
+    "--size",
+    required=True,
+    type=click.Choice(sorted(set(LADDER_RACKS) | set(H100_LADDER_NODES))),
+    help="Ladder rung width; availability depends on --target.",
+)
+@click.option(
+    "--target",
+    type=click.Choice([target.value for target in LadderTarget]),
+    default=LadderTarget.GB200_RACK.value,
+    show_default=True,
+    help="Canonical GB200 racks or the H100 EP4/EP8 ladder mapping.",
+)
 @click.option(
     "--num-steps",
     type=click.IntRange(min=1),
     default=None,
     help="Training steps. Default trains 791 tokens per active parameter at the rung's batch.",
+)
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Global sequence batch override. Default follows the selected hardware target.",
 )
 @click.option(
     "--checkpoint-every",
@@ -347,9 +467,21 @@ def build_ladder_run(
 )
 @build_options
 def main(
-    run_id: str, size: str, num_steps: int | None, checkpoint_every: int | None
+    run_id: str,
+    size: str,
+    target: str,
+    num_steps: int | None,
+    batch_size: int | None,
+    checkpoint_every: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_ladder_run(run_id=run_id, size=size, num_steps=num_steps, checkpoint_every=checkpoint_every)
+    return build_ladder_run(
+        run_id=run_id,
+        size=size,
+        target=LadderTarget(target),
+        num_steps=num_steps,
+        batch_size=batch_size,
+        checkpoint_every=checkpoint_every,
+    )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536 / d2048.
+"""Small-scale hero-shape ablation: d384 / d512 / d768 / d1024 / d1280 / d1536 / d2048.
 
 These runs mirror the EP hero: 384 routed experts, top-8 routing, hidden/2-wide experts in a hidden/2
 latent, two shared experts, and the pooled-wave all-to-all transport at receiver/sender capacity 1.15.
@@ -98,11 +98,9 @@ class Target:
 # These models are small enough to hold a whole rack's worth of experts on one node, so the H100
 # target keeps the all-to-all inside a single NVLink domain instead of crossing InfiniBand.
 #
-# Kernel availability follows the accelerator, in two places. `gpu_fa4_cute` is Blackwell-only: its
-# MMA op accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright, and `gpu_fa4_thd` needs
-# fixed-shape THD segment metadata this model does not supply, so Hopper falls back to reference
-# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
-# SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
+# These established small-scale H100 targets retain reference attention and the dense MuonH path for
+# comparability. The scaling-ladder launcher separately selects the validated SM90 FA4 and symmetric
+# GEMM kernels on Hopper.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: under pooled-wave the receiver cell pools over all senders and is
@@ -171,10 +169,12 @@ class SmallShape:
     global_kv_heads: int
 
 
-# hidden/depth/head split from the #7856 sweep grid: heads = hidden/128, KV split local = heads//4 and
-# global = heads//8 (floored at 1), depth following the 8/12/14/16/22 progression. The step count is
+# Hidden/depth/head split extends the #7856 sweep grid downward: heads = hidden/128, KV split local =
+# heads//4 and global = heads//8 (floored at 1), with depth 4/6/8/12/14/16/22. The step count is
 # derived from the active-param count (see `_active_params`), not carried here.
 SMALL_SHAPES: dict[str, SmallShape] = {
+    "d384": SmallShape(384, 4, 3, 1, 1),
+    "d512": SmallShape(512, 6, 4, 1, 1),
     "d768": SmallShape(768, 8, 6, 1, 1),
     "d1024": SmallShape(1024, 12, 8, 2, 1),
     "d1280": SmallShape(1280, 14, 10, 2, 1),
