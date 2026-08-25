@@ -41,7 +41,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method, authorize_resource_method
 from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -644,6 +644,18 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
     result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("ListJobs"))
     assert result == "ok"
     assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
+
+
+def test_dashboard_interceptor_allows_generic_resource_read():
+    policy = RequestAuthPolicy.enforcing(
+        verifier=MockVerifier({}),
+        iap_assertion_verifier=_StubAssertionVerifier(),
+    )
+    interceptor = PolicyAuthInterceptor(policy, cookie_name=SESSION_COOKIE, authorize=authorize_resource_method)
+
+    result = interceptor.intercept_unary_sync(lambda _req, _ctx: "ok", "req", _assertion_ctx("Get"))
+
+    assert result == "ok"
 
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():

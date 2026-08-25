@@ -98,6 +98,8 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
     }
 )
 
+RESOURCE_READABLE_RPCS: frozenset[str] = frozenset({"Get", "List", "BatchGet"})
+
 
 def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     """Enforce per-method access for restricted roles before dispatch.
@@ -112,22 +114,43 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
     ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
     caller invoking a non-readable method.
     """
+    _authorize_method(
+        identity,
+        method_name,
+        dashboard_methods=DASHBOARD_READABLE_RPCS,
+        federation_methods=FEDERATION_RPCS | FEDERATION_SCOPED_RPCS,
+    )
+
+
+def authorize_resource_method(identity: VerifiedIdentity, method_name: str) -> None:
+    """Apply restricted-role policy to generic resource verbs."""
+    _authorize_method(
+        identity,
+        method_name,
+        dashboard_methods=RESOURCE_READABLE_RPCS,
+        federation_methods=frozenset(),
+    )
+
+
+def _authorize_method(
+    identity: VerifiedIdentity,
+    method_name: str,
+    *,
+    dashboard_methods: frozenset[str],
+    federation_methods: frozenset[str],
+) -> None:
     if identity.audience is not None:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             "endpoint-scoped token cannot call control RPCs",
         )
-    if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
+    if identity.role == DASHBOARD_ROLE and method_name not in dashboard_methods:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"Read-only dashboard access cannot call {method_name}; "
             "this identity is not provisioned for write access",
         )
-    if (
-        identity.role == FEDERATION_PEER_ROLE
-        and method_name not in FEDERATION_RPCS
-        and method_name not in FEDERATION_SCOPED_RPCS
-    ):
+    if identity.role == FEDERATION_PEER_ROLE and method_name not in federation_methods:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"Federation-peer identity cannot call {method_name}; it is scoped to the federation RPC subset",

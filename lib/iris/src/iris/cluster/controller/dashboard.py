@@ -80,7 +80,7 @@ from iris.cluster.dashboard_common import (
 )
 from iris.cluster.types import JobName
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, authorize_method
+from iris.rpc.auth import SESSION_COOKIE, authorize_method, authorize_resource_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
@@ -242,13 +242,23 @@ class ControllerDashboard:
     def _create_app(self) -> ASGIApp:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
+        draining_interceptor = _ControllerDrainingInterceptor(self._draining)
         auth_interceptor = PolicyAuthInterceptor(
             self._auth_policy,
             cookie_name=SESSION_COOKIE,
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
         )
-        controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
+        controller_interceptors = [draining_interceptor, auth_interceptor, controller_timing]
+        resource_interceptors = [
+            draining_interceptor,
+            PolicyAuthInterceptor(
+                self._auth_policy,
+                cookie_name=SESSION_COOKIE,
+                authorize=authorize_resource_method,
+            ),
+            controller_timing,
+        ]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
         rpc_asgi_app = ControllerServiceASGIApplication(
@@ -266,7 +276,7 @@ class ControllerDashboard:
         resource_rpc_app = (
             ResourceServiceASGIApplication(
                 service=AsyncServiceAdapter(self._resource_service),
-                interceptors=controller_interceptors,
+                interceptors=resource_interceptors,
                 compressions=IRIS_RPC_COMPRESSIONS,
             )
             if self._resource_service is not None
@@ -579,6 +589,11 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.EndpointService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/iris.resource.ResourceService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.resource.ResourceService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),
