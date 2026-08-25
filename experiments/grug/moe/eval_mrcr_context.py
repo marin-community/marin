@@ -204,19 +204,38 @@ class _MrcrEvaluationShape:
     eval_batch_size: int
     data_axis_size: int
     context_axis_size: int
+    preemptible: bool
 
     @property
     def resources(self) -> ResourceConfig:
-        return ResourceConfig.with_tpu(self.tpu_variant, preemptible=False)
+        return ResourceConfig.with_tpu(self.tpu_variant, preemptible=self.preemptible)
 
 
 def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
     if tpu_variant == DEFAULT_TPU_VARIANT:
-        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=256, data_axis_size=256, context_axis_size=4)
+        return _MrcrEvaluationShape(
+            tpu_variant,
+            eval_batch_size=256,
+            data_axis_size=256,
+            context_axis_size=4,
+            preemptible=False,
+        )
     if tpu_variant == "v4-64":
-        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=32, data_axis_size=32, context_axis_size=1)
+        return _MrcrEvaluationShape(
+            tpu_variant,
+            eval_batch_size=32,
+            data_axis_size=32,
+            context_axis_size=1,
+            preemptible=True,
+        )
     if tpu_variant == "v4-32":
-        return _MrcrEvaluationShape(tpu_variant, eval_batch_size=16, data_axis_size=16, context_axis_size=1)
+        return _MrcrEvaluationShape(
+            tpu_variant,
+            eval_batch_size=16,
+            data_axis_size=16,
+            context_axis_size=1,
+            preemptible=True,
+        )
     raise ValueError(f"Unsupported MRCR evaluation TPU shape: {tpu_variant}")
 
 

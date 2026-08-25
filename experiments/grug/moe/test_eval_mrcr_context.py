@@ -92,6 +92,7 @@ def test_smoke_builder_exposes_four_independent_cells_with_validation_dependenci
     assert {step.config.evaluation.qk_mult for step in steps} == {1.57, 1.75}
     assert all(step.config.evaluation.dataset_stats_path is not None for step in steps)
     assert all(len(step.config.evaluation.dataset_manifest_paths) == 3 for step in steps)
+    assert all(step.config.resources.value.preemptible is False for step in steps)
 
 
 def test_v4_32_smoke_builder_uses_full_data_sharding_and_distinct_outputs():
@@ -102,6 +103,7 @@ def test_v4_32_smoke_builder_uses_full_data_sharding_and_distinct_outputs():
     assert all(step.config.evaluation.runtime.value.eval_batch_size == 16 for step in steps)
     assert all(step.config.evaluation.runtime.value.data_axis_size == 16 for step in steps)
     assert all(step.config.evaluation.runtime.value.context_axis_size == 1 for step in steps)
+    assert all(step.config.resources.value.preemptible is True for step in steps)
     assert all(step.name.endswith("-v432") for step in steps)
 
     with pytest.raises(ValueError, match="bounded smoke"):
@@ -116,6 +118,7 @@ def test_v4_64_smoke_builder_uses_full_data_sharding_without_context_parallelism
     assert all(step.config.evaluation.runtime.value.eval_batch_size == 32 for step in steps)
     assert all(step.config.evaluation.runtime.value.data_axis_size == 32 for step in steps)
     assert all(step.config.evaluation.runtime.value.context_axis_size == 1 for step in steps)
+    assert all(step.config.resources.value.preemptible is True for step in steps)
     assert all(step.name.endswith("-v464") for step in steps)
 
     with pytest.raises(ValueError, match="bounded smoke"):
