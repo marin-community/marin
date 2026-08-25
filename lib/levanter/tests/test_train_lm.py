@@ -161,6 +161,32 @@ def test_train_lm_exact_continuation_preserves_optimizer_schedule_and_state():
             assert jnp.array_equal(parent_leaf, fork_leaf)
 
 
+def test_optimizer_schedule_can_extend_past_execution_horizon():
+    config = train_lm.TrainLmConfig(
+        trainer=train_lm.TrainerConfig(num_train_steps=2400),
+        optimizer_schedule_num_train_steps=3007,
+    )
+
+    assert train_lm._optimizer_schedule_steps(config) == 3007
+
+
+def test_optimizer_schedule_cannot_end_before_execution():
+    config = train_lm.TrainLmConfig(
+        trainer=train_lm.TrainerConfig(num_train_steps=2400),
+        optimizer_schedule_num_train_steps=2399,
+    )
+
+    with pytest.raises(ValueError, match="must be at least"):
+        train_lm._optimizer_schedule_steps(config)
+
+
+def test_minimum_initial_step_rejects_incomplete_restore() -> None:
+    train_lm._validate_minimum_initial_step(initial_step=2400, minimum_initial_step=2400)
+
+    with pytest.raises(ValueError, match="Initial trainer step 2399 is below required minimum 2400"):
+        train_lm._validate_minimum_initial_step(initial_step=2399, minimum_initial_step=2400)
+
+
 def test_train_lm_scratch_hf_model_uses_resolved_data_tokenizer(monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir)

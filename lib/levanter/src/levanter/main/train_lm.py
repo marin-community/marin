@@ -94,6 +94,8 @@ class TrainLmConfig:
     """Build the optimizer schedule for this horizon while allowing a shorter exact-state continuation."""
     initial_state_evidence_path: str | None = None
     """Optional create-only JSON evidence for the trainer state after checkpoint initialization."""
+    minimum_initial_step: int | None = None
+    """Fail before training if checkpoint restoration starts before this completed-update count."""
 
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
@@ -143,6 +145,23 @@ class TrainLmConfig:
     log_entropy: bool = False
 
 
+def _validate_minimum_initial_step(initial_step: int, minimum_initial_step: int | None) -> None:
+    if minimum_initial_step is not None and initial_step < minimum_initial_step:
+        raise ValueError(f"Initial trainer step {initial_step} is below required minimum {minimum_initial_step}")
+
+
+def _optimizer_schedule_steps(config: TrainLmConfig) -> int:
+    schedule_steps = config.optimizer_schedule_num_train_steps
+    if schedule_steps is None:
+        return config.trainer.num_train_steps
+    if schedule_steps < config.trainer.num_train_steps:
+        raise ValueError(
+            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
+            f"{schedule_steps} < {config.trainer.num_train_steps}"
+        )
+    return schedule_steps
+
+
 def _restore_lm_model_from_partial_checkpoint(
     checkpointed_model: LmHeadModel,
     source_model: LmHeadModel,
@@ -171,9 +190,7 @@ def _load_lm_model_from_configured_source(
             dtype=trainer.mp.compute_dtype,
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
-    elif (
-        config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
-    ):
+    elif config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None:
         # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
         # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
@@ -242,15 +259,7 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    optimizer_schedule_num_train_steps = config.optimizer_schedule_num_train_steps
-    if optimizer_schedule_num_train_steps is None:
-        optimizer_schedule_num_train_steps = config.trainer.num_train_steps
-    if optimizer_schedule_num_train_steps < config.trainer.num_train_steps:
-        raise ValueError(
-            "optimizer_schedule_num_train_steps must be at least trainer.num_train_steps, got "
-            f"{optimizer_schedule_num_train_steps} < {config.trainer.num_train_steps}"
-        )
-    optimizer = config.optimizer.build(optimizer_schedule_num_train_steps)
+    optimizer = config.optimizer.build(_optimizer_schedule_steps(config))
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
@@ -331,6 +340,8 @@ def main(config: TrainLmConfig):
             state = load_checkpoint(state, checkpoint_path)
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
+
+        _validate_minimum_initial_step(int(state.step), config.minimum_initial_step)
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
@@ -490,9 +501,7 @@ def main(config: TrainLmConfig):
         @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
-            activations, _ = split_activations(
-                model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
-            )
+            activations, _ = split_activations(model.activations(example.tokens, key=None, attn_mask=example.attn_mask))
             head = model.get_lm_head()
             logits = hax.dot(activations, head, axis=model.Embed)
             return logits

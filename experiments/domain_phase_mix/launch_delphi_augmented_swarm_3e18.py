@@ -242,7 +242,7 @@ def _candidate_for_run_spec(*, scaling_fits: dict[str, ScalingFit], run_spec: De
     candidate = _candidate_for_budget(scaling_fits=scaling_fits)
     expected_tokens = run_spec.train_steps * run_spec.batch_size * SEQ_LEN_DELPHI
     if expected_tokens != run_spec.realized_train_tokens:
-        raise ValueError("Run-spec token accounting changed: " f"{expected_tokens} != {run_spec.realized_train_tokens}")
+        raise ValueError(f"Run-spec token accounting changed: {expected_tokens} != {run_spec.realized_train_tokens}")
     optimizer_config = completed_adamh_heuristic.build_optimizer_config(
         run_spec.batch_size,
         run_spec.realized_train_tokens,
