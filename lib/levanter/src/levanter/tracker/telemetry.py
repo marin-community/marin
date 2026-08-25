@@ -22,6 +22,7 @@ from rigging.telemetry.probes import nccl, nccl_client
 from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.tracker import NoopTracker
 
 logger = logging.getLogger(__name__)
 
@@ -157,16 +158,13 @@ class TelemetryTracker(Tracker):
 
     name: str = "telemetry"
 
-    def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
-        self._publish_tracker_metrics = publish_tracker_metrics
+    def __init__(self) -> None:
         self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
-        if not self._publish_tracker_metrics:
-            return
         for key, value in metrics.items():
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
@@ -232,6 +230,10 @@ class TelemetryTracker(Tracker):
             logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
 
 
+class _NonPublishingTelemetryTracker(NoopTracker):
+    name = "telemetry"
+
+
 @TrackerConfig.register_subclass("telemetry")
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
@@ -244,4 +246,6 @@ class TelemetryConfig(TrackerConfig):
             run_id=run_id,
             process_index=process_index,
         )
-        return TelemetryTracker(publish_tracker_metrics=process_index == 0)
+        if process_index == 0:
+            return TelemetryTracker()
+        return _NonPublishingTelemetryTracker()
