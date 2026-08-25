@@ -15,3 +15,5 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 2	2026-08-25T00:11Z	dkp-b2-cta0bar8	bench	cta0-delegated barrier, 8x128	12.73	-	promising	-1.5 vs adjacent 14.20 baseline but next baseline read 12.25; needs ladder
 2	2026-08-25T00:31Z	dkp-b0v-g8x	bench	g8x128 baseline, validating bench	12.25	-	baseline	VALIDATION OK; between-job spread 12.25-14.20 (64-of-72 co-tenancy)
 3	2026-08-25T00:5xZ	ladder-r1	bench	interleaved 2x(g8x,cta8,cta16,cta32)	-	-	running	paired medians; ladder.sh r1
+4	2026-08-25T01:41Z	usweep	bench	dk U=1: 7.95ms/404GBs = ONE-SHOT SPEED; U=120: 20.4; oneshot U=1: 24.2	7.95	-	keep-insight	Granularity is the whole dk gap; transports have opposite U preferences
+4	2026-08-25T02:0xZ	b3-dkbal	build	work-proportional CTA assignment (fork ragged-a2a-dk-balanced 06df0ee8a6)	-	-	running	subsumes ctas_per_unit; targets skew regime without splits
