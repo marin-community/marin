@@ -4,7 +4,7 @@
 import logging
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
@@ -54,6 +54,9 @@ def dispatch_grug_training_run(
     max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    pip_packages: Sequence[str] = (),
+    extra_env_vars: Mapping[str, str] | None = None,
+    setup_scripts: Sequence[str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -63,14 +66,35 @@ def dispatch_grug_training_run(
     ``max_retries_failure`` is the per-task retry budget and ``max_task_failures`` is the
     cumulative one. The job fails when either is exhausted, so raise the two together: a large
     per-task budget under a small cumulative one still ends the job at the cumulative limit.
+
+    ``pip_packages``, ``extra_env_vars``, and ``setup_scripts`` extend the task environment for
+    runs that need a dependency the standard image does not carry, such as the pinned
+    Transformer Engine build in ``experiments/grug/te_setup.py``. ``setup_scripts`` replaces the
+    task's whole setup: Iris then ignores ``pip_packages`` and the resource extras, so those
+    scripts must install both themselves (``default_setup_script(extras=...)`` renders the
+    standard one). Passing ``pip_packages`` alongside ``setup_scripts`` is rejected rather than
+    silently dropped.
     """
+    if pip_packages and setup_scripts is not None:
+        raise ValueError(
+            "Iris ignores pip_packages when setup_scripts is set; install them from the scripts "
+            "instead (default_setup_script(pip_packages=...))."
+        )
     safe_run_id = _safe_job_suffix(run_id)
-    env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
+    env_vars = resolve_training_env(
+        base_env={**_forwarded_env_vars(), **(extra_env_vars or {})},
+        resources=resources,
+    )
     request = JobRequest(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources),
+            pip_packages=pip_packages,
+            setup_scripts=setup_scripts,
+        ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,

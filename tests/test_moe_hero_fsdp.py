@@ -5,7 +5,9 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from experiments.grug.moe_hero_fsdp import launch, train
+import pytest
+
+from experiments.grug.moe_hero_fsdp import launch, model, train
 
 
 def test_build_hero_run_uses_run_id_argument(monkeypatch):
@@ -51,3 +53,12 @@ def test_run_grug_applies_runtime_defaults_and_keeps_overrides(monkeypatch):
         assert os.environ["XLA_FLAGS"] == explicit_flags
         assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
         assert os.environ["MALLOC_CONF"] == "narenas:8"
+
+
+def test_hero_config_rejects_the_transformer_engine_context_parallel_backend():
+    # The layer scan varies the sliding window through fa4_bounds, which TE cannot read as a static
+    # window_size, so selecting it here would quietly run every local layer full causal.
+    with pytest.raises(ValueError, match="not supported by moe_hero_fsdp"):
+        model.GrugModelConfig(vocab_size=128, attention_implementation="gpu_te_cp")
+
+    model.GrugModelConfig(vocab_size=128, attention_implementation="gpu_fa4_cute")
