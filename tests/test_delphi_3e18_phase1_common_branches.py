@@ -3,6 +3,7 @@
 
 import json
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -17,6 +18,17 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (
 
 CANDIDATE_SHA256 = "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6"
 CONTINUATION_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
+EXTENSION_CONTINUATION_SHA256 = "2860d0e1f177f1728580ec1cdda05e049734e7977b868a8c0abd05d9d8bd0ec3"
+EXTENSION_CONTINUATION_WEIGHTS = (
+    Path(__file__).resolve().parents[1]
+    / "experiments"
+    / "domain_phase_mix"
+    / "exploratory"
+    / "two_phase_many"
+    / "reference_outputs"
+    / "delphi_phase1_kl0p05_wave1_extension_20260825"
+    / "continuation_weights.csv"
+)
 SELECTED_CANDIDATES = (
     "observed_cap10_best",
     "shared_bounded_ensemble_kl0p05",
@@ -178,6 +190,78 @@ def test_branch_panel_crosses_common_fit_rows_and_keeps_controls_outside_budget(
     assert tuple(row["run_order"] for row in noise_rows) == branches.hardware_canary_gate().noise_run_orders
 
 
+def test_branch_run_id_base_can_isolate_an_extension_panel() -> None:
+    uniform = {domain: 1.0 / len(base.DOMAIN_NAMES) for domain in base.DOMAIN_NAMES}
+    row = {
+        "run_order": 57,
+        "fit_budget": True,
+        "branch_role": "primary_cross",
+        "prefix": branches.PrefixCheckpoint(
+            candidate_id="shared_bounded_ensemble_kl0p05",
+            repeat_seed=0,
+            checkpoint_uri="gs://marin-us-east5/prefix/step-2399",
+            provenance_sha256="provenance",
+        ),
+        "continuation_id": "fit_wave1_extension_00",
+        "continuation_role": "wave1_extension_stratified_maximin",
+        "phase_weights": {"phase_0": uniform, "phase_1": uniform},
+    }
+    prefix_specs = {
+        ("shared_bounded_ensemble_kl0p05", 0): cast(
+            base.DelphiSwarmRunSpec,
+            _PrefixSpec(
+                phase_weights={"phase_0": uniform, "phase_1": uniform},
+                data_seed=930_000,
+                trainer_seed=0,
+            ),
+        )
+    }
+
+    enriched = branches.enrich_branch_rows([row], prefix_specs, run_id_base=951_000)
+
+    assert enriched[0]["run_id"] == 951_057
+    assert enriched[0]["run_order"] == 57
+    assert enriched[0]["run_name"] == ("branch_shared_bounded_ensemble_kl0p05_seed0_fit_wave1_extension_00")
+
+
+def test_branch_run_id_base_rejects_negative_values() -> None:
+    with pytest.raises(ValueError, match="must be nonnegative"):
+        branches.enrich_branch_rows([], {}, run_id_base=-1)
+
+
+def test_noncanonical_continuation_panel_requires_distinct_run_id_namespace() -> None:
+    with pytest.raises(ValueError, match="must use a distinct"):
+        branches.validate_branch_run_id_namespace("extension", branches.BRANCH_RUN_ID_BASE)
+    branches.validate_branch_run_id_namespace(
+        branches.CANONICAL_CONTINUATION_WEIGHTS_SHA256,
+        branches.BRANCH_RUN_ID_BASE,
+    )
+    branches.validate_branch_run_id_namespace("extension", 951_000)
+
+
+def test_wave1_extension_loads_fifty_fit_rows_and_repeats_the_frozen_anchor() -> None:
+    _, original = branches.load_continuations(
+        branches.DEFAULT_CONTINUATION_WEIGHTS,
+        CONTINUATION_SHA256,
+        branches.DEFAULT_CANDIDATE_WEIGHTS,
+        CANDIDATE_SHA256,
+    )
+    _, extension = branches.load_continuations(
+        EXTENSION_CONTINUATION_WEIGHTS,
+        EXTENSION_CONTINUATION_SHA256,
+        branches.DEFAULT_CANDIDATE_WEIGHTS,
+        CANDIDATE_SHA256,
+    )
+
+    original_fit = next(row for row in original if row["continuation_id"] == "fit_maximin_00")
+    anchor = next(row for row in extension if row["continuation_id"] == "control_wave1a_anchor_fit_maximin_00")
+    assert len(extension) == branches.COMMON_CONTINUATION_COUNT
+    assert sum(bool(row["fit_budget"]) for row in extension) == branches.COMMON_FIT_CONTINUATION_COUNT
+    assert anchor["fit_budget"] is False
+    assert anchor["role"] == "cross_wave_anchor"
+    assert anchor["weights"] == original_fit["weights"]
+
+
 def test_terminal_metric_record_accepts_identical_retry_rows(tmp_path) -> None:
     run_name = "branch_retry"
     metric_dir = tmp_path / f"{run_name}-deadbeef" / "checkpoints"
@@ -318,6 +402,9 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         continuation_weights_sha256=CONTINUATION_SHA256,
         prefix_replay_code_commit="prefix",
         code_commit="branch",
+        branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        continuation_weights_version=versioned(CONTINUATION_SHA256),
+        branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
         selected_run_orders=versioned((0,)),
         prefix_hardware=branches.PREFIX_HARDWARE,
@@ -333,6 +420,9 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
         continuation_weights_sha256=CONTINUATION_SHA256,
         prefix_replay_code_commit="prefix",
         code_commit="branch",
+        branch_run_id_base=branches.BRANCH_RUN_ID_BASE,
+        continuation_weights_version=versioned(CONTINUATION_SHA256),
+        branch_run_id_base_version=versioned(branches.BRANCH_RUN_ID_BASE),
         branch_rows_json="[]",
         selected_run_orders=versioned(tuple(range(branches.TOTAL_BRANCH_ROWS))),
         prefix_hardware=branches.PREFIX_HARDWARE,
@@ -345,10 +435,14 @@ def test_manifest_step_versions_the_selected_run_orders() -> None:
 
     expected_hardware_version = branches.hardware_identity(branches.V6E_DEPLOYMENT.hardware)
     assert one_row_version == {
+        "branch_run_id_base_version": branches.BRANCH_RUN_ID_BASE,
+        "continuation_weights_version": CONTINUATION_SHA256,
         "selected_run_orders": (0,),
         "continuation_hardware_version": expected_hardware_version,
     }
     assert full_panel_version == {
+        "branch_run_id_base_version": branches.BRANCH_RUN_ID_BASE,
+        "continuation_weights_version": CONTINUATION_SHA256,
         "selected_run_orders": tuple(range(branches.TOTAL_BRANCH_ROWS)),
         "continuation_hardware_version": expected_hardware_version,
     }

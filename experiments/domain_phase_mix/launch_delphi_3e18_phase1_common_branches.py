@@ -73,6 +73,7 @@ REQUIRED_SELECTED_CANDIDATES = {"observed_cap10_best"}
 HISTORICAL_PHASE_1_EPOCH_CAP = 62.28165425173962
 HISTORICAL_TOTAL_EPOCH_CAP = 255.8246349460757
 BRANCH_RUN_ID_BASE = 950_000
+CANONICAL_CONTINUATION_WEIGHTS_SHA256 = "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355"
 TOTAL_BRANCH_ROWS = (
     SELECTED_PREFIX_COUNT * (COMMON_CONTINUATION_COUNT + 1 + STABILITY_CONTINUATION_COUNT) + BRANCH_NOISE_REPEAT_COUNT
 )
@@ -172,6 +173,9 @@ class SaveBranchManifestConfig:
     continuation_weights_sha256: str
     prefix_replay_code_commit: str
     code_commit: str
+    branch_run_id_base: int
+    continuation_weights_version: VersionedValue[str]
+    branch_run_id_base_version: VersionedValue[int]
     branch_rows_json: str
     selected_run_orders: VersionedValue[tuple[int, ...]]
     prefix_hardware: TpuHardware
@@ -723,7 +727,10 @@ def branch_rows(
 def enrich_branch_rows(
     rows: list[dict[str, object]],
     prefix_specs: dict[tuple[str, int], base.DelphiSwarmRunSpec],
+    run_id_base: int = BRANCH_RUN_ID_BASE,
 ) -> list[dict[str, object]]:
+    if run_id_base < 0:
+        raise ValueError("Branch run ID base must be nonnegative")
     enriched = []
     for row in rows:
         prefix = row["prefix"]
@@ -737,7 +744,7 @@ def enrich_branch_rows(
         enriched.append(
             {
                 **row,
-                "run_id": BRANCH_RUN_ID_BASE + run_order,
+                "run_id": run_id_base + run_order,
                 "run_name": run_name,
                 "data_seed": int(row.get("data_seed", source.data_seed)),
                 "trainer_seed": source.trainer_seed,
@@ -750,6 +757,11 @@ def enrich_branch_rows(
     if len(identities) != len(set(identities)):
         raise ValueError("Branch run identities are not unique")
     return enriched
+
+
+def validate_branch_run_id_namespace(continuation_weights_sha256: str, run_id_base: int) -> None:
+    if continuation_weights_sha256 != CANONICAL_CONTINUATION_WEIGHTS_SHA256 and run_id_base == BRANCH_RUN_ID_BASE:
+        raise ValueError("A noncanonical continuation panel must use a distinct --branch-run-id-base")
 
 
 def run_phase_1_branch(config: BranchTrainingConfig) -> None:
@@ -885,6 +897,7 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "continuation_weights_sha256": config.continuation_weights_sha256,
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
+        "branch_run_id_base": config.branch_run_id_base,
         "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(config.continuation_hardware),
         "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
@@ -937,6 +950,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--branch-tpu-zone", required=True)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
+    parser.add_argument("--branch-run-id-base", type=int, default=BRANCH_RUN_ID_BASE)
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_known_args()
@@ -950,6 +964,9 @@ def main() -> None:
     experiment_name = deployment.experiment_name
     if not 1 <= args.max_concurrent <= DEFAULT_MAX_CONCURRENT:
         raise ValueError(f"--max-concurrent must be in [1, {DEFAULT_MAX_CONCURRENT}]")
+    if args.branch_run_id_base < 0:
+        raise ValueError("--branch-run-id-base must be nonnegative")
+    validate_branch_run_id_namespace(args.expected_continuation_sha256, args.branch_run_id_base)
     expected_prefix = marin_prefix_for_region(deployment.hardware.region)
     if os.environ.get("MARIN_PREFIX", expected_prefix) != expected_prefix:
         raise ValueError(f"MARIN_PREFIX must be {expected_prefix}")
@@ -988,6 +1005,7 @@ def main() -> None:
     rows = enrich_branch_rows(
         branch_rows(prefixes=prefixes, prefix_specs=prefix_specs, continuations=continuations),
         prefix_specs,
+        run_id_base=args.branch_run_id_base,
     )
     if args.run_orders is not None:
         selected_orders = tuple(dict.fromkeys(args.run_orders))
@@ -1012,6 +1030,9 @@ def main() -> None:
                 continuation_weights_sha256=args.expected_continuation_sha256,
                 prefix_replay_code_commit=args.prefix_replay_code_commit,
                 code_commit=code_commit,
+                branch_run_id_base=args.branch_run_id_base,
+                continuation_weights_version=versioned(args.expected_continuation_sha256),
+                branch_run_id_base_version=versioned(args.branch_run_id_base),
                 branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                 selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
                 prefix_hardware=PREFIX_HARDWARE,
@@ -1096,6 +1117,9 @@ def main() -> None:
                     continuation_weights_sha256=args.expected_continuation_sha256,
                     prefix_replay_code_commit=args.prefix_replay_code_commit,
                     code_commit=code_commit,
+                    branch_run_id_base=args.branch_run_id_base,
+                    continuation_weights_version=versioned(args.expected_continuation_sha256),
+                    branch_run_id_base_version=versioned(args.branch_run_id_base),
                     branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                     selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
                     prefix_hardware=PREFIX_HARDWARE,
