@@ -27,3 +27,5 @@ iter	ts	cell	kind	config	metric	delta	status	notes
 6	2026-08-25T04:1xZ	dkp-08-bal-6k-s64	restore	bal + splits=64 (mechanism null-check)	-	-	running	expect <= s1: balanced kernel should make splits unnecessary
 7	2026-08-25T04:40Z	dkp-08-bal-6k-s64	restore	bal + splits=64	21.12	-1.3 vs bal-s1	null-confirmed	splits now purely hurt: balanced kernel replaces splits as the balancing device
 7	2026-08-25T04:4xZ	dkp-09-oneshot-6k	restore	same-night one-shot pairing (kmax128 wheel, s64)	-	-	running	rigorous adjacent A/B for the parity claim
+8	2026-08-25T07:05Z	dkp-09c-oneshot-6k	restore	same-night one-shot pairing (s64)	21.93	-0.53 vs bal-mean	KEY	one-shot BELOW its historical band tonight; balanced dk AHEAD same-night
+8	2026-08-25T07:1xZ	dkp-10-oneshot-6k-r2	restore	second one-shot draw	-	-	running	interleaved round 2
