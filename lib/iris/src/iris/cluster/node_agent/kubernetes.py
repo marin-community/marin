@@ -366,6 +366,16 @@ class HostSample:
 
 
 @dataclass(frozen=True)
+class _DcgmExporter:
+    """One dcgm-exporter pod's scrape address and the identity of what it reports."""
+
+    name: str
+    url: str
+    uid: str
+    node_name: str
+
+
+@dataclass(frozen=True)
 class _DcgmMetricSpec:
     name: str
     unit: str = ""
@@ -656,10 +666,10 @@ class NodeStatsScraper:
         self._fetch = fetch
         self._max_workers = max_workers
         self._prev_cpu: dict[str, tuple[float, float]] = {}
-        # node name -> its dcgm-exporter pods. The exporter is a DaemonSet pod whose
-        # address only moves when it restarts, so discovery is cached until a scrape
-        # of that node's exporter fails.
-        self._dcgm_pods_by_node: dict[str, list[dict]] = {}
+        # node name -> its dcgm exporters. The exporter is a DaemonSet pod whose address
+        # moves only when it restarts, so discovery is cached until a pass reads nothing
+        # from that node.
+        self._dcgm_exporters_by_node: dict[str, list[_DcgmExporter]] = {}
 
     def scrape(self, targets: list[NodeTarget]) -> dict[str, NodeMetrics]:
         """Return per-node metrics for ``targets`` (best-effort; missing nodes omitted)."""
@@ -716,24 +726,19 @@ class NodeStatsScraper:
     def _prune_prev(self, live: set[str]) -> None:
         for stale in self._prev_cpu.keys() - live:
             del self._prev_cpu[stale]
-        for stale in self._dcgm_pods_by_node.keys() - live:
-            del self._dcgm_pods_by_node[stale]
+        for stale in self._dcgm_exporters_by_node.keys() - live:
+            del self._dcgm_exporters_by_node[stale]
 
     def _scrape_hosts(self, targets: list[NodeTarget]) -> dict[str, HostSample]:
         urls = {t.name: f"http://{t.internal_ip}:{self._node_port}/metrics" for t in targets if t.internal_ip}
         texts = self._fetch_all(urls)
         return {name: parse_node_exporter(text) for name, text in texts.items()}
 
-    def _dcgm_pods(self, node_name: str) -> list[dict]:
-        """Return the addressable dcgm-exporter pods running on ``node_name``.
+    def _dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return the scrapeable dcgm exporters on ``node_name``.
 
-        Both selectors are applied server-side. The exporters namespace holds one
-        pod per exporter per node, so an unfiltered list would ship every node's
-        exporters to every agent on every collection pass.
-
-        Pods without a ``podIP`` are dropped rather than returned: a replacement
-        exporter that is scheduled but not yet running has no address to scrape, so
-        caching it would strand the node until the agent restarts.
+        Both selectors are applied server-side. Pods with no ``podIP`` are omitted
+        because they have no address to scrape.
         """
         try:
             pods = list(
@@ -747,46 +752,57 @@ class NodeStatsScraper:
         except Exception as e:
             logger.debug("node-metrics: listing dcgm exporters in %s failed: %s", self._ns, e)
             return []
-        return [pod for pod in pods if pod.get("status", {}).get("podIP")]
+        exporters = []
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            name = metadata.get("name", "")
+            pod_ip = pod.get("status", {}).get("podIP")
+            if not name or not pod_ip:
+                continue
+            exporters.append(
+                _DcgmExporter(
+                    name=name,
+                    url=f"http://{pod_ip}:{self._dcgm_port}/metrics",
+                    uid=metadata.get("uid", ""),
+                    node_name=pod.get("spec", {}).get("nodeName", node_name),
+                )
+            )
+        return exporters
 
-    def _discover_dcgm_pods(self, node_name: str) -> list[dict]:
-        """Return ``node_name``'s cached dcgm-exporter pods, discovering them if needed.
+    def _discover_dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return ``node_name``'s cached exporters, discovering them when the cache is cold.
 
-        An empty result is not cached, so a node whose exporter has not started yet
-        is retried on the next pass.
+        An empty result is not cached, so a node whose exporter has not started yet is
+        retried on the next pass.
         """
-        cached = self._dcgm_pods_by_node.get(node_name)
+        cached = self._dcgm_exporters_by_node.get(node_name)
         if cached:
             return cached
-        pods = self._dcgm_pods(node_name)
-        if pods:
-            self._dcgm_pods_by_node[node_name] = pods
-        return pods
+        exporters = self._dcgm_exporters(node_name)
+        if exporters:
+            self._dcgm_exporters_by_node[node_name] = exporters
+        return exporters
 
     def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
-        dcgm_pods = [pod for node_name in sorted(node_names) for pod in self._discover_dcgm_pods(node_name)]
-        exporters: dict[str, tuple[str, str, str]] = {}
-        for pod in dcgm_pods:
-            pod_ip = pod.get("status", {}).get("podIP")
-            name = pod.get("metadata", {}).get("name", "")
-            uid = pod.get("metadata", {}).get("uid", "")
-            node_name = pod.get("spec", {}).get("nodeName", "")
-            if pod_ip and name:
-                exporters[name] = (f"http://{pod_ip}:{self._dcgm_port}/metrics", uid, node_name)
+        exporters = {
+            exporter.name: exporter
+            for node_name in sorted(node_names)
+            for exporter in self._discover_dcgm_exporters(node_name)
+        }
         merged: dict[str, GpuSample] = {}
-        urls = {name: endpoint[0] for name, endpoint in exporters.items()}
-        for name, text in self._fetch_all(urls).items():
-            _, uid, node_name = exporters[name]
+        texts = self._fetch_all({exporter.name: exporter.url for exporter in exporters.values()})
+        for name, text in texts.items():
+            exporter = exporters[name]
             try:
-                merged.update(parse_dcgm(text, exporter_uid=uid, node_name=node_name))
+                merged.update(parse_dcgm(text, exporter_uid=exporter.uid, node_name=exporter.node_name))
             except ValueError as error:
                 logger.warning("could not parse dcgm exporter %s: %s", name, error)
         # Drop the cached address of every node this pass could not read: the exporter
         # stopped answering, moved, or a recycled pod IP is serving another node's
         # metrics under its own hostname. Those nodes rediscover on the next pass.
-        for _, _, node_name in exporters.values():
-            if node_name not in merged:
-                self._dcgm_pods_by_node.pop(node_name, None)
+        for exporter in exporters.values():
+            if exporter.node_name not in merged:
+                self._dcgm_exporters_by_node.pop(exporter.node_name, None)
         return merged
 
     def _fetch_all(self, urls: dict[str, str]) -> dict[str, str]:
