@@ -49,6 +49,32 @@ def test_reference_attention_matches_manual_segment_mask():
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
 
+def test_reference_attention_supports_model_sharded_head_dimension():
+    q, k, v = _make_qkv(batch=1, q_len=5, k_len=5, q_heads=2, kv_heads=1)
+    mask = AttentionMask.causal()
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+
+    mesh = jax.sharding.Mesh(
+        np.asarray(jax.devices()[:1]),
+        ("model",),
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    qkv_sharding = NamedSharding(mesh, P(None, None, None, "model"))
+    sharded_q, sharded_k, sharded_v = (jax.device_put(x, qkv_sharding) for x in (q, k, v))
+
+    actual = jax.jit(reference_attention, static_argnames=("mask", "logits_dtype"))(
+        sharded_q,
+        sharded_k,
+        sharded_v,
+        mask=mask,
+        logits_dtype=jnp.float32,
+    )
+
+    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+    assert isinstance(actual.sharding, NamedSharding)
+    assert actual.sharding.spec == qkv_sharding.spec
+
+
 def test_thd_segment_metadata_includes_padding_run():
     segment_ids = jnp.array([7, 7, 8, 8, 8, -1], dtype=jnp.int32)
     metadata = thd_segment_metadata_from_segment_ids(segment_ids, max_segments=3)
