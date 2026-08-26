@@ -76,15 +76,6 @@ HERO_EP_RUNTIME_ENV = {
     # allocation below has no room to remap into.
     "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75",
 }
-XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
-# The scheduler sizes the single `jit_train_step` temp arena against this percentage of its
-# memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and persistent state
-# occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served from pool free space and
-# forces a fresh mapping against the ~17 GiB of physical memory outside the pool. The default 95
-# asks for 125.7 GiB and fails that way. 85 sizes the arena at 113.6 GiB, leaving enough slack
-# for per-node variation in fragmentation. A lower percentage costs throughput, because a
-# smaller arena makes `HloRematerialization` recompute more of the step.
-XLA_MEMORY_LIMIT_SLOP_FLAG = "--xla_gpu_memory_limit_slop_factor=85"
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
@@ -177,8 +168,16 @@ def _apply_hero_ep_runtime_defaults(
         overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
-        f"{XLA_LATENCY_HIDING_FLAG}={'false' if ragged else 'true'}",
-        XLA_MEMORY_LIMIT_SLOP_FLAG,
+        f"--xla_gpu_enable_latency_hiding_scheduler={'false' if ragged else 'true'}",
+        # The scheduler sizes the single `jit_train_step` temp arena against this percentage of
+        # its memory budget, roughly `133.6 GiB x percentage`. The pool holds 138.2 GiB and
+        # persistent state occupies 18.1 GiB of it, so an arena above 120.2 GiB cannot be served
+        # from pool free space and forces a fresh mapping against the ~17 GiB of physical memory
+        # outside the pool. The default 95 asks for 125.7 GiB and fails that way. 85 sizes the
+        # arena at 113.6 GiB, leaving enough slack for per-node variation in fragmentation. A
+        # lower percentage costs throughput, because a smaller arena makes `HloRematerialization`
+        # recompute more of the step.
+        "--xla_gpu_memory_limit_slop_factor=85",
         XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}

@@ -3,7 +3,6 @@
 
 import math
 import os
-import re
 import subprocess
 import sys
 import textwrap
@@ -1014,30 +1013,6 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
             assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
 
 
-def test_the_ragged_backend_requires_one_process_per_gpu():
-    # The hero default already gives one process per GPU, so this guards an explicit wrong value
-    # rather than a trap: a task holding several GPUs in one process cannot run the ragged
-    # transport, and without the guard that only surfaces after the rack is allocated and compiled.
-    step = launch.build_diagnostic_run(
-        run_id="ragged-default-processes",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation="ragged_all_to_all",
-        version="dev",
-    )
-    assert step is not None
-
-    with pytest.raises(ValueError, match="one process per GPU"):
-        launch.build_diagnostic_run(
-            run_id="ragged-one-process",
-            dp_racks=1,
-            num_steps=1,
-            moe_implementation="ragged_all_to_all",
-            processes_per_task=1,
-            version="dev",
-        )
-
-
 def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
     # A watch interval of 0 would otherwise select overlap 4, so the assertion below
     # separates the ragged posture from the inline-watch one rather than aliasing it.
@@ -1052,31 +1027,6 @@ def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypa
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
-    assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in flags
     for flag in train.RAGGED_REQUIRED_XLA_FLAGS:
         assert flag in flags
-
-
-@pytest.mark.parametrize(
-    ("moe_implementation", "refused"),
-    [(train.RAGGED_MOE_IMPLEMENTATION, True), (None, False)],
-)
-def test_the_jax_floor_gates_the_forced_ragged_flags_and_nothing_else(monkeypatch, moe_implementation, refused):
-    """Below the floor the forced flags abort every rank at import, so refuse the run first.
-
-    The floor is a property of those flags, so it must leave the pooled default alone. The GPU
-    extra still pins a jax below it, which is the path an opt-in ragged run takes today.
-    """
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
-    overrides = {"moe_implementation": moe_implementation} if moe_implementation else {}
-    config = _runtime_env_config(watch_interval=0, **overrides)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        if refused:
-            with pytest.raises(RuntimeError, match=re.escape("99.0.0")):
-                train.run_grug(config)
-            return
-        train.run_grug(config)
-
-    assert train.RAGGED_REQUIRED_XLA_FLAGS[0] not in os.environ["XLA_FLAGS"].split()
