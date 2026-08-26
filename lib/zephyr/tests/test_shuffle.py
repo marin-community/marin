@@ -492,9 +492,9 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
 
 def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path):
     key = "only-key"
-    populated_shard = _target(key, 2)
-    empty_shard = 1 - populated_shard
     scatter_paths = _build_shard(tmp_path, [{"k": key, "v": 1}], num_output_shards=2)
+    populated_shard = next(iter(_Sidecar.read_all(scatter_paths)[0].shard_bytes))
+    empty_shard = 1 - populated_shard
     reader = ScatterReader.from_sidecars(scatter_paths, empty_shard)
 
     assert reader.total_chunks > 0
@@ -666,7 +666,6 @@ def test_read_merge_fan_in_accounts_for_process_baseline():
     }
     low_baseline_fan_in = memory_budget.read_merge_fan_in(4 * 2**30, 128 * 2**20, **inputs)
     high_baseline_fan_in = memory_budget.read_merge_fan_in(4 * 2**30, 1 * 2**30, **inputs)
-
     assert high_baseline_fan_in < low_baseline_fan_in
 
 
