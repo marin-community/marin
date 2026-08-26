@@ -96,6 +96,16 @@ MAX_KEY_SHARE = 0.8
 # Verdicts between progress lines. Small enough that a stalled run is visible within a minute.
 PROGRESS_EVERY = 250
 
+# httpx defaults to 100 pooled connections and 20 keep-alive. Left alone, everything above that
+# queues *inside* the client waiting for a connection, and the wait counts against the request
+# timeout -- so raising JUDGE_CONCURRENCY past 100 buys queueing rather than throughput, and looks
+# from the outside like the judge got slower. This repository has hit the same ceiling before, in
+# the inference worker's forwarding client. The pool is sized to the concurrency that governs it.
+CONNECTION_LIMITS = httpx.Limits(
+    max_connections=JUDGE_CONCURRENCY,
+    max_keepalive_connections=JUDGE_CONCURRENCY,
+)
+
 ESCALATE_COLUMN = "escalate"
 CONFIDENCE_COLUMN = "escalate_confidence"
 
@@ -200,22 +210,32 @@ async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Sem
     everything in flight when it is interrupted -- and shows no progress in between, which makes a
     stalled run indistinguishable from a slow one.
     """
+    payload = None
     for attempt in range(JUDGE_MAX_ATTEMPTS):
         async with gate:
             # Built inside the gate, and off the event loop. A packet is ~1.5 MB of base64 page
             # images; read directly from the coroutine that sends the request, the blocking fetch
             # stalls every other in-flight request for its duration, and the loop then spends
-            # longer moving bytes than waiting on the judge.
-            payload = await asyncio.to_thread(request, fs, task)
+            # longer moving bytes than waiting on the judge. Kept across retries so a 502 does not
+            # buy the same megabyte and a half again.
+            if payload is None:
+                payload = await asyncio.to_thread(request, fs, task)
             try:
                 response = await client.post("/chat/completions", json=payload, timeout=JUDGE_TIMEOUT)
                 response.raise_for_status()
                 body = response.json()
                 verdict = parse_verdict(body["choices"][0]["message"]["content"])
             except Exception as error:
-                logger.info("%s attempt %d: %s", task.packet_id, attempt + 1, error)
-                await asyncio.sleep(min(2**attempt, 30))
-                continue
+                failed = error
+            else:
+                failed = None
+        if failed is not None:
+            # Backed off *outside* the gate. Holding a concurrency slot while sleeping turns a burst
+            # of upstream 502s into a throughput collapse: the slots fill with coroutines that are
+            # waiting rather than working, and nothing else can start.
+            logger.info("%s attempt %d: %s", task.packet_id, attempt + 1, failed)
+            await asyncio.sleep(min(2**attempt, 30))
+            continue
         result = {
             "packet_id": task.packet_id,
             "model": task.model,
@@ -293,7 +313,7 @@ async def buy(fs, tasks: list[Task]) -> dict:
         return {"pilot_verdicts": 0, "projected": 0.0, "spent": 0.0}
 
     headers = {"Authorization": f"Bearer {os.environ[JUDGE_KEY_VAR]}"}
-    async with httpx.AsyncClient(base_url=BASE_URL, headers=headers) as client:
+    async with httpx.AsyncClient(base_url=BASE_URL, headers=headers, limits=CONNECTION_LIMITS) as client:
         credit = await key_credit(client)
         logger.info("key credit remaining: $%.2f", credit)
 
