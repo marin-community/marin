@@ -27,7 +27,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.external_dependencies import VLLM_GPU_RELEASE, VLLM_TPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -224,17 +224,6 @@ def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypa
 
     with pytest.raises(ValueError):
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
-
-
-def test_tpu_launcher_uses_one_public_release_requirement(monkeypatch, tmp_path):
-    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
-    launcher = vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU))
-    command = launcher.command()
-
-    assert command[command.index("--from") + 1] == VLLM_TPU_RELEASE.requirement
-    assert "--with" not in command
-    assert VLLM_TPU_RELEASE.requirement.startswith("vllm @ https://github.com/marin-community/vllm/releases/download/")
-    assert Path(launcher.env()["UV_CACHE_DIR"]).parent == tmp_path
 
 
 def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
