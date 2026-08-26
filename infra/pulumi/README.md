@@ -92,10 +92,10 @@ authoritative for one role and optional condition on its target: Pulumi removes 
 members from managed bindings while leaving other roles untouched. Audit live policy before
 adding or importing a managed binding so the declaration includes every intended member.
 
-`src/iac/gcp/iap.py` declares the shared IAP accessors and the authoritative Iris backend-service
-bindings. Echo, EvalDash, and Grafana compose the same shared accessors into their Cloud Run
-bindings. Do not add `roles/iap.httpsResourceAccessor` at project scope; add shared access in
-`iap.py` or service-specific access in the target declaration.
+`src/iac/gcp/iris.py` declares the authoritative Iris backend-service bindings. Echo, EvalDash,
+and Grafana declare their Cloud Run bindings in their own target modules. Each service lists its
+members directly so changing one policy cannot broaden another. Do not add
+`roles/iap.httpsResourceAccessor` at project scope; add access to the owning service declaration.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets

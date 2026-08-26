@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend-service IAP grants owned by the global IAM stack."""
+"""GCP IAM declarations required by the Iris deploy target."""
 
 from collections.abc import Mapping
 
 from iac.gcp.iam import GcpBackendServiceIapIam, GcpEncryptedMember, GcpIamGrantSet, GcpRoleGrant
-
-IAP_ACCESSOR_ROLE = "roles/iap.httpsResourceAccessor"
 
 
 def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> GcpIamGrantSet:
@@ -18,7 +16,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 service="iris-marin-be",
                 iap_grants=(
                     GcpRoleGrant(
-                        role=IAP_ACCESSOR_ROLE,
+                        role="roles/iap.httpsResourceAccessor",
                         members=(
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
@@ -49,7 +47,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 service="iris-marin-dev-be",
                 iap_grants=(
                     GcpRoleGrant(
-                        role=IAP_ACCESSOR_ROLE,
+                        role="roles/iap.httpsResourceAccessor",
                         members=(
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",

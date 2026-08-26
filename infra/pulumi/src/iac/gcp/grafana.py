@@ -13,7 +13,6 @@ from iac.gcp.iam import (
     GcpRoleGrant,
     GcpSecretIam,
 )
-from iac.gcp.iap import IAP_ACCESSOR_ROLE
 
 _REGION = "us-central1"
 _SERVICE = "marin-grafana"
@@ -64,7 +63,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 service=_SERVICE,
                 iap_grants=(
                     GcpRoleGrant(
-                        role=IAP_ACCESSOR_ROLE,
+                        role="roles/iap.httpsResourceAccessor",
                         members=(
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",

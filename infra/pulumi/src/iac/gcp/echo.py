@@ -13,7 +13,6 @@ from iac.gcp.iam import (
     GcpRoleGrant,
     GcpSecretIam,
 )
-from iac.gcp.iap import IAP_ACCESSOR_ROLE
 
 _REGION = "us-central1"
 _OPENATHENA_GROUP = "group:eng-all@openathena.ai"
@@ -69,7 +68,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                 service=_API_SERVICE,
                 iap_grants=(
                     GcpRoleGrant(
-                        role=IAP_ACCESSOR_ROLE,
+                        role="roles/iap.httpsResourceAccessor",
                         members=(
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",

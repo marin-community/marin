@@ -112,12 +112,11 @@ IAP authentication and authorization are separate checks:
 - The caller identity must hold `roles/iap.httpsResourceAccessor` on that
   backend service. Failure is normally `403`.
 
-The global IAM graph in `iac.gcp.iap` owns each backend access policy as an
-authoritative `WebBackendServiceIamBinding`. Its shared accessor set is also
-composed into each Cloud Run IAP binding, so access that applies to every Marin
-IAP service is declared once without a project-level role. Existing backend
-bindings must be included in the Program-first import before applying policy
-changes.
+The global IAM graph in `iac.gcp.iris` owns each backend access policy as an
+authoritative `WebBackendServiceIamBinding`. Each Iris backend and Cloud Run
+service lists its accessors in its owning module, without a project-level role
+or shared grant. Existing backend bindings must be included in the Program-first
+import before applying policy changes.
 
 The three common caller paths are:
 
