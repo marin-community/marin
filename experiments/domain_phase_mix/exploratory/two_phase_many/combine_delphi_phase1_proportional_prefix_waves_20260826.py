@@ -3,7 +3,13 @@
 
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pandas==2.2.2"]
+# dependencies = [
+#   "fsspec==2026.1.0",
+#   "gcsfs==2026.1.0",
+#   "numpy==2.3.5",
+#   "pandas==2.2.2",
+#   "scipy==1.17.0",
+# ]
 # ///
 """Combine sealed proportional-prefix branch waves for the final response fit."""
 

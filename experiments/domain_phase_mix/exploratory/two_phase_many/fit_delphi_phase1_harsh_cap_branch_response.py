@@ -438,6 +438,10 @@ def fit_candidate(
             "hellinger_to_tied": hellinger(pool[order], center),
         }
     )
+    ordered_pool = pool[order]
+    ordered_counts = np.stack([design.common_design.runtime_counts(weights) for weights in ordered_pool])
+    for bucket_index, bucket in enumerate(buckets):
+        predictions[f"phase_1_count::{bucket}"] = ordered_counts[:, bucket_index]
     point_index = int(np.argmin(predicted_effects))
     stable_index = int(np.argmin(stability_score))
     observed_index = int(np.argmin(effects))
@@ -555,6 +559,7 @@ def main() -> None:
         },
     }
     frozen_candidates = {}
+    artifact_hashes = {}
     for candidate_id in candidate_ids:
         candidate, artifacts = fit_candidate(
             results,
@@ -568,13 +573,18 @@ def main() -> None:
         )
         candidate_dir = args.output_dir / candidate_id
         candidate_dir.mkdir(exist_ok=True)
-        write_json_exact(candidate_dir / "predicted_optimum.json", candidate)
+        predicted_optimum_path = candidate_dir / "predicted_optimum.json"
+        write_json_exact(predicted_optimum_path, candidate)
+        artifact_hashes[f"{candidate_id}/{predicted_optimum_path.name}"] = file_sha256(predicted_optimum_path)
         for name, frame in artifacts.items():
-            frame.to_csv(candidate_dir / f"{name}.csv", index=False)
+            artifact_path = candidate_dir / f"{name}.csv"
+            frame.to_csv(artifact_path, index=False)
+            artifact_hashes[f"{candidate_id}/{artifact_path.name}"] = file_sha256(artifact_path)
         status["candidates"][candidate_id] = {
             key: value for key, value in candidate.items() if key not in {"coefficients", "weights", "baselines"}
         }
         frozen_candidates[candidate_id] = candidate
+    status["artifacts"] = artifact_hashes
     status_path = args.output_dir / "status.json"
     write_json_exact(status_path, status)
     contract = {

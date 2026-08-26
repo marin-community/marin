@@ -44,7 +44,7 @@ LOCAL_DRY_RUN_DIR = DEFAULT_DESIGN_DIR / "launch_dry_run"
 TARGET_PREFIX = "proportional_control"
 PREFIX_HARDWARE = runtime.TpuHardware(tpu_type="v5p-8", region="us-east5", zone="us-east5-a")
 CONTINUATION_HARDWARE = runtime.TpuHardware(tpu_type="v6e-8", region="us-east5", zone="us-east5-b")
-EXPECTED_PREFIX_SEEDS = (0, 1)
+DEFAULT_EXPECTED_PREFIX_SEEDS = (0, 1)
 BRANCH_RUN_ID_BASE = 976_000
 DEFAULT_MAX_CONCURRENT = 102
 
@@ -63,6 +63,7 @@ def source_prefix_specs(
     candidate_weights_path: Path,
     expected_candidate_weights_sha256: str,
     analysis_output_path: str,
+    expected_prefix_seeds: tuple[int, ...],
 ) -> dict[tuple[str, int], base.DelphiSwarmRunSpec]:
     specs, _ = prefixes.candidate_specs(
         candidate_weights_path=candidate_weights_path,
@@ -75,10 +76,10 @@ def source_prefix_specs(
     for spec in specs:
         if spec.run_name != f"prefix_{TARGET_PREFIX}_seed{spec.trainer_seed}":
             continue
-        if spec.trainer_seed not in EXPECTED_PREFIX_SEEDS:
+        if spec.trainer_seed not in expected_prefix_seeds:
             continue
         selected[(TARGET_PREFIX, spec.trainer_seed)] = spec
-    expected = {(TARGET_PREFIX, seed) for seed in EXPECTED_PREFIX_SEEDS}
+    expected = {(TARGET_PREFIX, seed) for seed in expected_prefix_seeds}
     if set(selected) != expected:
         raise ValueError(f"Exact proportional prefix specs are incomplete: {sorted(selected)}")
     return selected
@@ -90,6 +91,7 @@ def load_and_validate_prefixes(
     candidate_weights_sha256: str,
     prefix_replay_code_commit: str,
     specs: dict[tuple[str, int], base.DelphiSwarmRunSpec],
+    expected_prefix_seeds: tuple[int, ...],
 ) -> list[runtime.PrefixCheckpoint]:
     payload_bytes = read_uri_bytes(selected_prefixes_path)
     actual_sha256 = hashlib.sha256(payload_bytes).hexdigest()
@@ -122,6 +124,8 @@ def load_and_validate_prefixes(
         )
         for row in prefix_payloads
     ]
+    if tuple(sorted(row.repeat_seed for row in rows)) != expected_prefix_seeds:
+        raise ValueError("Selected-prefix checkpoints do not contain the requested seeds")
     if {(row.candidate_id, row.repeat_seed) for row in rows} != set(specs):
         raise ValueError("Selected-prefix checkpoints do not match the frozen proportional seeds")
     payload_by_identity = {(str(row["candidate_id"]), int(row["repeat_seed"])): row for row in prefix_payloads}
@@ -209,6 +213,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--analysis-output-path", default=base.DEFAULT_ANALYSIS_OUTPUT_PATH)
     parser.add_argument("--branch-run-id-base", type=int, required=True)
+    parser.add_argument("--expected-prefix-seed", action="append", type=int, dest="expected_prefix_seeds")
     parser.add_argument("--expected-fit-rows-per-prefix", type=int, default=runtime.FIT_ROWS_PER_PREFIX)
     parser.add_argument("--expected-referee-rows-per-prefix", type=int, default=runtime.REFEREE_ROWS_PER_PREFIX)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
@@ -230,13 +235,22 @@ def main() -> None:
         raise ValueError(f"MARIN_PREFIX must be {expected_prefix}")
     os.environ["MARIN_PREFIX"] = expected_prefix
     code_commit = replay.validate_replay_code_commit(args.code_commit, get_git_commit())
-    specs = source_prefix_specs(args.candidate_weights, args.expected_candidate_sha256, args.analysis_output_path)
+    expected_prefix_seeds = tuple(sorted(set(args.expected_prefix_seeds or DEFAULT_EXPECTED_PREFIX_SEEDS)))
+    if not expected_prefix_seeds or not set(expected_prefix_seeds).issubset(prefixes.REPEAT_SEEDS):
+        raise ValueError(f"Unknown proportional prefix seeds: {expected_prefix_seeds}")
+    specs = source_prefix_specs(
+        args.candidate_weights,
+        args.expected_candidate_sha256,
+        args.analysis_output_path,
+        expected_prefix_seeds,
+    )
     checkpoints = load_and_validate_prefixes(
         args.selected_prefixes,
         args.expected_selected_prefixes_sha256,
         args.expected_candidate_sha256,
         args.prefix_replay_code_commit,
         specs,
+        expected_prefix_seeds,
     )
     design_rows = runtime.load_design(
         args.continuation_summary,
@@ -270,6 +284,7 @@ def main() -> None:
                 "prefix_replay_code_commit": args.prefix_replay_code_commit,
                 "branch_code_commit": code_commit,
                 "branch_run_id_base": args.branch_run_id_base,
+                "expected_prefix_seeds": expected_prefix_seeds,
                 "experiment_name": args.experiment_name,
                 "expected_fit_rows_per_prefix": args.expected_fit_rows_per_prefix,
                 "expected_referee_rows_per_prefix": args.expected_referee_rows_per_prefix,

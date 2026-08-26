@@ -15,10 +15,16 @@ import pandas as pd
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_harsh_cap_branches as runtime
 from experiments.domain_phase_mix import launch_delphi_3e18_phase1_proportional_prefix_wave1 as launch
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    analyze_delphi_phase1_proportional_prefix_confirmation_20260826 as confirmation_analysis,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
     combine_delphi_phase1_proportional_prefix_waves_20260826 as combine_waves,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     design_delphi_phase1_harsh_cap_branches_20260825 as design_base,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (
+    design_delphi_phase1_proportional_prefix_confirmation_20260826 as confirmation,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (
     design_delphi_phase1_proportional_prefix_wave2_20260826 as wave2,
@@ -377,6 +383,179 @@ def test_wave2_design_is_full_rank_and_excludes_wave1(tmp_path: Path, monkeypatc
     assert candidate["candidate_id"] == launch.TARGET_PREFIX
     assert len(fit_artifacts["nested_predictions"]) == 160
 
+    candidate_predictions_path = tmp_path / "candidate_predictions.csv"
+    fit_artifacts["candidate_predictions"].to_csv(candidate_predictions_path, index=False)
+    combined_coverage_path = tmp_path / "combined_coverage.json"
+    combined_coverage_path.write_text(json.dumps(combined_coverage))
+    confirmation_model_contract_path = tmp_path / "confirmation_model_contract.json"
+    confirmation_model_contract_path.write_text(
+        json.dumps(
+            {
+                "expected_fit_rows": 160,
+                "inputs": {
+                    "coverage_sha256": sha256(combined_coverage_path),
+                    "design_summary_sha256": sha256(combined_summary_path),
+                    "design_weights_sha256": sha256(combined_weights_path),
+                },
+                "seal": {"referee_outcomes_present_in_fit_input": False},
+                "frozen_candidates": {launch.TARGET_PREFIX: {"eligible_for_measurement": True}},
+                "artifacts": {f"{launch.TARGET_PREFIX}/candidate_predictions.csv": sha256(candidate_predictions_path)},
+            }
+        )
+    )
+    confirmation_summary, confirmation_weights, confirmation_manifest = confirmation.build_design(
+        Namespace(
+            candidate_predictions=candidate_predictions_path,
+            model_contract=confirmation_model_contract_path,
+            coverage=combined_coverage_path,
+            combined_summary=combined_summary_path,
+            combined_weights=combined_weights_path,
+            candidate_weights=launch.DEFAULT_CANDIDATE_WEIGHTS,
+            selected_prefixes=confirmation.DEFAULT_SELECTED_PREFIXES,
+            wave2_contract=wave2.DEFAULT_WAVE2_CONTRACT,
+            output_dir=tmp_path / "confirmation",
+        )
+    )
+    assert len(confirmation_summary) == 36
+    assert confirmation_summary.role.value_counts().to_dict() == {
+        "predicted_branch_confirmation": 27,
+        "paired_tied_confirmation": 9,
+    }
+    assert tuple(sorted(confirmation_summary.prefix_repeat_seed.unique())) == (0, 1, 2)
+    assert tuple(sorted(confirmation_summary.data_seed.unique())) == (972_000, 972_001, 972_002)
+    assert confirmation_manifest["rows"] == {
+        "controls_per_prefix": 36,
+        "fit_per_prefix": 0,
+        "sealed_referees_per_prefix": 0,
+        "total": 36,
+    }
+    assert confirmation_weights.continuation_id.nunique() == 36
+    confirmation_pairing = cast(dict[str, object], confirmation_manifest["pairing"])
+    assert confirmation_pairing["crossed_prefix_data_blocks"] == 9
+    assert confirmation_pairing["measured_fit_coordinates_excluded"] is True
+    assert confirmation_pairing["previously_trained_coordinates_excluded"] is True
+    fit_ids = set(combined_summary[combined_summary.fit_budget.astype(bool)].continuation_id)
+    fit_counts = {
+        tuple(group.phase_1_count.to_numpy(dtype=int))
+        for continuation_id, group in combined_weights.groupby("continuation_id", sort=False)
+        if continuation_id in fit_ids
+    }
+    candidate_ids = set(
+        confirmation_summary[confirmation_summary.role.eq("predicted_branch_confirmation")].continuation_id
+    )
+    candidate_counts = {
+        tuple(group.phase_1_count.to_numpy(dtype=int))
+        for continuation_id, group in confirmation_weights.groupby("continuation_id", sort=False)
+        if continuation_id in candidate_ids
+    }
+    assert fit_counts.isdisjoint(candidate_counts)
+    prior_counts = {
+        tuple(group.phase_1_count.to_numpy(dtype=int))
+        for _, group in combined_weights.groupby("continuation_id", sort=False)
+    }
+    assert prior_counts.isdisjoint(candidate_counts)
+
+    runtime_summary_path = tmp_path / "confirmation_runtime_summary.csv"
+    runtime_weights_path = tmp_path / "confirmation_runtime_weights.csv"
+    runtime_manifest_path = tmp_path / "confirmation_runtime_manifest.json"
+    confirmation_summary.to_csv(runtime_summary_path, index=False)
+    confirmation_weights.loc[:, list(design_base.WEIGHT_ARTIFACT_COLUMNS)].to_csv(runtime_weights_path, index=False)
+    runtime_manifest_path.write_text(json.dumps(confirmation_manifest))
+    runtime_rows = runtime.load_design(
+        runtime_summary_path,
+        sha256(runtime_summary_path),
+        runtime_weights_path,
+        sha256(runtime_weights_path),
+        runtime_manifest_path,
+        sha256(runtime_manifest_path),
+        (launch.TARGET_PREFIX,),
+        expected_fit_rows_per_prefix=0,
+        expected_referee_rows_per_prefix=0,
+    )
+    source_specs = launch.source_prefix_specs(
+        launch.DEFAULT_CANDIDATE_WEIGHTS,
+        sha256(launch.DEFAULT_CANDIDATE_WEIGHTS),
+        launch.base.DEFAULT_ANALYSIS_OUTPUT_PATH,
+        (0, 1, 2),
+    )
+    prefix_payload = json.loads(confirmation.DEFAULT_SELECTED_PREFIXES.read_text())
+    checkpoints = [
+        runtime.PrefixCheckpoint(
+            candidate_id=str(row["candidate_id"]),
+            repeat_seed=int(row["repeat_seed"]),
+            checkpoint_uri=str(row["checkpoint_uri"]),
+            provenance_sha256=str(row["provenance_sha256"]),
+        )
+        for row in prefix_payload["prefixes"]
+    ]
+    enriched = runtime.enrich_rows(runtime_rows, checkpoints, source_specs, 978_000)
+    assert len(enriched) == 36
+    assert len({int(row["run_id"]) for row in enriched}) == 36
+    assert tuple(sorted({int(row["prefix_repeat_seed"]) for row in enriched})) == (0, 1, 2)
+    json.dumps(confirmation_manifest)
+
+    analysis_summary_path = tmp_path / "confirmation_summary.csv"
+    confirmation_summary.to_csv(analysis_summary_path, index=False)
+    analysis_results = confirmation_summary.copy()
+    analysis_results["run_id"] = np.arange(978_000, 978_000 + len(analysis_results))
+    analysis_results["run_name"] = [f"confirmation_{index}" for index in range(len(analysis_results))]
+    tied_bpb = {
+        (prefix_seed, data_seed): 1.0 + prefix_seed / 1000 + (data_seed - 972_000) / 10_000
+        for prefix_seed in (0, 1, 2)
+        for data_seed in (972_000, 972_001, 972_002)
+    }
+    effects = {0: -0.002, 1: -0.001, 2: 0.001}
+    analysis_results[response.TARGET] = [
+        (
+            tied_bpb[(int(row.prefix_repeat_seed), int(row.data_seed))]
+            if row.role == "paired_tied_confirmation"
+            else tied_bpb[(int(row.prefix_repeat_seed), int(row.data_seed))]
+            + effects[int(str(row.continuation_id).split("candidate", maxsplit=1)[1].split("_", maxsplit=1)[0])]
+        )
+        for row in analysis_results.itertuples(index=False)
+    ]
+    analysis_results_path = tmp_path / "confirmation_results.csv"
+    analysis_results.to_csv(analysis_results_path, index=False)
+    analysis_coverage_path = tmp_path / "confirmation_coverage.json"
+    analysis_coverage_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "missing_rows": 0,
+                "expected_rows": 36,
+                "visible_result_rows": 36,
+                "sealed_referee_rows": 0,
+                "referee_outcomes_opened": False,
+                "manifest_sha256": "runtime",
+            }
+        )
+    )
+    analysis_manifest_path = tmp_path / "confirmation_manifest.json"
+    analysis_manifest_path.write_text(
+        json.dumps(
+            {
+                "artifacts": {"continuation_summary.csv": sha256(analysis_summary_path)},
+                "inputs": {"wave2_contract_sha256": sha256(wave2.DEFAULT_WAVE2_CONTRACT)},
+            }
+        )
+    )
+    paired, candidate_summary, analysis_report = confirmation_analysis.analyze(
+        Namespace(
+            results=analysis_results_path,
+            coverage=analysis_coverage_path,
+            design_summary=analysis_summary_path,
+            design_manifest=analysis_manifest_path,
+            contract=wave2.DEFAULT_WAVE2_CONTRACT,
+            output_dir=tmp_path / "confirmation_analysis",
+        )
+    )
+    assert len(paired) == 27
+    primary = candidate_summary[candidate_summary.candidate_index.eq(0)].iloc[0]
+    assert np.isclose(primary.mean_candidate_minus_tied_bpb, -0.002)
+    assert primary.crossed_bootstrap_ci95_high_bpb < 0.0
+    assert analysis_report["primary_promotion_gate_passed"] is True
+    assert analysis_report["canonical_frontier_claim_allowed"] is False
+
 
 def test_control_baselines_accepts_five_paired_prefix_states() -> None:
     results = pd.DataFrame(
@@ -421,6 +600,15 @@ def test_proportional_prefix_manifest_freezes_two_wave1_states() -> None:
         "tpu_zone": "us-east5-a",
     }
     assert all(row["executor_info_sha256"] for row in payload["prefixes"])
+
+
+def test_confirmation_prefix_manifest_adds_independent_seed_two() -> None:
+    payload = json.loads(confirmation.DEFAULT_SELECTED_PREFIXES.read_text())
+
+    assert [row["repeat_seed"] for row in payload["prefixes"]] == [0, 1, 2]
+    assert payload["prefixes"][2]["checkpoint_uri"].endswith(
+        "/prefix_proportional_control_seed2-0bd984/checkpoints/step-2399"
+    )
 
 
 def test_proportional_prefix_hardware_is_not_conflated_with_continuation_hardware() -> None:

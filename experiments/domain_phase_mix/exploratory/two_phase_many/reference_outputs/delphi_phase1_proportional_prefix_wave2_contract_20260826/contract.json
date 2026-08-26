@@ -13,18 +13,38 @@
   },
   "confirmation": {
     "candidate_count": 3,
+    "crossed_prefix_data_blocks": 9,
     "data_seeds": [
       972000,
       972001,
       972002
     ],
     "outside_fit_budget": true,
+    "minimum_hellinger_to_tied": 0.05,
+    "minimum_pairwise_hellinger": 0.05,
+    "measured_fit_coordinates_excluded": true,
+    "previously_trained_coordinates_excluded": true,
+    "primary_candidate_index": 0,
     "prefix_seeds": [
       0,
       1,
       2
     ],
-    "rule": "Confirm the three distinct predicted mixtures with the best spatial-crossfit-supported selection scores, paired against exact tied continuations under common random numbers. A canonical frontier claim additionally requires same-hardware confirmation."
+    "rule": "Confirm the three distinct previously untrained predicted mixtures with the best spatial-crossfit-supported selection scores, Hellinger distance at least 0.05 from tied, and pairwise Hellinger distance at least 0.05. Cross prefix seeds 0, 1, and 2 with data seeds 972000, 972001, and 972002, pairing each candidate against one shared tied continuation in every prefix-data block. Candidate 0 is the sole primary claim; candidates 1 and 2 are descriptive robustness checks. A canonical frontier claim additionally requires same-hardware confirmation.",
+    "scoring": {
+      "bootstrap_draws": 50000,
+      "bootstrap_seed": 20260826,
+      "estimand": "candidate minus tied Uncheatable BPB averaged over the crossed prefix-seed by data-seed panel",
+      "primary_gate": "Candidate 0 passes only if its mean candidate-minus-tied effect is negative and the upper endpoint of its crossed-cluster bootstrap 95% interval is below zero.",
+      "resampling": "Independently resample the three prefix seeds and three data seeds with replacement, then average the resulting Cartesian 3x3 cells.",
+      "secondary_candidates": "Candidates 1 and 2 are descriptive and do not produce additional promotion claims.",
+      "frontier_comparison": "Absolute endpoint performance versus the historical 0.9798883332146539 frontier is descriptive because that frontier is not paired to these prefix-data blocks."
+    }
+  },
+  "confirmation_review_amendment": {
+    "outcomes_used": false,
+    "reason": "A read-only CC review required exact runtime-count exclusion of all previously trained coordinates, a full 3x3 crossed confirmation, a minimum candidate distance from tied, and a frozen crossed-cluster bootstrap rule. These confirmation safeguards were added while Wave 1 was still running; no endpoint value or ordering was consulted.",
+    "visible_wave1_rows_when_amended": 75
   },
   "contract_version": "delphi_phase1_proportional_prefix_wave2_20260826_v1",
   "corrective_amendment": {
