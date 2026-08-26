@@ -399,7 +399,11 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
         with open(full_path, "r") as f:
             return yaml.safe_load(f)
 
+    def function_constructor(loader, node):
+        return loader.construct_scalar(node)
+
     yaml.add_constructor("!include", include_constructor, Loader=yaml.SafeLoader)
+    yaml.add_constructor("!function", function_constructor, Loader=yaml.SafeLoader)
 
     for file_path in config_files:
         if file_path.suffix == ".toml":

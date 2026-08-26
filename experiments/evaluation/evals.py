@@ -238,6 +238,8 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "olympiadbench",
     "humanevalplus",
     "mbppplus",
+    "mrcr",
+    "mrcr-smoke",
     "mmlu-smoke",
     "gsm8k-smoke",
 )
@@ -308,8 +310,9 @@ NLP_EVALS: tuple[str, ...] = (
 
 # The Evalchemy chat benchmarks that run greedily in the lean uvx runtime. Chat-template models only.
 # GPQADiamond is omitted because its sampled requests carry a seed the TPU vLLM backend rejects.
-# MMLU-Pro, CruxEval, MRCR, IFBench, and FinanceBench have no working task on the pinned fork.
+# MMLU-Pro, CruxEval, IFBench, and FinanceBench have no working task on the pinned fork.
 CHAT_EVALS: tuple[str, ...] = ("math500", "aime24", "olympiadbench")
+LONG_CONTEXT_EVALS: tuple[str, ...] = ("mrcr",)
 
 MATH_EVALS: tuple[str, ...] = ("math500", "aime24", "gsm8k-0shot")
 CODE_EVALS: tuple[str, ...] = ("humanevalplus", "mbppplus")
@@ -334,6 +337,7 @@ SUITES: dict[str, tuple[str, ...]] = {
     "chat": CHAT_EVALS,
     "math": MATH_EVALS,
     "code": CODE_EVALS,
+    "long-context": LONG_CONTEXT_EVALS,
     "agentic": AGENTIC_EVALS,
 }
 

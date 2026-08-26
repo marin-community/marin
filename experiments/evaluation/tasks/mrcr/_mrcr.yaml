@@ -1,0 +1,83 @@
+dataset_path: openai/mrcr
+dataset_kwargs:
+  revision: f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d
+  data_files:
+    - 2needle/2needle_0.parquet
+    - 2needle/2needle_1.parquet
+    - 4needle/4needle_0.parquet
+    - 4needle/4needle_1.parquet
+    - 8needle/8needle_0.parquet
+    - 8needle/8needle_1.parquet
+output_type: generate_until
+test_split: train
+doc_to_text: !function utils.render_prompt
+doc_to_target: !function utils.doc_to_target
+target_delimiter: ""
+process_results: !function utils.process_results
+generation_kwargs:
+  temperature: 0.0
+  do_sample: false
+  until: []
+metric_list:
+  - metric: mrcr_accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: prefix_hit_rate
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_8192_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_8192_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_8192_8needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_16384_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_16384_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_16384_8needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_32768_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_32768_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_32768_8needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_65536_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_65536_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_65536_8needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_131072_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_131072_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_131072_8needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_262144_2needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_262144_4needle
+    aggregation: mean
+    higher_is_better: true
+  - metric: mrcr_262144_8needle
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
