@@ -190,15 +190,13 @@ def is_mutable_version(version: str) -> bool:
     return version == "dev" or version.endswith("-dev")
 
 
-def run_id_for_address(address: str) -> str:
-    """``address`` as a run id, unique because the address is.
-
-    A run id names a W&B run and a checkpoint directory, so it cannot keep the separator, and
-    flattening ``/`` to ``-`` on its own is not injective: ``a-b/c`` and ``a/b-c`` both read
-    ``a-b-c``. The digest keeps distinct addresses on distinct ids.
-    """
-    digest = hashlib.sha256(address.encode()).hexdigest()[:8]
-    return f"{address.replace('/', '-')}-{digest}"
+def run_id_for(name: str, version: str) -> str:
+    """The default run id for ``name`` at ``version``."""
+    # A name may be a nested path and a version may carry a hyphen, so the flattened text alone
+    # leaves some pairs equal. The digest makes that unlikely without ruling it out.
+    identity = f"{name}/{version}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    return f"{identity.replace('/', '-')}-{digest}"
 
 
 def validate_path_segment(label: str, value: str) -> None:

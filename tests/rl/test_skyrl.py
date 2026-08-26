@@ -14,7 +14,7 @@ from typing import IO, cast
 
 import pytest
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.execution.artifact import Artifact, run_id_for_address
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
@@ -221,36 +221,17 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
 
-def _run_id_for(name: str, version: str) -> str:
-    spec = dataclasses.replace(_spec(), name=name, version=version)
-    step = skyrl_step(spec, _execution())
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=f"s3://durable/{name}/{version}",
-            prefix="s3://durable",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    return config.request.run_id
-
-
-def test_skyrl_run_id_names_the_artifact_address() -> None:
-    """The RL path mints from the same address as the training path, so the steps of one
-    experiment carry ids that agree by construction rather than by coincidence."""
-    assert _run_id_for("tests/iceball-rl", "2026.08.01") == run_id_for_address("tests/iceball-rl/2026.08.01")
-
-
 def test_skyrl_run_id_is_a_single_segment() -> None:
-    """A run id names a W&B run and a directory, and an artifact name may be a nested path, so
-    joining name to version left the separator in the id."""
-    assert "/" not in _run_id_for("users/alice/iceball-rl", "2026.08.01")
+    spec = dataclasses.replace(_spec(), name="users/alice/iceball-rl", version="2026.08.01")
+    step = skyrl_step(spec, _execution())
+    ctx = StepContext.for_run(
+        output_path="s3://durable/users/alice/iceball-rl/2026.08.01",
+        prefix="s3://durable",
+        runtime_args=step.runtime_args,
+        deps=step.deps,
+    )
 
-
-def test_skyrl_run_id_separates_the_name_from_the_version() -> None:
-    """Joining with "-" mapped two distinct artifacts onto one id whenever the version carried a
-    hyphen: ``a`` at ``b-dev`` and ``a-b`` at ``dev`` both read ``a-b-dev``."""
-    assert _run_id_for("a", "b-dev") != _run_id_for("a-b", "dev")
+    assert "/" not in step.build_config(ctx).request.run_id
 
 
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:

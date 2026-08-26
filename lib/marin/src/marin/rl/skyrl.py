@@ -18,7 +18,7 @@ from typing import cast
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
-from marin.execution.artifact import Artifact, run_id_for_address
+from marin.execution.artifact import Artifact, run_id_for
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
@@ -385,7 +385,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, 'trajectories')}'",
         )
         request = SkyRLLaunchRequest(
-            run_id=run_id_for_address(f"{step_name}/{spec.version}"),
+            run_id=run_id_for(step_name, spec.version),
             attempt_id=attempt_id,
             config_yaml=spec.config_yaml,
             runtime=spec.runtime,

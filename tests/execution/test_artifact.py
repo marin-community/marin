@@ -19,6 +19,7 @@ from marin.execution.artifact import (
     StepRecordIdentity,
     read_artifact,
     read_record,
+    run_id_for,
     write_artifact,
     write_step_record,
 )
@@ -315,3 +316,7 @@ def test_write_step_record_tolerates_none_result(tmp_path):
     assert rec.name == "train"
     assert rec.config == {"seed": 42}
     assert rec.result is None
+
+
+def test_run_id_for_separates_the_name_from_the_version():
+    assert run_id_for("sweep/a", "b-dev") != run_id_for("sweep/a-b", "dev")
