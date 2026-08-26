@@ -702,6 +702,29 @@ def test_cluster_variable_lists_every_configured_cluster():
         assert set(variables["cluster"]["query"].split(",")) == expected, name
 
 
+def test_training_run_selector_uses_a_fixed_discovery_window():
+    dashboard = _stitched_dashboards()["training.json"]
+    variable = next(variable for variable in dashboard["templating"]["list"] if variable["name"] == "run")
+    sql = next(
+        param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    )
+    at = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute('CREATE TABLE "levanter.metrics"(run_id VARCHAR, step BIGINT, timestamp_ms BIGINT)')
+    database.executemany(
+        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?)',
+        [
+            ("recent-run", 100, int((at.timestamp() - 3_600) * 1_000)),
+            ("old-run", 200, int((at.timestamp() - 3 * 86_400) * 1_000)),
+        ],
+    )
+    sql = sql.replace("now()", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-19 12:00:00+00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
+
+    assert database.execute(sql).fetchall() == [("recent-run",)]
+
+
 def test_cluster_series_keep_one_colour_across_dashboards():
     # Colour follows the entity, not its rank: a cluster filtered out of one panel must
     # not repaint the survivors, and the same cluster reads the same on every dashboard.

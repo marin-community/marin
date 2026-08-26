@@ -14,7 +14,7 @@
 //!    delete leaves the input file in the bucket, and adoption would give it a
 //!    permanent REMOTE row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use futures::StreamExt;
 
@@ -22,7 +22,7 @@ use crate::errors::StatsError;
 use crate::partition_policy::SegmentPartition;
 use crate::store::catalog::Catalog;
 use crate::store::remote::RemoteStore;
-use crate::store::types::{basename, parse_seg_filename, SegmentLocation, SegmentRow};
+use crate::store::types::{parse_seg_filename, segment_relative_key, SegmentLocation, SegmentRow};
 
 /// Bounded concurrency for the boot reconcile's remote footer reads. High enough
 /// to hide cross-region round-trip latency (a sequential await chain costs O(N)
@@ -40,7 +40,7 @@ fn now_ms() -> i64 {
 /// Reconcile the remote bucket for `namespace` against the catalog at boot.
 ///
 /// `local_dir` is the namespace's on-disk directory (adopted REMOTE rows point
-/// their `path` at `{local_dir}/{basename}` so a later download lands the file
+/// their `path` at `{local_dir}/{relative key}` so a later download lands the file
 /// in place). `key_column` is the namespace's ordering key for footer key-bound
 /// recovery.
 pub async fn reconcile_remote_segments(
@@ -61,16 +61,53 @@ pub async fn reconcile_remote_segments(
     };
     let list_ms = list_started.elapsed().as_millis() as u64;
 
-    // Catalog rows at L>=1 keyed by basename (the durable-archive pointers).
+    // Catalog rows at L>=1 keyed by relative object key (the durable pointers).
     let catalog_rows = catalog.list_segments_min_level(namespace, 1)?;
-    let catalog_by_basename: HashMap<String, SegmentRow> = catalog_rows
-        .into_iter()
-        .map(|r| (basename(&r.path), r))
+    let mut catalog_by_key: HashMap<String, SegmentRow> = HashMap::new();
+    for row in catalog_rows {
+        let Some(key) = segment_relative_key(local_dir, &row.path) else {
+            tracing::warn!(
+                namespace,
+                path = %row.path,
+                "remote catalog segment is outside its namespace directory"
+            );
+            continue;
+        };
+        catalog_by_key.insert(key, row);
+    }
+
+    // A REMOTE row is only a pointer into this object listing. If its object is
+    // absent after a successful strongly-consistent list, the row is already
+    // unreadable and must not poison later maintenance. This also repairs a
+    // layout move that crashed after deleting the old key: the destination is
+    // adopted below instead of being discarded as a duplicate of a phantom.
+    let object_keys: HashSet<&str> = objects.iter().map(|(key, _)| key.as_str()).collect();
+    let missing_remote: Vec<(String, String)> = catalog_by_key
+        .iter()
+        .filter(|(key, row)| {
+            row.location == SegmentLocation::Remote && !object_keys.contains(key.as_str())
+        })
+        .map(|(key, row)| (key.clone(), row.path.clone()))
         .collect();
+    let missing_remote_paths: Vec<String> = missing_remote
+        .iter()
+        .map(|(_key, path)| path.clone())
+        .collect();
+    catalog.remove_segments(namespace, &missing_remote_paths)?;
+    for (key, _path) in &missing_remote {
+        catalog_by_key.remove(key);
+    }
+    if !missing_remote.is_empty() {
+        tracing::warn!(
+            namespace,
+            segments = missing_remote.len(),
+            "removed catalog pointers to missing remote segments"
+        );
+    }
 
     // Footer-fetch every remote parquet not already known to the catalog.
     struct Footer {
-        basename: String,
+        relative_key: String,
         level: i32,
         min_seq: i64,
         max_seq: i64,
@@ -82,8 +119,11 @@ pub async fn reconcile_remote_segments(
     }
     let pending: Vec<(String, u64)> = objects
         .iter()
-        .filter(|(name, _)| !catalog_by_basename.contains_key(name))
-        .filter_map(|(name, size)| parse_seg_filename(name).map(|_| (name.clone(), *size)))
+        .filter(|(key, _)| !catalog_by_key.contains_key(key))
+        .filter_map(|(key, size)| {
+            let filename = std::path::Path::new(key).file_name()?.to_str()?;
+            parse_seg_filename(filename).map(|_| (key.clone(), *size))
+        })
         .collect();
     // Fetch footers CONCURRENTLY: these are latency-bound cross-region round
     // trips, so a sequential await would cost O(N) RTTs. `buffer_unordered`
@@ -102,7 +142,7 @@ pub async fn reconcile_remote_segments(
                 return None;
             };
             Some(Footer {
-                basename: name,
+                relative_key: name,
                 level: metadata.level,
                 min_seq: metadata.min_seq,
                 max_seq: metadata.max_seq,
@@ -121,7 +161,7 @@ pub async fn reconcile_remote_segments(
     // a strictly-higher level as redundant (transitivity makes a single pass
     // sufficient — Z covers Y, Y covers X => Z covers X).
     let mut all_known: HashMap<String, (i32, i64, i64, Option<SegmentPartition>)> = HashMap::new();
-    for (name, row) in &catalog_by_basename {
+    for (name, row) in &catalog_by_key {
         all_known.insert(
             name.clone(),
             (row.level, row.min_seq, row.max_seq, row.partition.clone()),
@@ -129,7 +169,7 @@ pub async fn reconcile_remote_segments(
     }
     for f in &footers {
         all_known.insert(
-            f.basename.clone(),
+            f.relative_key.clone(),
             (f.level, f.min_seq, f.max_seq, f.partition.clone()),
         );
     }
@@ -142,6 +182,22 @@ pub async fn reconcile_remote_segments(
     }
     let mut redundant: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (name, (level, min_seq, max_seq, partition)) in &all_known {
+        // A path-only layout migration changes the object key without changing
+        // the segment identity represented by its level/seq/partition tuple.
+        // If the process crashes after uploading the new key but before deleting
+        // the old one, retain the catalog-owned key and discard the duplicate
+        // instead of adopting a permanent REMOTE row for it.
+        if !catalog_by_key.contains_key(name)
+            && catalog_by_key.values().any(|row| {
+                row.level == *level
+                    && row.min_seq == *min_seq
+                    && row.max_seq == *max_seq
+                    && row.partition == *partition
+            })
+        {
+            redundant.insert(name.clone());
+            continue;
+        }
         for (higher_level, ranges) in &by_level {
             if *higher_level <= *level {
                 continue;
@@ -159,7 +215,7 @@ pub async fn reconcile_remote_segments(
     let catalog_update_started = std::time::Instant::now();
     let removed_paths: Vec<String> = redundant
         .iter()
-        .filter_map(|name| catalog_by_basename.get(name).map(|row| row.path.clone()))
+        .filter_map(|name| catalog_by_key.get(name).map(|row| row.path.clone()))
         .collect();
     catalog.remove_segments(namespace, &removed_paths)?;
     let catalog_remove_ms = catalog_update_started.elapsed().as_millis() as u64;
@@ -176,10 +232,10 @@ pub async fn reconcile_remote_segments(
     let now = now_ms();
     let mut adopted_rows = Vec::new();
     for f in &footers {
-        if redundant.contains(&f.basename) {
+        if redundant.contains(&f.relative_key) {
             continue;
         }
-        let local_path = local_dir.join(&f.basename);
+        let local_path = local_dir.join(&f.relative_key);
         // Record the footer's actual num_rows, not a seq-span recomputation, so
         // an edge-case empty footer adopts row_count=0 rather than 1.
         adopted_rows.push(SegmentRow {
@@ -205,7 +261,8 @@ pub async fn reconcile_remote_segments(
     tracing::info!(
         namespace,
         remote_objects = objects.len(),
-        catalog_segments = catalog_by_basename.len(),
+        catalog_segments = catalog_by_key.len(),
+        removed_missing = missing_remote.len(),
         footer_reads = footers.len(),
         adopted,
         dropped_redundant = dropped,

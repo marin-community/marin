@@ -224,7 +224,12 @@ benchmark; there is no free-form plugin registry.
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
 required literal runs prune instead of full-scan. Today it is on `log.key`,
-`log.data`, and the `name` columns of `telemetry_v1` and `levanter.metrics`.
+`log.data`, and telemetry `name` columns. `levanter.metrics` intentionally has no
+secondary indexes: its queries use exact `run_id` and `name` predicates, which
+are served by the hidden exact run partition and Parquet sort/statistics. Its
+managed policy also disables adaptive string value counts and removes stale
+bundles written under the old telemetry-derived schema in bounded maintenance
+batches.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for

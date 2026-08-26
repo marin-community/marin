@@ -183,6 +183,36 @@ It retains unpartitioned, malformed, or older-spec files, so a rolling
 conversion cannot hide rows. A partition transform change requires a new spec
 id rather than reinterpreting existing metadata.
 
+L0 remains flat and unpartitioned so a busy run cannot strand a separate stream
+of tiny files. Compaction writes L1 and higher segments under the bounded
+physical layout `levanter.metrics/run_id/00..31/`, while each footer and catalog
+row retains the full run id for exact pruning and future run deletion. The
+bucket only limits directory fanout; it does not replace the logical partition.
+
+`levanter.metrics` intentionally has no secondary indexes. Exact `run_id`
+partition pruning and the `(run_id, name, step, timestamp_ms)` Parquet order
+serve its deployed exact-match queries without telemetry's `name` trigram,
+`kind` postings, or adaptive string value counts. Server-owned registration
+removes the old declarations, queries ignore old `.fidx` bundles, and bounded
+maintenance deletes those derived files online. Source Parquet remains
+authoritative throughout cleanup.
+
+Maintenance converges older layouts online. It merges migration-produced or
+partition-stamped L0s into partitioned L1, rebuilds stale local partition
+metadata, and moves current local L1 files into their bucket directory under the
+query-visibility lock. Evicted objects move with an in-bucket copy, atomic
+catalog swap, then old-key deletion, so the server does not download archived
+bytes. Startup reconciliation resolves a crash between those phases by keeping
+the key named by the catalog. One store-wide L0 rebuild wave runs two
+independent workers; each coalesces about 32 MiB of compressed inputs, sorts and
+partitions that bounded stream, then publishes its source span atomically. The
+global permit prevents several namespaces from multiplying that memory
+envelope and leaves half of the four-core hub available for queries. A cycle starts work for at most three seconds, flushes and syncs live
+writes, and resumes after 100 ms while local migration remains. Remote copies retain their separate
+three-second budget. An individual job already in flight may exceed its budget.
+Watch `physical layout migration advanced` and `remote physical layout migration
+advanced` until their remaining counts reach zero.
+
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
 Producers may send them directly in the request's `resource`
@@ -221,8 +251,10 @@ serving. It takes a consistent SQLite snapshot and hard-links exactly the local
 root Parquets named by that catalog under
 `.finelog-telemetry-v1-migration/source`. If compaction removes one during the
 snapshot, preparation retries from a newer catalog. Rewritten Parquets land
-under `.finelog-telemetry-v1-migration/staged` with a negative `seq` range
-disjoint from live ingestion.
+under `.finelog-telemetry-v1-migration/staged` as flat, unpartitioned L0s with a
+negative `seq` range disjoint from live ingestion. After publication, ordinary
+runtime maintenance performs the L0-to-L1 partitioning and bounded physical
+placement described above.
 
 ```bash
 finelog-migrate prepare-telemetry-v1 \
