@@ -14,7 +14,7 @@
 //!    delete leaves the input file in the bucket, and adoption would give it a
 //!    permanent REMOTE row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use futures::StreamExt;
 
@@ -63,10 +63,39 @@ pub async fn reconcile_remote_segments(
 
     // Catalog rows at L>=1 keyed by relative object key (the durable pointers).
     let catalog_rows = catalog.list_segments_min_level(namespace, 1)?;
-    let catalog_by_key: HashMap<String, SegmentRow> = catalog_rows
+    let mut catalog_by_key: HashMap<String, SegmentRow> = catalog_rows
         .into_iter()
         .filter_map(|row| segment_relative_key(local_dir, &row.path).map(|key| (key, row)))
         .collect();
+
+    // A REMOTE row is only a pointer into this object listing. If its object is
+    // absent after a successful strongly-consistent list, the row is already
+    // unreadable and must not poison later maintenance. This also repairs a
+    // layout move that crashed after deleting the old key: the destination is
+    // adopted below instead of being discarded as a duplicate of a phantom.
+    let object_keys: HashSet<&str> = objects.iter().map(|(key, _)| key.as_str()).collect();
+    let missing_remote: Vec<(String, String)> = catalog_by_key
+        .iter()
+        .filter(|(key, row)| {
+            row.location == SegmentLocation::Remote && !object_keys.contains(key.as_str())
+        })
+        .map(|(key, row)| (key.clone(), row.path.clone()))
+        .collect();
+    let missing_remote_paths: Vec<String> = missing_remote
+        .iter()
+        .map(|(_key, path)| path.clone())
+        .collect();
+    catalog.remove_segments(namespace, &missing_remote_paths)?;
+    for (key, _path) in &missing_remote {
+        catalog_by_key.remove(key);
+    }
+    if !missing_remote.is_empty() {
+        tracing::warn!(
+            namespace,
+            segments = missing_remote.len(),
+            "removed catalog pointers to missing remote segments"
+        );
+    }
 
     // Footer-fetch every remote parquet not already known to the catalog.
     struct Footer {
@@ -225,6 +254,7 @@ pub async fn reconcile_remote_segments(
         namespace,
         remote_objects = objects.len(),
         catalog_segments = catalog_by_key.len(),
+        removed_missing = missing_remote.len(),
         footer_reads = footers.len(),
         adopted,
         dropped_redundant = dropped,

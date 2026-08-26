@@ -3165,6 +3165,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn boot_reconcile_removes_missing_remote_catalog_pointer() {
+        let dir = tempdir();
+        let remote_dir = dir.join("remote");
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns_remote(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+            remote_dir.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let segment = ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .remove(0);
+        let evict_ns = Arc::clone(&ns);
+        let evict_path = segment.path.clone();
+        tokio::task::spawn_blocking(move || evict_ns.evict_segment(&evict_path))
+            .await
+            .unwrap();
+        let remote_key = segment_relative_key(&ns_dir, &segment.path).unwrap();
+        std::fs::remove_file(remote_dir.join("levanter.metrics").join(remote_key)).unwrap();
+
+        ns.boot_reconcile().await.unwrap();
+
+        assert!(ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .is_empty());
+        ns.shutdown(Duration::from_secs(10)).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn implicit_timestamp_key_captures_segment_bounds() {
         let dir = tempdir();
         let mut schema = worker_schema();
