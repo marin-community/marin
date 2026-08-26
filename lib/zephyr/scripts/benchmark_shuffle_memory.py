@@ -519,9 +519,7 @@ def _read_child(
     avg_item_bytes = sum(estimated) / total_rows
 
     scanned = [scan_parquet(path) for path in paths]
-    frames = _unify_frame_schemas(
-        [_FrameWithSchema(frame=frame, schema=frame.collect_schema()) for frame in scanned]
-    )
+    frames = _unify_frame_schemas([_FrameWithSchema(frame=frame, schema=frame.collect_schema()) for frame in scanned])
     _warm_polars()
     baseline = max(_process_rss_bytes(), _process_peak_bytes())
     total_payload_bytes = sum(

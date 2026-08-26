@@ -8,7 +8,6 @@ without spinning up a full coordinator.
 """
 
 import io
-import itertools
 import os
 from collections import OrderedDict
 from unittest.mock import patch
@@ -718,7 +717,7 @@ def test_merge_sorted_frames_reads_coreweave_spills_with_virtual_host_addressing
         assert mode == "wb"
         return SpillBuffer(path)
 
-    def scan_parquet(path: str, *, storage_options: dict[str, str]) -> pl.LazyFrame:
+    def scan_parquet(path: str, *, schema: pl.Schema | None = None, storage_options: dict[str, str]) -> pl.LazyFrame:
         scan_calls.append((path, storage_options))
         return real_scan_parquet(io.BytesIO(spill_bytes[path]))
 
