@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
@@ -256,18 +256,30 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
+def _named_sharding(x: jax.Array) -> NamedSharding | None:
+    sharding = jax.typeof(x).sharding
+    return sharding if isinstance(sharding, NamedSharding) else None
+
+
+def _match_attention_batch_sharding(x: jax.Array, reference: jax.Array) -> jax.Array:
+    x_sharding = _named_sharding(x)
+    reference_sharding = _named_sharding(reference)
+    if x_sharding is None or reference_sharding is None or reference_sharding.mesh.empty:
+        return x
+
+    # JAX 0.11.1 requires dot_general batch dimensions to use the same sharding.
+    # Keep K/V sequence sharding, but match Q's batch, head, and contracted dimensions.
+    target_spec = P(
+        reference_sharding.spec[0],
+        x_sharding.spec[1],
+        reference_sharding.spec[2],
+        reference_sharding.spec[3],
+    )
+    return reshard(x, NamedSharding(reference_sharding.mesh, target_spec))
+
+
 def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | None:
     """Describe the surviving dimensions when attention contracts a sharded head dimension."""
-
-    def _named_sharding(x: jax.Array) -> NamedSharding | None:
-        try:
-            sharding = x.sharding  # type: ignore[attr-defined]
-        except Exception:
-            sharding = None
-        if sharding is None:
-            sharding = getattr(getattr(x, "aval", None), "sharding", None)
-        return sharding if isinstance(sharding, NamedSharding) else None
-
     q_sharding = _named_sharding(q)
     k_sharding = _named_sharding(k)
     if q_sharding is None or k_sharding is None or q_sharding.mesh != k_sharding.mesh:
@@ -290,8 +302,8 @@ def reference_attention(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = align_kv_heads(k, num_q_heads=num_q_heads)
-    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    k = _match_attention_batch_sharding(align_kv_heads(k, num_q_heads=num_q_heads), q)
+    v = _match_attention_batch_sharding(align_kv_heads(v, num_q_heads=num_q_heads), q)
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum(
