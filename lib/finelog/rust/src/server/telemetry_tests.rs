@@ -285,6 +285,14 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             Some(max_gibibytes * GIBIBYTE)
         );
     }
+    assert_eq!(
+        store.get_policy("levanter.metrics").unwrap(),
+        StoragePolicy {
+            max_segments: Some(i32::MAX),
+            max_bytes: Some(32 * GIBIBYTE),
+            max_age_seconds: None,
+        }
+    );
     for name in ["service", "kind", "name"] {
         let column = schema
             .columns

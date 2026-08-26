@@ -18,6 +18,7 @@ pub(crate) const LEVANTER_METRICS_NAMESPACE: &str = "levanter.metrics";
 const LEVANTER_METRICS_ALIAS_PREFIX: &str = "levanter.metrics.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const LEVANTER_METRICS_MAX_BYTES: i64 = 32 * GIBIBYTE;
+const LEVANTER_METRICS_MAX_SEGMENTS: i32 = i32::MAX;
 const METRICS_ROW_GROUP_ROWS: u32 = 131_072;
 const TIMESTAMP_COLUMN: &str = "timestamp_ms";
 const RUN_ID_COLUMN: &str = "run_id";
@@ -90,6 +91,10 @@ impl NamespaceStoragePolicy for LevanterMetricsPolicy {
     fn storage_policy(&self, namespace: &str) -> Result<StoragePolicy, StatsError> {
         declared_run_id(namespace)?;
         Ok(StoragePolicy {
+            // Run partitioning intentionally creates many small segments. Keep
+            // this namespace byte-retained so partition count cannot evict the
+            // newest compacted data while migrated L0 segments remain local.
+            max_segments: Some(LEVANTER_METRICS_MAX_SEGMENTS),
             max_bytes: Some(LEVANTER_METRICS_MAX_BYTES),
             ..StoragePolicy::default()
         })
