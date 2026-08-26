@@ -87,8 +87,7 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) 
     it returns immediately rather than waiting out the remaining attempts.
 
     Used by ``gcp_up`` (where early attempts fail while OS Login propagates the
-    SSH key) and ``gcp_restart``, which re-runs the bootstrap over SSH and so
-    never reaches the serial console.
+    SSH key) and by the shared ``marin-deploy finelog rollout`` command.
     """
     probe = health_probe_command(port)
     body = "unreachable"
@@ -158,7 +157,7 @@ def gcp_up(cfg: FinelogConfig) -> None:
     existing = _instance_describe(cfg.name, gcp.project, gcp.zone)
     if existing is not None:
         click.echo(f"Instance {cfg.name} already exists in {gcp.zone}; skipping create.")
-        click.echo("Run `finelog deploy restart <name>` to refresh the container in place.")
+        click.echo("Run `marin-deploy finelog rollout <name>` to refresh the container in place.")
         return
 
     bootstrap = _pinned_bootstrap(cfg)
@@ -217,55 +216,6 @@ def gcp_down(cfg: FinelogConfig, *, yes: bool) -> None:
         "--quiet",
     )
     click.echo(f"Deleted {cfg.name}.")
-
-
-def _set_startup_script(cfg: FinelogConfig, bootstrap: str) -> None:
-    """Persist ``bootstrap`` as the instance's startup-script metadata, which a VM
-    reboot (host maintenance, manual reset) re-runs."""
-    assert cfg.deployment.gcp is not None
-    gcp = cfg.deployment.gcp
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
-        f.write(bootstrap)
-        startup_path = f.name
-    click.echo("Updating instance startup-script metadata...")
-    _gcloud(
-        "compute",
-        "instances",
-        "add-metadata",
-        cfg.name,
-        f"--project={gcp.project}",
-        f"--zone={gcp.zone}",
-        f"--metadata-from-file=startup-script={startup_path}",
-    )
-
-
-def apply_bootstrap(cfg: FinelogConfig, bootstrap: str) -> bool:
-    """Run ``bootstrap`` on the VM over SSH, then persist it as startup-script
-    metadata. Returns whether the container came up.
-
-    The script polls ``/health`` itself and exits non-zero on a crash-loop or
-    timeout, so a ``False`` return means the image never became healthy. Metadata
-    is written only on success, so a reboot re-runs the last bootstrap known to
-    boot rather than one that just failed.
-    """
-    result = subprocess.run(_ssh_args(cfg, "bash -s"), input=bootstrap, text=True)
-    if result.returncode != 0:
-        return False
-    _set_startup_script(cfg, bootstrap)
-    return True
-
-
-def gcp_restart(cfg: FinelogConfig) -> None:
-    """Restart finelog in-place by re-running the bootstrap over SSH."""
-    bootstrap = _pinned_bootstrap(cfg)
-    click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
-    if not apply_bootstrap(cfg, bootstrap):
-        raise click.ClickException("Bootstrap re-run failed; see SSH output above")
-    click.echo("Bootstrap re-applied. Verifying health...")
-    health = _wait_health_via_ssh(cfg, cfg.port)
-    if health != HEALTH_OK:
-        raise click.ClickException(f"finelog did not become healthy after restart ({health})")
-    click.echo("finelog is healthy.")
 
 
 def gcp_status(cfg: FinelogConfig) -> None:

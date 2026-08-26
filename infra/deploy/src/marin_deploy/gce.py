@@ -41,7 +41,7 @@ def _identity_args(target: GceVmTarget) -> list[str]:
     return arguments
 
 
-def run_remote(
+def _run_remote(
     target: GceVmTarget,
     command: str,
     *,
@@ -50,8 +50,8 @@ def run_remote(
     connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
     attempts: int = 1,
     retry_interval: float = DEFAULT_RETRY_INTERVAL,
+    capture_output: bool,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command on ``target`` over noninteractive GCE SSH."""
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
     arguments = gce_ssh_arguments(
@@ -71,6 +71,7 @@ def run_remote(
             text=True,
             check=True,
             timeout=timeout,
+            capture_output=capture_output,
         )
 
     if attempts == 1:
@@ -89,6 +90,50 @@ def run_remote(
         ),
         operation=f"SSH command on {target.instance}",
     )
+
+
+def run_remote(
+    target: GceVmTarget,
+    command: str,
+    *,
+    stdin: str | None = None,
+    timeout: int,
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
+    attempts: int = 1,
+    retry_interval: float = DEFAULT_RETRY_INTERVAL,
+) -> subprocess.CompletedProcess[str]:
+    """Run one command on ``target`` over noninteractive GCE SSH."""
+    return _run_remote(
+        target,
+        command,
+        stdin=stdin,
+        timeout=timeout,
+        connect_timeout=connect_timeout,
+        attempts=attempts,
+        retry_interval=retry_interval,
+        capture_output=False,
+    )
+
+
+def remote_stdout(
+    target: GceVmTarget,
+    command: str,
+    *,
+    timeout: int,
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
+    attempts: int = 1,
+    retry_interval: float = DEFAULT_RETRY_INTERVAL,
+) -> str:
+    """Return stdout from one noninteractive GCE SSH command."""
+    return _run_remote(
+        target,
+        command,
+        timeout=timeout,
+        connect_timeout=connect_timeout,
+        attempts=attempts,
+        retry_interval=retry_interval,
+        capture_output=True,
+    ).stdout
 
 
 def set_startup_script(target: GceVmTarget, script: str, *, timeout: int) -> None:

@@ -22,7 +22,7 @@ import click
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
+from finelog.deploy.cli import down_cmd, logs_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
 from rigging.provenance import Provenance
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
@@ -782,7 +782,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `marin-deploy finelog`"
         )
     return cfg.finelog.config
 
@@ -809,21 +809,6 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
     """Tear down the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
     ctx.invoke(down_cmd, name=name, yes=yes)
-
-
-@log_server.command("restart")
-@click.option(
-    "--build/--no-build",
-    "build",
-    default=True,
-    show_default=True,
-    help="Build and push the finelog image before restarting. Pass --no-build to reuse the registry's :latest.",
-)
-@click.pass_context
-def log_server_restart(ctx: click.Context, build: bool) -> None:
-    """Restart the cluster's finelog deployment."""
-    name = _require_log_server_config(ctx)
-    ctx.invoke(restart_cmd, name=name, build=build)
 
 
 @log_server.command("status")

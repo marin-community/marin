@@ -234,13 +234,15 @@ Every caller — Iris included — reaches them the same way:
 iris://marin?endpoint=/system/logger
 ```
 
-Operationally, the cluster CLI manages them like any other lifecycle target:
+Operationally, the shared deploy CLI manages each service by its deployment
+configuration:
 
 ```bash
-iris cluster log-server restart
+uv run marin-deploy finelog rollout <name>
 ```
 
-Here `iris cluster` is the cluster-management CLI; `log-server` is the system-service name from the YAML. The CLI is not running logger in-process — it is reconciling the declared system service against its provider.
+The command is not running Finelog in-process. It reconciles the named service
+against its GCE or Kubernetes deployment backend.
 
 Endpoints update when a service moves to a new VM. Callers continue to use the logical name.
 

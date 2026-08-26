@@ -159,8 +159,8 @@ and old writers null-fill them. HTTP write compatibility holds only while
 producers remain attribute-only; the previous parser rejects explicit promoted
 fields. The old process may replace version-2 `.fidx` bundles with version 1 and
 does not apply the new sort policy. A later roll forward re-registers the policy
-and rebuilds indexes. The `safe_deploy` digest rollback remains the required
-operational path.
+and rebuilds indexes. `marin-deploy finelog rollback` remains the required
+digest rollback path.
 
 First-party Grafana queries require the promoted columns. Production rollout
 must update Finelog servers before deploying those query changes. Training and

@@ -184,17 +184,17 @@ carries the per-namespace error, first-failure time, and attempt count, and the
 dashboard's System page renders it.
 
 The deploy paths gate on the body: the VM bootstrap loop and `_wait_health_via_ssh`
-(which is what makes `safe_deploy` auto-rollback fire), plus the `infra/finelog`
-Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot register
-`telemetry_v1` fails its own deploy.
+(which makes `marin-deploy finelog rollout` restore a failed GCE candidate), plus
+the `infra/finelog` Pulumi stack's post-rollout `finelog deploy verify`. A binary
+that cannot register `telemetry_v1` fails its own deploy.
 
 ## Changing a server-owned schema
 
 `log`, the semantic `telemetry_v1.*` tables, and `levanter.metrics` are registered by the server itself, and every boot
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
-deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
-rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
+deployed, so `/health` reports it (`server/ingest_health.rs`) and `marin-deploy
+finelog rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
 the candidate over a copy of that deployment's catalog with `--mode shadow` and
 read `/health`. Register through `schema::stored_form` so what you check is the
 schema `register_table` merges.

@@ -430,15 +430,20 @@ runs it needs `roles/secretmanager.secretAccessor` on that secret. The Pulumi
 stack references that existing Kubernetes Secret without reading its values.
 
 ```bash
-uv run finelog deploy restart marin              # hub: gcp backend, in-place
+uv run marin-deploy finelog rollout marin --no-build --force  # hub: gcp backend
 export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy sync-secret "$CLUSTER"
 uv run marin-deploy finelog rollout "$CLUSTER"
 ```
 
-`marin-deploy finelog rollout` captures the active Deployment revision, runs the matching
-Pulumi stack, and restores the captured ReplicaSet if the update or ingest
+For the GCE hub, `marin-deploy finelog rollout` captures the running image digest,
+re-renders the startup script from the current config, and restores the digest if
+the candidate fails its ingest gate. `--no-build --force` reapplies config such as
+an auth-policy change without publishing another image.
+
+For Kubernetes, the command captures the active Deployment revision, runs the
+matching Pulumi stack, and restores the captured ReplicaSet if the update or ingest
 verification fails. Its rollout identity and image build stamp come from the
 checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
 the pod using `kube_context`, `namespace`, and `name` from
@@ -545,11 +550,10 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
-System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
-restart`, and `safe_deploy` paths gate on the body; `safe_deploy` uses
-`marin-deploy`'s shared GCE startup-script activator and rolls back a failed
-rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
-ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
+System page shows the same under **Ingest**. GCE `marin-deploy finelog rollout`
+uses the body to accept the candidate or restore the captured image digest.
+Kubernetes rollout restores the captured ReplicaSet when Pulumi's post-Deployment
+`finelog deploy verify` fails.
 
 ## Serving a copy of a store
 

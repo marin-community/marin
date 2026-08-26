@@ -33,17 +33,28 @@ and GitHub-held service secrets. Run the command locally only to deploy an unmer
 checkout or investigate a rollout with operator credentials; it targets the same
 production stack.
 
-Finelog Kubernetes deployments add revision rollback support:
+Finelog deployments dispatch through the backend in the named configuration:
 
 ```bash
-uv run marin-deploy finelog rollout <cluster>
-uv run marin-deploy finelog rollback <cluster>
+uv run marin-deploy finelog rollout <name>
+uv run marin-deploy finelog rollback <name>
+uv run marin-deploy finelog status <name>
 ```
 
-Pass `--yes` to skip confirmation. A rollback selects the next older retained
-Kubernetes revision by default; use `--to-revision N` to select an exact revision.
-Finelog status, logs, secret synchronization, and GCE operations remain under
-`uv run finelog deploy`.
+Kubernetes rollouts capture the active Deployment revision, apply the matching
+Pulumi stack, and restore the captured ReplicaSet if update or ingest verification
+fails. Pass `--yes` to skip confirmation. A rollback selects the next older retained
+revision by default; use `--to-revision N` to select an exact revision.
+
+GCE rollouts build and digest-pin the configured image, record the running digest
+under `~/.cache/finelog/deploy-state/`, and activate the candidate over SSH. The
+startup script becomes reboot-time metadata only after the candidate boot succeeds.
+A failed candidate restores and verifies the recorded digest. Use `--no-build` to
+deploy the current registry tag, `--force` to reapply a matching digest, and
+`rollback --to <image@sha256:...>` to select an explicit target.
+
+Finelog secret synchronization, logs, and one-time GCE creation or deletion remain
+under `uv run finelog deploy`.
 
 Iris controller deployments use one Pulumi stack per cluster:
 
@@ -59,7 +70,8 @@ through the same stack and still exits with failure. Pulumi never receives
 resolved controller secrets and does not own controller deletion.
 
 GCE deployments share the typed target and noninteractive SSH runner in
-`marin_deploy.gce`. Iris and Finelog use its startup-script persistence policies;
-Loom's Pulumi activation uses the same runner to restart the metadata-managed
-startup unit. Service-specific health checks and rollback state remain with each
+`marin_deploy.gce`. Finelog persists only a startup script that completed its own
+health gate. Iris persists before activation so an interrupted controller rollout
+can resume its image/checkpoint transaction, and Loom leaves startup metadata under
+Pulumi ownership. Service-specific health checks and rollback state remain with each
 deployment.
