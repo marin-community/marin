@@ -13,7 +13,7 @@ from iac.gcp.iam import (
     GcpRoleGrant,
     GcpSecretIam,
 )
-from iac.gcp.iap import IAP_ACCESSOR_ROLE, shared_iap_accessors
+from iac.gcp.iap import IAP_ACCESSOR_ROLE
 
 _REGION = "us-central1"
 _SERVICE = "marin-evaldash"
@@ -57,7 +57,15 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                     GcpRoleGrant(
                         role=IAP_ACCESSOR_ROLE,
                         members=(
-                            *shared_iap_accessors(project, principals),
+                            f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+                            "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
+                            principals["human-014"],
+                            principals["human-032"],
+                            principals["human-024"],
+                            principals["human-012"],
+                            principals["human-067"],
+                            principals["human-021"],
+                            principals["human-006"],
                             "domain:openathena.ai",
                             loom_account,
                             principals["human-064"],
