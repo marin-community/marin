@@ -28,8 +28,8 @@ from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import encode_key
 from zephyr.shuffle import (
     _PAYLOAD_COL,
-    _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SCATTER_HASH_SEED,
+    _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SHARD_COL,
     _SORT_KEY_COL,
     ScatterReader,

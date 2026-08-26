@@ -42,7 +42,6 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, overload
-from urllib.parse import urlparse
 
 import cloudpickle
 import humanfriendly
