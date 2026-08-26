@@ -49,7 +49,7 @@ def collect_inject_env(names: Sequence[str]) -> dict[str, str]:
     if missing:
         raise ValueError(
             "Cluster config defaults.inject_env requires environment variables that are unset in "
-            f"this shell: {', '.join(missing)}. Export them before `iris cluster start`."
+            f"this shell: {', '.join(missing)}. Export them before starting or rolling out the cluster."
         )
     return resolved
 

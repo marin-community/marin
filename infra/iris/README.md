@@ -16,9 +16,11 @@ uv run marin-deploy iris rollout <cluster>
 uv run marin-deploy iris rollback <cluster>
 ```
 
-The rollout wrapper resolves controller secrets, takes a checkpoint, builds and
-pins the controller images, and invokes `pulumi up`. When a prior deployment is
-recorded, it first writes a `pending` record with the paired rollback state.
+The rollout wrapper resolves operator-side secrets and task environment variables,
+takes a checkpoint, builds and pins the controller images, and invokes `pulumi up`.
+CoreWeave S3-backed clusters require `CW_KEY_ID` and `CW_KEY_SECRET`; missing
+variables fail this preflight before the checkpoint or image build. When a prior
+deployment is recorded, the wrapper first writes a `pending` record with the paired rollback state.
 Pulumi records the cluster name, image references, activation ID, and digest.
 The dynamic provider loads the cluster configuration and resolves runtime values
 in the operator process. It avoids the stdout and stderr state capture performed
