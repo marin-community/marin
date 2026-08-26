@@ -209,7 +209,7 @@ def load_vllm_tpu_release(path: Path) -> VllmTpuRelease:
 
     release_tag = config["release_tag"]
     requirement = config["requirement"]
-    expected_prefix = "vllm @ https://github.com/marin-community/vllm/releases/download/" f"{release_tag}/"
+    expected_prefix = f"vllm @ {gpu_release_url_prefix(release_tag)}"
     if not requirement.startswith(expected_prefix) or not requirement.endswith(".whl"):
         raise ValueError(f"{path}: requirement is not a vLLM wheel from {release_tag}")
 

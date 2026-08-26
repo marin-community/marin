@@ -307,14 +307,14 @@ class IsolatedTpuVllm:
         # vLLM otherwise targets CUDA; the uvx-launched process inherits this environment.
         # Iris mounts its system temporary directory no-exec, so uvx's executable tool env
         # must live under the task work directory.
-        cache_root = os.environ.get("IRIS_WORKDIR", tempfile.gettempdir())
+        cache_root = os.environ.get("IRIS_WORKDIR", os.getcwd())
         return {
             "VLLM_TARGET_DEVICE": "tpu",
             "UV_CACHE_DIR": os.path.join(cache_root, f".marin-vllm-tpu-{self.release_tag}"),
         }
 
     def cache_identity(self) -> str:
-        return f"tpu:{self.requirement}"
+        return f"tpu:{self.requirement}:{self.exclude_newer}:{self.python_version}:{self.torch_backend}"
 
 
 def _starts_nccl_ras_probe(launcher: VllmLauncher) -> bool:
