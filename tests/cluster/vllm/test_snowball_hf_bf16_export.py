@@ -30,13 +30,13 @@ from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
 from marin.testing.inference.snowball import SNOWBALL
 from marin.testing.inference.snowball_checkpoint import (
+    apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
 )
 
 from experiments.grug.moe.export_hf_bf16 import (
-    apply_pending_qb_betas,
     inference_config,
     inference_model,
     save_hf_bf16,

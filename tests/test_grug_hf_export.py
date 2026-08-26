@@ -11,9 +11,9 @@ import numpy as np
 import safetensors
 from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
+from marin.testing.inference.snowball_checkpoint import apply_pending_qb_betas
 
 from experiments.grug.moe.export_hf_bf16 import (
-    apply_pending_qb_betas,
     inference_model,
     save_hf_bf16,
 )

@@ -9,7 +9,7 @@ import dataclasses
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import click
 import draccus
@@ -19,9 +19,10 @@ import jax.numpy as jnp
 from haliax.partitioning import set_mesh
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.tokenizers import load_tokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from marin.testing.inference.snowball_checkpoint import apply_pending_qb_betas
 from rigging.filesystem.cluster_config import check_gcs_paths_same_region
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as ArrayStackedGrugModelConfig
@@ -44,10 +45,10 @@ class ExportConfig:
     def resolved_executor_info_path(self) -> str:
         if self.executor_info_path is not None:
             return self.executor_info_path
-        run_root, separator, _ = self.checkpoint_path.rstrip("/").partition("/checkpoints/")
-        if not separator:
+        checkpoint = StoragePath(self.checkpoint_path)
+        if checkpoint.parent.name != "checkpoints":
             raise ValueError("checkpoint_path must contain '/checkpoints/' when executor_info_path is omitted")
-        return f"{run_root}/.executor_info"
+        return str(checkpoint.parent.parent / ".executor_info")
 
 
 @dataclass(frozen=True)
@@ -115,18 +116,6 @@ def export_plan(config: ExportConfig) -> ExportPlan:
     )
 
 
-def apply_pending_qb_betas(
-    model: ArrayStackedTransformer,
-    pending_qb_betas: jax.Array,
-) -> ArrayStackedTransformer:
-    """Apply the checkpoint's deferred QB router-bias update before export."""
-
-    assert model.stacked_blocks is not None
-    router_bias = -pending_qb_betas
-    router_bias -= jnp.mean(router_bias, axis=-1, keepdims=True)
-    return eqx.tree_at(lambda tree: tree.stacked_blocks.stacked.mlp.router_bias, model, router_bias)
-
-
 def inference_model(
     checkpoint_model: ArrayStackedTransformer,
     config: GrugModelConfig,
@@ -134,15 +123,14 @@ def inference_model(
     """Adapt the array-stacked training model to the canonical HF exporter model."""
 
     assert checkpoint_model.stacked_blocks is not None
-    source = cast(Any, checkpoint_model)
     return Transformer(
-        token_embed=source.token_embed,
-        embed_norm=source.embed_norm,
-        embed_gated_norm=source.embed_gated_norm,
-        output_proj=source.output_proj,
-        blocks=tuple(source.stacked_blocks.unstacked()),
-        final_norm=source.final_norm,
-        final_gated_norm=source.final_gated_norm,
+        token_embed=checkpoint_model.token_embed,
+        embed_norm=checkpoint_model.embed_norm,
+        embed_gated_norm=checkpoint_model.embed_gated_norm,
+        output_proj=checkpoint_model.output_proj,
+        blocks=tuple(checkpoint_model.stacked_blocks.unstacked()),
+        final_norm=checkpoint_model.final_norm,
+        final_gated_norm=checkpoint_model.final_gated_norm,
         config=config,
     )
 
@@ -152,7 +140,7 @@ def save_hf_bf16(
     config: GrugModelConfig,
     output_path: str,
     *,
-    tokenizer: Any | None,
+    tokenizer: MarinTokenizer | None,
 ) -> None:
     converter = (
         config.hf_checkpoint_converter().replaced(tokenizer=tokenizer).with_config_overrides({"dtype": "bfloat16"})
@@ -207,7 +195,7 @@ def export_checkpoint(config: ExportConfig) -> None:
             tokenizer=tokenizer,
         )
 
-    exported_config = json.loads(StoragePath(f"{config.output_path.rstrip('/')}/config.json").read_text())
+    exported_config = json.loads(StoragePath(prefix_join(config.output_path, "config.json")).read_text())
     if exported_config.get("max_position_embeddings") != config.max_seq_len:
         raise ValueError("exported config.json has the wrong max_position_embeddings")
     if exported_config.get("qk_mult") != config.qk_mult:
