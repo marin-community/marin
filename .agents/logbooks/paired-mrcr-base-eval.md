@@ -5,7 +5,8 @@
 - Goal: measure whether June 67B context-extension checkpoints use retained conversation context when predicting the same final assistant response.
 - Primary metrics: token-micro context gain in NLL and BPB, defined as `query_only - full_context`; positive values mean retained context improves likelihood.
 - Constraints: score only response-body tokens, preserve paired source IDs and tokenizer-specific bins, restore parameters only, and keep checkpoint/data/output I/O in `us-central2`.
-- Experiment issue: [#7181](https://github.com/marin-community/marin/issues/7181)
+- Experiment issue: [#8701](https://github.com/marin-community/marin/issues/8701)
+- Prior d512 MRCR experiment: [#7181](https://github.com/marin-community/marin/issues/7181)
 - Implementation branch: `codex/paired-mrcr-base-eval`
 
 ## Baseline
