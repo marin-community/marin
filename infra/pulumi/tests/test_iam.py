@@ -8,6 +8,7 @@ import pulumi
 from iac.gcp import iam as iam_module
 from iac.gcp.iam import (
     GcpArtifactRepositoryIam,
+    GcpBackendServiceIapIam,
     GcpBucketIam,
     GcpCloudRunIapIam,
     GcpCustomRole,
@@ -34,6 +35,7 @@ SECRET_IAM_BINDING_TYPE = "gcp:secretmanager/secretIamBinding:SecretIamBinding"
 SERVICE_ACCOUNT_IAM_BINDING_TYPE = "gcp:serviceaccount/iAMBinding:IAMBinding"
 BUCKET_IAM_BINDING_TYPE = "gcp:storage/bucketIAMBinding:BucketIAMBinding"
 IAP_CLOUD_RUN_SERVICE_IAM_BINDING_TYPE = "gcp:iap/webCloudRunServiceIamBinding:WebCloudRunServiceIamBinding"
+IAP_BACKEND_SERVICE_IAM_BINDING_TYPE = "gcp:iap/webBackendServiceIamBinding:WebBackendServiceIamBinding"
 IAM_BINDING_TYPES = frozenset(
     {
         ARTIFACT_REPOSITORY_IAM_BINDING_TYPE,
@@ -43,6 +45,7 @@ IAM_BINDING_TYPES = frozenset(
         SERVICE_ACCOUNT_IAM_BINDING_TYPE,
         BUCKET_IAM_BINDING_TYPE,
         IAP_CLOUD_RUN_SERVICE_IAM_BINDING_TYPE,
+        IAP_BACKEND_SERVICE_IAM_BINDING_TYPE,
     }
 )
 
@@ -92,6 +95,12 @@ def _args() -> GcpIamArgs:
             GcpArtifactRepositoryIam(location="us-central1", repository="test-repository", grants=(_grant(),)),
         ),
         service_accounts=(GcpServiceAccountIam(email="target@example.iam.gserviceaccount.com", grants=(_grant(),)),),
+        backend_service_iap=(
+            GcpBackendServiceIapIam(
+                service="test-backend",
+                iap_grants=(_grant(),),
+            ),
+        ),
         cloud_run_iap=(
             GcpCloudRunIapIam(
                 location="us-central1",
@@ -135,6 +144,7 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
         (iam_module.gcp.projects, "IAMCustomRole", CUSTOM_ROLE_TYPE),
         (iam_module.gcp.serviceaccount, "Account", OWNED_SERVICE_ACCOUNT_TYPE),
         (iam_module.gcp.iap, "WebCloudRunServiceIamBinding", IAP_CLOUD_RUN_SERVICE_IAM_BINDING_TYPE),
+        (iam_module.gcp.iap, "WebBackendServiceIamBinding", IAP_BACKEND_SERVICE_IAM_BINDING_TYPE),
     )
     for namespace, name, resource_type in constructors:
         monkeypatch.setattr(namespace, name, _resource_recorder(resource_type, options_by_type, arguments_by_type))
@@ -175,9 +185,13 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
         IAP_CLOUD_RUN_SERVICE_IAM_BINDING_TYPE: (
             f"projects/{TEST_PROJECT}/iap_web/cloud_run-us-central1/services/test-service roles/viewer"
         ),
+        IAP_BACKEND_SERVICE_IAM_BINDING_TYPE: (
+            f"projects/{TEST_PROJECT}/iap_web/compute/services/test-backend roles/viewer"
+        ),
         CUSTOM_ROLE_TYPE: f"projects/{TEST_PROJECT}/roles/{CUSTOM_ROLE_ID}",
         OWNED_SERVICE_ACCOUNT_TYPE: (
             f"projects/{TEST_PROJECT}/serviceAccounts/"
             f"{OWNED_SERVICE_ACCOUNT_ID}@{TEST_PROJECT}.iam.gserviceaccount.com"
         ),
     }
+    assert arguments_by_type[IAP_BACKEND_SERVICE_IAM_BINDING_TYPE]["web_backend_service"] == "test-backend"

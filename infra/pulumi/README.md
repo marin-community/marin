@@ -67,8 +67,9 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 ### User grants
 
 A GCP user grant is applied by the `marin` stack. Shared grants and the encrypted principal
-registry live in `src/iac/gcp/iam_data.yaml`; Echo, EvalDash, Grafana, and Loom grants live in
-the adjacent deploy-target modules. Service stack config must not contain IAM members. The IAM
+registry live in `src/iac/gcp/iam_data.yaml`; backend-service IAP, Echo, EvalDash, Grafana, and
+Loom grants live in the adjacent deploy-target modules. Service stack config must not contain
+IAM members. The IAM
 YAML declares each human principal's KMS ciphertext once under an opaque `human-NNN` ID, and
 deploy-target modules reference that ID so one person's ciphertext cannot drift across roles.
 Two agent skills drive the flow so no personal email lands in this public repo unencrypted:
@@ -90,6 +91,11 @@ stacks and deploy scripts must not create or mutate IAM policy. Each `*IAMBindin
 authoritative for one role and optional condition on its target: Pulumi removes undeclared
 members from managed bindings while leaving other roles untouched. Audit live policy before
 adding or importing a managed binding so the declaration includes every intended member.
+
+`src/iac/gcp/iap.py` declares the shared IAP accessors and the authoritative Iris backend-service
+bindings. Echo, EvalDash, and Grafana compose the same shared accessors into their Cloud Run
+bindings. Do not add `roles/iap.httpsResourceAccessor` at project scope; add shared access in
+`iap.py` or service-specific access in the target declaration.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets

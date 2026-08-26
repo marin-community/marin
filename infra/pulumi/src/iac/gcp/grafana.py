@@ -13,6 +13,7 @@ from iac.gcp.iam import (
     GcpRoleGrant,
     GcpSecretIam,
 )
+from iac.gcp.iap import shared_iap_accessors
 
 _REGION = "us-central1"
 _SERVICE = "marin-grafana"
@@ -65,9 +66,9 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",
                         members=(
+                            *shared_iap_accessors(project, principals),
                             "domain:openathena.ai",
                             loom_account,
-                            principals["human-012"],
                             principals["human-064"],
                             principals["human-070"],
                             principals["human-071"],
