@@ -702,6 +702,18 @@ def test_cluster_variable_lists_every_configured_cluster():
         assert set(variables["cluster"]["query"].split(",")) == expected, name
 
 
+def test_training_run_selector_uses_a_fixed_discovery_window():
+    dashboard = _stitched_dashboards()["training.json"]
+    variable = next(variable for variable in dashboard["templating"]["list"] if variable["name"] == "run")
+    sql = next(
+        param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    )
+
+    assert "now() - INTERVAL '12 hours'" in sql
+    assert "{{from}}" not in sql
+    assert "{{to}}" not in sql
+
+
 def test_cluster_series_keep_one_colour_across_dashboards():
     # Colour follows the entity, not its rank: a cluster filtered out of one panel must
     # not repaint the survivors, and the same cluster reads the same on every dashboard.

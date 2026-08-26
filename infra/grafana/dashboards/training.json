@@ -1,7 +1,7 @@
 {
   "uid": "marin-training",
   "title": "Training run",
-  "description": "The status of one training run. The run selector lists Levanter runs that reported a step in the dashboard window. Hero runs come first. The current hero run is the initial selection. Run identity uses run_id, so a run keeps one series set across clusters. Use the Runs dashboard to compare runs.",
+  "description": "The status of one training run. The run selector lists Levanter runs active in the last 12 hours. Hero runs come first. The current hero run is the initial selection. Run identity uses run_id, so a run keeps one series set across clusters. A run supplied in the dashboard URL remains selectable for older graph windows. Use the Runs dashboard to compare runs.",
   "tags": [
     "marin",
     "generated"
@@ -20,7 +20,7 @@
         "name": "run",
         "label": "Run",
         "type": "query",
-        "description": "Levanter runs that reported a step inside the dashboard window, hero runs first and newest first within each group. Sorting is left to the query, so the default selection is the newest hero run.",
+        "description": "Levanter runs active in the last 12 hours, hero runs first and newest first within each group. A run supplied in the dashboard URL remains selectable for older graph windows. Sorting is left to the query, so the default selection is the newest hero run.",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
@@ -41,15 +41,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE step IS NOT NULL AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
-                },
-                {
-                  "key": "from",
-                  "value": "${__from}"
-                },
-                {
-                  "key": "to",
-                  "value": "${__to}"
+                  "value": "WITH telemetry AS (SELECT * FROM \"levanter.metrics\") SELECT run_id AS value FROM telemetry WHERE step IS NOT NULL AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '12 hours') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) GROUP BY run_id ORDER BY CASE WHEN run_id LIKE 'hero-%' THEN 0 ELSE 1 END, MAX(timestamp_ms) DESC"
                 }
               ]
             },

@@ -291,8 +291,11 @@ job it is that job's queue over time.
 
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
 single-value selector puts the newest hero run first. It uses `run_id` across
-clusters. The status strip uses one 15-minute query over the semantic
-`levanter.metrics` table for ten fields. The strip includes the two hero
+clusters and discovers runs from a fixed 12-hour window, so widening the graph
+range does not turn the selector into a whole-store scan. A `run_id` supplied in
+the dashboard URL remains available for older graph windows. The status strip
+uses one 15-minute query over the semantic `levanter.metrics` table for ten
+fields. The strip includes the two hero
 alert inputs: time
 since the last completed step and
 train loss, plus step time, throughput, schedule progress, and token count.
