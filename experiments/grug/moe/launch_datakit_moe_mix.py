@@ -249,16 +249,16 @@ _TAIL_BUCKETS: tuple[str, ...] = (
 )
 
 
-def _bucket_path(bucket: str) -> str:
+def _bucket_path(bucket: str, store_prefix: str) -> str:
     cluster = int(bucket[1:3])
     quality = int(bucket[-1])
-    return f"{_STORE_PREFIX}/cluster={cluster}/quality={quality}"
+    return f"{store_prefix}/cluster={cluster}/quality={quality}"
 
 
-def _bucket_component(bucket: str) -> DatasetComponent:
+def _bucket_component(bucket: str, store_prefix: str) -> DatasetComponent:
     return DatasetComponent(
         source=None,
-        cache_dir=_bucket_path(bucket),
+        cache_dir=_bucket_path(bucket, store_prefix),
         format=TextLmDatasetFormat(),
         tags=[bucket],
         flat_cache=True,
@@ -298,12 +298,14 @@ def _phase_1_start_step(total_steps: int, batch_size: int) -> int:
     return max(step_multiple, (requested // step_multiple) * step_multiple)
 
 
-def _datakit_components() -> dict[str, DatasetComponent | ConcatDatasetComponent]:
-    direct = {bucket: _bucket_component(bucket) for bucket, _, _ in _BUCKET_PHASE_WEIGHTS if bucket != "tail"}
+def _datakit_components(store_prefix: str) -> dict[str, DatasetComponent | ConcatDatasetComponent]:
+    direct = {
+        bucket: _bucket_component(bucket, store_prefix) for bucket, _, _ in _BUCKET_PHASE_WEIGHTS if bucket != "tail"
+    }
     return {
         **direct,
         "tail": ConcatDatasetComponent(
-            children={bucket: _bucket_component(bucket) for bucket in _TAIL_BUCKETS},
+            children={bucket: _bucket_component(bucket, store_prefix) for bucket in _TAIL_BUCKETS},
             tags=["tail"],
         ),
     }
@@ -315,6 +317,7 @@ def _simulated_experiment_budget(*, total_steps: int, batch_size: int, max_seq_l
 
 def _datakit_data_config(
     *,
+    store_prefix: str,
     total_steps: int,
     batch_size: int,
     max_seq_len: int,
@@ -336,7 +339,7 @@ def _datakit_data_config(
             "experiment_budget": experiment_budget,
         }
 
-    all_components = {**_datakit_components(), **val_components}
+    all_components = {**_datakit_components(store_prefix), **val_components}
     val_zero_weights = {name: 0.0 for name in val_components}
 
     return LmDataConfig(
@@ -381,6 +384,7 @@ def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
         data = _datakit_data_config(
+            store_prefix=_STORE_PREFIX,
             total_steps=_steps,
             batch_size=_batch_size,
             max_seq_len=_model.max_seq_len,

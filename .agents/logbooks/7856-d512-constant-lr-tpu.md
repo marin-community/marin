@@ -239,3 +239,52 @@ changes d512 token-budget scaling relative to issue #7856?
   risk.
 - Next action: push the research snapshot, query Iris and W&B for
   `AUG-LRC-TPU-003`, and submit only that cell if no duplicate exists.
+
+### 2026-08-26 01:03 PDT - Submitted representative TPU cell
+
+- Hypothesis: the 30x/1.0x cell is a sufficient live gate for TPU compilation,
+  constant-LR telemetry, finite loss, and zero routing drops before launching
+  the remaining matrix.
+- Commit Hash: `4610d50ea`.
+- Command: `/Users/kaiyuew/Downloads/Project/marin-iris-client-current/.venv/bin/iris --controller-url http://127.0.0.1:19000 job run --no-wait --job-name issue-7856-d512-constant-lr-smoke --user kaiyuew --cpu 1 --memory 2G --priority interactive --extra cpu -e WANDB_API_KEY ${WANDB_API_KEY} -- python -m experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch --token-multiple 30 --lr-multiplier 1 --max-concurrent 1`.
+- Config: CPU-only StepRunner parent
+  `/kaiyuew/issue-7856-d512-constant-lr-smoke`; expected child
+  `AUG-LRC-TPU-003-d512-30x-lr1` on a v4-8 in `us-central2-b`; W&B
+  project `marin-community/marin_moe` and group
+  `issue-7856-d512-constant-lr-tpu`.
+- Result: parent submitted after Iris and W&B duplicate checks found no prior
+  constant-LR jobs or runs.
+- Interpretation: submission identity is clean; parent/child startup and TPU
+  compile still require live verification.
+- Next action: wait two minutes, verify the child and W&B config/progress, then
+  submit the remaining 24 cells if the representative gate is healthy.
+
+### 2026-08-26 01:10 PDT - Fixed remote datakit cache resolution
+
+- Hypothesis: the representative failure is caused by a relative cache prefix,
+  not by TPU execution or the constant-LR optimizer, and should be fixed by
+  resolving the same us-central2 objects through Marin's `mirror://` filesystem.
+- Commit Hash: pending reproducibility snapshot.
+- Commands:
+  - inspected the child traceback and verified
+    `gs://marin-us-central2/datakit/store_8ac06c74/cluster=1/quality=1/shard_ledger.json`;
+  - cancelled `/kaiyuew/issue-7856-d512-constant-lr-smoke` after the same
+    missing-cache error entered its automatic retry;
+  - `uv run pytest -q tests/test_d512_constant_lr_tpu.py`;
+  - `uv run pytest -q tests/test_grug_variant_contracts.py -k 'moe_hero_fsdp_constant_lr_tpu'`;
+  - `./infra/pre-commit.py --changed-files --fix`.
+- Config: the historical launcher retains its explicit relative store prefix;
+  the TPU extension now passes
+  `mirror://datakit/store_8ac06c74`, which resolves to the in-region Marin
+  bucket on the us-central2 worker.
+- Result: the first child reached a v4-8 and created the intended W&B run with
+  `lr_schedule=constant`, then failed before model initialization with
+  `ValueError: No source and no cache found for component c01q1 split train`.
+  The path fix materializes `c01q1` as a `mirror://` cache; all focused tests
+  and changed-file checks pass.
+- Interpretation: this is a bounded launcher-path bug. It provides no evidence
+  against either research hypothesis and should not be counted as an
+  experimental result.
+- Next action: snapshot and push the fix, resubmit the same representative run
+  identity, and require an advancing finite loss before launching the other 24
+  cells.

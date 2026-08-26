@@ -49,6 +49,7 @@ EXPERIMENT_PREFIX = "AUG-LRC-TPU"
 EXPERIMENT_VERSION = "2026.08.26"
 WANDB_PROJECT = "marin_moe"
 WANDB_GROUP = "issue-7856-d512-constant-lr-tpu"
+TPU_STORE_PREFIX = "mirror://datakit/store_8ac06c74"
 
 D512_HIDDEN_DIM = 512
 D512_BATCH_SIZE = 64
@@ -185,6 +186,7 @@ def build_d512_constant_lr_run(
             val_components = {dataset.name: ctx.resolved(dataset).as_component() for dataset in _VALIDATION}
 
         data = _datakit_data_config(
+            store_prefix=TPU_STORE_PREFIX,
             total_steps=point.num_train_steps,
             batch_size=D512_BATCH_SIZE,
             max_seq_len=D512_SEQUENCE_LENGTH,
