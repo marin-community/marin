@@ -8,6 +8,7 @@ import os
 from datetime import timedelta
 
 import click
+import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
@@ -57,6 +58,7 @@ from experiments.grug.moe_hero_ep.train import (
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
+DIAGNOSTIC_PARAM_DTYPES = ("bfloat16", "float32")
 
 
 def build_diagnostic_run(
@@ -85,6 +87,7 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    param_dtype: str = "bfloat16",
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -110,6 +113,8 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+    if param_dtype not in DIAGNOSTIC_PARAM_DTYPES:
+        raise ValueError(f"param_dtype must be one of {DIAGNOSTIC_PARAM_DTYPES}, got {param_dtype}")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
     # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
@@ -244,6 +249,10 @@ def build_diagnostic_run(
                 keep_last_temporary_checkpoints=1,
                 debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
+        )
+        trainer = dataclasses.replace(
+            trainer,
+            mp=jmp.get_policy(f"params={param_dtype},compute=bfloat16,output=bfloat16"),
         )
         data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
@@ -447,6 +456,13 @@ def build_diagnostic_run(
     help="Use the configured mixture or reuse a deterministic synthetic batch without opening TensorStore.",
 )
 @click.option(
+    "--param-dtype",
+    type=click.Choice(DIAGNOSTIC_PARAM_DTYPES),
+    default="bfloat16",
+    show_default=True,
+    help="Parameter and returned-gradient dtype. Compute and output stay bfloat16.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=HERO_MODEL_CONFIG.capacity_factor,
@@ -479,6 +495,7 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
+    param_dtype: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -515,6 +532,7 @@ def main(
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
+        param_dtype=param_dtype,
     )
 
 
