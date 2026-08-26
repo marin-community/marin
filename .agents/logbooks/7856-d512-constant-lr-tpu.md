@@ -27,7 +27,9 @@ author: kaiyuew
 - Historical reconstruction is complete. The 25 d512 controls used 1% warmup
   plus linear decay to 5% of peak LR, not constant LR, and ran on 4xGB200.
 - The TPU extension is being implemented as the same 25 cells with constant LR
-  after the 1% warmup. No TPU cells have been submitted yet.
+  after the 1% warmup. The representative TPU cell has not reached its first
+  optimizer step: two training-preflight attempts exposed cache URI bugs, and
+  the second fix now uses the native in-region GCS URI required by TensorStore.
 
 ## Baseline
 
@@ -195,6 +197,9 @@ changes d512 token-budget scaling relative to issue #7856?
 - 2026-08-25: run on v4-8 in us-central2-b to keep the datakit store in-region.
 - 2026-08-25: submit one full 30x/1.0x representative cell before lowering the
   remaining 24 cells, then run the matrix with max concurrency 5.
+- 2026-08-26: use the explicit `gs://marin-us-central2` datakit prefix because
+  TensorStore cannot consume Marin's fsspec-only `mirror://` scheme. The v4-8
+  remains pinned to `us-central2-b`, so reads stay in-region.
 
 ## Negative Results Index
 
@@ -264,7 +269,7 @@ changes d512 token-budget scaling relative to issue #7856?
 - Hypothesis: the representative failure is caused by a relative cache prefix,
   not by TPU execution or the constant-LR optimizer, and should be fixed by
   resolving the same us-central2 objects through Marin's `mirror://` filesystem.
-- Commit Hash: pending reproducibility snapshot.
+- Commit Hash: `8515b04ad`.
 - Commands:
   - inspected the child traceback and verified
     `gs://marin-us-central2/datakit/store_8ac06c74/cluster=1/quality=1/shard_ledger.json`;
@@ -288,3 +293,29 @@ changes d512 token-budget scaling relative to issue #7856?
 - Next action: snapshot and push the fix, resubmit the same representative run
   identity, and require an advancing finite loss before launching the other 24
   cells.
+
+### 2026-08-26 01:20 PDT - Replaced mirror URI at the TensorStore boundary
+
+- Hypothesis: the second preflight failure comes from passing an fsspec-only
+  `mirror://` path into TensorStore; the native us-central2 GCS URI should serve
+  the same objects without cross-region I/O.
+- Commit Hash: `9e6a55dfd`.
+- Commands:
+  - inspected attempt
+    `/kaiyuew/issue-7856-d512-constant-lr-smoke/grug-train-AUG-LRC-TPU-003-d512-30x-lr1/0:0`;
+  - checked Iris capacity: 28 READY v4-8 slices in `us-central2-b`;
+  - cancelled the exact parent before an automatic retry could repeat the
+    known error.
+- Config: replace `mirror://datakit/store_8ac06c74` with
+  `gs://marin-us-central2/datakit/store_8ac06c74`; keep the v4-8 in
+  `us-central2-b`.
+- Result: the attempt loaded all 200 ledgers, then failed before model
+  initialization with `Unsupported URI scheme for tensorstore: 'mirror'`.
+  W&B contains no loss or step, and no checkpoint was written. Nine focused
+  tests, two copied-variant contracts, and changed-file pre-commit checks pass;
+  the native path builds a GCS TensorStore spec, and the failed shard's
+  `zarr.json` exists in `marin-us-central2`.
+- Interpretation: the two attempts are training-preflight failures, not
+  constant-LR observations. Native GCS is required below the cache-ledger
+  layer.
+- Next action: validate, snapshot, and resubmit the representative identity.
