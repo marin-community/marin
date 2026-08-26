@@ -4,8 +4,10 @@
 """Application health configuration and task-side health port publication."""
 
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from rigging.timing import Duration
 
@@ -23,6 +25,35 @@ HEALTH_FAILURE_COUNT_FILE = "/tmp/iris/health-failures"
 HEALTH_TERMINATION_FILE = "/tmp/iris/health-termination-log"
 
 
+class TaskHealthCheckRequest(Protocol):
+    """Structural task health policy accepted at client boundaries."""
+
+    startup_timeout: Duration
+    period: Duration
+    request_timeout: Duration
+    failure_threshold: int
+
+
+class IrisTaskHealthCheck(ABC):
+    """Health policy that can add itself to an Iris launch request."""
+
+    @staticmethod
+    def from_request(request: TaskHealthCheckRequest | None) -> "IrisTaskHealthCheck":
+        """Convert an optional structural request to an Iris health policy."""
+        if request is None:
+            return NOOP_IRIS_TASK_HEALTH_CHECK
+        return TaskHealthCheck(
+            startup_timeout=request.startup_timeout,
+            period=request.period,
+            request_timeout=request.request_timeout,
+            failure_threshold=request.failure_threshold,
+        )
+
+    @abstractmethod
+    def apply_to(self, target: job_pb2.TaskHealthCheck) -> None:
+        """Apply this policy to a task health proto."""
+
+
 def _positive_whole_seconds(name: str, duration: Duration) -> None:
     milliseconds = duration.to_ms()
     if milliseconds <= 0:
@@ -32,7 +63,7 @@ def _positive_whole_seconds(name: str, duration: Duration) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class TaskHealthCheck:
+class TaskHealthCheck(IrisTaskHealthCheck):
     """Health policy that Iris applies to each task attempt."""
 
     startup_timeout: Duration
@@ -56,6 +87,20 @@ class TaskHealthCheck:
             request_timeout=duration_to_proto(self.request_timeout),
             failure_threshold=self.failure_threshold,
         )
+
+    def apply_to(self, target: job_pb2.TaskHealthCheck) -> None:
+        target.CopyFrom(self.to_proto())
+
+
+@dataclass(frozen=True, slots=True)
+class NoopIrisTaskHealthCheck(IrisTaskHealthCheck):
+    """Health policy that leaves task health disabled."""
+
+    def apply_to(self, target: job_pb2.TaskHealthCheck) -> None:
+        pass
+
+
+NOOP_IRIS_TASK_HEALTH_CHECK = NoopIrisTaskHealthCheck()
 
 
 def validate_task_health_check(health_check: job_pb2.TaskHealthCheck) -> None:

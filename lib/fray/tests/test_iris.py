@@ -35,6 +35,7 @@ from fray.types import (
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
+from iris.cluster.health import NoopIrisTaskHealthCheck
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
@@ -342,6 +343,16 @@ class TestImagePlumbing:
         assert converted.period == health.period
         assert converted.request_timeout == health.request_timeout
         assert converted.failure_threshold == health.failure_threshold
+
+    def test_submit_job_uses_noop_health_when_unconfigured(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-health-noop")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        client.submit(JobRequest(name="health-noop", entrypoint=Entrypoint.from_callable(lambda: None)))
+
+        health_check = fake_iris.submit.call_args.kwargs["health_check"]
+        assert isinstance(health_check, NoopIrisTaskHealthCheck)
 
 
 class TestActorGroupEnvironment:
