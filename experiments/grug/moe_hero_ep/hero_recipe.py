@@ -39,7 +39,7 @@ HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
 # pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
-# and a paired hero measurement put the master 1.78 percent behind on that path -- it buys
+# and a paired hero measurement put the master about 2 percent behind on that path -- it buys
 # memory relief that transport is not short of, and charges a host round trip per step for it.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,

@@ -361,7 +361,7 @@ def build_diagnostic_run(
     show_default=True,
     help=(
         "Where the authoritative fp32 weights live. Disabling the master keeps them on device and "
-        "measured 1.78 percent faster on the ragged transport, which does not need the memory relief."
+        "measured about 2 percent faster on the ragged transport, which does not need the memory relief."
     ),
 )
 @click.option(
