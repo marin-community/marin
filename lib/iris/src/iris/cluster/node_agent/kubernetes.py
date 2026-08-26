@@ -132,13 +132,9 @@ class KubeletScrapeError(RuntimeError):
 def kubelet_resource_metrics(timeout: float = _SCRAPE_TIMEOUT) -> str:
     """Return the local kubelet's ``metrics/resource`` text.
 
-    The node agent runs on the host network and reads its own kubelet directly.
-    Routing the same request through the apiserver's ``nodes/proxy`` subresource
-    sends every sample across the cluster's Konnectivity tunnel, behind the same
-    control-plane path that carries ``exec``, ``port-forward``, and ``logs``.
-
-    Authorization uses the pod's service-account token, which the kubelet checks
-    against the ``nodes/metrics`` subresource.
+    Reads the kubelet on the agent's own node over loopback, which the host
+    network makes reachable. Authorization uses the pod's service-account token,
+    which the kubelet checks against the ``nodes/metrics`` subresource.
     """
     token = SERVICE_ACCOUNT_TOKEN_PATH.read_text().strip()
     request = urllib.request.Request(KUBELET_RESOURCE_METRICS_URL, headers={"Authorization": f"Bearer {token}"})
