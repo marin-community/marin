@@ -48,9 +48,12 @@ materialized `c01q1` cache URI.
 
 ## Results
 
-Pending live verification on `AUG-LRC-TPU-003-d512-30x-lr1`.
+The native GCS attempt loaded all 200 training caches and entered the training
+loop. W&B reached step 86 with finite loss, constant LR after step 10, zero
+dropped assignments, and zero routing overflow. The full matrix parent then
+reused the representative artifact lock and started four additional children.
 
 ## Future work
 
-- [ ] Start the remaining 24 cells only after the representative run reports
+- [x] Start the remaining 24 cells only after the representative run reports
   finite loss and constant post-warmup LR.

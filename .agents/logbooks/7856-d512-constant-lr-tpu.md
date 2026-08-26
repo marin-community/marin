@@ -27,9 +27,9 @@ author: kaiyuew
 - Historical reconstruction is complete. The 25 d512 controls used 1% warmup
   plus linear decay to 5% of peak LR, not constant LR, and ran on 4xGB200.
 - The TPU extension is being implemented as the same 25 cells with constant LR
-  after the 1% warmup. The representative TPU cell has not reached its first
-  optimizer step: two training-preflight attempts exposed cache URI bugs, and
-  the second fix now uses the native in-region GCS URI required by TensorStore.
+  after the 1% warmup. The representative TPU cell passed the live gate with
+  finite decreasing loss, flat post-warmup LR, and zero routing drops. The full
+  matrix parent is active with max concurrency 5.
 
 ## Baseline
 
@@ -319,3 +319,26 @@ changes d512 token-budget scaling relative to issue #7856?
   constant-LR observations. Native GCS is required below the cache-ledger
   layer.
 - Next action: validate, snapshot, and resubmit the representative identity.
+
+### 2026-08-26 01:42 PDT - Passed the live gate and launched the full matrix
+
+- Hypothesis: one healthy 30x/1.0x run is enough to release the other 24 cells
+  without duplicating the representative artifact.
+- Commit Hash: `4593a8f95`.
+- Commands:
+  - monitored W&B `AUG-LRC-TPU-003-d512-30x-lr1` through step 86;
+  - submitted parent `/kaiyuew/issue-7856-d512-constant-lr-matrix` with default
+    max concurrency 5;
+  - created the 15-minute heartbeat `babysit-7856-d512-constant-lr`.
+- Config: all 25 d512 cells on v4-8 in `us-central2-b`; batch 64; 1% warmup;
+  constant post-warmup LR; W&B group `issue-7856-d512-constant-lr-tpu`.
+- Result: representative loss fell from 11.782 at step 2 to 8.794 at step 20
+  and 5.685 at step 86. LR reached 0.028575256 at step 10 and remained there;
+  dropped assignments and routing overflow stayed zero. The matrix parent
+  waited on the active representative lock, started `001`, `002`, `004`, and
+  `005`, and created no duplicate `003` child. The first two new W&B runs also
+  report `lr_schedule=constant`, warmup 0.01, batch 64, and 1,058 steps.
+- Interpretation: the TPU/data/optimizer path is healthy enough to run the
+  matrix. Startup has not introduced a schedule or routing confound.
+- Next action: babysit all 25 cells, verify checkpoints and terminal Paloma
+  metrics, then fit the constant-LR optimum and loss scaling against #7856.
