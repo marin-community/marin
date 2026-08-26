@@ -1312,6 +1312,24 @@ def test_adopt_restores_the_task_health_contract(mock_worker, mock_runtime):
     assert task.ports == {"healthz": 50042}
 
 
+def test_adopt_rejects_health_check_without_a_container_start_time(mock_worker, mock_runtime):
+    health = job_pb2.TaskHealthCheck(failure_threshold=3)
+    health.startup_timeout.milliseconds = 30_000
+    health.period.milliseconds = 5_000
+    health.request_timeout.milliseconds = 1_000
+    container = replace(
+        _make_discovered_container(
+            ports={"healthz": 50042},
+            health_check_json=json_format.MessageToJson(health, preserving_proto_field_name=True),
+        ),
+        started_at=None,
+    )
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    with pytest.raises(RuntimeError, match="container start time"):
+        mock_worker.adopt_running_containers()
+
+
 def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker, mock_runtime, monkeypatch):
     started_at = Timestamp.from_seconds(1_735_689_600)
     now = started_at.add(Duration.from_seconds(20))

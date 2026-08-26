@@ -12,17 +12,13 @@ from typing import Protocol
 from rigging.timing import Duration
 
 from iris.rpc import job_pb2
+from iris.runtime import health as runtime_health
 from iris.time_proto import duration_from_proto, duration_to_proto
 
+HEALTH_PATH = runtime_health.HEALTH_PATH
 HEALTH_PORT_NAME = "healthz"
-HEALTH_PATH = "/healthz"
 HEALTH_PORT_ENV = "IRIS_PORT_HEALTHZ"
-HEALTH_PORT_FILE_ENV = "IRIS_HEALTH_PORT_FILE"
-HEALTH_FAILURE_COUNT_FILE_ENV = "IRIS_HEALTH_FAILURE_COUNT_FILE"
-HEALTH_TERMINATION_FILE_ENV = "IRIS_HEALTH_TERMINATION_FILE"
-HEALTH_PORT_FILE = "/tmp/iris/health-port"
-HEALTH_FAILURE_COUNT_FILE = "/tmp/iris/health-failures"
-HEALTH_TERMINATION_FILE = "/tmp/iris/health-termination-log"
+HEALTH_PORT_FILE = runtime_health.HEALTH_PORT_FILE
 
 
 class TaskHealthCheckRequest(Protocol):
@@ -115,7 +111,7 @@ def validate_task_health_check(health_check: job_pb2.TaskHealthCheck) -> None:
 
 def task_health_enabled() -> bool:
     """Return whether Iris asked this task to publish a health port."""
-    return HEALTH_PORT_FILE_ENV in os.environ
+    return HEALTH_PORT_ENV in os.environ
 
 
 def task_health_port() -> int:
@@ -140,7 +136,7 @@ def publish_task_health(port: int) -> None:
     if requested_port and port != requested_port:
         raise ValueError(f"health server bound port {port}, expected {requested_port}")
 
-    path = Path(os.environ[HEALTH_PORT_FILE_ENV])
+    path = Path(HEALTH_PORT_FILE)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(f"{port}\n", encoding="utf-8")

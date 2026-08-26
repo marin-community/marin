@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
-from iris.runtime.health_probe import main, probe_http_health
+import iris.runtime.health_probe as health_probe
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
@@ -43,7 +43,7 @@ def _health_server(status: int):
 
 def test_probe_accepts_redirect_status_without_following_it():
     with _health_server(302) as port:
-        result = probe_http_health(port, timeout=1)
+        result = health_probe.probe_http_health(port, timeout=1)
 
     assert result.healthy
     assert result.detail == "HTTP 302"
@@ -54,34 +54,34 @@ def test_live_probe_writes_a_termination_reason_at_the_failure_threshold(monkeyp
     port_file = tmp_path / "port"
     failures_file = tmp_path / "failures"
     termination_file = tmp_path / "termination"
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(port_file))
-    monkeypatch.setenv("IRIS_HEALTH_FAILURE_COUNT_FILE", str(failures_file))
-    monkeypatch.setenv("IRIS_HEALTH_TERMINATION_FILE", str(termination_file))
+    monkeypatch.setattr(health_probe, "HEALTH_PORT_FILE", str(port_file))
+    monkeypatch.setattr(health_probe, "HEALTH_FAILURE_COUNT_FILE", str(failures_file))
+    monkeypatch.setattr(health_probe, "HEALTH_TERMINATION_FILE", str(termination_file))
 
     with _health_server(503) as port:
         port_file.write_text(str(port))
-        assert main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
+        assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
         assert failures_file.read_text().strip() == "1"
         assert not termination_file.exists()
 
-        assert main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
+        assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
 
     assert failures_file.read_text().strip() == "2"
     assert "HTTP 503" in termination_file.read_text()
 
     with _health_server(200) as port:
         port_file.write_text(str(port))
-        assert main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 0
+        assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 0
 
     assert failures_file.read_text().strip() == "0"
     assert not termination_file.exists()
 
 
 def test_startup_probe_does_not_write_a_termination_reason(monkeypatch, tmp_path):
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(tmp_path / "missing-port"))
-    monkeypatch.setenv("IRIS_HEALTH_FAILURE_COUNT_FILE", str(tmp_path / "failures"))
+    monkeypatch.setattr(health_probe, "HEALTH_PORT_FILE", str(tmp_path / "missing-port"))
+    monkeypatch.setattr(health_probe, "HEALTH_FAILURE_COUNT_FILE", str(tmp_path / "failures"))
     termination_file = tmp_path / "termination"
-    monkeypatch.setenv("IRIS_HEALTH_TERMINATION_FILE", str(termination_file))
+    monkeypatch.setattr(health_probe, "HEALTH_TERMINATION_FILE", str(termination_file))
 
-    assert main(["--phase", "startup", "--timeout", "1"]) == 1
+    assert health_probe.main(["--phase", "startup", "--timeout", "1"]) == 1
     assert not termination_file.exists()

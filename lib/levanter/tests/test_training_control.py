@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 import pytest
 from jax import numpy as jnp
 
+import iris.cluster.health as iris_health
 import levanter.training_control as training_control
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import EndpointAccess, JobName
@@ -237,7 +238,7 @@ def test_required_health_server_survives_endpoint_registry_failure(monkeypatch, 
     registry = _FailingRegistry()
     job_info = JobInfo(task_id=JobName.from_wire("/alice/parent/train/0"), advertise_host="127.0.0.1")
     port_file = tmp_path / "health-port"
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(port_file))
+    monkeypatch.setattr(iris_health, "HEALTH_PORT_FILE", str(port_file))
     monkeypatch.setenv("IRIS_PORT_HEALTHZ", "0")
     monkeypatch.setattr(training_control.jax, "process_index", lambda: 0)
     monkeypatch.setattr(training_control, "get_iris_ctx", lambda: SimpleNamespace(registry=registry))
@@ -260,7 +261,7 @@ def test_required_health_server_survives_endpoint_registry_failure(monkeypatch, 
 
 
 def test_required_health_server_rejects_an_unmonitored_training_process(monkeypatch, tmp_path):
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(tmp_path / "health-port"))
+    monkeypatch.setattr(iris_health, "HEALTH_PORT_FILE", str(tmp_path / "health-port"))
     monkeypatch.setenv("IRIS_PORT_HEALTHZ", "0")
 
     with pytest.raises(RuntimeError, match="progress watchdog"):
@@ -270,7 +271,7 @@ def test_required_health_server_rejects_an_unmonitored_training_process(monkeypa
 
 def test_task_local_leader_serves_health_without_registering_a_public_endpoint(monkeypatch, tmp_path):
     port_file = tmp_path / "health-port"
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(port_file))
+    monkeypatch.setattr(iris_health, "HEALTH_PORT_FILE", str(port_file))
     monkeypatch.setenv("IRIS_PORT_HEALTHZ", "0")
     monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_PROCESS_INDEX", "0")
     monkeypatch.setattr(training_control.jax, "process_index", lambda: 4)

@@ -12,7 +12,7 @@ Status codes from 200 through 399 mean healthy. Other status codes mean unhealth
 
 The probe does not follow redirects. A redirect status is healthy without a second request.
 
-The task server binds `IRIS_BIND_HOST`. It reads `IRIS_PORT_HEALTHZ` as the requested port. A value of `0` permits kernel port selection. After listen starts, the task publishes the real port through the Python API below.
+The task server reads `IRIS_PORT_HEALTHZ` as the requested port. A value of `0` permits kernel port selection. After listen starts, the task publishes the real port through the Python API below. The Levanter process-zero dashboard binds `0.0.0.0`. Other task leaders bind `127.0.0.1` because only the local backend probe uses their server.
 
 ## Public Python API
 
@@ -30,12 +30,23 @@ HEALTH_PATH = "/healthz"
 HEALTH_PORT_NAME = "healthz"
 
 
-@dataclass(frozen=True)
-class TaskHealthCheck:
+class IrisTaskHealthCheck:
+    @staticmethod
+    def from_request(request: TaskHealthCheckRequest | None) -> "IrisTaskHealthCheck": ...
+
+    def apply_to(self, target: job_pb2.TaskHealthCheck) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TaskHealthCheck(IrisTaskHealthCheck):
     startup_timeout: Duration
     period: Duration
     request_timeout: Duration
     failure_threshold: int
+
+
+@dataclass(frozen=True, slots=True)
+class NoopIrisTaskHealthCheck(IrisTaskHealthCheck): ...
 
 
 def task_health_port() -> int:
@@ -54,19 +65,19 @@ def task_health_enabled() -> bool:
 def publish_task_health(port: int) -> None:
     """Publish the listening health port.
 
-    The function writes the port atomically to IRIS_HEALTH_PORT_FILE. When Iris
-    allocates a positive port, the published port must have the same value. The
-    function raises ValueError for an invalid or different port.
+    The function writes the port atomically for the Kubernetes exec probe. When
+    Iris allocates a positive port, the published port must have the same value.
+    The function raises ValueError for an invalid or different port.
     """
 ```
 
 `IrisClient.submit`, `RemoteClusterClient.submit_job`, and their protocols add this parameter:
 
 ```python
-health_check: TaskHealthCheck | None = None
+health_check: IrisTaskHealthCheck = NOOP_IRIS_TASK_HEALTH_CHECK
 ```
 
-`None` disables all health behavior and does not reserve a port.
+The no-op policy disables all health behavior and does not reserve a port. `IrisTaskHealthCheck.from_request` converts Fray's optional structural request to either `TaskHealthCheck` or `NoopIrisTaskHealthCheck` at the backend boundary.
 
 ### Fray
 
@@ -140,16 +151,13 @@ ALTER TABLE job_config ADD COLUMN health_check_json TEXT;
 
 ## Runtime Files and Environment
 
-Iris adds these environment values for enabled tasks:
+Iris adds one environment value for enabled tasks:
 
 ```text
 IRIS_PORT_HEALTHZ=<allocated-port-or-zero>
-IRIS_HEALTH_PORT_FILE=/tmp/iris/health-port
-IRIS_HEALTH_FAILURE_COUNT_FILE=/tmp/iris/health-failures
-IRIS_HEALTH_TERMINATION_FILE=/tmp/iris/health-termination-log
 ```
 
-`publish_task_health` creates the parent directory and replaces the port file atomically. The file contains one base-10 port and one newline. Its mode is `0644`.
+Kubernetes uses three fixed internal files under `/tmp/iris`: `health-port`, `health-failures`, and `health-termination-log`. These paths are not application configuration. `publish_task_health` creates the parent directory and replaces `health-port` atomically. The file contains one base-10 port and one newline. Its mode is `0644`. The worker-daemon backend probes the allocated port directly and does not read these files.
 
 The Kubernetes probe helper lives at `lib/iris/src/iris/runtime/health_probe.py`. It reads the port file and requests `http://127.0.0.1:<port>/healthz`. It returns process status zero for HTTP 200 through 399. It returns status one for all failures.
 
@@ -157,13 +165,13 @@ The helper accepts `--timeout <seconds>` and applies the configured request time
 
 An enabled Kubernetes task must provide the `iris.runtime.health_probe` module through `$IRIS_VENV` or `$IRIS_PYTHON`. A missing module stays a startup failure.
 
-On a live threshold failure, the helper writes a bounded failure message to `IRIS_HEALTH_TERMINATION_FILE`:
+On a live threshold failure, the helper writes a bounded failure message to `/tmp/iris/health-termination-log`:
 
 ```text
 Task health check failed <count> consecutive times: <detail>
 ```
 
-The live helper keeps its diagnostic count in `IRIS_HEALTH_FAILURE_COUNT_FILE`. Success resets the count and removes the Iris termination file. Startup probes do not change either file.
+The live helper keeps its diagnostic count in `/tmp/iris/health-failures`. Success resets the count and removes the Iris termination file. Startup probes do not change either file.
 
 ## Backend Behavior
 
@@ -196,10 +204,9 @@ startupProbe:
       - bash
       - -lc
       - >-
-        if [ -x "$IRIS_VENV/bin/python" ]; then
-          exec "$IRIS_VENV/bin/python" -m iris.runtime.health_probe --phase startup --timeout <request_timeout>;
-        fi;
-        exec "$IRIS_PYTHON" -m iris.runtime.health_probe --phase startup --timeout <request_timeout>
+        if [ -x "$IRIS_VENV/bin/python" ]; then probe_python="$IRIS_VENV/bin/python";
+        else probe_python="$IRIS_PYTHON"; fi;
+        exec "$probe_python" -m iris.runtime.health_probe --phase startup --timeout <request_timeout>
   periodSeconds: <period>
   timeoutSeconds: <request_timeout + 1>
   initialDelaySeconds: 0
@@ -210,10 +217,9 @@ livenessProbe:
       - bash
       - -lc
       - >-
-        if [ -x "$IRIS_VENV/bin/python" ]; then
-          exec "$IRIS_VENV/bin/python" -m iris.runtime.health_probe --phase live --timeout <request_timeout> --failure-threshold <failure_threshold>;
-        fi;
-        exec "$IRIS_PYTHON" -m iris.runtime.health_probe --phase live --timeout <request_timeout> --failure-threshold <failure_threshold>
+        if [ -x "$IRIS_VENV/bin/python" ]; then probe_python="$IRIS_VENV/bin/python";
+        else probe_python="$IRIS_PYTHON"; fi;
+        exec "$probe_python" -m iris.runtime.health_probe --phase live --timeout <request_timeout> --failure-threshold <failure_threshold>
   periodSeconds: <period>
   timeoutSeconds: <request_timeout + 1>
   initialDelaySeconds: 0

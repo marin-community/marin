@@ -418,6 +418,7 @@ def test_build_pod_manifest_task_container_falls_back_to_logs_on_error():
 
 def test_build_pod_manifest_uses_native_task_health_probes():
     request = make_run_req("/test-job/0")
+    request.ports.append("healthz")
     request.health_check.startup_timeout.milliseconds = 30 * 60 * 1000
     request.health_check.period.milliseconds = 10 * 1000
     request.health_check.request_timeout.milliseconds = 3 * 1000
@@ -428,7 +429,9 @@ def test_build_pod_manifest_uses_native_task_health_probes():
     env = {item["name"]: item.get("value") for item in container["env"]}
 
     assert env["IRIS_PORT_HEALTHZ"] == "0"
-    assert env["IRIS_HEALTH_PORT_FILE"] == "/tmp/iris/health-port"
+    assert "IRIS_HEALTH_PORT_FILE" not in env
+    assert "IRIS_HEALTH_FAILURE_COUNT_FILE" not in env
+    assert "IRIS_HEALTH_TERMINATION_FILE" not in env
     assert container["startupProbe"]["periodSeconds"] == 10
     assert container["startupProbe"]["timeoutSeconds"] == 4
     assert container["startupProbe"]["failureThreshold"] == 181

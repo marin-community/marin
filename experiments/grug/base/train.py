@@ -581,6 +581,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     and backward_flow_config.interval > 0
                     and current_step % backward_flow_config.interval == 0
                 )
+                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                 state, metrics, watch_stats = train_step(
                     state,
                     batch,
@@ -593,6 +594,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
                 duration = time.perf_counter() - step_start
                 backward_flow_timing_metrics = None
                 if compute_backward_flow:
@@ -633,7 +635,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         )
 
                 if checkpointer is not None:
-                    checkpointer.on_step(tree=state, step=int(state.step))
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
+                        checkpointer.on_step(tree=state, step=int(state.step))
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
@@ -643,8 +650,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                checkpointer.wait_until_finished()
+                with callbacks.progress_event_scope(
+                    state_callbacks.emit_event,
+                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                ):
+                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                    checkpointer.wait_until_finished()
+        finally:
+            state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
 

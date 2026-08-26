@@ -20,7 +20,7 @@ Add an optional `TaskHealthCheck` to the Iris job specification. The contract ha
 
 The application owns the HTTP response. Status codes from 200 through 399 mean healthy. A different status, connection error, or request timeout means unhealthy. Iris does not follow redirects or parse the response body. Applications can return a small JSON report for diagnosis.
 
-The application reads its bind port from `IRIS_PORT_HEALTHZ`. On worker-daemon backends, Iris assigns a real host port. On Kubernetes, the value is zero, so the server can ask the kernel for a port. After listen starts, the application calls `publish_task_health(port)`. The helper records the selected port in `IRIS_HEALTH_PORT_FILE` for local probes.
+The application reads its bind port from `IRIS_PORT_HEALTHZ`. On worker-daemon backends, Iris assigns a real host port. On Kubernetes, the value is zero, so the server can ask the kernel for a port. After listen starts, the application calls `publish_task_health(port)`. The helper records the selected port at the fixed internal path `/tmp/iris/health-port` for the Kubernetes exec probe. The worker daemon probes its allocated port directly.
 
 The health state has two phases. During startup, Iris waits for the first successful request until `startup_timeout`. After the first success, each success clears the failure count. Iris fails the task after `failure_threshold` consecutive failures.
 
@@ -30,7 +30,7 @@ The worker-daemon path extends the task monitor at [`task_attempt.py:808`](https
 
 A worker restart restores the health config from Docker labels. The monitor writes a live-phase marker after the first success. Adoption reads this marker. Without a marker, adoption keeps the original startup deadline from the container start time. It never grants a new startup window.
 
-The Kubernetes path adds `startupProbe` and `livenessProbe` to the task Pod at [`tasks.py:862`](https://github.com/marin-community/marin/blob/442825abf3939d971c6f12d48af1ce835556d0dd/lib/iris/src/iris/cluster/backends/k8s/tasks.py#L862). Each probe runs the Iris health helper inside the task container. The helper reads `IRIS_HEALTH_PORT_FILE` and requests localhost `/healthz`. This keeps Kubernetes-native probe control and supports dynamic ports with `hostNetwork`.
+The Kubernetes path adds `startupProbe` and `livenessProbe` to the task Pod. Each probe runs the Iris health helper inside the task container. The helper reads `/tmp/iris/health-port` and requests localhost `/healthz`. This keeps Kubernetes-native probe control and supports dynamic ports with `hostNetwork`.
 
 The Kubernetes helper keeps a local live-failure count for diagnostic output. On the threshold failure, it writes a bounded message to a dedicated termination file. The startup helper never writes this file. Because task Pods use `restartPolicy: Never`, kubelet termination makes the Pod fail. The existing Kubernetes backend then reports an application failure and applies `max_retries_failure`.
 
@@ -63,17 +63,13 @@ The first rollout enables this contract for the Grug EP hero dispatcher. Use a 3
 
 ## Testing
 
-Unit tests will cover the startup and consecutive-failure state machine with a fake clock. Response success, timeout, connection failure, and counter reset each need one boundary test.
+Unit tests cover the startup and consecutive-failure state machine with a fake clock. They cover response success, connection failure, counter reset, and process-exit races.
 
-Worker tests will use a local HTTP server. Tests will cover startup failure, 503 failure, recovery, terminal error text, process-exit races, and worker adoption.
+Worker tests use a local HTTP server. They cover startup failure, 503 failure, terminal error text, process-exit races, and worker adoption.
 
-Kubernetes manifest tests will compare the configured startup and liveness probes with the job contract. They will check the exact startup boundary. A Kind test will return 503 and verify that the Pod fails once. It will also verify that a recovered failure leaves no termination message.
+Kubernetes manifest tests compare the configured startup and liveness probes with the job contract. Probe-helper tests cover failure diagnostics and recovery.
 
-Levanter tests will verify one server per Iris task leader. They will verify that only global process zero registers the public training endpoint. They will also cover required health startup without checkpoint support.
-
-A timing test will verify that Levanter exits before the Iris threshold. It will cover the 60-second watchdog poll and the 20-second diagnostic budget.
-
-A controller test will verify coscheduled failure accounting. It will charge the unhealthy attempt and mark sibling attempts `COSCHED_FAILED`.
+Levanter tests verify one server per Iris task leader, process-zero endpoint registration, and required health startup without checkpoint support.
 
 ## Open Questions
 

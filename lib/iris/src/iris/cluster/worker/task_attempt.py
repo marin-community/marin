@@ -26,15 +26,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
-from iris.cluster.health import (
-    HEALTH_FAILURE_COUNT_FILE,
-    HEALTH_FAILURE_COUNT_FILE_ENV,
-    HEALTH_PORT_FILE,
-    HEALTH_PORT_FILE_ENV,
-    HEALTH_PORT_NAME,
-    HEALTH_TERMINATION_FILE,
-    HEALTH_TERMINATION_FILE_ENV,
-)
+from iris.cluster.health import HEALTH_PORT_NAME
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
@@ -191,15 +183,6 @@ def build_iris_env(
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
         env[f"IRIS_PORT_{name.upper()}"] = str(port)
-
-    if req.HasField("health_check"):
-        env.update(
-            {
-                HEALTH_PORT_FILE_ENV: HEALTH_PORT_FILE,
-                HEALTH_FAILURE_COUNT_FILE_ENV: HEALTH_FAILURE_COUNT_FILE,
-                HEALTH_TERMINATION_FILE_ENV: HEALTH_TERMINATION_FILE,
-            }
-        )
 
     return env
 
@@ -392,7 +375,9 @@ class TaskAttempt:
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
         instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
         if request.HasField("health_check"):
-            started_at = discovered.started_at or Timestamp.from_ms(0)
+            started_at = discovered.started_at
+            if started_at is None or started_at.epoch_ms() <= 0:
+                raise RuntimeError(f"Cannot adopt health-checked task {task_id}: container start time is unavailable")
             instance._health_startup_deadline = Deadline.after(
                 started_at,
                 duration_from_proto(request.health_check.startup_timeout),
@@ -817,7 +802,11 @@ class TaskAttempt:
             worker_metadata=self._worker_metadata,
             ports=self.ports,
             health_check_json=(
-                json_format.MessageToJson(self.request.health_check, preserving_proto_field_name=True)
+                json_format.MessageToJson(
+                    self.request.health_check,
+                    preserving_proto_field_name=True,
+                    indent=None,
+                )
                 if self.request.HasField("health_check")
                 else ""
             ),

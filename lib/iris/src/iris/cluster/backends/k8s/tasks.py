@@ -54,16 +54,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.health import (
-    HEALTH_FAILURE_COUNT_FILE,
-    HEALTH_FAILURE_COUNT_FILE_ENV,
-    HEALTH_PORT_ENV,
-    HEALTH_PORT_FILE,
-    HEALTH_PORT_FILE_ENV,
-    HEALTH_TERMINATION_FILE,
-    HEALTH_TERMINATION_FILE_ENV,
-    validate_task_health_check,
-)
+from iris.cluster.health import validate_task_health_check
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
@@ -137,6 +128,7 @@ from iris.cluster.stats.tables import (
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
+from iris.runtime.health import HEALTH_TERMINATION_FILE
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -851,15 +843,6 @@ def _build_pod_manifest(
         resources=run_req.resources if run_req.HasField("resources") else None,
     )
     combined = {**config.task_env, **dict(run_req.environment.env_vars), **iris_env}
-    if run_req.HasField("health_check"):
-        combined.update(
-            {
-                HEALTH_PORT_ENV: "0",
-                HEALTH_PORT_FILE_ENV: HEALTH_PORT_FILE,
-                HEALTH_FAILURE_COUNT_FILE_ENV: HEALTH_FAILURE_COUNT_FILE,
-                HEALTH_TERMINATION_FILE_ENV: HEALTH_TERMINATION_FILE,
-            }
-        )
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
     # Pod IP via downward API -- not expressible as a static value.
     env_list.append(
