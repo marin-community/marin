@@ -439,6 +439,16 @@ def test_direct_xplane_timeline_parser_recovers_perfetto_style_summary(tmp_path:
     assert summary.trace_provenance.run_ids == ["7"]
 
 
+def test_direct_xplane_timeline_parser_uses_semantic_name_for_generic_tf_op(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "gpu_profile.xplane.pb"
+    _write_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10)
+
+    assert any("moe_up_down" in region.path for region in summary.hierarchical_regions)
+
+
 def test_xplane_host_track_aggregation_preserves_breakdown_and_provenance(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
     xplane_path = tmp_path / "host_profile.xplane.pb"
@@ -878,6 +888,8 @@ def _write_xplane(path: Path) -> None:
     plane.stat_metadata[2].name = "long_name"
     plane.stat_metadata[3].id = 3
     plane.stat_metadata[3].name = "run_id"
+    plane.stat_metadata[4].id = 4
+    plane.stat_metadata[4].name = "name"
 
     _add_xplane_event_metadata(plane, 1, "0")
     _add_xplane_event_metadata(plane, 2, "1")
@@ -896,14 +908,20 @@ def _write_xplane(path: Path) -> None:
     ops.id = 2
     ops.name = "XLA Ops"
     fusion = _add_xplane_event(ops, 3, offset_us=0, duration_us=10)
-    _add_xplane_stat(fusion, 1, "train_step/block_0/fusion")
+    _add_xplane_stat(fusion, 1, "XlaModule:")
     _add_xplane_stat(fusion, 2, "%fusion.1 = f32[8,8] fusion()")
     _add_xplane_stat(fusion, 3, 7)
+    _add_xplane_stat(
+        fusion,
+        4,
+        "jit(fwd_0)/GrugMoePipelineStage.run_blocks/Block/MoEMLP/moe_up_down/pallas_call",
+    )
     _add_xplane_event(ops, 6, offset_us=10, duration_us=20)
     _add_xplane_event(ops, 4, offset_us=100, duration_us=1)
     dot = _add_xplane_event(ops, 5, offset_us=101, duration_us=30)
     _add_xplane_stat(dot, 1, "train_step/block_0/matmul")
     _add_xplane_stat(dot, 2, "%dot.1 = f32[8,8] dot(f32[8,8] %lhs, f32[8,8] %rhs)")
+    _add_xplane_stat(dot, 4, "lowered/dot")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(xspace.SerializeToString())
