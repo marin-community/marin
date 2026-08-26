@@ -42,7 +42,7 @@ use crate::store::compaction::executor::{
     read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
     PlannedSwap,
 };
-use crate::store::compaction::planner::plan;
+use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
@@ -951,16 +951,9 @@ impl Namespace {
                 && compressed_bytes.saturating_add(segment.size_bytes)
                     > PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES
             {
-                let output_min_seq = inputs
-                    .iter()
-                    .map(|input: &SegmentRow| input.min_seq)
-                    .min()
-                    .expect("migration job has inputs");
-                jobs.push(CompactionJob {
-                    inputs: std::mem::take(&mut inputs),
-                    output_level: 1,
-                    output_min_seq,
-                });
+                let input_refs = inputs.iter().collect();
+                jobs.push(build_job(input_refs, 1));
+                inputs.clear();
                 compressed_bytes = 0;
                 if jobs.len() >= limit {
                     break;
@@ -975,16 +968,7 @@ impl Namespace {
             inputs.push(row);
         }
         if jobs.len() < limit && !inputs.is_empty() {
-            let output_min_seq = inputs
-                .iter()
-                .map(|input| input.min_seq)
-                .min()
-                .expect("migration job has inputs");
-            jobs.push(CompactionJob {
-                inputs,
-                output_level: 1,
-                output_min_seq,
-            });
+            jobs.push(build_job(inputs.iter().collect(), 1));
         }
         jobs
     }
@@ -1871,6 +1855,7 @@ impl Namespace {
         true
     }
 
+    /// Advance local layout work and report whether another fast retry is due.
     fn advance_physical_layout_migration(&self) -> Result<bool, StatsError> {
         let migration_slot = match self.physical_layout_migration_slot.try_lock() {
             Ok(slot) => slot,

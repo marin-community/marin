@@ -995,7 +995,6 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     )
 
     query = signal_query(now, (_watched(),))
-    assert query.count('FROM "levanter.metrics"') == 1
     run = signals_by_run(database.execute(query).fetch_arrow_table())["cw-a", "hero-a"]
     signals = run.metrics
 

@@ -113,9 +113,8 @@ pub struct MemorySummary {
 
 /// The filename part of `path`, or `path` itself when it has none.
 ///
-/// Segments are identified by basename nearly everywhere outside the catalog —
-/// logs, the remote archive's object keys, the debug and introspection routes —
-/// because the directory is a property of the store, not of the segment.
+/// Segments are identified by basename in logs and introspection routes. Remote
+/// archive keys use [`segment_relative_key`] so physical partitions survive.
 pub fn basename(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()

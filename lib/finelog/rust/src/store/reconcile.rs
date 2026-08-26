@@ -63,10 +63,18 @@ pub async fn reconcile_remote_segments(
 
     // Catalog rows at L>=1 keyed by relative object key (the durable pointers).
     let catalog_rows = catalog.list_segments_min_level(namespace, 1)?;
-    let mut catalog_by_key: HashMap<String, SegmentRow> = catalog_rows
-        .into_iter()
-        .filter_map(|row| segment_relative_key(local_dir, &row.path).map(|key| (key, row)))
-        .collect();
+    let mut catalog_by_key: HashMap<String, SegmentRow> = HashMap::new();
+    for row in catalog_rows {
+        let Some(key) = segment_relative_key(local_dir, &row.path) else {
+            tracing::warn!(
+                namespace,
+                path = %row.path,
+                "remote catalog segment is outside its namespace directory"
+            );
+            continue;
+        };
+        catalog_by_key.insert(key, row);
+    }
 
     // A REMOTE row is only a pointer into this object listing. If its object is
     // absent after a successful strongly-consistent list, the row is already

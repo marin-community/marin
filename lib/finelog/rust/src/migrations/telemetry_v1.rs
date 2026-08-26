@@ -192,13 +192,8 @@ pub struct PlannedOutput {
     pub file_sha256: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct MigrationDestination {
-    namespace: String,
-}
-
 struct DestinationWriter {
-    destination: MigrationDestination,
+    namespace: String,
     min_seq: i64,
     next_seq: i64,
     rows: i64,
@@ -1114,9 +1109,7 @@ fn write_source_outputs(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
         )? {
-            let destination = MigrationDestination {
-                namespace: partition.destination.logical_namespace,
-            };
+            let destination = partition.destination.logical_namespace;
             if !writers.contains_key(&destination) {
                 let writer =
                     create_destination_writer(&destination, writers.len(), source_offset, config)?;
@@ -1178,7 +1171,7 @@ fn migrated_source_offset(source_index: usize) -> Result<i64, StatsError> {
 }
 
 fn create_destination_writer(
-    destination: &MigrationDestination,
+    namespace: &str,
     output_index: usize,
     source_offset: i64,
     config: &PrepareConfig,
@@ -1192,7 +1185,7 @@ fn create_destination_writer(
         .checked_mul(MIGRATED_SEQ_ROWS_PER_OUTPUT)
         .and_then(|offset| source_offset.checked_add(offset))
         .ok_or_else(|| validation_error("migrated sequence range overflowed"))?;
-    let relative_path = Path::new(&destination.namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
+    let relative_path = Path::new(namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
     let final_path = config.output_dir.join(relative_path);
     let parent = final_path
         .parent()
@@ -1206,8 +1199,7 @@ fn create_destination_writer(
         }
     }
     let file = File::create(&temporary_path).map_err(internal_error("create output segment"))?;
-    let target_schema =
-        schema_to_arrow(&stored_form(migration_schema_for(&destination.namespace)?));
+    let target_schema = schema_to_arrow(&stored_form(migration_schema_for(namespace)?));
     let options =
         ArrowWriterOptions::new().with_properties(segment_writer_properties_with_partition(
             usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
@@ -1217,7 +1209,7 @@ fn create_destination_writer(
     let writer = ArrowWriter::try_new_with_options(file, Arc::clone(&target_schema), options)
         .map_err(internal_error("create output parquet writer"))?;
     Ok(DestinationWriter {
-        destination: destination.clone(),
+        namespace: namespace.to_string(),
         min_seq,
         next_seq: min_seq,
         rows: 0,
@@ -1269,7 +1261,7 @@ fn write_destination_batch(
 }
 
 fn finish_destination_writers(
-    writers: BTreeMap<MigrationDestination, DestinationWriter>,
+    writers: BTreeMap<String, DestinationWriter>,
     output_dir: &Path,
 ) -> Result<Vec<PlannedOutput>, StatsError> {
     let mut outputs = Vec::with_capacity(writers.len());
@@ -1289,7 +1281,7 @@ fn finish_destination_writers(
             .to_string_lossy()
             .into_owned();
         outputs.push(PlannedOutput {
-            namespace: writer.destination.namespace,
+            namespace: writer.namespace,
             relative_path,
             min_seq: writer.min_seq,
             max_seq: writer.next_seq - 1,

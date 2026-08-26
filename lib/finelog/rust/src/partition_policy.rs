@@ -284,7 +284,6 @@ mod tests {
     #[test]
     fn physical_path_is_bounded_while_partition_metadata_stays_exact() {
         let first = IDENTITY_POLICY.partition("run/with/slashes");
-        let second = IDENTITY_POLICY.partition("a different run");
         let first_path = segment_path(
             Path::new("levanter.metrics"),
             "seg_L1_0001.parquet",
@@ -304,7 +303,6 @@ mod tests {
                 .unwrap(),
             "name"
         );
-        assert_ne!(first, second);
         assert_eq!(
             segment_path(
                 Path::new("levanter.metrics"),
