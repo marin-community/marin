@@ -768,8 +768,6 @@ def shard_param_exemplar_over_context(params: ParamsT) -> ParamsT:
             leaf.dtype,
             sharding=sharding,
             weak_type=leaf.weak_type,
-            manual_axis_type=leaf.manual_axis_type,
-            is_ref=leaf.is_ref,
         )
 
     return cast(ParamsT, jax.tree.map(shard_leaf, params))

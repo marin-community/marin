@@ -385,6 +385,27 @@ def test_context_sharded_param_exemplar_combines_data_and_context_mesh_axes():
     assert sharded["replicated"].sharding.spec == P(None)
 
 
+def test_context_sharded_param_exemplar_does_not_require_optional_shape_attributes(monkeypatch):
+    @dataclasses.dataclass(frozen=True)
+    class MinimalShapeDtypeStruct:
+        shape: tuple[int, ...]
+        dtype: object
+        sharding: NamedSharding
+        weak_type: bool = False
+
+    mesh = Mesh(np.asarray(jax.devices()).reshape((1, 1)), ("data", "context"))
+    leaf = MinimalShapeDtypeStruct(
+        (8, 4),
+        jnp.dtype(jnp.float32),
+        NamedSharding(mesh, P("data", None)),
+    )
+    monkeypatch.setattr(jax, "ShapeDtypeStruct", MinimalShapeDtypeStruct)
+
+    sharded = shard_param_exemplar_over_context({"weight": leaf})
+
+    assert sharded["weight"].sharding.spec == P(("data", "context"), None)
+
+
 def test_next_token_labels_preserve_context_sharded_sequence():
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
