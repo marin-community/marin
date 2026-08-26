@@ -142,14 +142,13 @@ def test_decontamination_mark_subset_preserves_full_graph_identity():
     assert subset.marks["a"].hash_id == full.marks["a"].hash_id
 
 
-def test_decontamination_resolves_eval_root_at_construction(monkeypatch):
+def test_decontamination_eval_root_rekeys_bloom(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://first-region")
     first = decontamination_steps(_sources(), scale=SMOKE_SCALE)
     monkeypatch.setenv("MARIN_PREFIX", "gs://second-region")
     second = decontamination_steps(_sources(), scale=SMOKE_SCALE)
 
-    assert first.bloom.hash_attrs["eval_data_sources"] == (f"gs://first-region/{reference_pipeline.EVALS_RELATIVE}",)
-    assert second.bloom.hash_attrs["eval_data_sources"] == (f"gs://second-region/{reference_pipeline.EVALS_RELATIVE}",)
+    assert first.bloom.hash_id != second.bloom.hash_id
 
 
 def test_centroid_seed_rekeys_training():

@@ -76,23 +76,23 @@ def _sample_flagged_rows(output_dir: str, limit: int, seed: int) -> tuple[list[d
     return rows, used_files
 
 
-def _completed_marks() -> tuple[dict[str, StepSpec], dict[str, StepSpec]]:
-    sources = select_sources(None)
-    decon = decontamination_steps(sources)
+def _completed_marks(all_marks: dict[str, StepSpec]) -> dict[str, StepSpec]:
     complete: dict[str, StepSpec] = {}
-    for name, step in decon.marks.items():
+    for name, step in all_marks.items():
         if StoragePath(f"{step.output_path.rstrip('/')}/.artifact.json").exists():
             complete[name] = step
-    return complete, decon.marks
+    return complete
 
 
-def _wait_for_marks(minimum_sources: int, timeout: int) -> tuple[dict[str, StepSpec], dict[str, StepSpec]]:
+def _wait_for_marks(all_marks: dict[str, StepSpec], minimum_sources: int, timeout: int) -> dict[str, StepSpec]:
+    if minimum_sources > len(all_marks):
+        raise ValueError(f"minimum sources {minimum_sources} exceeds the {len(all_marks)} configured marks")
     deadline = time.monotonic() + timeout
     while True:
-        complete, all_marks = _completed_marks()
+        complete = _completed_marks(all_marks)
         logger.info("completed marks: %d/%d; gate=%d", len(complete), len(all_marks), minimum_sources)
         if len(complete) >= minimum_sources:
-            return complete, all_marks
+            return complete
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"only {len(complete)}/{len(all_marks)} marks completed before the timeout")
@@ -186,8 +186,12 @@ def main() -> None:
         parser.error("--minimum-sources must be positive")
     if args.timeout < 0:
         parser.error("--timeout must be nonnegative")
+    if args.samples_per_source <= 0:
+        parser.error("--samples-per-source must be positive")
 
-    complete, all_marks = _wait_for_marks(args.minimum_sources, args.timeout)
+    sources = select_sources(None)
+    all_marks = decontamination_steps(sources).marks
+    complete = _wait_for_marks(all_marks, args.minimum_sources, args.timeout)
     sampled_by_source: dict[str, list[dict]] = {}
     sample_files: dict[str, list[str]] = {}
     source_hash_counts: dict[str, Counter[int]] = {}
@@ -236,7 +240,7 @@ def main() -> None:
             eval_hits: Counter[str] = Counter()
             families: Counter[str] = Counter()
             for feature_hash in matched_hashes:
-                for eval_id in hash_to_evals.get(feature_hash, ()):
+                for eval_id in sorted(hash_to_evals.get(feature_hash, ())):
                     eval_hits[eval_id] += 1
                     families[_eval_family(eval_id)] += 1
             chosen_evals = eval_hits.most_common(MAX_MATCHED_EVALS)
@@ -265,7 +269,7 @@ def main() -> None:
         total = contaminated + clean
         family_counts: Counter[str] = Counter()
         for feature_hash, count in source_hash_counts[source].items():
-            for eval_id in hash_to_evals.get(feature_hash, ()):
+            for eval_id in sorted(hash_to_evals.get(feature_hash, ())):
                 family_counts[_eval_family(eval_id)] += count
         for family, count in family_counts.items():
             if family in AA_BENCHMARK_NAMES:
