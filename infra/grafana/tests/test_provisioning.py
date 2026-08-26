@@ -708,10 +708,21 @@ def test_training_run_selector_uses_a_fixed_discovery_window():
     sql = next(
         param["value"] for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
     )
+    at = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute('CREATE TABLE "levanter.metrics"(run_id VARCHAR, step BIGINT, timestamp_ms BIGINT)')
+    database.executemany(
+        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?)',
+        [
+            ("recent-run", 100, int((at.timestamp() - 3_600) * 1_000)),
+            ("old-run", 200, int((at.timestamp() - 3 * 86_400) * 1_000)),
+        ],
+    )
+    sql = sql.replace("now()", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
+    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-19 12:00:00+00:00'")
+    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
 
-    assert "now() - INTERVAL '12 hours'" in sql
-    assert "{{from}}" not in sql
-    assert "{{to}}" not in sql
+    assert database.execute(sql).fetchall() == [("recent-run",)]
 
 
 def test_cluster_series_keep_one_colour_across_dashboards():

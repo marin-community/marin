@@ -2554,7 +2554,7 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Spawn the per-namespace maintenance task.
+/// Run remote reconciliation before periodic maintenance when requested.
 ///
 /// When `reconcile_first` is set, the task FIRST runs the boot remote reconcile
 /// (adopt unknown remote parquet, redundancy-drop covered segments), then enters
@@ -2568,11 +2568,10 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
 /// Every `check_interval` the loop runs one `run_maintenance` cycle (compaction
 /// drain, then sync, then evict). A physical-layout backlog shortens only the
 /// next delay to 100 ms, so the streaming rebuild continues without a 30 s gap
-/// while each cycle still flushes and syncs live writes. The cycle's heavy work
-/// is dispatched onto `spawn_blocking` inside `run_maintenance`, so the reactor
-/// is never stalled. On the stop notify the task exits immediately WITHOUT a
-/// final maintenance cycle; the final drain-to-disk and reconcile on shutdown
-/// are handled by [`Namespace::shutdown`].
+/// while each cycle still flushes and syncs live writes. On the stop notify the
+/// task exits immediately WITHOUT a final maintenance cycle; the final
+/// drain-to-disk and reconcile on shutdown are handled by
+/// [`Namespace::shutdown`].
 fn spawn_maintenance_task(
     ns: Arc<Namespace>,
     reconcile_first: bool,
