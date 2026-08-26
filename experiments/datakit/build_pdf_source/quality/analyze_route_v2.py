@@ -47,6 +47,7 @@ visual-token budget instead of skipping the page.
 
 import json
 import logging
+import math
 from dataclasses import asdict, dataclass
 
 import fsspec
@@ -56,7 +57,7 @@ import xgboost as xgb
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.build_pdf_source.ocr_extract.render import DEFAULT_MAX_VISUAL_TOKENS
+from experiments.datakit.build_pdf_source.ocr_extract.render import DEFAULT_MAX_RENDER_DPI, DEFAULT_MAX_VISUAL_TOKENS
 from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
 from experiments.datakit.build_pdf_source.quality.analyze_route_study import read_table
 from experiments.datakit.build_pdf_source.quality.build_inspector_output_study import (
@@ -630,11 +631,28 @@ def gate_report(frame: pl.DataFrame) -> dict:
     for budget, gpu_hours in sorted(BUDGET_SWEEP.items()):
         rescued = affected.filter(contract.legible_at_budget(budget))
         rescued_pages = float(rescued["num_pages"].cast(pl.Float64).sum())
+        # The DPI these pages would actually be rendered at, as distinct from what a Letter page
+        # gets. This is the number that decides whether the published sweep's reasoning applies:
+        # it stopped above 8192 because the 300-DPI upscale cap binds there and a bigger budget
+        # would re-render near-identical payloads. On the gated set the cap is nowhere near
+        # binding -- these are large-format sheets rendering at a fraction of it -- so the sweep's
+        # conclusion is about a different population than the one this gate is about.
+        gated_dpi = rescued if rescued.height else affected
+        scaled = gated_dpi.select(
+            dpi=pl.min_horizontal(
+                pl.col("mean_render_dpi") * math.sqrt(budget / DEFAULT_MAX_VISUAL_TOKENS),
+                pl.lit(DEFAULT_MAX_RENDER_DPI),
+            )
+        )["dpi"]
         options[budget] = {
-            "median_dpi": contract.dpi_at_budget(146.0, budget),
+            "letter_page_median_dpi": contract.dpi_at_budget(146.0, budget),
+            "gated_page_median_dpi": float(scaled.median()),
+            "gated_page_p90_dpi": float(scaled.quantile(0.9)),
+            "gated_pages_at_upscale_cap": float((scaled >= DEFAULT_MAX_RENDER_DPI).mean()),
             "throughput_measured": budget not in EXTRAPOLATED_BUDGETS,
             "gpu_hours_per_million_pages": gpu_hours,
             "documents_made_legible": rescued.height,
+            "documents_still_gated": affected.height - rescued.height,
             "pages_made_legible": rescued_pages,
             "share_of_corpus_pages_rescued": rescued_pages / total_pages,
             # Raising the budget globally charges every escalated page the higher rate.
@@ -694,8 +712,9 @@ def gate_report(frame: pl.DataFrame) -> dict:
 
 def frontier_table(result: ArmResult) -> str:
     lines = [
+        "  net of the forced escalations          |      gross, whole corpus",
         f"  {'docs':>6} {'pages':>7} {'loss/pg':>8} {'loss/doc':>9} {'catches':>8} {'marg':>6} "
-        f"{'per resc':>8} | {'corpus pg':>10} {'core-h/M':>9} {'GPU-h/M':>8} {'crawl core-h':>13}"
+        f"{'per resc':>8} | {'gross pg':>9} {'core-h/M':>9} {'GPU-h/M':>8} {'crawl core-h':>13}",
     ]
     for budget in REPORTED_BUDGETS:
         point = result.points[budget]
