@@ -4,9 +4,16 @@
 """Validate the ragged all-to-all EP path on a 4-GPU node.
 
 The guard for the EP64 tuning loop: a hero arm costs a production rack, so any change to the
-transport's offset arithmetic or expert kernels earns one only after this passes. All-to-all is
-GPU-only, so this cannot run in CPU CI. The run carries the hero's ragged XLA flags, so it
-exercises the device-initiated kernel the hero actually uses.
+transport's offset arithmetic or expert kernels earns one only after this passes. By default the
+run carries the hero's ragged XLA flags, so it covers the device-initiated kernel the hero uses;
+``--transport-kernel`` selects otherwise and the verdict records which one ran.
+
+Nothing invokes this on a schedule. All-to-all is GPU-only so it cannot run in CPU CI, and the
+repository has no marker, fixture, or workflow for a test that needs particular accelerators
+(#8704) -- ``tests/cluster/`` covers submitting a job to a standing cluster but names only the
+TPU and H100 peers. So this is launched by hand, and it lives beside the other remote harnesses
+in this directory rather than under ``tests/``. It belongs in ``tests/cluster/`` once #8704 adds
+a GB200 lane and a cost tier.
 
 A. Ground truth. At a capacity factor high enough that nothing is dropped, every token reaches
    every expert it selected, so the transport computes exactly the dense MoE. The gate compares
