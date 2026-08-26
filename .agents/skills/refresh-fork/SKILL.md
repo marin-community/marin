@@ -114,10 +114,9 @@ temporary source descriptor or add a second tpu-inference requirement.
 7. Run focused Marin checks, then run the sole physical gate in **Validate**.
    Open one draft Marin PR with the release and validation receipt. Do not add a
    second physical qualification or exact-byte protocol.
-8. After the producer change merges, mark the same GitHub release final without
-   rebuilding or replacing either asset. Read back the unchanged asset IDs and
-   digests. Land the Marin consumer with any tpu-inference compatibility change,
-   then land this refresh procedure.
+8. After validation, mark the same GitHub release final without rebuilding or
+   replacing either asset. Read back the unchanged asset IDs and digests before
+   landing the Marin consumer.
 
 Rebuild and rerun the physical gate only after a change that can affect the
 wheel bytes or metadata, selected assets, producer path, Marin requirement, or
@@ -158,13 +157,10 @@ suffix). Single-pin forks and the vLLM GPU pin use `main-next`. This staging bra
 force-updates it — and is distinct from the protected stable `<branch>`, which the
 unattended refresh leaves unchanged.
 
-Find the base our commits currently sit on: `old_base` is the descriptor's
-`upstream_base` (descriptor pins) or `git merge-base <fork>/<branch> upstream/HEAD`
-(isolated and release pins, where it is not recorded). `old_tip` is the head of our
-patches: the fork's `main` for isolated pins (Marin's recorded pin may lag `main`, so
-rebase from `main` to cover the full patch set), or the pin's stable `<branch>` tip for
-descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
-`source_commit`). Then, onto `new_base`:
+Find the base our commits currently sit on. For an isolated pin, `old_tip` is the
+fork's `main` because Marin's recorded lock may lag the fork. For the `vllm-gpu`
+release pin, `old_tip` is `gpu.toml`'s `source_commit`. Resolve `old_base` with
+`git merge-base <old_tip> upstream/HEAD`. Then, onto `new_base`:
 
 1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
    Merge commits (especially merges of `upstream` into a feature branch) are not
