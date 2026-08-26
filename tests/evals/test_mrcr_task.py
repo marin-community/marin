@@ -6,7 +6,7 @@ import json
 import datasets
 import pytest
 
-from experiments.evaluation.tasks.mrcr.utils import (
+from experiments.evaluation.tasks.mrcr.benchmark import (
     mrcr_bin,
     process_docs,
     process_results,

@@ -32,8 +32,6 @@ def render_prompt(doc: dict) -> str:
 
 
 def doc_to_target(doc: dict) -> str:
-    """Return the nonce-prefixed reference response."""
-
     return doc["answer"]
 
 
@@ -62,14 +60,25 @@ def _model_tokenizer(name: str) -> PreTrainedTokenizerBase:
     return AutoTokenizer.from_pretrained(name)
 
 
-def _fits_served_context(doc: dict) -> bool:
+@cache
+def _served_context() -> tuple[int, int, str] | None:
     max_length = os.environ.get(MRCR_MAX_LENGTH_ENV)
     max_gen_toks = os.environ.get(MRCR_MAX_GEN_TOKS_ENV)
     tokenizer_name = os.environ.get(MRCR_TOKENIZER_ENV)
+    if max_length is None and max_gen_toks is None and tokenizer_name is None:
+        return None
     if max_length is None or max_gen_toks is None or tokenizer_name is None:
+        raise ValueError("MRCR context filtering requires max length, generation budget, and tokenizer")
+    return int(max_length), int(max_gen_toks), tokenizer_name
+
+
+def _fits_served_context(doc: dict) -> bool:
+    served_context = _served_context()
+    if served_context is None:
         return True
+    max_length, max_gen_toks, tokenizer_name = served_context
     prompt_tokens = len(_model_tokenizer(tokenizer_name).encode(render_prompt(doc), add_special_tokens=True))
-    return prompt_tokens + int(max_gen_toks) <= int(max_length)
+    return prompt_tokens + max_gen_toks <= max_length
 
 
 def _ordered_docs(dataset: datasets.Dataset, *, one_per_cell: bool) -> datasets.Dataset:

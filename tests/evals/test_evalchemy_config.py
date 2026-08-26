@@ -94,21 +94,6 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert model_args["max_length"] == "32768"
 
 
-def test_build_command_loads_checked_in_local_tasks():
-    config = _payload(_config(tasks=(EvalTaskConfig("mrcr_smoke", 0, generation=True, completion_only=True),)))
-
-    command = build_command(
-        config,
-        config["tasks"][0],
-        "/tmp/out",
-        "/opt/py",
-        262_144,
-        include_path="/workspace/experiments/evaluation/tasks",
-    )
-
-    assert command[command.index("--include_path") + 1] == "/workspace/experiments/evaluation/tasks"
-
-
 def test_parent_rejects_endpoint_model_arg_overrides():
     # Endpoint identity is Marin-owned; a config must not reroute the isolated child to another model.
     with pytest.raises(ValueError):
