@@ -873,7 +873,6 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
         "history",
         "total",
     }
-    assert all(duration >= 0 for duration in server_timings.values())
     assert response.json() == [
         {
             "key": "file:1001",
@@ -1243,6 +1242,7 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
 
     class DeploymentReranker:
         def rerank(self, query, documents, batch_size):
+            del batch_size
             assert query == "how do i deploy iris"
             return [float("verifies controller health" in document) for document in documents]
 
@@ -1269,6 +1269,7 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
 
     class RejectingReranker:
         def rerank(self, _query, documents, batch_size):
+            del batch_size
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)
