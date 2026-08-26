@@ -416,7 +416,7 @@ def test_direct_xplane_timeline_parser_recovers_perfetto_style_summary(tmp_path:
 
     assert summary.source_format == "xplane_pb"
     assert summary.trace_overview.display_time_unit == "us"
-    assert summary.trace_overview.num_complete_events == 6
+    assert summary.trace_overview.num_complete_events == 7
     assert summary.trace_overview.num_processes == 1
     assert summary.trace_overview.num_threads == 2
     assert summary.step_time.all_steps.count == 2
@@ -437,6 +437,17 @@ def test_direct_xplane_timeline_parser_recovers_perfetto_style_summary(tmp_path:
     assert "train_step" in region_paths
     assert "train_step=>block_0=>matmul" in region_paths
     assert summary.trace_provenance.run_ids == ["7"]
+
+
+def test_direct_xplane_timeline_parser_uses_semantic_name_for_generic_tf_op(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "gpu_profile.xplane.pb"
+    _write_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10)
+
+    assert any("moe_up_down" in region.path for region in summary.hierarchical_regions)
+    assert not any("fabricated" in region.path for region in summary.hierarchical_regions)
 
 
 def test_xplane_host_track_aggregation_preserves_breakdown_and_provenance(tmp_path: Path, monkeypatch) -> None:
@@ -464,7 +475,7 @@ def test_profile_dir_prefers_xplane_over_capped_perfetto_trace(tmp_path: Path, m
     summary = summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
 
     assert summary.source_format == "xplane_pb"
-    assert summary.trace_overview.num_complete_events == 6
+    assert summary.trace_overview.num_complete_events == 7
 
 
 def test_profile_dir_falls_back_to_perfetto_for_multiple_xplane_files(tmp_path: Path, monkeypatch) -> None:
@@ -582,7 +593,7 @@ def test_summarize_cli_profile_dir_uses_xplane_default(tmp_path: Path, monkeypat
     assert capsys.readouterr().out.strip() == str(output_path)
     summary = profile_summary_from_dict(json.loads(output_path.read_text(encoding="utf-8")))
     assert summary.source_format == "xplane_pb"
-    assert summary.trace_overview.num_complete_events == 6
+    assert summary.trace_overview.num_complete_events == 7
 
 
 def test_summarize_cli_xplane_file_honors_breakdown_mode(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -700,7 +711,7 @@ def test_summarize_xplane_with_installed_xprof_exports_tables(tmp_path: Path) ->
     assert summary.trace_overview.duration_basis.endswith("+xprof_aggregate_tables")
     assert output_dir.exists()
     assert (output_dir / "overview_page.json").exists()
-    assert summary.trace_overview.num_complete_events == 6
+    assert summary.trace_overview.num_complete_events == 7
 
 
 def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Path, monkeypatch) -> None:
@@ -878,6 +889,8 @@ def _write_xplane(path: Path) -> None:
     plane.stat_metadata[2].name = "long_name"
     plane.stat_metadata[3].id = 3
     plane.stat_metadata[3].name = "run_id"
+    plane.stat_metadata[4].id = 4
+    plane.stat_metadata[4].name = "name"
 
     _add_xplane_event_metadata(plane, 1, "0")
     _add_xplane_event_metadata(plane, 2, "1")
@@ -885,6 +898,7 @@ def _write_xplane(path: Path) -> None:
     _add_xplane_event_metadata(plane, 4, "%iota.296 = s32[8] iota()", display_name="iota.296")
     _add_xplane_event_metadata(plane, 5, "%dot.1 = f32[8,8] dot()", display_name="dot.1")
     _add_xplane_event_metadata(plane, 6, "all-reduce.1")
+    _add_xplane_event_metadata(plane, 7, "kernel_without_tf_op")
 
     steps = plane.lines.add()
     steps.id = 1
@@ -896,14 +910,22 @@ def _write_xplane(path: Path) -> None:
     ops.id = 2
     ops.name = "XLA Ops"
     fusion = _add_xplane_event(ops, 3, offset_us=0, duration_us=10)
-    _add_xplane_stat(fusion, 1, "train_step/block_0/fusion")
+    _add_xplane_stat(fusion, 1, "XlaModule:")
     _add_xplane_stat(fusion, 2, "%fusion.1 = f32[8,8] fusion()")
     _add_xplane_stat(fusion, 3, 7)
+    _add_xplane_stat(
+        fusion,
+        4,
+        "jit(fwd_0)/GrugMoePipelineStage.run_blocks/Block/MoEMLP/moe_up_down/pallas_call",
+    )
     _add_xplane_event(ops, 6, offset_us=10, duration_us=20)
     _add_xplane_event(ops, 4, offset_us=100, duration_us=1)
     dot = _add_xplane_event(ops, 5, offset_us=101, duration_us=30)
     _add_xplane_stat(dot, 1, "train_step/block_0/matmul")
     _add_xplane_stat(dot, 2, "%dot.1 = f32[8,8] dot(f32[8,8] %lhs, f32[8,8] %rhs)")
+    _add_xplane_stat(dot, 4, "lowered/dot")
+    unnamed = _add_xplane_event(ops, 7, offset_us=132, duration_us=10)
+    _add_xplane_stat(unnamed, 4, "fabricated/scope")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(xspace.SerializeToString())
