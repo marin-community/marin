@@ -238,8 +238,11 @@ Conversion updates the manifest after each source segment is durable. A
 completed manifest records every source checksum, destination sequence range,
 row count, stable row-identity checksum, output checksum, and the source catalog
 checksum. Re-running preparation resumes from verified completed source
-segments. Wrap operational invocations in an explicit deadline; the current
-hot-store rehearsal completed preparation in under two minutes:
+segments. `verify-telemetry-v1` rereads the source snapshot and every staged
+Parquet, then records `verified_at_ms` in the manifest. Publish refuses a staged
+manifest without that marker. Wrap operational invocations in an explicit
+deadline; the current hot-store rehearsal completed preparation in under two
+minutes:
 
 ```bash
 timeout 15m finelog-migrate prepare-telemetry-v1 \
@@ -259,10 +262,12 @@ and replaces a catalog derived from the latest live catalog. It leaves the
 root namespace queryable. Old root-only queries and new semantic-only queries
 therefore each see one copy of the rows; a root-plus-semantic union would count
 them twice. Deploy the semantic-only Grafana and Iris queries after publish.
-Publish verifies every linked file and catalog row before recording the phase.
-After the server restarts, ordinary compaction may replace those L0 paths;
-subsequent verification checks the immutable staged outputs and registered
-semantic namespaces instead of requiring the original live filenames.
+Publish trusts the completed pre-cutover verification: while Finelog is stopped,
+it only hard-links the staged files, builds and swaps the catalog, and checks the
+new catalog rows before recording the phase. It does not reread Parquet contents
+or recompute checksums. After the server restarts, ordinary compaction may replace
+those L0 paths; subsequent verification checks the immutable staged outputs and
+registered semantic namespaces instead of requiring the original live filenames.
 
 Once those queries are live, stop Finelog for the second short cutover:
 

@@ -35,7 +35,7 @@ use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
-const MANIFEST_VERSION: u32 = 5;
+const MANIFEST_VERSION: u32 = 6;
 const POLICY_REVISION: &str = "typed-levanter-run-partition-v2-step-index";
 const MIGRATION_SOURCE_NAMESPACES: [&str; 1] = [TELEMETRY_NAMESPACE];
 const OUTPUT_LEVEL: i32 = 0;
@@ -94,6 +94,8 @@ pub struct MigrationManifest {
     pub final_log_dir: String,
     pub complete: bool,
     pub phase: MigrationPhase,
+    #[serde(default)]
+    pub verified_at_ms: Option<i64>,
     pub input_rows: i64,
     pub output_rows: i64,
     pub suppressed_rows: i64,
@@ -181,7 +183,7 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
 
     verify_source_segments(&config.source_dir, &manifest)?;
     if manifest.complete {
-        return verify_store(&config.source_dir, &config.output_dir, config.batch_rows);
+        return Ok(manifest);
     }
     write_planned_outputs(config, &mut manifest)?;
     if manifest
@@ -202,7 +204,7 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
     manifest.complete = true;
     manifest.phase = MigrationPhase::Staged;
     write_manifest(&manifest_path, &manifest)?;
-    verify_store(&config.source_dir, &config.output_dir, config.batch_rows)
+    Ok(manifest)
 }
 
 pub fn verify_store(
@@ -266,26 +268,44 @@ pub fn verify_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, Stat
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
     let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
-    let manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
+    let mut manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
     if manifest.phase != MigrationPhase::Staged {
         verify_published_layout(&store_dir, &manifest)?;
     }
     if manifest.phase == MigrationPhase::Retired {
         verify_root_namespace_retired(&store_dir)?;
     }
+    if manifest.phase == MigrationPhase::Staged {
+        manifest.verified_at_ms = Some(now_ms()?);
+        write_manifest(&staged_dir.join(MANIFEST_FILENAME), &manifest)?;
+    }
     Ok(manifest)
 }
 
 /// Make the staged semantic rows queryable during a stopped-server cutover.
-pub fn publish_in_place(config: &InPlaceConfig) -> Result<MigrationManifest, StatsError> {
-    let store_dir = std::fs::canonicalize(&config.store_dir)
+pub fn publish_in_place(store_dir: &Path) -> Result<MigrationManifest, StatsError> {
+    let store_dir = std::fs::canonicalize(store_dir)
         .map_err(internal_error("resolve in-place telemetry store"))?;
     let _store_lock = acquire_exclusive_store_lock(&store_dir)?;
     let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
-    let source_dir = migration_dir.join(SOURCE_SNAPSHOT_DIRECTORY);
     let staged_dir = migration_dir.join(STAGED_DIRECTORY);
     let manifest_path = staged_dir.join(MANIFEST_FILENAME);
-    let mut manifest = verify_store(&source_dir, &staged_dir, config.batch_rows)?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    if manifest.version != MANIFEST_VERSION || manifest.policy_revision != POLICY_REVISION {
+        return Err(validation_error(
+            "migration manifest policy version does not match this binary",
+        ));
+    }
+    if !manifest.complete {
+        return Err(validation_error(
+            "migration manifest is incomplete; rerun prepare",
+        ));
+    }
+    if manifest.verified_at_ms.is_none() {
+        return Err(validation_error(
+            "staged telemetry migration has not been verified; run verify-telemetry-v1 before publish",
+        ));
+    }
     if manifest.phase != MigrationPhase::Staged {
         return Err(validation_error(
             "telemetry migration has already been published",
@@ -830,6 +850,7 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         final_log_dir: config.final_log_dir.to_string_lossy().into_owned(),
         complete: false,
         phase: MigrationPhase::Staged,
+        verified_at_ms: None,
         input_rows,
         output_rows: 0,
         suppressed_rows: 0,
@@ -1790,6 +1811,7 @@ mod tests {
         assert_eq!(manifest.output_rows, 7);
         assert!(manifest.complete);
         assert_eq!(manifest.phase, MigrationPhase::Staged);
+        assert!(manifest.verified_at_ms.is_none());
         assert_eq!(
             file_sha256(
                 &dirs
@@ -2003,12 +2025,14 @@ mod tests {
     #[tokio::test]
     async fn publish_then_retire_switches_visibility_without_rewriting_again() {
         let PreparedMigration { dirs, .. } = prepared_migration();
-        let published = publish_in_place(&InPlaceConfig {
+        verify_in_place(&InPlaceConfig {
             store_dir: dirs.store.clone(),
             batch_rows: 2,
         })
         .unwrap();
+        let published = publish_in_place(&dirs.store).unwrap();
         assert_eq!(published.phase, MigrationPhase::Published);
+        assert!(published.verified_at_ms.is_some());
         assert_eq!(
             published.published_files.len(),
             published
@@ -2116,6 +2140,11 @@ mod tests {
     #[tokio::test]
     async fn publish_refuses_a_store_held_by_a_running_server() {
         let PreparedMigration { dirs, .. } = prepared_migration();
+        verify_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
         let store = Store::new(
             Some(dirs.store.clone()),
             String::new(),
@@ -2124,13 +2153,26 @@ mod tests {
         )
         .unwrap();
 
-        assert!(publish_in_place(&InPlaceConfig {
-            store_dir: dirs.store.clone(),
-            batch_rows: 2,
-        })
-        .is_err());
+        assert!(publish_in_place(&dirs.store).is_err());
         store.shutdown(Duration::from_secs(1)).await;
         drop(store);
+    }
+
+    #[test]
+    fn publish_requires_a_completed_pre_cutover_verification() {
+        let PreparedMigration { dirs, .. } = prepared_migration();
+
+        assert!(publish_in_place(&dirs.store).is_err());
+        let manifest = read_manifest(
+            &dirs
+                .store
+                .join(MIGRATION_DIRECTORY)
+                .join(STAGED_DIRECTORY)
+                .join(MANIFEST_FILENAME),
+        )
+        .unwrap();
+        assert_eq!(manifest.phase, MigrationPhase::Staged);
+        assert!(manifest.published_files.is_empty());
     }
 
     #[test]

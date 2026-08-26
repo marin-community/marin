@@ -30,8 +30,6 @@ enum Command {
     PublishTelemetryV1 {
         #[arg(long)]
         store_dir: PathBuf,
-        #[arg(long, default_value_t = DEFAULT_BATCH_ROWS)]
-        batch_rows: usize,
     },
     /// Remove the root namespace after queries use semantic names. Finelog must be stopped.
     RetireTelemetryV1 {
@@ -57,13 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             store_dir,
             batch_rows,
         })?,
-        Command::PublishTelemetryV1 {
-            store_dir,
-            batch_rows,
-        } => publish_in_place(&InPlaceConfig {
-            store_dir,
-            batch_rows,
-        })?,
+        Command::PublishTelemetryV1 { store_dir } => publish_in_place(&store_dir)?,
         Command::RetireTelemetryV1 { store_dir } => retire_in_place(&InPlaceConfig {
             store_dir,
             batch_rows: DEFAULT_BATCH_ROWS,
