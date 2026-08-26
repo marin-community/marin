@@ -107,9 +107,9 @@ temporary source descriptor or add a second tpu-inference requirement.
 7. Run focused Marin checks, then run the sole physical gate in **Validate**.
    Open one draft Marin PR with the release and validation receipt. Do not add a
    second physical qualification or exact-byte protocol.
-8. After validation, mark the same GitHub release final without rebuilding or
-   replacing either asset. Read back the unchanged asset IDs and digests before
-   landing the Marin consumer.
+8. After validation and the producer change merges, mark the same GitHub release
+   final without rebuilding or replacing either asset. Read back the unchanged
+   asset IDs and digests before landing the Marin consumer.
 
 Rebuild and rerun the physical gate only after a change that can affect the
 wheel bytes or metadata, selected assets, producer path, Marin requirement, or
