@@ -16,9 +16,9 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
+import functools
 import logging
 import os
-import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,7 +36,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.expr import col
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
-from zephyr.writers import ThreadedBatchWriter, write_parquet_file
+from zephyr.writers import ThreadedBatchWriter, batchify, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.datakit.source_key import DatakitArtifactPath
@@ -134,34 +134,54 @@ def _text_from_value(value: Any) -> str:
     return str(value)
 
 
-def _make_normalize_fn(
-    text_field: str,
-    id_field: str | None,
-    bare: bool = False,
-    drop_fields: tuple[str, ...] = (),
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return the record transform used for schema-inferred inputs."""
+_INPUT_BATCH_ROWS = 8192
+_SCHEMA_SAMPLE_FILES = 2
 
-    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-        text = _text_from_value(record[text_field])
-        source_id = record.get(id_field) if id_field is not None else None
-        out: dict[str, Any] = {}
 
-        if not bare:
-            for key, value in record.items():
-                if key == id_field or key in drop_fields:
-                    continue
-                if key == text_field and text_field != "text":
-                    continue
-                out[key] = value
+def _infer_input_schema(paths: list[str]) -> pa.Schema:
+    """Infer one Arrow schema from the first batch of two non-empty files."""
+    schemas: list[pa.Schema] = []
+    sampled_paths: list[str] = []
 
-        out["id"] = generate_id(text)
-        out["text"] = text
-        if source_id is not None:
-            out["source_id"] = source_id
-        return out
+    for path in paths:
+        records = next(iter(batchify(load_file(path), n=_INPUT_BATCH_ROWS)), ())
+        if not records:
+            continue
+        try:
+            schemas.append(pa.Table.from_pylist(list(records)).schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as err:
+            raise ValueError(f"Could not infer an Arrow schema from sampled file {path}: {err}") from err
+        sampled_paths.append(path)
+        if len(schemas) == _SCHEMA_SAMPLE_FILES:
+            break
 
-    return normalize_record
+    if not schemas:
+        return pa.schema([])
+
+    try:
+        return pa.unify_schemas(schemas, promote_options="permissive")
+    except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as err:
+        raise ValueError(f"Could not infer one Arrow schema from sampled files {sampled_paths}: {err}") from err
+
+
+def _iter_input_batches(path: str, *, schema: pa.Schema) -> Iterator[pa.RecordBatch]:
+    """Load row-oriented input into batches conforming to a sampled schema."""
+    for records in batchify(load_file(path), n=_INPUT_BATCH_ROWS):
+        dicts = list(records)
+        actual_schema: pa.Schema | None = None
+        try:
+            actual_schema = pa.Table.from_pylist(dicts).schema
+            unified_schema = pa.unify_schemas([schema, actual_schema], promote_options="permissive")
+            if not schema.equals(unified_schema, check_metadata=True):
+                raise pa.ArrowInvalid("batch would widen the sampled schema")
+            batch = pa.RecordBatch.from_pylist(dicts, schema=schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as err:
+            raise ValueError(
+                f"Input batch from {path} does not match the sampled schema. "
+                f"Sampled schema:\n{schema}\n"
+                f"Batch schema:\n{actual_schema if actual_schema is not None else 'unknown'}"
+            ) from err
+        yield batch
 
 
 def _as_text_series(series: pl.Series) -> pl.Series:
@@ -327,21 +347,6 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return sum(StoragePath(path).size() for path in file_paths)
 
 
-def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return the record transform used to compact long whitespace runs."""
-    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
-
-    def compact(record: dict[str, Any]) -> dict[str, Any]:
-        text = record["text"]
-        compacted = pattern.sub(lambda match: match.group(0)[:max_whitespace_run_chars], text)
-        if len(compacted) != len(text):
-            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
-            return {**record, "text": compacted, "id": generate_id(compacted)}
-        return record
-
-    return compact
-
-
 @dataclass
 class MainOutput:
     """Wraps a unique record destined for the main output shard."""
@@ -417,6 +422,14 @@ def _build_pipeline(
     drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
+    normalize_batch = _make_normalize_batch_fn(
+        text_field,
+        id_field,
+        max_whitespace_run_chars,
+        bare=bare,
+        drop_fields=drop_fields,
+    )
+
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
@@ -435,45 +448,17 @@ def _build_pipeline(
     reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
 
     if files and all(path.endswith(".parquet") for path in files):
-        normalize_batch = _make_normalize_batch_fn(
-            text_field,
-            id_field,
-            max_whitespace_run_chars,
-            bare=bare,
-            drop_fields=drop_fields,
-        )
-        return (
-            Dataset.from_list(files)
-            .load_parquet(batch_mode=True)
-            .flat_map(normalize_batch)
-            .group_by(
-                key=col("id"),
-                reducer=reducers[dedup_mode],
-                sort_by=col("id"),
-                num_output_shards=num_shards,
-            )
-            .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
-        )
-
-    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
-
-    def has_text(record: dict[str, Any]) -> bool:
-        text = record.get(text_field)
-        if text is None or _text_from_value(text).strip() == "":
-            counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, 1)
-            return False
-        return True
+        ds = Dataset.from_list(files).load_parquet(batch_mode=True)
+    else:
+        input_schema = _infer_input_schema(files)
+        ds = Dataset.from_list(files).flat_map(functools.partial(_iter_input_batches, schema=input_schema))
 
     return (
-        Dataset.from_list(files)
-        .flat_map(load_file)
-        .filter(has_text)
-        .map(normalize_record)
-        .map(_make_whitespace_compactor(max_whitespace_run_chars))
+        ds.flat_map(normalize_batch)
         .group_by(
-            key=lambda record: record["id"],
+            key=col("id"),
             reducer=reducers[dedup_mode],
-            sort_by=lambda record: record["id"],
+            sort_by=col("id"),
             num_output_shards=num_shards,
         )
         .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
@@ -504,6 +489,11 @@ def normalize_to_parquet(
     content per *dedup_mode*, sorts by ``id``, and writes
     Parquet partitions sized by *target_partition_bytes*. Input directory
     structure is not preserved.
+
+    Non-Parquet inputs infer one Arrow schema from at most the first 8192 rows
+    of the first two non-empty files. Every input batch is converted to that
+    schema before normalization. Missing sampled fields become null; unseen
+    fields or incompatible type changes raise an error.
 
     Args:
         input_path: Root directory containing raw downloaded data.
