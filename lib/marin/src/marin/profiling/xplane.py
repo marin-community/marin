@@ -761,7 +761,7 @@ def _trace_event_args_from_xplane_stats(stats: dict[str, Any], *, long_name: str
 
 def _xplane_semantic_path(stats: dict[str, Any]) -> str | None:
     tf_op = _string_stat(stats, "tf_op")
-    if tf_op and tf_op.strip().rstrip(":") != _XLA_MODULE_TF_OP:
+    if tf_op is None or tf_op.strip().rstrip(":") != _XLA_MODULE_TF_OP:
         return tf_op
     return _string_stat(stats, "name") or tf_op
 
