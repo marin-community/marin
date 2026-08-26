@@ -28,6 +28,8 @@ enum ColumnType {
   COLUMN_TYPE_BYTES = 6;        // pa.binary()
   COLUMN_TYPE_INT32 = 7;        // pa.int32()
   COLUMN_TYPE_MAP = 8;          // pa.map_(pa.string(), pa.string())
+  COLUMN_TYPE_FLOAT64_LIST = 9; // pa.list_(pa.float64())
+  COLUMN_TYPE_INT64_LIST = 10;  // pa.list_(pa.int64())
 }
 
 // User-facing column index policy. The server compiles these declarations and

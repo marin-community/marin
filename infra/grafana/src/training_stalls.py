@@ -10,6 +10,7 @@ import pyarrow as pa
 from hero_runs import (
     FINISHED_PHASE,
     INITIALIZING_PHASE,
+    LEVANTER_METRICS_TABLE,
     PHASE_METRIC,
     TASK_STATE_LOOKBACK,
     TELEMETRY_GONE_AGE,
@@ -23,10 +24,8 @@ from hero_runs import (
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-# Every rank publishes `step` and `phase`, so an unfiltered scan of one hour of
-# the hero run reads about 1.4M rows a minute against the hub for the ~2k that
-# carry the tracker's own view. Process zero is that view, and the same replica
-# the training dashboard selects.
+# Typed training metrics publish from process zero. Keep that constraint in the
+# query so migrated legacy rows and direct typed rows select the same replica.
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
 _EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
 # The phase heartbeat reaches back a day so a run that went silent hours ago is
@@ -46,18 +45,24 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
     progress_since = sql_epoch_ms(now - _PROGRESS_LOOKBACK)
     enrolled_since = sql_timestamp(now - _PHASE_LOOKBACK)
     end = sql_epoch_ms(now)
-    metric_names = f"'{PHASE_METRIC}', '{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
+    metric_names = f"'{PHASE_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        "WITH filtered AS ("
+        f"WITH telemetry AS (SELECT * FROM {LEVANTER_METRICS_TABLE}), raw AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
-        "run_id, job_id AS telemetry_job, execution_uid, name, value, "
+        "run_id, job_id AS telemetry_job, execution_uid, name, value, step, "
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
-        'FROM "telemetry_v1" '
-        f"WHERE service = 'levanter' AND name IN ({metric_names}) "
-        f"AND {run_predicate} AND process_index = '0' "
+        "FROM telemetry "
+        f"WHERE name IN ({metric_names}) "
+        f"AND {run_predicate} AND process_index = 0 "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
         f"AND (name = '{PHASE_METRIC}' OR timestamp_ms >= {progress_since})"
+        "), filtered AS ("
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid, name, value, "
+        "timestamp_ms, seq, ts FROM raw UNION ALL "
+        "SELECT origin_cluster, run_id, telemetry_job, execution_uid, 'step' AS name, "
+        "CAST(step AS DOUBLE) AS value, timestamp_ms, seq, ts FROM raw "
+        f"WHERE name = '{_PROGRESS_TIME_METRIC}' AND step IS NOT NULL"
         "), phase_history AS ("
         "SELECT origin_cluster, run_id, telemetry_job, execution_uid, ts, "
         "ROW_NUMBER() OVER ("

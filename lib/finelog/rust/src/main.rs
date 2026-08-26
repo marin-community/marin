@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
@@ -18,7 +19,7 @@ use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
 use finelog::store::remote::is_object_store;
-use finelog::store::{ServeMode, Store};
+use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
@@ -32,6 +33,13 @@ use tokio::sync::Notify;
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum TelemetryMigrationMode {
+    #[default]
+    Normal,
+    DualWrite,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
@@ -100,6 +108,16 @@ struct Args {
     /// through a secret; never inline it into a deploy manifest.
     #[arg(long = "signing-key", env = "FINELOG_SIGNING_KEY", default_value = "")]
     signing_key: String,
+
+    /// Transitional hub behavior for the telemetry_v1 migration. `dual-write`
+    /// mirrors legacy root rows while also writing their semantic destination.
+    #[arg(
+        long,
+        env = "FINELOG_TELEMETRY_MIGRATION_MODE",
+        value_enum,
+        default_value_t = TelemetryMigrationMode::Normal
+    )]
+    telemetry_migration_mode: TelemetryMigrationMode,
 }
 
 #[tokio::main]
@@ -117,15 +135,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
+    let store_dir = args.log_dir.clone().map(PathBuf::from);
+    let telemetry_root_write_mode = match args.telemetry_migration_mode {
+        TelemetryMigrationMode::Normal => TelemetryRootWriteMode::SemanticOnly,
+        TelemetryMigrationMode::DualWrite => TelemetryRootWriteMode::MirrorRoot,
+    };
     let store = Arc::new(
-        Store::new(
-            args.log_dir.clone().map(PathBuf::from),
+        Store::new_with_telemetry_root_write_mode(
+            store_dir.clone(),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
             mode,
+            telemetry_root_write_mode,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
+    if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {
+        let store_dir = store_dir
+            .as_deref()
+            .ok_or("dual-write telemetry migration mode requires a persistent --log-dir")?;
+        let fence = ensure_dual_write_fence(store_dir, store.telemetry_root_max_seq()?)?;
+        tracing::info!(
+            legacy_max_seq = fence.legacy_max_seq,
+            armed_at_ms = fence.armed_at_ms,
+            "telemetry dual-write migration fence active"
+        );
+    }
     // Start each namespace's maintenance task. Each task runs its boot remote
     // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
     // in the BACKGROUND as its first step, so a large first-time reconcile (e.g.

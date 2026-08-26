@@ -96,7 +96,7 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 3600
-      maxConcurrent: 1
+      maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/ops/AGENTS.md

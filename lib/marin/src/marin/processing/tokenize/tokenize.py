@@ -156,9 +156,7 @@ class TokenizeConfigBase(abc.ABC):
     Lower values reduce peak memory for datasets with large documents."""
 
     @abc.abstractmethod
-    def as_lm_dataset_source_config(
-        self, actual_output_path: str | None, *, include_raw_paths=True
-    ) -> LmDatasetSourceConfigBase:
+    def as_lm_dataset_source_config(self, actual_output_path: str | None) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
         """
@@ -187,23 +185,17 @@ class TokenizeConfig(TokenizeConfigBase):
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
 
-    def as_lm_dataset_source_config(
-        self, actual_output_path: str | None, *, include_raw_paths=True
-    ) -> LmDatasetSourceConfigBase:
+    def as_lm_dataset_source_config(self, actual_output_path: str | None) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
             actual_output_path: The output path to use for the cache.
-
-            include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
-                to run training without the original training data, but hte provenance won't be recorded in wandb.
-
         """
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=self.train_paths if include_raw_paths else [],
-            validation_urls=self.validation_paths if include_raw_paths else [],
+            train_urls=self.train_paths,
+            validation_urls=self.validation_paths,
             cache_dir=actual_output_path,
             format=self.format,
         )
@@ -241,9 +233,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
 
-    def as_lm_dataset_source_config(
-        self, actual_output_path: str | None, *, include_raw_paths=True
-    ) -> LmDatasetSourceConfigBase:
+    def as_lm_dataset_source_config(self, actual_output_path: str | None) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
             name=self.name,

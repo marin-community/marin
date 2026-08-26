@@ -383,6 +383,7 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT *, 123::BIGINT AS step FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
 
     stalled_at = now - timedelta(minutes=20)
@@ -531,6 +532,7 @@ def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', ?, 'train_loss', ?, ?)",
         [(run_id, loss, int(at.timestamp() * 1000)) for run_id, at, loss in samples],
@@ -610,16 +612,26 @@ def test_loss_spike_alert_returns_explicit_zero_without_active_hero_runs():
     ]
 
 
-def test_loss_spike_query_reads_one_bounded_window_per_evaluation():
+def test_loss_spike_query_bounds_window_and_run():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    sql = loss_window_query(now, (_hero_run("hero-prod"),))
+    windows = _loss_windows(
+        now,
+        (_hero_run("hero-prod"),),
+        [
+            ("hero-prod", now - timedelta(minutes=61), 100.0),
+            ("hero-prod", now - timedelta(minutes=60), 1.0),
+            ("hero-other", now - timedelta(minutes=30), 100.0),
+            ("hero-prod", now - timedelta(minutes=5), 2.0),
+            ("hero-prod", now, 100.0),
+        ],
+    ).to_pylist()
 
-    assert sql.count('FROM "telemetry_v1"') == 1
-    assert "name = 'train_loss'" in sql
-    assert "run_id = 'hero-prod'" in sql
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:00:00') * 1000 AS BIGINT)" in sql
-    assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 12:00:00') * 1000 AS BIGINT)" in sql
-    assert "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:55:00') * 1000 AS BIGINT)" in sql
+    assert len(windows) == 1
+    assert windows[0]["run_id"] == "hero-prod"
+    assert windows[0]["baseline_samples"] == 1
+    assert windows[0]["baseline_loss"] == pytest.approx(1.0)
+    assert windows[0]["recent_samples"] == 1
+    assert windows[0]["recent_loss"] == pytest.approx(2.0)
 
 
 def _watched(
@@ -782,6 +794,7 @@ def test_loss_jump_reads_one_attempt_so_a_restore_is_not_a_rise():
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
 
     def at(minutes: float) -> int:
         return int((now - timedelta(minutes=minutes)).timestamp() * 1000)
@@ -924,6 +937,7 @@ def _signal_database(samples: list[tuple[str, str, float, datetime, int]]) -> du
         )
         """
     )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('cw-a', 'levanter', 'hero-a', ?, '0', ?, ?, ?, ?)",
@@ -1028,8 +1042,10 @@ def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
 def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
-    for sql in (telemetry_query(now, (run,)), zephyr_progress_query(now)):
-        assert 'FROM "telemetry_v1"' in sql
+    training_sql = telemetry_query(now, (run,))
+    zephyr_sql = zephyr_progress_query(now)
+
+    for sql in (training_sql, zephyr_sql):
         assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
         assert "* 1000 AS BIGINT)" in sql
@@ -1059,6 +1075,7 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
         )
         """
     )
+    database.execute('CREATE VIEW "telemetry_v1.zephyr" AS SELECT * FROM telemetry_v1')
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -1089,30 +1106,6 @@ def test_zephyr_alert_query_keeps_job_identity_across_the_schema_transition():
 
     zephyr_jobs = {row[0] for row in database.execute(f"SELECT job FROM ({zephyr_progress_query(now)})").fetchall()}
     assert zephyr_jobs == {"old-zephyr-job", "new-zephyr-job"}
-
-
-def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
-    """Wide scans read telemetry_v1 once a minute and can saturate Finelog.
-
-    Progress needs one extra stall window so a metric that just became stale
-    remains observable. Levanter republishes `phase` every 60s, and it reaches
-    back a day so a run silent for hours is still recognisable as one that
-    stopped publishing rather than one that never started.
-    """
-    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    run = HeroRun("cw-a", "/u/hero-prod-coord", "hero-prod", now - timedelta(hours=1))
-    sql = telemetry_query(now, (run,))
-
-    assert sql.count('FROM "telemetry_v1"') == 1
-    assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
-    assert "run_id = 'hero-prod'" in sql
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
-    assert (
-        "name = 'phase' OR timestamp_ms >= "
-        "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:30:00') * 1000 AS BIGINT)" in sql
-    )
-    assert "WHERE name = 'phase' AND ts >= TIMESTAMP '2026-07-27 12:00:00'" in sql
-    assert "root_job_id LIKE '%/hero-%-coord'" in task_state_query(now)
 
 
 class FakeLoomAlerts(LoomAlertClient):

@@ -237,6 +237,7 @@ pub fn adopt_namespace_from_disk(
             created_at_ms,
             min_key_value: meta.min_key_value.map(|v| v.to_string()),
             max_key_value: meta.max_key_value.map(|v| v.to_string()),
+            partition: meta.partition,
             location: SegmentLocation::Local,
         });
     }
@@ -669,6 +670,7 @@ mod tests {
                 created_at_ms: 1,
                 min_key_value: None,
                 max_key_value: None,
+                partition: None,
                 location: SegmentLocation::Local,
             },
             SegmentRow {
@@ -682,6 +684,7 @@ mod tests {
                 created_at_ms: 1,
                 min_key_value: None,
                 max_key_value: None,
+                partition: None,
                 location: SegmentLocation::Local,
             },
         ];

@@ -23,9 +23,11 @@ from graphql_source import graphql_data
 _GRAPHQL_URL = "https://api.wandb.ai/graphql"
 _ENTITY = "marin-community"
 _PROJECT = "marin_moe"
-_REPORT_VIEW_ID = "VmlldzoxNzM1OTMxMQ=="
-_REPORT_URL = "https://wandb.ai/marin-community/marin_moe/reports/67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
-_X_KEY = "throughput/total_tokens"
+_REPORT_VIEW_ID = "VmlldzoxNzc2MDM5Ng=="
+_REPORT_URL = (
+    "https://wandb.ai/marin-community/marin_moe/reports/535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
+)
+_TOTAL_TOKENS_KEY = "throughput/total_tokens"
 _SAMPLES = 800
 
 WANDB_CHARTS = {
@@ -39,6 +41,13 @@ _RUN_HISTORY_SAMPLES = 2000
 # W&B's own step counter. Levanter logs every training metric through
 # `wandb.log(..., step=<training step>)`, so this column is the Levanter step.
 _STEP_KEY = "_step"
+
+# Reference speed for progress efficiency. `summaryMetrics` carries only the last
+# step's `throughput/tokens_per_second`, which a checkpoint or eval step drives
+# ~15x low, so the mean of a sampled history is used instead: it is stable across a
+# single bad step and matches the status strip's own AVG(tokens/s) tile.
+_TPS_KEY = "throughput/tokens_per_second"
+_TPS_SAMPLES = 500
 
 # The projects a run named by the training dashboard can live in, searched in this
 # order. The grug hero launchers default to marin_moe and marin.experiment.train
@@ -102,15 +111,16 @@ class WandbSource:
             raise UpstreamError("wandb", "report pins no runs", status_code=502)
         return view.get("displayName") or "W&B report", runs
 
-    def _sampled_history(
-        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
-    ) -> list[tuple[float, float]] | None:
-        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent.
+    def _sampled_points(
+        self, *, project: str, run: str, keys: tuple[str, ...], samples: int
+    ) -> list[dict[str, float]] | None:
+        """Numeric points from one run's sampled history, or None if the run is absent.
 
-        A point missing either key is dropped: W&B writes a null wherever a metric
-        was not logged on that step. Callers decide what an absent run means.
+        Each point carries every key in `keys`; a point missing any of them is dropped,
+        since W&B writes a null wherever a metric was not logged on that step. Callers
+        decide what an absent run means.
         """
-        spec = json.dumps({"keys": [x_key, y_key], "samples": samples})
+        spec = json.dumps({"keys": list(keys), "samples": samples})
         run_data = (
             self._graphql(
                 _HISTORY_QUERY,
@@ -121,13 +131,21 @@ class WandbSource:
         if not run_data:
             return None
         histories = run_data.get("sampledHistory") or []
-        pairs: list[tuple[float, float]] = []
+        points: list[dict[str, float]] = []
         for point in histories[0] if histories else []:
-            x_value = point.get(x_key)
-            y_value = point.get(y_key)
-            if isinstance(x_value, int | float) and isinstance(y_value, int | float):
-                pairs.append((x_value, y_value))
-        return pairs
+            values = {key: point.get(key) for key in keys}
+            if all(isinstance(value, int | float) for value in values.values()):
+                points.append(values)
+        return points
+
+    def _sampled_history(
+        self, *, project: str, run: str, x_key: str, y_key: str, samples: int
+    ) -> list[tuple[float, float]] | None:
+        """Numeric (x, y) pairs from one run's sampled history, or None if it is absent."""
+        points = self._sampled_points(project=project, run=run, keys=(x_key, y_key), samples=samples)
+        if points is None:
+            return None
+        return [(point[x_key], point[y_key]) for point in points]
 
     def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
         """Return the first non-empty `read(candidate)` over the projects that may hold `run`.
@@ -149,7 +167,9 @@ class WandbSource:
         report_title, runs = self._report()
         rows: list[dict] = []
         for run in runs:
-            pairs = self._sampled_history(project=_PROJECT, run=run, x_key=_X_KEY, y_key=metric, samples=_SAMPLES)
+            pairs = self._sampled_history(
+                project=_PROJECT, run=run, x_key=_TOTAL_TOKENS_KEY, y_key=metric, samples=_SAMPLES
+            )
             if pairs is None:
                 raise UpstreamError("wandb", f"run {run!r} not found", status_code=502)
             rows.extend(
@@ -188,16 +208,52 @@ class WandbSource:
 
         return self._search_projects(run, project, read)
 
+    def _reference_rate_and_token_baseline(self, *, project: str, run: str) -> tuple[float, float] | tuple[None, None]:
+        """Mean per-step token rate and the tokens this W&B run inherited before its first step.
+
+        Both come from one sampled history. The mean of the rate is the reference speed
+        -- a mean over history, not the summary's last-step value, so a checkpoint or
+        eval step cannot skew it (see `_TPS_KEY`).
+
+        The baseline is the cumulative token count before this run's first step, which a
+        run resumed under a fresh id from a mid-schedule checkpoint carries in from the
+        checkpoint (levanter derives `total_tokens` from the global step). It is
+        reconstructed rather than read off the earliest sample, because that sample is
+        logged *after* the first step and so already includes one batch: with a constant
+        batch, `total_tokens` is proportional to `step + 1`, so the pre-first-step count
+        is `first_tokens * first_step / (first_step + 1)` -- zero for a run started from
+        scratch, the inherited count for a resumed one. `(None, None)` before the first
+        logged step.
+        """
+        points = self._sampled_points(
+            project=project, run=run, keys=(_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), samples=_TPS_SAMPLES
+        )
+        if not points:
+            return None, None
+        reference_tps = sum(point[_TPS_KEY] for point in points) / len(points)
+        first = min(points, key=lambda point: point[_STEP_KEY])
+        step, tokens = first[_STEP_KEY], first[_TOTAL_TOKENS_KEY]
+        baseline = tokens * step / (step + 1)
+        return reference_tps, baseline
+
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
-        """Return one row of active and wall-clock time for the whole of `run`.
+        """Return one row of active time, wall-clock time, and progress efficiency for `run`.
 
         W&B's `_runtime` counts the seconds a process was alive: `resume="allow"`
         restores it at each restart, so the wait between two attempts never enters
         it. That makes it the run's active execution time across every attempt, and
         unlike a `telemetry_v1` scan it does not stop where segment eviction does.
         Wall time runs from the run's creation to its last heartbeat, thus the
-        remainder is downtime and the ratio is the share of the run that ran. A run
-        that has logged nothing yet reports a null active time rather than a zero.
+        remainder is downtime and the ratio is the share of the run that ran.
+
+        Progress efficiency is `tokens_since_start / (reference_tps * wall)`: the
+        fraction of an ideal run that held its steady token rate from creation with no
+        downtime. It counts tokens this W&B run produced -- cumulative tokens minus the
+        run's starting count -- so a run resumed under a fresh id from a mid-schedule
+        checkpoint is not credited the tokens it inherited. It is stricter than active
+        share, which sees only downtime: this also counts the throughput lost to
+        checkpoints, evals, and steps redone after a rollback. A run that has logged
+        nothing yet reports nulls rather than zeros.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -214,6 +270,17 @@ class WandbSource:
             active = summary.get("_runtime")
             active = float(active) if isinstance(active, int | float) else None
             wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
+            tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
+            tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
+            reference_tps, tokens_baseline = self._reference_rate_and_token_baseline(project=candidate, run=run)
+            tokens_since_start = (
+                tokens_seen - tokens_baseline if tokens_seen is not None and tokens_baseline is not None else None
+            )
+            efficiency = (
+                tokens_since_start / (reference_tps * wall)
+                if tokens_since_start is not None and tokens_since_start > 0 and reference_tps and wall > 0
+                else None
+            )
             return [
                 {
                     "run": run,
@@ -224,6 +291,8 @@ class WandbSource:
                     "wall_seconds": wall,
                     "downtime_seconds": None if active is None else wall - active,
                     "active_share": active / wall if active is not None and wall > 0 else None,
+                    "reference_tps": reference_tps,
+                    "progress_efficiency": efficiency,
                 }
             ]
 

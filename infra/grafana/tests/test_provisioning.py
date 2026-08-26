@@ -68,6 +68,10 @@ def _panel_sql(dashboard: dict) -> list[str]:
     ]
 
 
+def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
+
+
 def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
 
@@ -337,7 +341,11 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "training-progress-stalled"]
     assert rule["for"] == "5m"
     assert "isPaused" not in rule
-    assert rule["labels"] == {"severity": "critical", "notification": "hero-run"}
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
     assert rule["data"][0]["model"]["url"] == "/alerts/training_stalls"
 
     route = _route_for(rule)
@@ -346,13 +354,27 @@ def test_training_stall_alert_pages_each_hero_run_after_five_minutes():
     assert {column["selector"] for column in rule["data"][0]["model"]["columns"]} >= {"run", "job"}
 
 
+def test_training_loss_alert_selects_the_hero_operator_behavior():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "training-loss-spike"]
+
+    assert rule["labels"] == {
+        "severity": "critical",
+        "notification": "hero-run",
+        "operator_behavior": "hero",
+    }
+
+
 def test_run_health_alerts_split_paging_from_announcing():
     # The hero on-call policy pages for a lost run or an unstable optimizer, and
     # announces the routing, throughput, and Iris signals an operator reads.
     rules = {rule["uid"]: rule for rule in _rules()}
     paging = ("training-telemetry-gone", "training-optimizer-unstable")
     for uid in paging:
-        assert rules[uid]["labels"] == {"severity": "critical", "notification": "hero-run"}
+        assert rules[uid]["labels"] == {
+            "severity": "critical",
+            "notification": "hero-run",
+            "operator_behavior": "hero",
+        }
         assert rules[uid]["for"] == "5m"
     assert rules["training-run-health-degraded"]["labels"] == {"severity": "warning", "notification": "slack"}
 
@@ -623,7 +645,7 @@ def test_telemetry_queries_bound_their_window_with_foldable_macros():
     unbounded: list[tuple[str, str]] = []
     for name, dashboard in _stitched_dashboards().items():
         for sql in _panel_sql(dashboard):
-            if '"telemetry_v1"' not in sql:
+            if '"telemetry_v1' not in sql:
                 continue
             if "timestamp_ms >= CAST(EXTRACT(EPOCH FROM" not in sql:
                 unbounded.append((name, sql))
@@ -719,6 +741,7 @@ def test_training_loss_by_attempt_separates_process_incarnations():
         )
         """
     )
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
@@ -808,6 +831,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
         )
         """
     )
+    _create_levanter_stream_view(database)
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
@@ -966,7 +990,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
+        CREATE TABLE "levanter.metrics"(
             service VARCHAR,
             run_id VARCHAR,
             cluster VARCHAR,
@@ -982,7 +1006,7 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
             ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
@@ -1024,6 +1048,7 @@ def test_training_moe_health_queries_show_routing_signals():
         )
         """
     )
+    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
         "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",

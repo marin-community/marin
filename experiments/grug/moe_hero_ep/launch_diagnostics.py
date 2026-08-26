@@ -1,74 +1,62 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GB200 launcher for the EP64 MoE hero configuration."""
+"""Bounded GB200 diagnostics for the production EP64 MoE hero recipe."""
 
 import dataclasses
 import os
 from datetime import timedelta
 
 import click
-import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
-from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datasets.paloma import paloma_datasets
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
-    HARRIER_MIX_2026_08_17_1_STORE,
-    HARRIER_MIX_2026_08_17_1_TAG,
-    harrier_mix_2026_08_17_1_data_config,
+from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
+    HARRIER_MIX_2026_08_18_STORE,
+    HARRIER_MIX_2026_08_18_TAG,
+    harrier_mix_2026_08_18_data_config,
 )
-from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
+from experiments.grug.moe_hero_ep.hero_recipe import (
+    DEFAULT_WANDB_PROJECT,
+    HERO_EP_BATCH_SIZE,
+    HERO_EP_EXPERT_AXIS_SIZE,
+    HERO_EP_NODES,
+    HERO_GPUS_PER_NODE,
+    HERO_MODEL_CONFIG,
+    HERO_NODE_CPU,
+    HERO_NODE_DISK,
+    HERO_NODE_RAM,
+    HERO_PROCESSES_PER_TASK,
+    HERO_TENSORSTORE_CACHE_BYTES,
+    HERO_WATCH_INTERVAL,
+    HeroThroughputResult,
+    hero_grug_trainer_config,
+    hero_trainer_config,
+    validation_datasets,
+)
+from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
-    GrugTrainerConfig,
-    MasterParamMode,
     TrainingDataMode,
     WatchMode,
+    _compute_flops,
     run_grug,
 )
-from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_HERO_STEPS = 25
-DEFAULT_WANDB_PROJECT = "marin_moe"
-HERO_EP_BATCH_SIZE = 1024
-HERO_EP_NODES = 16
-HERO_GPUS_PER_NODE = 4
-HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-HERO_PROCESSES_PER_TASK = 1
-HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
-# Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
-HERO_OFFLOAD_OPT_STATE = True
-HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 
-# Held-out sets are added at weight 0 so they surface as tagged eval sets.
-def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
-    return list(paloma_datasets(tokenizer=marin_tokenizer).values())
-
-
-class HeroThroughputResult(Artifact):
-    """Result of the rack-scale throughput hero run.
-
-    The run mirrors its tracker metrics to the output path. It writes no checkpoint by default.
-    With checkpointing enabled, it resumes from the newest complete checkpoint.
-    """
-
-
-def build_hero_run(
+def build_diagnostic_run(
     *,
     run_id: str,
     dp_racks: int,
@@ -85,6 +73,7 @@ def build_hero_run(
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
+    checkpoint_debug: CheckpointDebugConfig | None = None,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
@@ -92,7 +81,7 @@ def build_hero_run(
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the EP64 hero throughput run.
+    """Build a bounded diagnostic run for the production EP64 hero recipe.
 
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
@@ -127,10 +116,11 @@ def build_hero_run(
     if schedule_steps is not None and schedule_steps < num_steps:
         raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
     total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
-    model, optimizer = build_hero_configs(
+    _, optimizer = build_hero_configs(
         num_train_steps=total_schedule_steps,
         batch_size=batch_size,
     )
+    model = HERO_MODEL_CONFIG
     overrides = {
         name: value
         for name, value in (
@@ -163,35 +153,29 @@ def build_hero_run(
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=HERO_OFFLOAD_OPT_STATE,
-        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
+    grug_trainer = hero_grug_trainer_config(
+        replica_axis_size=dp_racks,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
-        replica_axis_size=dp_racks,
-        sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_NODE,
-        cpu=120,
-        ram="850g",
-        disk="1t",
+        cpu=HERO_NODE_CPU,
+        ram=HERO_NODE_RAM,
+        disk=HERO_NODE_DISK,
         replicas=HERO_EP_NODES * dp_racks,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = _validation_datasets() if eval_every > 0 else []
+    validation = validation_datasets() if eval_every > 0 else []
+    flops_per_example, _ = _compute_flops(model_config=model)
+    experiment_flops = flops_per_example * batch_size * total_schedule_steps
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
-        trainer = TrainerConfig(
-            id=run_id,
+        trainer = hero_trainer_config(
+            run_id=run_id,
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
@@ -202,9 +186,13 @@ def build_hero_run(
                 # One rank is enough for a step trace, and tracing all 64 multiplies the upload
                 # without adding signal.
                 process_index=0,
-                profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
+                # Host scopes and HLO metadata identify compiled model regions in XProf.
+                profile_options=ProfileOptionsConfig(
+                    host_tracer_level=1,
+                    python_tracer_level=0,
+                    enable_hlo_proto=True,
+                ),
             ),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -219,7 +207,7 @@ def build_hero_run(
                     wave_tag,
                     size_tag,
                     "gb200",
-                    HARRIER_MIX_2026_08_17_1_TAG,
+                    HARRIER_MIX_2026_08_18_TAG,
                     "MHEP",
                 ],
                 group="moe-hero-ep",
@@ -227,9 +215,6 @@ def build_hero_run(
                 replicate_path=ctx.output_path,
             ),
             watch=WatchConfig(interval=watch_interval),
-            use_explicit_mesh_axes=True,
-            require_accelerator=True,
-            allow_nondivisible_batch_size=False,
             # Levanter's default base path is pod-local, so a preempted run would have nothing to
             # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
             checkpointer=CheckpointerConfig(
@@ -240,25 +225,36 @@ def build_hero_run(
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
+                debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
         )
-        data = harrier_mix_2026_08_17_1_data_config(
+        data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
             total_steps=total_schedule_steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
+            experiment_flops=experiment_flops,
             validation=validation,
         )
         return GrugRunConfig(
             model=model,
             data=data,
             resources=ctx.runtime_arg("train_resources"),
+            tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             # Off by default so a throughput run stays a throughput run. Turn it on to make a
             # run scoreable: comparing configs needs held-out loss, not train loss.
             eval=(
-                GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
+                GrugEvalConfig(
+                    steps_per_eval=eval_every,
+                    eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+                    eval_ema=False,
+                    compute_bpb=True,
+                    dropless_eval=True,
+                )
+                if eval_every > 0
+                else None
             ),
             stop_after_steps=num_steps,
             processes_per_task=HERO_PROCESSES_PER_TASK,
@@ -270,7 +266,7 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_17_1_STORE, *validation),
+        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -310,24 +306,24 @@ def build_hero_run(
 @click.option(
     "--num-experts",
     type=click.IntRange(min=1),
-    default=HERO_MODEL.num_experts,
+    default=HERO_MODEL_CONFIG.num_experts,
     show_default=True,
     help=(
         f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
-        f"and the local expert count must support {HERO_MODEL.num_expert_waves} waves."
+        f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
     ),
 )
 @click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
-    default=HERO_MODEL.num_experts_per_token,
+    default=HERO_MODEL_CONFIG.num_experts_per_token,
     show_default=True,
     help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
 )
 @click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
-    default=HERO_MODEL.intermediate_dim,
+    default=HERO_MODEL_CONFIG.intermediate_dim,
     show_default=True,
     help="Override the routed expert width.",
 )
@@ -361,6 +357,12 @@ def build_hero_run(
     "--checkpoint-path",
     default=None,
     help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
+)
+@click.option(
+    "--checkpoint-debug/--no-checkpoint-debug",
+    default=False,
+    show_default=True,
+    help="Publish checkpoint phase and memory telemetry. Use with --save-checkpoints.",
 )
 @click.option(
     "--eval-every",
@@ -407,7 +409,7 @@ def build_hero_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=HERO_MODEL.capacity_factor,
+    default=HERO_MODEL_CONFIG.capacity_factor,
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
@@ -427,6 +429,7 @@ def main(
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
+    checkpoint_debug: bool,
     eval_every: int,
     watch_interval: int,
     watch_mode: str,
@@ -434,7 +437,7 @@ def main(
     profile_start_step: int,
     training_data: str,
 ) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(
+    return build_diagnostic_run(
         run_id=run_id,
         dp_racks=dp_racks,
         num_steps=num_steps,
@@ -449,6 +452,17 @@ def main(
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
+        checkpoint_debug=(
+            CheckpointDebugConfig(
+                enabled=True,
+                tracemalloc_frames=None,
+                top_allocations=0,
+                force_gc_before_serialize=False,
+                flush_logs=False,
+            )
+            if checkpoint_debug
+            else None
+        ),
         eval_every=eval_every,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),

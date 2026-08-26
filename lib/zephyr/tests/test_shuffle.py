@@ -128,7 +128,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
     monkeypatch.setattr(pl, "scan_parquet", scan_parquet)
 
-    reader = ScatterReader(files=[("source", [path])], target_shard=0, avg_item_bytes=1.0)
+    reader = ScatterReader(chunk_paths=[path], target_shard=0)
     rows = reader.get_frames()[0].collect().to_dicts()
 
     assert len(rows) == 1
@@ -153,13 +153,6 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
             chunk = list(_dataframe_to_items(lf.collect()))
             keys = [_key(x) for x in chunk]
             assert keys == sorted(keys), f"chunk for shard {shard_idx} not sorted"
-
-
-def test_avg_item_bytes_written(tmp_path):
-    items = [{"k": 0, "v": i} for i in range(20)]
-    scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    assert shard.avg_item_bytes > 0
 
 
 def test_merge_sorted_chunks_basic(tmp_path):
@@ -415,7 +408,7 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(files=[(data_path, [f"{data_path}c0000.parquet"])], target_shard=513, avg_item_bytes=1)
+    reader = ScatterReader(chunk_paths=[f"{data_path}c0000.parquet"], target_shard=513)
     assert _read_shard(reader) == [{"k": 513}]
 
 

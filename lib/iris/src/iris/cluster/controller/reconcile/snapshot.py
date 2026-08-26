@@ -48,6 +48,7 @@ class TaskUpdate:
     pod_uid: str | None = None
     node_name: str | None = None
     terminal_reason: str | None = None
+    output_archive: job_pb2.TaskOutputArchive | None = None
 
 
 @dataclass(frozen=True, slots=True)

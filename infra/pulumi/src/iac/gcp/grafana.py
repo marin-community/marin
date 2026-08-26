@@ -68,6 +68,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             "domain:openathena.ai",
                             loom_account,
                             principals["human-012"],
+                            principals["human-064"],
+                            principals["human-070"],
                             principals["human-071"],
                         ),
                     ),

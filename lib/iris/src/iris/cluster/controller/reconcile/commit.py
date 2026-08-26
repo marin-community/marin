@@ -17,9 +17,11 @@ folded through a single ``apply`` site, so this sink never touches it.
 
 from sqlalchemy import bindparam, func
 from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import reads
 from iris.cluster.controller.audit_logging import log_event
+from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.reconcile.effects import (
@@ -28,7 +30,7 @@ from iris.cluster.controller.reconcile.effects import (
     JobRowDelta,
     TaskRowDelta,
 )
-from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.schema import jobs_table, task_attempt_outputs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.writes import record_federation_change
 from iris.cluster.stats.tables import TaskEventRow
@@ -164,6 +166,21 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
     # An attempt's state / started_at drives the derived failure & preemption
     # counts, so invalidate the owning jobs' cached totals via the cursor's memo.
     cur.caches[AttemptCountsProjection].invalidate_for_tasks(cur, [d.task_id for d in deltas])
+
+    output_rows = [
+        {
+            "task_id": delta.task_id,
+            "attempt_id": delta.attempt_id,
+            "archive_json": proto_to_json(delta.output_archive),
+        }
+        for delta in deltas
+        if delta.output_archive is not None
+    ]
+    if output_rows:
+        cur.execute(
+            sqlite_insert(task_attempt_outputs_table).on_conflict_do_nothing(index_elements=["task_id", "attempt_id"]),
+            output_rows,
+        )
 
 
 def _flush_jobs(cur: Tx, deltas: list[JobRowDelta]) -> None:

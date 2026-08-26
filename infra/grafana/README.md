@@ -38,7 +38,8 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
-GET /iris/{cluster}/jobs | workers | health      live controller RPCs
+GET /iris/{cluster}/job_counts | jobs | workers | health
+                                                    live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/report/{train-loss,paloma-macro-loss,mfu}
@@ -282,7 +283,7 @@ fragments shared with `home.json`. The active panels pin a fixed two-minute wind
 (`timeFrom: 2m`) so a finished job — which stops emitting with no final zero row —
 ages out rather than lingering as active. GCE controllers (marin, marin-dev) emit
 no `iris.task_state` (their DB is directly `ExecuteRawQuery`-able), so their
-job-state counts come from the live `/iris/{cluster}/jobs` endpoint in its own row,
+job-state counts come from the live `/iris/{cluster}/job_counts` endpoint in its own row,
 and their per-task resource history sits in a collapsed row below. The `$job`
 selector scopes the active-jobs table and the waiting-task series; with every job
 selected the latter is the fleet backlog broken out by job, and narrowed to one
@@ -290,10 +291,12 @@ job it is that job's queue over time.
 
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
 single-value selector puts the newest hero run first. It uses `run_id` across
-clusters. The status strip uses one 15-minute `telemetry_v1` query for ten fields.
-It includes the two hero alert inputs: time since the last completed step and
-train loss. It also includes step time, throughput, schedule progress, and token
-count. Active execution and active share come from `/wandb/activity`, which makes
+clusters. The status strip uses one 15-minute query over the semantic
+`levanter.metrics` table for ten fields. The strip includes the two hero
+alert inputs: time
+since the last completed step and
+train loss, plus step time, throughput, schedule progress, and token count.
+Active execution and active share come from `/wandb/activity`, which makes
 the strip a mixed-datasource panel. Those two totals describe the whole run, and the
 eviction that keeps the step-axis loss panel on W&B bounds any finelog answer to the
 retained window. On 2026-08-24 `hero-12d8b6f0-dee637` read 93.5 hours active against
@@ -330,7 +333,7 @@ entropy and 400 bias.
 
 The two loss panels read different stores on purpose. The step-axis panel reads
 W&B through `/wandb/history`, because finelog evicts telemetry segments once
-`telemetry_v1` passes its storage policy and a finelog query only scans locally
+`levanter.metrics` passes its storage policy and a finelog query only scans locally
 resident segments. A run that outlives that window therefore has no step 0 left in
 finelog, while its W&B run keeps the whole history and spans every restart under
 one id. W&B samples the series and the bridge caches it for a minute, so this
@@ -392,7 +395,7 @@ These three watch a wider enrolment: a run that either the Iris rollup or fresh
 Levanter `phase` telemetry reports. The stall and loss rules enroll from
 `iris.task_state` alone, so a break in that path stops them watching a training
 run with no signal that it happened, which is what `iris_state_stale` reports.
-One `telemetry_v1` scan per cache interval feeds all three, reduced over the
+One `levanter.metrics` scan per cache interval feeds all three, reduced over the
 newest execution process zero reports so a retry cannot mix two attempts; the
 loss-jump check filters its two windows to that execution for the same reason.
 `TrainingProgressStalled` labels a silent run `telemetry_gone` and emits a zero
@@ -464,9 +467,17 @@ reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
 
-Distinct firing groups feed one live `Grafana operator` session; the operator can
-delegate independent incidents to child Loom sessions. Repeated notifications for
-the same alert fingerprint and start time reuse the same Loom run, and thread a
+Generic firing groups feed the live `Grafana operator` session on the `operator`
+channel. `TrainingProgressStalled`, `TrainingLossSpike`,
+`TrainingTelemetryGone`, and `TrainingOptimizerUnstable` also carry the trusted
+`operator_behavior=hero` label, which selects the `operator:hero` channel. Loom
+therefore keeps a separate durable coordinator for Hero while both behaviors use
+the same four-session `ops` policy pool. Every nonterminal session explicitly
+using `ops` counts toward that pool; an operator-launched child with no explicit
+profile uses Loom's `default` profile. The extra `ops` capacity covers handoffs or
+explicit same-profile delegation but is shared, not reserved per channel.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run, and thread a
 short "still firing" note under the original announcement. The Slack thread key is
 the Grafana notification group key. A replacement alert instance in the same group
 therefore keeps the thread even when the prior instance first resolves. Resolved
@@ -476,15 +487,25 @@ unreachable, and that failure is reported into the thread instead of only into
 Grafana's notification history. A Slack failure is logged and still opens the
 triage session.
 
+The Hero behavior receives static discovery and query guidance instead of a
+precomputed evidence snapshot. It tells the coordinator how to follow the alert's
+logical run across execution and coordinator retries, then query current
+`telemetry_v1`, `iris.task_state`, `iris.task_event`, and `log` rows. The guidance
+uses exact IDs and Finelog's literal `prefix` predicate, includes the deduplicated
+event `count`, and asks the coordinator to compare tasks and ranks rather than
+grep a fixed error-signature list. Live evidence stays out of the webhook path, so
+query latency, truncation, redaction, or an unknown cluster label cannot silently
+turn a partial snapshot into the operator's starting facts.
+
 Open threads are tracked for six hours in the bridge's memory, which is sound
 because Cloud Run runs this service at `min=max=1`. A revision rollover forgets
 them: the next notification for a still-firing alert announces afresh, and a
 resolution for an alert this revision never announced is dropped rather than
 posted bare.
 
-The Loom Pulumi stack binds the exact `marin-grafana`
-service-account email and numeric subject to this profile. The Grafana stack
-reads the Loom URL and profile from that stack's `workloadClients` output, so
+The Loom Pulumi stack binds the exact `marin-grafana` service-account email and
+numeric subject to the `ops` profile. The Grafana stack reads the Loom URL and
+profile from that stack's `workloadClients` output, so
 the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation
@@ -720,7 +741,7 @@ Four things about the data will bite you:
   fails to parse. Qualifying or wrapping it is enough for the parser, but panels
   always write `"cluster"`, and a test rejects every other spelling so nobody has
   to remember which positions are safe.
-- **Bound every `telemetry_v1` query, and fold the boundary.** Write
+- **Bound every telemetry query, and fold the boundary.** Write
   `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
   `timestamp_ms >= {{from}}`, which cannot prune segments. A test asserts that no
   panel is exempt. An unbounded scan is both slow and a lie about coverage: on

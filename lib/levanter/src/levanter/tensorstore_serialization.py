@@ -615,9 +615,13 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
+    on_local_commit: Optional[Callable[[str], None]] = None,
+    on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
+    debug_log_flush: Callable[[logging.Logger], None] | None = flush_debug_output,
     write_config: Optional[TensorStoreWriteConfig] = None,
-):
+) -> int:
+    """Serialize a PyTree and return the peak host bytes staged by this process."""
     write_config = write_config or TensorStoreWriteConfig()
 
     if manager is None:
@@ -649,7 +653,8 @@ def tree_serialize_leaves_tensorstore(
             largest_path or "<none>",
             _format_gib(largest_array_bytes),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     plans = [plan_array_write(path, array, write_config) for path, array in zip(paths, arrays)]
     _log_write_share(paths, arrays, plans, total_array_bytes)
@@ -681,16 +686,29 @@ def tree_serialize_leaves_tensorstore(
             split,
             len(plans),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
-    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback)
+    staged_host_bytes = _serialize_arrays(
+        arrays,
+        tspecs,
+        plans,
+        manager,
+        write_config,
+        commit_callback,
+        on_local_commit,
+        on_staged,
+    )
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     if manager_was_none:
         manager.wait_until_finished()
+
+    return staged_host_bytes
 
 
 def _serialize_arrays(
@@ -700,11 +718,16 @@ def _serialize_arrays(
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
     commit_callback: Callable,
-) -> None:
+    on_local_commit: Optional[Callable[[str], None]],
+    on_staged: Optional[Callable[[int], None]],
+) -> int:
     """Write every array according to its plan and start the asynchronous commit.
 
     Returns once this process has copied its data out. ``manager`` joins the commits and
     barriers on the other processes.
+
+    Returns:
+        The peak host bytes staged by this process.
     """
     manager.wait_until_finished()
 
@@ -714,48 +737,78 @@ def _serialize_arrays(
     gate = _HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
-    async def issue_write(num_bytes: int, stage):
-        """Admit ``num_bytes`` to the staging budget, then stage and issue one write."""
+    async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
         await gate.acquire(num_bytes)
         try:
-            write = await stage()
+            data = await stage()
         except BaseException:
             gate.release(num_bytes)
             raise
-        commit_futures.append(write.commit)
+
+        promise, commit_future = ts.Promise.new()
+        commit_futures.append(commit_future)
         # Fires on failure as well as success, so a failed commit cannot strand the budget.
-        write.commit.add_done_callback(lambda _: gate.release(num_bytes))
-        await write.copy
+        commit_future.add_done_callback(lambda _: gate.release(num_bytes))
 
-    async def write_host_array(store, array):
-        # Unsharded and identical everywhere, so process 0 writes all of it.
-        if jax.process_index() != 0:
-            return
+        def store_opened(future: ts.Future) -> None:
+            try:
+                store = future.result()
+                target = store if region is None else store[region.index]
+                write = target.write(data, can_reference_source_data_indefinitely=True)
+                write.commit.add_done_callback(write_finished)
+                write.commit.force()
+            except BaseException as error:
+                promise.set_exception(error)
 
+        def write_finished(future: ts.Future) -> None:
+            try:
+                future.result()
+            except BaseException as error:
+                promise.set_exception(error)
+            else:
+                promise.set_result(None)
+
+        store_future.add_done_callback(store_opened)
+
+    async def write_host_array(store_future, array):
         async def stage():
-            # The caller owns this buffer and may mutate it, so TensorStore must copy.
-            return store.write(np.asarray(array), can_reference_source_data_indefinitely=False)
+            # The caller owns this buffer and may mutate it after the save returns.
+            return np.array(array, copy=True)
 
-        await issue_write(_estimate_array_nbytes(array), stage)
+        await issue_write(_estimate_array_nbytes(array), stage, store_future, None)
 
-    async def write_shard(store, shard, plan):
-        region = _shard_write_region(shard, plan)
-        if region is None:
-            return
-
+    async def write_shard(store_future, shard, plan, region: _ShardWrite):
         async def stage():
-            data = await _transfer_shard_to_pageable_host(shard, region.local_slice)
-            # The snapshot is private and never mutated, so TensorStore may hold the reference.
-            return store[region.index].write(data, can_reference_source_data_indefinitely=True)
+            return await _transfer_shard_to_pageable_host(shard, region.local_slice)
 
-        await issue_write(_estimate_array_nbytes(shard.data) // plan.write_replicas, stage)
+        await issue_write(
+            _estimate_array_nbytes(shard.data) // plan.write_replicas,
+            stage,
+            store_future,
+            region,
+        )
 
     async def write_one(array, tspec, plan):
-        store = await ts.open(ts.Spec(tspec), create=True, open=True, context=context)
+        store_future = ts.open(ts.Spec(tspec), create=True, open=True, context=context)
+
         if not isinstance(array, jax.Array):
-            await write_host_array(store, array)
+            # Unsharded and identical everywhere, so process 0 writes all of it.
+            if jax.process_index() != 0:
+                return
+            # Start I/O without waiting; staging below never depends on open completion.
+            store_future.force()
+            await write_host_array(store_future, array)
             return
-        await asyncio.gather(*(write_shard(store, shard, plan) for shard in array.addressable_shards))
+
+        shard_writes = [
+            (shard, region)
+            for shard in array.addressable_shards
+            if (region := _shard_write_region(shard, plan)) is not None
+        ]
+        if not shard_writes:
+            return
+        store_future.force()
+        await asyncio.gather(*(write_shard(store_future, shard, plan, region) for shard, region in shard_writes))
 
     async def write_all():
         await asyncio.gather(*(write_one(a, s, p) for a, s, p in zip(arrays, tspecs, plans)))
@@ -769,12 +822,39 @@ def _serialize_arrays(
         len(commit_futures),
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
+    staged_host_bytes = gate.peak_bytes
 
     _trim_host_memory_after_commits(commit_futures)
 
     # Private to AsyncManager. Its own `serialize` calls these.
     manager._add_futures(commit_futures)
+    if on_staged is not None:
+        on_staged(staged_host_bytes)
+    if on_local_commit is not None:
+        remaining = len(commit_futures)
+        callback_lock = threading.Lock()
+        local_status = "local_completed"
+
+        def local_write_finished(future: ts.Future) -> None:
+            nonlocal remaining, local_status
+            try:
+                future.result()
+                failed = False
+            except BaseException:
+                failed = True
+            with callback_lock:
+                if failed:
+                    local_status = "local_failed"
+                remaining -= 1
+                if remaining == 0:
+                    on_local_commit(local_status)
+
+        for future in commit_futures:
+            future.add_done_callback(local_write_finished)
+        if not commit_futures:
+            on_local_commit(local_status)
     manager._start_async_commit(commit_callback)
+    return staged_host_bytes
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:

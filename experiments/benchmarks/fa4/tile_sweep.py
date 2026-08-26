@@ -41,6 +41,7 @@ from unittest.mock import patch
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention import _fa4_cute as fa4_cute
 from levanter.grug.attention import _fa4_cute_kernels as fa4_cute_kernels
@@ -270,7 +271,7 @@ def main() -> None:
     v = jax.random.normal(jax.random.fold_in(key, 2), shape_kv, dtype=jnp.bfloat16)
     segment_ids = _segment_ids(args.batch, args.seq_len, args.documents)
 
-    arch = fa4_cute._gpu_compute_arch()
+    arch = gpu_compute_capability()
     base = flash4_cute_kernel_config(args.head_dim, arch=arch)
     print(f"arch=sm{arch} base_forward_tile={base.forward_tile} base_backward_tile={base.backward_tile}")
     print(f"shape: batch={args.batch} seq={args.seq_len} q_heads={args.q_heads} head_dim={args.head_dim}")

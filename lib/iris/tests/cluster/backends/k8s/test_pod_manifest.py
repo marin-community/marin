@@ -9,10 +9,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 import pytest
+from iris.cluster.backends.k8s.output_contract import output_policy_from_environment
 from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -177,6 +179,67 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
 
 def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
     return _build_pod_manifest(request, pod_config())["spec"]["containers"][0]["command"][2]
+
+
+def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
+    manifest = _build_pod_manifest(
+        make_run_req("/user/job/0", attempt_uid="0123456789abcdef"),
+        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy()),
+    )
+
+    uploader = next(container for container in manifest["spec"]["containers"] if container["name"] == "output-uploader")
+    mounts = {mount["name"]: mount["mountPath"] for mount in uploader["volumeMounts"]}
+    env = {entry["name"]: entry["value"] for entry in uploader["env"]}
+    assert mounts == {"task-outputs": "/iris/outputs", "output-control": "/iris/output-control"}
+    assert env["IRIS_ATTEMPT_UID"] == "0123456789abcdef"
+    assert env["IRIS_TASK_OUTPUT_TTL_DAYS"] == "7"
+    assert output_policy_from_environment(env) == TaskOutputPolicy()
+
+
+def test_succeeded_pod_reports_uploader_archive() -> None:
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/user/job/0"), attempt_id=0, attempt_uid="uid")
+    pod = make_pod("ignored", "Succeeded", exit_code=0)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
+        {
+            "name": "output-uploader",
+            "state": {
+                "terminated": {
+                    "exitCode": 0,
+                    "message": json.dumps(
+                        {
+                            "state": "TASK_OUTPUT_ARCHIVE_STATE_UPLOADED",
+                            "uri": "s3://bucket/tmp/ttl=7d/outputs.tar.zst",
+                            "size_bytes": "42",
+                            "retention": "TASK_OUTPUT_ARCHIVE_RETENTION_TTL",
+                            "ttl_days": 7,
+                        }
+                    ),
+                }
+            },
+        },
+    ]
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert update.output_archive.uri == "s3://bucket/tmp/ttl=7d/outputs.tar.zst"
+    assert update.output_archive.size_bytes == 42
+
+
+def test_terminated_uploader_without_result_reports_failure() -> None:
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/user/job/0"), attempt_id=0, attempt_uid="uid")
+    pod = make_pod("ignored", "Failed", exit_code=0)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
+        {"name": "output-uploader", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}},
+    ]
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert update.output_archive.state == job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED
+    assert "OOMKilled (exit code 137)" in update.output_archive.error
 
 
 @dataclass(frozen=True)
@@ -738,6 +801,13 @@ def test_timeout_rounds_down_to_at_least_one_second():
     req.timeout.milliseconds = 500  # sub-second
     manifest = _build_pod_manifest(req, pod_config(default_image="img:latest"))
     assert manifest["spec"]["activeDeadlineSeconds"] == 1
+
+
+def test_timeout_reserves_output_finalization_window():
+    req = make_run_req("/my-job/task-0")
+    req.timeout.milliseconds = 3600_000
+    manifest = _build_pod_manifest(req, pod_config(task_outputs=TaskOutputPolicy()))
+    assert manifest["spec"]["activeDeadlineSeconds"] == 3900
 
 
 def test_no_timeout_no_deadline():

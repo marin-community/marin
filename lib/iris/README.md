@@ -464,6 +464,7 @@ scale_groups:
 
 - [Architecture](docs/architecture.md) - source layout, import layers, and the `TaskBackend` contract
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
+- [Temporary Task Outputs](docs/task-outputs.md) - per-attempt diagnostic archives
 - [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
 - [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
 - [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it

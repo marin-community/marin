@@ -32,6 +32,7 @@ use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::index_cache::IndexCache;
 
 /// A live namespace as one DataFusion table.
@@ -49,6 +50,8 @@ pub struct NamespaceProvider {
     segment_paths: Vec<String>,
     segment_key_column: Option<String>,
     segment_key_bounds: BTreeMap<String, (i64, i64)>,
+    partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
+    segment_partitions: BTreeMap<String, SegmentPartition>,
     index_cache: Arc<IndexCache>,
     exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
 }
@@ -119,31 +122,46 @@ impl NamespaceProvider {
     }
 
     fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let Some(key_column) = self.segment_key_column.as_ref() else {
-            return self.segment_paths.clone();
-        };
         let ranges = crate::query::predicate::int_column_ranges(filters);
-        let Some(range) = ranges.get(key_column) else {
-            return self.segment_paths.clone();
-        };
+        let key_range = self
+            .segment_key_column
+            .as_ref()
+            .and_then(|column| ranges.get(column).map(|range| (column, range)));
+        let exact_values = crate::query::exact_prune::values_by_column(filters);
+        let partition_candidates = self
+            .partition_policy
+            .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
         let paths = self
             .segment_paths
             .iter()
             .filter(|path| {
-                self.segment_key_bounds
-                    .get(path.as_str())
-                    .is_none_or(|&(minimum, maximum)| {
-                        minimum > maximum || range.overlaps(minimum, maximum)
-                    })
+                let key_matches = key_range.is_none_or(|(_, range)| {
+                    self.segment_key_bounds
+                        .get(path.as_str())
+                        .is_none_or(|&(minimum, maximum)| {
+                            minimum > maximum || range.overlaps(minimum, maximum)
+                        })
+                });
+                let partition_matches = partition_candidates.as_ref().is_none_or(|candidates| {
+                    let Some(policy) = self.partition_policy else {
+                        return true;
+                    };
+                    self.segment_partitions
+                        .get(path.as_str())
+                        .is_none_or(|partition| {
+                            !policy.is_current_partition(partition)
+                                || candidates.contains(partition)
+                        })
+                });
+                key_matches && partition_matches
             })
             .cloned()
             .collect::<Vec<_>>();
         if paths.len() != self.segment_paths.len() {
             tracing::debug!(
-                key_column,
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range"
+                "scoped segment planning to key range and physical partitions"
             );
         }
         paths
@@ -170,6 +188,8 @@ impl NamespaceProvider {
                 segment_paths: Vec::new(),
                 segment_key_column: None,
                 segment_key_bounds: BTreeMap::new(),
+                partition_policy: None,
+                segment_partitions: BTreeMap::new(),
                 index_cache,
                 exact_postings_policy: None,
             });
@@ -182,6 +202,8 @@ impl NamespaceProvider {
             segment_paths: segment_paths.to_vec(),
             segment_key_column: None,
             segment_key_bounds: BTreeMap::new(),
+            partition_policy: None,
+            segment_partitions: BTreeMap::new(),
             index_cache,
             exact_postings_policy: None,
         })
@@ -196,6 +218,17 @@ impl NamespaceProvider {
     ) -> Self {
         self.segment_key_column = Some(key_column.into());
         self.segment_key_bounds = bounds;
+        self
+    }
+
+    /// Attach hidden physical partitions captured with the path snapshot.
+    pub fn with_segment_partitions(
+        mut self,
+        policy: Option<&'static dyn PhysicalPartitionPolicy>,
+        partitions: BTreeMap<String, SegmentPartition>,
+    ) -> Self {
+        self.partition_policy = policy;
+        self.segment_partitions = partitions;
         self
     }
 
@@ -328,6 +361,7 @@ impl TableProvider for NamespaceProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
@@ -343,6 +377,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::levanter_metrics_policy::LEVANTER_RUN_PARTITION_POLICY;
+    use crate::partition_policy::PhysicalPartitionPolicy;
     use crate::store::segment::write_segment_to_dir;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
@@ -376,6 +412,53 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn exact_run_id_prunes_current_partitions_but_keeps_transition_files() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("run_id", DataType::Utf8, false),
+        ]));
+        let paths = vec![
+            "/tmp/current-run-a.parquet".to_string(),
+            "/tmp/current-run-b.parquet".to_string(),
+            "/tmp/unpartitioned.parquet".to_string(),
+            "/tmp/old-spec.parquet".to_string(),
+        ];
+        let partition_for = |run_id: &str| {
+            LEVANTER_RUN_PARTITION_POLICY
+                .partitions_for_exact_values(&HashMap::from([(
+                    "run_id".to_string(),
+                    vec![run_id.to_string()],
+                )]))
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        let mut old_spec = partition_for("run-a");
+        old_spec.spec_id = 0;
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_partitions(
+            Some(&LEVANTER_RUN_PARTITION_POLICY),
+            BTreeMap::from([
+                (paths[0].clone(), partition_for("run-a")),
+                (paths[1].clone(), partition_for("run-b")),
+                (paths[3].clone(), old_spec),
+            ]),
+        );
+
+        assert_eq!(
+            provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
+            vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
+        );
+        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
     }
 
     #[tokio::test]

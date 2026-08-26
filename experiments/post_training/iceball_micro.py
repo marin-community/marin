@@ -149,7 +149,7 @@ QWEN3_CHAT_TEMPLATE = (
 )
 
 ICEBALL_RL_CONFIG = f"""\
-entrypoint: skyrl_train.entrypoints.main_base
+entrypoint: standard
 
 context_budget:
   request_window_tokens: {ICEBALL_SEQUENCE_LENGTH}

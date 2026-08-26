@@ -24,8 +24,17 @@ from pathlib import Path
 from typing import ClassVar, NamedTuple
 
 from finelog.client.log_client import Table
+from google.protobuf import json_format
 from rigging.timing import Timestamp
 
+from iris.cluster.backends.k8s.output_contract import (
+    OUTPUT_CONTAINER_NAME,
+    OUTPUT_CONTROL_PATH,
+    OUTPUT_CONTROL_VOLUME_NAME,
+    OUTPUT_RELEASE_PATH,
+    output_uploader_environment,
+)
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -84,7 +93,9 @@ from iris.cluster.platforms.k8s.types import (
 )
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
+    OUTPUT_MOUNT,
     STANDARD_MOUNTS,
+    TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
     WORKDIR_MOUNT,
     build_common_iris_env,
@@ -92,6 +103,7 @@ from iris.cluster.runtime.env import (
     normalize_workdir_relative_path,
     render_setup_steps,
 )
+from iris.cluster.runtime.output_capture import task_output_storage_failure
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -498,6 +510,7 @@ class PodConfig:
     controller_address: str | None = None
     managed_label: str = ""
     task_env: dict[str, str] = field(default_factory=dict)
+    task_outputs: TaskOutputPolicy | None = None
     # Name of a Secret whose keys are projected into every task container via
     # envFrom (operator-injected env, defaults.inject_env). Empty disables it.
     env_secret_name: str = ""
@@ -646,6 +659,32 @@ def _build_logship_sidecar(
         "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
         "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
     }
+
+
+def _build_output_uploader(
+    task_id_wire: str,
+    attempt_uid: str,
+    image: str,
+    policy: TaskOutputPolicy,
+    source_prefix: str | None,
+    env_secret_name: str,
+) -> dict:
+    container: dict[str, object] = {
+        "name": OUTPUT_CONTAINER_NAME,
+        "image": image,
+        "imagePullPolicy": "IfNotPresent",
+        "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.outputship"],
+        "env": output_uploader_environment(task_id_wire, attempt_uid, policy, source_prefix),
+        "volumeMounts": [
+            {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
+            {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
+        ],
+        "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}},
+        "terminationMessagePolicy": "File",
+    }
+    if env_secret_name:
+        container["envFrom"] = [{"secretRef": {"name": env_secret_name}}]
+    return container
 
 
 def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
@@ -979,9 +1018,23 @@ def _build_pod_manifest(
         }
     )
 
+    containers = [container]
+    if config.task_outputs is not None:
+        volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
+        containers.append(
+            _build_output_uploader(
+                iris_env["IRIS_TASK_ID"],
+                iris_env.get("IRIS_ATTEMPT_UID", ""),
+                config.logship_image,
+                config.task_outputs,
+                config.task_env.get("MARIN_PREFIX"),
+                config.env_secret_name,
+            )
+        )
+
     spec: dict = {
         "restartPolicy": "Never",
-        "containers": [container],
+        "containers": containers,
         "initContainers": [logship],
         "volumes": volumes,
     }
@@ -1013,9 +1066,14 @@ def _build_pod_manifest(
 
     # K8s starts activeDeadlineSeconds at pod creation, so omit it for gangs that
     # may wait SchedulingGated while nodes provision. The controller times gangs
-    # from execution start; single pods keep the earlier native deadline.
+    # from execution start. Single pods keep the native execution deadline and
+    # reserve the configured output-finalization window before K8s kills the pod.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
-        spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
+        execution_deadline = max(1, run_req.timeout.milliseconds // 1000)
+        finalization_grace = (
+            (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
+        )
+        spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -1049,6 +1107,42 @@ def _task_container_status(pod: dict) -> dict | None:
         if status.get("name") == IRIS_TASK_CONTAINER_NAME:
             return status
     return statuses[0]
+
+
+def _output_container_status(pod: dict) -> dict | None:
+    for status in pod.get("status", {}).get("containerStatuses", []):
+        if status.get("name") == OUTPUT_CONTAINER_NAME:
+            return status
+    return None
+
+
+def _task_container_terminated(pod: dict) -> bool:
+    status = _task_container_status(pod)
+    return status is not None and bool(status.get("state", {}).get("terminated"))
+
+
+def _output_archive_from_pod(pod: dict) -> job_pb2.TaskOutputArchive | None:
+    status = _output_container_status(pod)
+    if status is None:
+        return None
+    terminated = status.get("state", {}).get("terminated")
+    if terminated is None:
+        return None
+    message = terminated.get("message", "")
+    if not message:
+        reason = terminated.get("reason") or "unknown reason"
+        exit_code = terminated.get("exitCode")
+        return task_output_storage_failure(RuntimeError(f"output uploader terminated: {reason} (exit code {exit_code})"))
+    archive = job_pb2.TaskOutputArchive()
+    try:
+        json_format.Parse(message, archive)
+    except json_format.ParseError:
+        logger.warning("Invalid output-uploader termination message", exc_info=True)
+        return job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+            error="invalid_uploader_result",
+        )
+    return archive
 
 
 def _disruption_condition(pod: dict) -> dict | None:
@@ -1146,7 +1240,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
-            status_message="",
+            status_message=TASK_OUTPUT_FINALIZING_STATUS if _task_container_terminated(pod) else "",
             **identity,
         )
 
@@ -1156,22 +1250,33 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
             status_message="",
+            output_archive=_output_archive_from_pod(pod),
             **identity,
         )
 
     # _poll_pods holds unresolved phases through their grace period, so only a
     # definitive Failed phase can reach the failure classifier.
     exit_code = _extract_exit_code(pod)
-    new_state = _pod_failure_state(pod)
+    task_terminated = _task_container_terminated(pod)
+    new_state = (
+        job_pb2.TASK_STATE_SUCCEEDED
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        else _pod_failure_state(pod)
+    )
     terminal_reason = _extract_terminal_reason(pod)
     return TaskUpdate(
         task_id=task_id,
         attempt_id=attempt_id,
         new_state=new_state,
         exit_code=exit_code,
-        error=terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod),
+        error=(
+            None
+            if new_state == job_pb2.TASK_STATE_SUCCEEDED
+            else terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod)
+        ),
         status_message="",
         terminal_reason=terminal_reason,
+        output_archive=_output_archive_from_pod(pod),
         **identity,
     )
 
@@ -1185,6 +1290,30 @@ def _extract_exit_code(pod: dict) -> int | None:
         if isinstance(code, int):
             return code
     return None
+
+
+def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
+    exit_code = _extract_exit_code(pod)
+    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
+    update = _task_update_from_pod(entry, terminal_pod)
+    return TaskUpdate(
+        task_id=update.task_id,
+        attempt_id=update.attempt_id,
+        new_state=update.new_state,
+        error=update.error,
+        exit_code=update.exit_code,
+        container_id=update.container_id,
+        status_message="",
+        pod_name=update.pod_name,
+        pod_uid=update.pod_uid,
+        node_name=update.node_name,
+        terminal_reason=update.terminal_reason,
+        output_archive=job_pb2.TaskOutputArchive(
+            state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_FAILED,
+            error="deadline_exceeded",
+        ),
+    )
 
 
 def _extract_error(pod: dict) -> str | None:
@@ -2298,6 +2427,8 @@ class K8sTaskProvider:
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
+    _output_finalization_started: dict[RunningTaskEntry, float] = field(default_factory=dict, init=False, repr=False)
+    _released_output_attempts: set[RunningTaskEntry] = field(default_factory=set, init=False, repr=False)
 
     def _ensure_periodic_profiler(self) -> PeriodicProfiler | None:
         if self.profile_table is None:
@@ -3009,6 +3140,42 @@ class K8sTaskProvider:
                 field_selector=f"status.phase={phase}",
             )
 
+    def _finalize_task_outputs(
+        self,
+        entry: RunningTaskEntry,
+        pod_name: str,
+        pod: dict,
+    ) -> TaskUpdate | None:
+        policy = self.pods.task_outputs
+        if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
+            return None
+
+        started = self._output_finalization_started.setdefault(entry, time.monotonic())
+        uploader = _output_container_status(pod)
+        uploader_running = uploader is not None and "running" in uploader.get("state", {})
+        if uploader_running and entry not in self._released_output_attempts:
+            try:
+                release = self.kubectl.exec(
+                    pod_name,
+                    ["touch", OUTPUT_RELEASE_PATH],
+                    container=OUTPUT_CONTAINER_NAME,
+                    timeout=10,
+                )
+                if release.returncode == 0:
+                    self._released_output_attempts.add(entry)
+                else:
+                    logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
+            except KubectlError:
+                logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
+
+        if time.monotonic() - started < policy.finalization_timeout.to_seconds():
+            return None
+
+        self.kubectl.delete(K8sResource.PODS, pod_name, force=True, wait=False)
+        self._output_finalization_started.pop(entry, None)
+        self._released_output_attempts.discard(entry)
+        return _task_update_after_output_timeout(entry, pod)
+
     def _poll_pods(
         self,
         running: list[RunningTaskEntry],
@@ -3037,7 +3204,15 @@ class K8sTaskProvider:
                 self._task_event_log.retain(set())
             self._pod_unresolved_counts.clear()
             self._disruption_reasons.clear()
+            self._output_finalization_started.clear()
+            self._released_output_attempts.clear()
             return []
+
+        running_set = set(running)
+        self._output_finalization_started = {
+            entry: started for entry, started in self._output_finalization_started.items() if entry in running_set
+        }
+        self._released_output_attempts.intersection_update(running_set)
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         nodes_by_name = {node.get("metadata", {}).get("name", ""): node for node in nodes or []}
@@ -3085,6 +3260,10 @@ class K8sTaskProvider:
 
             phase = pod.get("status", {}).get("phase", "") if pod is not None else ""
             workload = _workload_for_pod(pod, workload_index) if pod is not None else None
+            output_update = self._finalize_task_outputs(entry, pod_name, pod) if pod is not None else None
+            if output_update is not None:
+                updates.append(output_update)
+                continue
             if pod is not None:
                 disruption = _disruption_condition(pod)
                 if disruption is not None:
