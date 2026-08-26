@@ -16,6 +16,7 @@ import pytest
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
     SKYRL_POLICY_LOCATION,
@@ -221,17 +222,19 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
 
-def test_skyrl_run_id_is_a_single_segment() -> None:
-    spec = dataclasses.replace(_spec(), name="users/alice/iceball-rl", version="2026.08.01")
-    step = skyrl_step(spec, _execution())
-    ctx = StepContext.for_run(
-        output_path="s3://durable/users/alice/iceball-rl/2026.08.01",
-        prefix="s3://durable",
-        runtime_args=step.runtime_args,
-        deps=step.deps,
-    )
+def test_skyrl_run_ids_stay_distinct_through_job_name_sanitization() -> None:
+    def job_name(name: str) -> str:
+        spec = dataclasses.replace(_spec(), name=name, version="2026.08.01")
+        step = skyrl_step(spec, _execution())
+        ctx = StepContext.for_run(
+            output_path=f"s3://durable/{name}/2026.08.01",
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+        return sanitize_job_name(step.build_config(ctx).request.run_id)
 
-    assert "/" not in step.build_config(ctx).request.run_id
+    assert job_name("a-b/c") != job_name("a/b-c")
 
 
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:

@@ -191,11 +191,10 @@ def is_mutable_version(version: str) -> bool:
 
 
 def run_id_for(name: str, version: str) -> str:
-    """The default run id for ``name`` at ``version``."""
-    # A name may be a nested path and a version may carry a hyphen, so the flattened text alone
-    # leaves some pairs equal. The digest makes that unlikely without ruling it out.
+    """The run id for ``name`` at ``version``."""
+    # "a" at "b-dev" and "a-b" at "dev" both flatten to a-b-dev; the digest separates them.
     identity = f"{name}/{version}"
-    digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
     return f"{identity.replace('/', '-')}-{digest}"
 
 
