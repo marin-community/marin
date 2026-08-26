@@ -6,6 +6,40 @@ vLLM's `/metrics` endpoint. The checked-in contract is
 It covers request volume, scheduler pressure, KV-cache use, preemption, and the
 latencies used by Marin's inference dashboard.
 
+## Selection
+
+The standard list preserves signals consumed by the current inference dashboard,
+then checks their forwarding cost. These are the primary names emitted by
+Marin's pinned vLLM builds; query-side compatibility aliases do not expand the
+forwarding contract.
+
+The representative costs below assume eight `(model_name, engine)` label sets
+and five `finished_reason` values. A histogram contributes
+`(finite buckets + 1 + count + sum + _created) * 8` samples, where `1` is the
+implicit `+Inf` bucket. A counter contributes its value and `_created` sample per
+label set. A gauge contributes one sample per label set. These are sample counts
+for one scrape, not measured bytes or storage cost.
+
+| Family | Dashboard signal | Representative samples per scrape |
+| --- | --- | ---: |
+| `vllm:e2e_request_latency_seconds` | End-to-end latency mean and quantiles | 200 |
+| `vllm:generation_tokens` | Generated-token rate and window total | 16 |
+| `vllm:inter_token_latency_seconds` | Inter-token latency mean and quantiles | 184 |
+| `vllm:kv_cache_usage_perc` | KV-cache use over time, average, and peak | 8 |
+| `vllm:num_preemptions` | Preemption window total | 16 |
+| `vllm:num_requests_running` | Running requests over time, average, and peak | 8 |
+| `vllm:num_requests_waiting` | Waiting requests over time, average, and peak | 8 |
+| `vllm:prompt_tokens` | Prompt-token rate and window total | 16 |
+| `vllm:request_queue_time_seconds` | Queue latency mean and quantiles | 200 |
+| `vllm:request_success` | Request outcomes by finish reason | 80 |
+| `vllm:request_time_per_output_token_seconds` | Request TPOT mean and quantiles | 184 |
+| `vllm:time_to_first_token_seconds` | TTFT mean and quantiles | 208 |
+
+The five histograms contribute 976 samples, `request_success` contributes 80,
+the other three counters contribute 48, and the three gauges contribute 24:
+1,128 samples in total. The counts already include all 104 `_created` samples:
+40 from histograms, 40 from `request_success`, and 24 from the other counters.
+
 The family names are the names returned by the Prometheus parser. Counter names
 therefore omit the exposition suffix `_total`. `request_success` keeps every
 `finished_reason` label. Each selected histogram keeps every bucket, its count,

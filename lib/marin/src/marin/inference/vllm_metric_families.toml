@@ -1,3 +1,4 @@
+# See docs/explanations/vllm-metric-forwarding.md for selection rationale and sample cost.
 families = [
   "vllm:e2e_request_latency_seconds",
   "vllm:generation_tokens",
