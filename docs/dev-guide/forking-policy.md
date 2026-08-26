@@ -11,17 +11,14 @@ how Marin pins a fork and how the refresh runs.
 Every fork is pinned under `config/external/`. The pins feed
 `config/update-external.py`, which regenerates
 `lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
-revision directly. There are three pin kinds:
+revision directly. There are two pin kinds:
 
 - Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
-- Descriptor SHA (`vllm` TPU stack, `tpu-inference`): the fork tips live in
-  `config/external/vllm/tpu.toml`. This stack runs from an isolated `uvx`
-  environment, so its `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own
-  dependencies and there is no workspace lock change.
-- Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
-  promoted, immutable wheel per architecture. See the GPU release pipeline below.
+- Release wheel (`vllm` TPU and GPU): `config/external/vllm/tpu.toml` records one
+  public vLLM requirement whose metadata selects its tpu-inference companion.
+  `gpu.toml` independently records the promoted GPU wheel per architecture.
 
 ## The weekly refresh
 
@@ -42,6 +39,12 @@ result on a `<branch>-next` branch, re-pin Marin, run the fork's declared
 end-to-end test, and on green open one draft Marin PR requesting the descriptor's
 reviewer. On an unresolved external blocker it files a "can't migrate" issue
 instead of a PR.
+
+The TPU vLLM group is the exception to branch staging. The session selects exact
+vLLM and tpu-inference source commits, builds one public prerelease from a frozen
+vLLM producer commit, verifies that the vLLM wheel depends on the companion, and
+updates Marin's one vLLM requirement. The source commits remain release evidence;
+they are not separate Marin pins.
 
 `config/external/migration.toml` is the per-fork descriptor. It records the
 upstream repository, the pin kind, the fork branch the pin tracks, how to select a
@@ -66,6 +69,27 @@ pins on the old fork stack. It fixes only failures that pass on the old stack an
 regress on the refreshed one. A workload already broken on the old stack is
 recorded as a baseline failure and left for its own fix.
 
+For the TPU vLLM release, this table names the sole physical gate. It uses
+Qwen3-0.6B at TP8 on one `v6e-8` in `us-east5` through Iris `marin`, with
+production priority on the launcher and worker. A fresh run must cold-install
+through `uvx`, start the server, and pass a real request. Rerun only when a change
+can affect the producer path, wheel bytes or metadata, selected assets, Marin
+requirement, or launcher.
+
+## The TPU vLLM release
+
+The TPU release is one public vLLM wheel plus one public tpu-inference wheel. The
+vLLM wheel declares the exact companion URL in its package metadata, so Marin
+needs one requirement. Before the physical gate, resolve that requirement in a
+fresh uv environment and repeat with an explicit tpu-inference HEAD override;
+the latter is the nightly compatibility shape.
+
+The refresh freezes the vLLM producer commit, both source commits, the dependency
+cutoff, and the Marin consumer head before it builds. It publishes the pair once
+as a prerelease and records the workflow, assets, commits, and digests. After the
+producer change merges, mark that same release final without rebuilding or
+replacing its assets.
+
 ## The vLLM GPU release pipeline
 
 The GPU pin resolves to a prebuilt wheel. The `marin-community/vllm`
@@ -89,7 +113,8 @@ loader validates.
 
 ## Promotion
 
-The refresh never force-moves a fork's stable branch. It stages on `<branch>-next`
+For branch-based refreshes, the refresh never force-moves a fork's stable branch.
+It stages on `<branch>-next`
 and leaves the protected stable branch at the old tip; the draft Marin PR names
 the `<branch>-next` to `<branch>` hard swap an admin performs after review. Because
 the staged tip and the eventual stable tip are the same commit, the pins need no
@@ -99,9 +124,9 @@ change after promotion.
 
 | Fork | Repository | Tracks upstream | Pin |
 |------|-----------|-----------------|-----|
-| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | descriptor SHA on the `tpu` branch (`tpu.toml`) |
+| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | public release requirement (`tpu.toml`) |
 | vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
-| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | selected transitively by the TPU vLLM release |
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |

@@ -8,10 +8,11 @@
 #
 # Migrating a pin rebases our commits onto a newer upstream base on a `<branch>-next` staging branch,
 # validates with the fork's e2e against that branch, re-pins Marin at the exact staged tip, and opens
-# a draft PR. The refresh creates rollback and date tags; an admin promotes the protected stable
-# `branch` before merging the Marin PR. Some forks have drifted too far for a mechanical rebase (see
-# their nuances); a refresh files a blocker for those until a one-time manual catch-up brings them
-# close to upstream again.
+# a draft PR. Branch-based refreshes create rollback and date tags before an admin promotion. The
+# TPU vLLM group instead publishes one public release from two exact source commits; those commits
+# stay in release evidence while Marin records only the vLLM requirement. Some forks have drifted
+# too far for a mechanical rebase (see their nuances); a refresh files a blocker for those until a
+# one-time manual catch-up brings them close to upstream again.
 #
 # The `refresh-fork` skill reads a section to drive one pin's refresh. `ops-fork-ferry.yaml` asks
 # Weaver to run that skill weekly for each supported pin or group. Keep every section consistent with
@@ -21,20 +22,17 @@
 # fork with more than one pin has one section per pin (the vllm fork has `vllm` and `vllm-gpu`).
 # Fields:
 #   upstream         Repo we rebase our commits onto. Every fork has one.
-#   group            Sections sharing a group refresh together and land in one atomic Marin PR (each
-#                    still rebases onto its own base). The vllm/tpu-inference pair must move together:
-#                    the TPU launcher installs both pins at once and vllm's base derives from the
-#                    tpu-inference release, so a split refresh could pin a mixed, unblessed stack.
+#   group            Sections sharing a refresh move together and land in one Marin PR. The
+#                    vllm/tpu-inference pair produces one vLLM release: vLLM's base derives from the
+#                    tpu-inference release, and the vLLM wheel selects the exact companion.
 #                    Omitted for pins that refresh alone.
 #   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
-#                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
-#                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
-#                    source commit + per-arch wheels, for a pin too expensive to build at job time).
-#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
-#                    carries two pins on different upstream bases, so it splits them across two stable
-#                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
-#                    The refresh stages on "<branch>-next"; an admin promotes it onto "<branch>" after
-#                    reviewing the draft Marin PR.
+#                    uv.lock, follows the fork's main branch), or "release:<path>" (a public prebuilt
+#                    wheel selection). Grouped sources may share one release path when one wheel's
+#                    metadata selects the complete environment.
+#   branch           The fork branch that supplies a selected source or branch pin. For the TPU
+#                    release, its resolved commit is release evidence rather than a Marin input. Other
+#                    refreshes stage on "<branch>-next" for admin promotion after review.
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
 #                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
 #                    another fork, with `derived_from`).
@@ -49,7 +47,7 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#tpu-inference"
+pin = "release:vllm/tpu.toml"
 branch = "main"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
@@ -61,7 +59,7 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu.toml#vllm"
+pin = "release:vllm/tpu.toml"
 branch = "tpu"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
@@ -70,7 +68,8 @@ e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
 blocker_assignee = "yonromai"
 nuances = [
     "Do not advance past the vLLM known-good commit the selected tpu-inference release blessed.",
-    "The vllm fork carries a second, independent pin (vllm-gpu). Keep this one on its own `tpu` branch; the fork's `main` carries the vllm-gpu overlay.",
+    "Build one public vLLM wheel whose metadata selects the exact tpu-inference companion; record both source commits as release evidence, not separate Marin pins.",
+    "The vllm fork carries a second, independent GPU release pin. Do not change it during this TPU refresh.",
 ]
 
 [vllm-gpu]
@@ -82,7 +81,7 @@ e2e = "tests/cluster/vllm/test_snowball_backend_parity.py"
 blocker_assignee = "yonromai"
 nuances = [
     "The pin is a prebuilt wheel. The fork's release pipeline compiles `main` into an immutable wheel under a release tag; gpu.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel, then re-pins with `uv run config/update-external.py --promote-gpu-release <manifest>`, which reads the promoted marin-vllm-gpu-manifest.json.",
-    "This GPU pin refreshes on its own (no shared group). It tracks upstream head on `main`, which the release candidate build triggers on. The [vllm] pin tracks the tpu-inference-blessed base on the separate `tpu` branch.",
+    "This GPU pin refreshes on its own (no shared group). It tracks upstream head on `main`; the TPU release selects its sources independently.",
     "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
 
