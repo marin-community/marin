@@ -192,7 +192,12 @@ async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Sem
             # Built inside the gate, not before it: a packet is ~1.5 MB of base64 page images, and
             # a batch is four times the concurrency, so materializing every request up front would
             # hold gigabytes of images that no request is using yet.
-            payload = request(fs, task)
+            #
+            # Off the event loop, because the read is a blocking object fetch. Called directly it
+            # stalls every other in-flight request for the length of the fetch, and at this
+            # concurrency the loop then spends longer moving bytes than waiting on the judge --
+            # measured, that took a 512-verdict batch from ~90 seconds to over six minutes.
+            payload = await asyncio.to_thread(request, fs, task)
             try:
                 response = await client.post("/chat/completions", json=payload, timeout=JUDGE_TIMEOUT)
                 response.raise_for_status()
@@ -212,6 +217,17 @@ async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Sem
     return None
 
 
+def bought_packets(fs, model: str) -> set[str]:
+    """Packet ids this model already has a verdict for, from one prefix listing."""
+    slot = f"{VERDICT_PREFIX}/{model.replace('/', '_')}"
+    return {path.rsplit("/", 1)[-1].removesuffix(".json") for path in fs.glob(f"{slot}/*.json")}
+
+
+def write_verdict(fs, task: Task, result: dict) -> None:
+    with fs.open(task.path, "w") as stream:
+        json.dump(result, stream)
+
+
 async def run_batch(client: httpx.AsyncClient, fs, tasks: list[Task]) -> float:
     """Buy a batch of verdicts, writing each to its own object, and return what it cost."""
     gate = asyncio.Semaphore(JUDGE_CONCURRENCY)
@@ -219,12 +235,11 @@ async def run_batch(client: httpx.AsyncClient, fs, tasks: list[Task]) -> float:
     for start in range(0, len(tasks), JUDGE_CONCURRENCY * 4):
         batch = tasks[start : start + JUDGE_CONCURRENCY * 4]
         results = await asyncio.gather(*(judge_one(client, fs, task, gate) for task in batch))
-        for task, result in zip(batch, results, strict=True):
-            if result is None:
-                continue
-            spent += result.get("cost") or 0.0
-            with fs.open(task.path, "w") as stream:
-                json.dump(result, stream)
+        bought = [(task, result) for task, result in zip(batch, results, strict=True) if result is not None]
+        spent += sum(result.get("cost") or 0.0 for _, result in bought)
+        # Threaded for the same reason the reads are: 512 sequential object writes between batches
+        # is dead time on a run that buys twenty thousand of them.
+        await asyncio.gather(*(asyncio.to_thread(write_verdict, fs, task, result) for task, result in bought))
         logger.info("judged %d/%d, spent $%.4f", min(start + len(batch), len(tasks)), len(tasks), spent)
     return spent
 
@@ -244,7 +259,11 @@ async def buy(fs, tasks: list[Task]) -> dict:
     The pilot is not a dry run -- its verdicts are kept. It exists so the projection is made against
     this packet shape and this judge rather than against a remembered number from a different pass.
     """
-    pending = [task for task in tasks if not fs.exists(task.path)]
+    # One listing per model rather than a HEAD per task. At twenty thousand tasks the sequential
+    # existence check is minutes of the run on its own, and it has to stay per model: the same
+    # packet is judged by two of them and their verdicts live under different prefixes.
+    bought = {model: bought_packets(fs, model) for model in {task.model for task in tasks}}
+    pending = [task for task in tasks if task.packet_id not in bought[task.model]]
     logger.info("judging: %d tasks, %d already bought", len(tasks), len(tasks) - len(pending))
     if not pending:
         return {"pilot_verdicts": 0, "projected": 0.0, "spent": 0.0}
