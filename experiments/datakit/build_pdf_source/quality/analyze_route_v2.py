@@ -728,14 +728,14 @@ def report(results: dict) -> str:
         f"over {results['noise_floor']['splits']} domain splits at "
         f"{results['noise_floor']['document_budget']:.0%} of documents",
         "",
-        f"{'arm':<46} {'core-h':>7} {'@25%':>8} {'@50%':>8} {'@75%':>8} {'clump':>7} {'free gain':>10}",
+        f"{'arm':<46} {'core-h':>7} {'@25%':>8} {'@50%':>8} {'@70%':>8} {'clump':>7} {'free gain':>10}",
     ]
     for arm in results["arms"]:
         lines.append(
             f"{arm['name']:<46} {arm['router_core_hours']:>7.2f} "
             f"{arm['points'][0.25]['quality_loss_pages']:>8.4f} "
             f"{arm['points'][0.50]['quality_loss_pages']:>8.4f} "
-            f"{arm['points'][0.75]['quality_loss_pages']:>8.4f} "
+            f"{arm['points'][0.70]['quality_loss_pages']:>8.4f} "
             f"{arm['clumping']['largest_clump_share']:>7.1%} {arm['gains']['free_share']:>10.1%}"
         )
     for arm in results["arms"]:
