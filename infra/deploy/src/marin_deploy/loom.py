@@ -25,7 +25,7 @@ sudo test -f /run/loom-startup-succeeded
 
 
 class LoomNotReadyError(RuntimeError):
-    """The Loom readiness endpoint has not reported ready yet."""
+    pass
 
 
 def _require_ready(url: str) -> None:

@@ -446,8 +446,6 @@ class K8sControllerProvider:
         self._shutdown_event = threading.Event()
         self.signing_key_spec: tuple[str, ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
-        self._prepared_task_env: dict[str, str] | None = None
-        self._prepared_task_env_spec: tuple[bool, tuple[str, ...]] | None = None
 
     @property
     def kubectl(self) -> K8sService:
@@ -472,20 +470,11 @@ class K8sControllerProvider:
     def preflight_controller(self, config: IrisClusterConfig) -> None:
         """Resolve operator-side secrets without changing Kubernetes resources."""
         self._prepared_controller_env = None
-        self._prepared_task_env = None
-        self._prepared_task_env_spec = None
-
-        signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        task_env_spec = (self.uses_s3_storage(config), tuple(config.defaults.inject_env))
-        task_env: dict[str, str] = {}
-        if task_env_spec[0]:
-            task_env.update(self._s3_task_env())
-        task_env.update(collect_inject_env(config.defaults.inject_env))
-
-        self.signing_key_spec = signing_key_spec
+        if self.uses_s3_storage(config):
+            self._s3_task_env()
+        collect_inject_env(config.defaults.inject_env)
+        self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
         self._prepared_controller_env = _controller_env(config)
-        self._prepared_task_env = task_env
-        self._prepared_task_env_spec = task_env_spec
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -512,22 +501,21 @@ class K8sControllerProvider:
 
         self.verify_prerequisites(config)
 
-        # Project the preflighted cluster default env into the controller and
-        # every task via the iris-task-env Secret + envFrom. The controller never
-        # reads these secrets from the operator's shell itself.
+        # Build the cluster default env and project it into the controller and
+        # every task via the iris-task-env Secret + envFrom. Resolution happens
+        # here, in the operator's shell -- the controller never has these secrets.
+        # S3 storage auth and operator-injected vars share one flow.
+        default_env: dict[str, str] = {}
+        if self.uses_s3_storage(config):
+            default_env.update(self._s3_task_env())
+        default_env.update(collect_inject_env(config.defaults.inject_env))
+        if default_env:
+            self.ensure_task_env_secret(default_env)
+
         signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        task_env_spec = (self.uses_s3_storage(config), tuple(config.defaults.inject_env))
-        if (
-            self._prepared_controller_env is None
-            or self._prepared_task_env is None
-            or self.signing_key_spec != signing_key_spec
-            or self._prepared_task_env_spec != task_env_spec
-        ):
+        if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
             self.preflight_controller(config)
         assert self._prepared_controller_env is not None
-        assert self._prepared_task_env is not None
-        if self._prepared_task_env:
-            self.ensure_task_env_secret(self._prepared_task_env)
         if self._prepared_controller_env:
             self.ensure_controller_env_secret(self._prepared_controller_env)
 

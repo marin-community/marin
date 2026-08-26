@@ -465,23 +465,17 @@ def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(mon
     provider.shutdown()
 
 
-def test_preflight_controller_caches_s3_credentials(monkeypatch):
-    """Activation projects the S3 credentials validated before the image build."""
-    monkeypatch.setenv("CW_KEY_ID", "key-before-build")
-    monkeypatch.setenv("CW_KEY_SECRET", "secret-before-build")
+def test_start_controller_s3_storage_creates_task_env_secret():
+    """S3 storage alone (no inject_env) still populates the iris-task-env Secret."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
     _seed_prerequisites(k8s, cluster_config)
 
-    provider.preflight_controller(cluster_config)
-    monkeypatch.setenv("CW_KEY_ID", "key-after-build")
-    monkeypatch.setenv("CW_KEY_SECRET", "secret-after-build")
     provider.start_controller(cluster_config)
 
     secret = k8s.get_json(K8sResource.SECRETS, "iris-task-env")
     assert secret is not None
-    assert base64.b64decode(secret["data"]["AWS_ACCESS_KEY_ID"]).decode() == "key-before-build"
-    assert base64.b64decode(secret["data"]["AWS_SECRET_ACCESS_KEY"]).decode() == "secret-before-build"
+    assert "AWS_ACCESS_KEY_ID" in secret["data"]
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
 
@@ -940,11 +934,10 @@ def test_preflight_controller_errors_without_s3_credentials(monkeypatch):
     provider, _ = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://my-bucket/bundles")
 
-    with pytest.raises(
-        InfraError,
-        match="Missing required environment variables for S3-compatible object storage: CW_KEY_ID, CW_KEY_SECRET",
-    ):
+    with pytest.raises(InfraError) as exc_info:
         provider.preflight_controller(cluster_config)
+    assert "CW_KEY_ID" in str(exc_info.value)
+    assert "CW_KEY_SECRET" in str(exc_info.value)
     provider.shutdown()
 
 

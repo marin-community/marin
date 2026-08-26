@@ -77,7 +77,7 @@ controller running.
 
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets and task environment variables before taking a checkpoint, building images, or writing a rollout record. CoreWeave S3-backed clusters require `CW_KEY_ID` and `CW_KEY_SECRET`; an unset credential is reported by name at this gate. CoreWeave keeps the resolved signing key and task environment in memory and projects those values into `iris-controller-env` and `iris-task-env` during activation. A missing environment variable, Secret Manager dependency, or inaccessible secret leaves the running controller and rollout record unchanged.
+The restart preflight validates operator-side controller secrets and task environment variables before taking a checkpoint, building images, or writing a rollout record. CoreWeave S3-backed clusters require `CW_KEY_ID` and `CW_KEY_SECRET`; an unset credential is reported by name at this gate. Activation projects the signing key and task environment from the operator's shell into `iris-controller-env` and `iris-task-env`. A missing environment variable, Secret Manager dependency, or inaccessible secret leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 

@@ -452,7 +452,7 @@ def restart_controller(
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
 ) -> tuple[str, StandaloneWorkerHandle]:
-    """Restart controller container in-place on an existing VM."""
+    """Restart a controller in place and return its address and VM handle."""
     plan = controller_restart_plan(platform, config, resolve_image)
     logger.info("Restarting controller container in-place on VM %s", plan.vm.vm_id)
     plan.vm.bootstrap(plan.bootstrap_script)

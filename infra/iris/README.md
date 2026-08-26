@@ -16,7 +16,7 @@ uv run marin-deploy iris rollout <cluster>
 uv run marin-deploy iris rollback <cluster>
 ```
 
-The rollout wrapper resolves operator-side secrets and task environment variables,
+The rollout wrapper validates operator-side secrets and task environment variables,
 takes a checkpoint, builds and pins the controller images, and invokes `pulumi up`.
 CoreWeave S3-backed clusters require `CW_KEY_ID` and `CW_KEY_SECRET`; missing
 variables fail this preflight before the checkpoint or image build. When a prior

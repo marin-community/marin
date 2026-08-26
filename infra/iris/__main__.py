@@ -21,7 +21,7 @@ def _activation_spec(properties: dict[str, Any]) -> IrisActivationSpec:
 
 
 class IrisControllerProvider(pulumi.dynamic.ResourceProvider):
-    """Activate controllers without capturing command output or owning deletion."""
+    """Apply in-place controller activations; deletion leaves the controller running."""
 
     def create(self, properties: dict[str, Any]) -> pulumi.dynamic.CreateResult:
         spec = _activation_spec(properties)
