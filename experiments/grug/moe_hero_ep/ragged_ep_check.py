@@ -56,6 +56,8 @@ from marin.experiment.namespacing import user_namespaced_name
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.grug.moe_hero_ep.train import RAGGED_REQUIRED_XLA_FLAGS
+
 logger = logging.getLogger(__name__)
 
 TOKENS_PER_DEVICE = 64
@@ -107,15 +109,6 @@ SKEWED_CAPACITY = 1.0
 # the max are recorded as diagnostics.
 TOLERANCE = 5e-2
 
-# Mirrors `train.py`'s `RAGGED_REQUIRED_XLA_FLAGS`. Duplicated rather than imported so this guard
-# does not pull in the hero's training module, at the cost of having to be kept in step with it:
-# without these the check validates the host-launched kernel while every hero run uses the
-# device-initiated one, which is the opposite of what a transport guard is for.
-RAGGED_TRANSPORT_XLA_FLAGS = (
-    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
-)
-
 
 class TransportKernel(StrEnum):
     """Which ragged all-to-all kernel the run exercises.
@@ -133,7 +126,7 @@ class TransportKernel(StrEnum):
 
 
 def _transport_flags(kernel: TransportKernel) -> tuple[str, ...]:
-    return RAGGED_TRANSPORT_XLA_FLAGS if kernel is TransportKernel.DEVICE else ()
+    return RAGGED_REQUIRED_XLA_FLAGS if kernel is TransportKernel.DEVICE else ()
 
 
 # TODO(https://github.com/marin-community/marin/issues/8704): move this to `tests/cluster/` once a

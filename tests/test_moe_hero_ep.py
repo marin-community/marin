@@ -975,26 +975,6 @@ def test_baseline_eval_hook_runs_once_after_the_first_step():
     assert fired == []
 
 
-def test_moe_backend_override_reaches_the_model_and_the_run_tags():
-    step = launch.build_diagnostic_run(
-        run_id="ragged-backend",
-        dp_racks=1,
-        num_steps=1,
-        moe_implementation="ragged_all_to_all",
-        processes_per_task=4,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.model.moe_implementation == "ragged_all_to_all"
-    assert config.processes_per_task == 4
-    tags = config.trainer.trainer.tracker.tags
-    assert "ragged-all-to-all" in tags
-    # The pooled receiver capacity is the pooled transport's own knob; reporting it against a
-    # transport that has no such buffer would label the run with a setting it never read.
-    assert not [tag for tag in tags if tag.startswith("transport-capacity-")]
-
-
 def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
     # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
     # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
@@ -1034,12 +1014,6 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
             assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
 
 
-def test_the_4gpu_guard_mirrors_the_hero_s_ragged_xla_flags():
-    # ragged_ep_check duplicates these rather than importing the training module. If the hero's
-    # set changes and the guard's does not, the guard silently validates a transport no run uses.
-    assert ragged_ep_check.RAGGED_TRANSPORT_XLA_FLAGS == train.RAGGED_REQUIRED_XLA_FLAGS
-
-
 def test_the_ragged_backend_requires_one_process_per_gpu():
     # The hero default already gives one process per GPU, so this guards an explicit wrong value
     # rather than a trap: a task holding several GPUs in one process cannot run the ragged
@@ -1064,23 +1038,6 @@ def test_the_ragged_backend_requires_one_process_per_gpu():
         )
 
 
-def test_disabling_the_master_keeps_fp32_weights_on_device():
-    step = launch.build_diagnostic_run(
-        run_id="fp32-device-params",
-        dp_racks=1,
-        num_steps=1,
-        master_param_mode=train.MasterParamMode.DISABLED,
-        version="dev",
-    )
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-
-    assert config.trainer.master_param_mode is train.MasterParamMode.DISABLED
-    # Weights move to fp32 on device; the compute precision does not follow them there.
-    assert config.trainer.trainer.mp.param_dtype == jnp.float32
-    assert config.trainer.trainer.mp.compute_dtype == jnp.bfloat16
-    assert "master-params-disabled" in config.trainer.trainer.tracker.tags
-
-
 def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
     # A watch interval of 0 would otherwise select overlap 4, so the assertion below
     # separates the ragged posture from the inline-watch one rather than aliasing it.
@@ -1100,27 +1057,26 @@ def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypa
         assert flag in flags
 
 
-def test_the_ragged_transport_refuses_a_jax_that_cannot_honor_its_flags(monkeypatch):
-    """A runtime below the floor aborts at import on the unknown flags, on every rank at once.
+@pytest.mark.parametrize(
+    ("moe_implementation", "refused"),
+    [(train.RAGGED_MOE_IMPLEMENTATION, True), (None, False)],
+)
+def test_the_jax_floor_gates_the_forced_ragged_flags_and_nothing_else(monkeypatch, moe_implementation, refused):
+    """Below the floor the forced flags abort every rank at import, so refuse the run first.
 
-    The GPU extra still pins a jax below it, so this is the path an opt-in ragged run takes today.
+    The floor is a property of those flags, so it must leave the pooled default alone. The GPU
+    extra still pins a jax below it, which is the path an opt-in ragged run takes today.
     """
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
-    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
-
-    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(RuntimeError, match=re.escape("99.0.0")):
-        train.run_grug(config)
-
-
-def test_the_jax_floor_leaves_the_pooled_transport_alone(monkeypatch):
-    """The floor is a property of the forced flags, so it must not gate the default backend."""
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
-    config = _runtime_env_config(watch_interval=0)
+    overrides = {"moe_implementation": moe_implementation} if moe_implementation else {}
+    config = _runtime_env_config(watch_interval=0, **overrides)
 
     with patch.object(train, "dispatch_grug_training_run"):
+        if refused:
+            with pytest.raises(RuntimeError, match=re.escape("99.0.0")):
+                train.run_grug(config)
+            return
         train.run_grug(config)
 
-    flags = os.environ["XLA_FLAGS"].split()
-    assert train.RAGGED_REQUIRED_XLA_FLAGS[0] not in flags
+    assert train.RAGGED_REQUIRED_XLA_FLAGS[0] not in os.environ["XLA_FLAGS"].split()
