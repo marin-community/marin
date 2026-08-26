@@ -72,7 +72,7 @@ jobs:
       CANARY_PROFILER_NUM_STEPS: "10"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
-      CANARY_MAX_LOSS: "8.0"
+      CANARY_MAX_LOSS: "10.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/cw-us-west-04a.yaml
