@@ -23,6 +23,8 @@ from experiments.datakit.build_pdf_source.quality.analyze_route_v2 import (
     at_budget,
     clumping,
     confusion,
+    corpus_cost,
+    corpus_share,
     frontier,
     knee,
 )
@@ -425,3 +427,97 @@ def test_expected_output_length_is_absolute_because_it_predicts_truncation():
     long_page = measure(["word " * 4000], num_pages=1)
 
     assert long_page["inspector_output_chars_per_source_page"] > 100 * short["inspector_output_chars_per_source_page"]
+
+
+# ---------------------------------------------------------------------------
+# Corpus accounting: what the gates spend before the score allocates anything
+# ---------------------------------------------------------------------------
+
+
+def corpus_frame(rows: list[dict]) -> pl.DataFrame:
+    return pl.DataFrame(rows, schema_overrides={"inspector_error": pl.String})
+
+
+def test_forced_escalations_consume_vlm_budget_before_the_score_does():
+    """A document pdf-inspector read nothing from is a certain escalation, not a saving.
+
+    The learned score is trained and evaluated on the routable remainder, so a budget quoted against
+    it understates what the pipeline spends. ~12% of this corpus never reaches the score and every
+    page of it goes to the VLM.
+    """
+    frame = corpus_frame(
+        [
+            {"num_pages": 10.0, "inspector_error": None, "inspector_markdown_chars": 0, "mean_render_dpi": 150.0},
+            {"num_pages": 10.0, "inspector_error": None, "inspector_markdown_chars": 500, "mean_render_dpi": 40.0},
+            {"num_pages": 80.0, "inspector_error": None, "inspector_markdown_chars": 900, "mean_render_dpi": 150.0},
+        ]
+    )
+
+    share = corpus_share(frame)
+
+    assert share.forced_escalate_documents == 1
+    assert share.forced_escalate_page_share == pytest.approx(0.10)
+    assert share.forced_keep_documents == 1
+    assert share.forced_keep_page_share == pytest.approx(0.10)
+    assert share.unreadable_by_either_documents == 0
+    assert share.routable_page_share == pytest.approx(0.80)
+
+
+def test_corpus_cost_adds_the_forced_escalations_back_onto_the_learned_budget():
+    """Half the routable pages plus a tenth already forced is 50% of the score's budget, not the corpus's."""
+    frame = corpus_frame(
+        [
+            {"num_pages": 10.0, "inspector_error": None, "inspector_markdown_chars": 0, "mean_render_dpi": 150.0},
+            {"num_pages": 90.0, "inspector_error": None, "inspector_markdown_chars": 900, "mean_render_dpi": 150.0},
+        ]
+    )
+    share = corpus_share(frame)
+    scores = np.array([0.9, 0.1])
+    escalate = np.array([True, False])
+    pages = np.array([1.0, 1.0])
+    point = at_budget(frontier(scores, escalate, pages, 0.0, needs_inspector=True), 0.5)
+
+    priced = corpus_cost(point, share, router_core_hours=contract.ROUTE_FEATURES_CORE_HOURS)
+
+    assert priced["corpus_page_budget"] == pytest.approx(0.10 + 0.5 * 0.90)
+    assert priced["forced_share_of_escalation"] == pytest.approx(0.10 / 0.55)
+    assert priced["cpu_core_hours"] == pytest.approx(
+        contract.INSPECTOR_CORE_HOURS + contract.ROUTE_FEATURES_CORE_HOURS + 0.55 * contract.VLM_FEED_CORE_HOURS
+    )
+
+
+def test_the_empty_extraction_gate_forces_pdf_inspector_onto_every_page():
+    """The gate that removes 12% of the corpus from the score is itself an extraction result.
+
+    So the corpus-level price always carries the full 2.1 core-h, and the marginal cost of an
+    escalated page is the whole 17.8 core-h feed path rather than 17.8 - 2.1. Dropping to 15.7 means
+    giving up the gate as well as the free feature groups.
+    """
+    frame = corpus_frame(
+        [{"num_pages": 1.0, "inspector_error": None, "inspector_markdown_chars": 10, "mean_render_dpi": 150.0}]
+    )
+    share = corpus_share(frame)
+    point = at_budget(frontier(np.array([1.0, 0.0]), np.array([True, False]), np.ones(2), 0.0, False), 0.5)
+
+    priced = corpus_cost(point, share, router_core_hours=0.0)
+
+    assert priced["cpu_core_hours"] == pytest.approx(contract.INSPECTOR_CORE_HOURS + 0.5 * contract.VLM_FEED_CORE_HOURS)
+
+
+def test_a_document_neither_route_can_read_is_kept_rather_than_escalated():
+    """The two gates disagree on ~600 documents and legibility is the stronger statement.
+
+    pdf-inspector returning no text argues for escalation; the page rendering below the floor says
+    the VLM cannot read it either. Escalating buys a transcription of a blur at full render and GPU
+    price, so the legibility gate wins and the document is counted as unreadable by either route.
+    """
+    frame = corpus_frame(
+        [{"num_pages": 5.0, "inspector_error": None, "inspector_markdown_chars": 0, "mean_render_dpi": 30.0}]
+    )
+
+    share = corpus_share(frame)
+
+    assert share.forced_escalate_documents == 0
+    assert share.forced_keep_documents == 1
+    assert share.unreadable_by_either_documents == 1
+    assert share.forced_escalate_page_share == pytest.approx(0.0)

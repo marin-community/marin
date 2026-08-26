@@ -85,14 +85,27 @@ BUDGET_GRID = np.round(np.arange(0.002, 1.0, 0.002), 4)
 # scores does not turn the derivative into a step.
 MARGINAL_WINDOW = 0.025
 
+# Page-weighted quality-loss targets the arms are compared at. Holding quality fixed and reading off
+# CPU is what prices the router pass; holding budget fixed and reading off quality does not, because
+# the arms do not cost the same to run.
+EQUAL_QUALITY_TARGETS = (0.20, 0.15, 0.10, 0.07, 0.05, 0.03, 0.02, 0.01)
+
 # Seeds the domain-disjoint split is redrawn under, to measure how much of a difference between two
 # arms is the arms and how much is which domains landed in the test half. The published v1 pass put
 # that noise floor at ~0.012 on 89k rows; this label set is smaller, so it is measured again rather
 # than inherited.
 NOISE_SEEDS = (0, 1, 2, 3, 4)
 
-# Visual-token budgets priced against the legibility gate. Throughput costs from `ocr-budget-sweep.md`.
-BUDGET_SWEEP = {1024: 16.2, 2048: 18.3, 4096: 22.8, 8192: 25.2}
+# Visual-token budgets priced against the legibility gate, as GPU-hours per million pages.
+#
+# Up to 8192 these are measured (`ocr-budget-sweep.md`, packable lean config). 16384 is
+# extrapolated from that curve and flagged as such in the output: the sweep skipped it because the
+# 300-DPI upscale cap already binds at 8192 for ordinary paper, so a 16384 arm would have rendered
+# near-identical payloads. That reasoning does not hold for the pages this gate is about, which are
+# large-format sheets the cap never reaches -- 16384 is the largest budget the render path can
+# express at all, since 16384 x 1024 pixels is exactly `render.MAX_PIXELS`.
+BUDGET_SWEEP = {1024: 16.2, 2048: 18.3, 4096: 22.8, 8192: 25.2, 16384: 28.0}
+EXTRAPOLATED_BUDGETS = (16384,)
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +143,12 @@ def joined(fs: fsspec.AbstractFileSystem) -> pl.DataFrame:
         .join(output, on="source_id", how="left")
         .join(labels.drop("domain", "trustworthy", strict=False), on="source_id", how="left")
     )
-    logger.info("joined %d rows, %d labelled", frame.height, frame[ESCALATE_COLUMN].is_not_null().sum())
+    logger.info(
+        "joined %d rows, %d labelled, %d with pdf-inspector output statistics",
+        frame.height,
+        frame[ESCALATE_COLUMN].is_not_null().sum(),
+        frame["inspector_output_alpha_ratio"].is_not_null().sum(),
+    )
     return contract.with_derived(frame)
 
 
@@ -303,6 +321,86 @@ def confusion(points: list[RoutePoint], scores: np.ndarray, escalate: np.ndarray
 
 
 # ---------------------------------------------------------------------------
+# What the gates take before the score sees anything
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CorpusShare:
+    """How the corpus divides between the two gates and the documents the score actually ranks.
+
+    The learned score is trained and evaluated on the routable remainder, so a budget quoted against
+    it is a share of that remainder and not of the corpus. That distinction is not cosmetic here:
+    the documents pdf-inspector returns no text for are ~12% of the corpus and every one of them is
+    a certain escalation, so they spend VLM budget before the score allocates a page.
+    """
+
+    documents: int
+    corpus_pages: float
+    forced_escalate_documents: int
+    forced_escalate_page_share: float
+    forced_keep_documents: int
+    forced_keep_page_share: float
+    unreadable_by_either_documents: int
+    routable_documents: int
+    routable_page_share: float
+
+
+def corpus_share(frame: pl.DataFrame) -> CorpusShare:
+    """Split the corpus into forced escalations, forced keeps, and the routable remainder."""
+    pages = frame["num_pages"].cast(pl.Float64)
+    total = float(pages.sum())
+    no_text = pl.col("inspector_error").is_not_null() | (pl.col("inspector_markdown_chars") == 0)
+    illegible = contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS).not_()
+
+    # Legibility is checked first, and the order is the decision. A document can be both -- ~600 of
+    # them are -- and the two gates then disagree: one says escalate because there is no cheap text,
+    # the other says the VLM cannot read the page either. The second is the stronger statement, so
+    # it wins. Escalating a document rendered below the floor buys a transcription of a blur at full
+    # render and GPU price. Neither route can read these; they are candidates for tiling or for
+    # exclusion from the corpus, and that decision sits above the router.
+    keep_forced = frame.filter(illegible)
+    escalate_forced = frame.filter(illegible.not_() & no_text)
+    routable = frame.filter(illegible.not_() & no_text.not_())
+    return CorpusShare(
+        documents=frame.height,
+        corpus_pages=total,
+        forced_escalate_documents=escalate_forced.height,
+        forced_escalate_page_share=float(escalate_forced["num_pages"].cast(pl.Float64).sum()) / total,
+        forced_keep_documents=keep_forced.height,
+        forced_keep_page_share=float(keep_forced["num_pages"].cast(pl.Float64).sum()) / total,
+        unreadable_by_either_documents=frame.filter(illegible & no_text).height,
+        routable_documents=routable.height,
+        routable_page_share=float(routable["num_pages"].cast(pl.Float64).sum()) / total,
+    )
+
+
+def corpus_cost(point: RoutePoint, share: CorpusShare, router_core_hours: float) -> dict:
+    """One held-out operating point restated against the whole corpus rather than the remainder.
+
+    ``needs_inspector`` does not appear, and its absence is a result. The gate that removes ~12% of
+    the corpus from the score's reach is "pdf-inspector produced no text", which is only knowable
+    after running pdf-inspector. Any pipeline using that gate therefore pays the 2.1 core-h on every
+    page whatever its router reads, so the marginal cost of escalating a page is the full 17.8 core-h
+    of the feed path, not the 17.8 - 2.1 = 15.7 that a router able to skip the extraction would pay.
+    Dropping to 15.7 means giving up both the free feature groups and the empty-extraction gate.
+    """
+    escalated = share.forced_escalate_page_share + point.page_budget * share.routable_page_share
+    return {
+        "learned_budget_of_routable": point.document_budget,
+        "corpus_page_budget": escalated,
+        "forced_share_of_escalation": share.forced_escalate_page_share / escalated if escalated else 0.0,
+        "cpu_core_hours": contract.INSPECTOR_CORE_HOURS + router_core_hours + escalated * contract.VLM_FEED_CORE_HOURS,
+        "gpu_hours": escalated * contract.VLM_GPU_HOURS,
+        "crawl_core_hours": (
+            (contract.INSPECTOR_CORE_HOURS + router_core_hours + escalated * contract.VLM_FEED_CORE_HOURS)
+            * contract.CRAWL_PAGES
+            / 1e6
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # One arm
 # ---------------------------------------------------------------------------
 
@@ -378,10 +476,15 @@ class ArmResult:
     clumping: dict
     confusion: dict[float, dict]
     gains: dict
+    corpus: dict[float, dict]
 
 
-def read_out(arm: Arm, split: Split, scores: np.ndarray, gains: dict) -> ArmResult:
-    """Everything reported about one score on the shared held-out set."""
+def read_out(arm: Arm, split: Split, scores: np.ndarray, gains: dict, share: CorpusShare) -> ArmResult:
+    """Everything reported about one score on the shared held-out set.
+
+    Reported twice: against the routable remainder the score actually ranks, and against the whole
+    corpus once the gates' forced escalations are added back. The second is what the pipeline pays.
+    """
     escalate = split.test[ESCALATE_COLUMN].to_numpy().astype(bool)
     pages = split.test["num_pages"].to_numpy().astype(np.float64)
     points = frontier(scores, escalate, pages, arm.core_hours, arm.needs_inspector)
@@ -398,27 +501,66 @@ def read_out(arm: Arm, split: Split, scores: np.ndarray, gains: dict) -> ArmResu
         clumping=clumping(scores),
         confusion={budget: confusion(points, scores, escalate, budget) for budget in (0.25, 0.5, 0.75)},
         gains=gains,
+        corpus={budget: corpus_cost(at_budget(points, budget), share, arm.core_hours) for budget in REPORTED_BUDGETS},
     )
 
 
-def evaluate(split: Split, arm: Arm) -> ArmResult:
+def evaluate(split: Split, arm: Arm, share: CorpusShare) -> ArmResult:
     """Train the arm on one side of the shared domain-disjoint split, read it on the other."""
     features = arm.features
     booster = fit(split, features)
     logger.info("%s: %d features, %s", arm.name, len(features), split.describe())
-    return read_out(arm, split, escalation_scores(booster, split.test, features), group_gains(booster, features))
+    return read_out(arm, split, escalation_scores(booster, split.test, features), group_gains(booster, features), share)
 
 
-def evaluate_rule(split: Split, name: str, column: str) -> ArmResult:
+def evaluate_rule(split: Split, name: str, column: str, groups: tuple[str, ...], share: CorpusShare) -> ArmResult:
     """The same read-out for a score nobody trained: a raw signal used directly as a routing rule.
 
     Read on the same held-out documents as the trained arms, so the comparison is not also a
     comparison of row sets. The point of including these is the clumping column: an untrained rule
     tends to tie most of the corpus at one value, and a frontier over that is a fiction.
+
+    ``groups`` prices the rule rather than describing what it may read. The incumbent's probability
+    is not free -- it needs its own PyMuPDF feature pass -- so it is charged as if it were the
+    ``page_signals`` pass. That is an approximation and an upper bound on the incumbent's cost; the
+    conclusion it feeds does not turn on it, because the incumbent loses on quality at every budget.
     """
-    arm = Arm(name, ())
+    arm = Arm(name, groups)
     scores = np.nan_to_num(split.test[column].cast(pl.Float64).to_numpy())
-    return read_out(arm, split, scores, {"top_features": [], "share_by_group": {}, "free_share": 0.0, "paid_share": 0.0})
+    empty = {"top_features": [], "share_by_group": {}, "free_share": 0.0, "paid_share": 0.0}
+    return read_out(arm, split, scores, empty, share)
+
+
+def cheapest_at_quality(result: ArmResult, target_loss: float) -> dict | None:
+    """The least corpus CPU this arm can spend and still hold page-weighted loss at or below target.
+
+    This is the comparison that prices the router pass, and it is the one a gain ranking cannot
+    make. Gain says how much of a model's explanatory work a feature group did; it says nothing
+    about whether the same quality was reachable without the group at a lower budget. Two arms
+    quoted at equal quality and unequal CPU answer that directly.
+    """
+    affordable = [
+        (budget, point, result.corpus[budget])
+        for budget, point in result.points.items()
+        if point["quality_loss_pages"] <= target_loss
+    ]
+    if not affordable:
+        return None
+    budget, point, corpus = min(affordable, key=lambda item: item[2]["cpu_core_hours"])
+    return {
+        "target_quality_loss": target_loss,
+        "learned_budget": budget,
+        "quality_loss_pages": point["quality_loss_pages"],
+        "corpus_page_budget": corpus["corpus_page_budget"],
+        "cpu_core_hours": corpus["cpu_core_hours"],
+        "gpu_hours": corpus["gpu_hours"],
+        "crawl_core_hours": corpus["crawl_core_hours"],
+    }
+
+
+def equal_quality_table(arms: list[ArmResult], targets: tuple[float, ...]) -> dict:
+    """Every arm's cheapest corpus CPU at each quality target, so the arms differ only in cost."""
+    return {target: {arm.name: cheapest_at_quality(arm, target) for arm in arms} for target in targets}
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +632,7 @@ def gate_report(frame: pl.DataFrame) -> dict:
         rescued_pages = float(rescued["num_pages"].cast(pl.Float64).sum())
         options[budget] = {
             "median_dpi": contract.dpi_at_budget(146.0, budget),
+            "throughput_measured": budget not in EXTRAPOLATED_BUDGETS,
             "gpu_hours_per_million_pages": gpu_hours,
             "documents_made_legible": rescued.height,
             "pages_made_legible": rescued_pages,
@@ -551,18 +694,20 @@ def gate_report(frame: pl.DataFrame) -> dict:
 
 def frontier_table(result: ArmResult) -> str:
     lines = [
-        f"  {'docs':>6} {'pages':>7} {'loss/pg':>8} {'loss/doc':>9} "
-        f"{'catches':>8} {'marg':>6} {'per resc':>8} {'core-h/M':>9} {'GPU-h/M':>8}"
+        f"  {'docs':>6} {'pages':>7} {'loss/pg':>8} {'loss/doc':>9} {'catches':>8} {'marg':>6} "
+        f"{'per resc':>8} | {'corpus pg':>10} {'core-h/M':>9} {'GPU-h/M':>8} {'crawl core-h':>13}"
     ]
     for budget in REPORTED_BUDGETS:
         point = result.points[budget]
+        corpus = result.corpus[budget]
         precision = result.marginal[budget]
         rescue = 1.0 / precision if precision and precision > 0 else float("inf")
         lines.append(
             f"  {point['document_budget']:>6.1%} {point['page_budget']:>7.1%} "
             f"{point['quality_loss_pages']:>8.4f} {point['quality_loss_documents']:>9.4f} "
-            f"{point['recall_of_escalations']:>8.1%} {precision:>6.2f} {rescue:>8.1f} "
-            f"{point['cpu_core_hours']:>9.1f} {point['gpu_hours']:>8.1f}"
+            f"{point['recall_of_escalations']:>8.1%} {precision:>6.2f} {rescue:>8.1f} | "
+            f"{corpus['corpus_page_budget']:>10.1%} {corpus['cpu_core_hours']:>9.1f} "
+            f"{corpus['gpu_hours']:>8.1f} {corpus['crawl_core_hours']:>13.0f}"
         )
     return "\n".join(lines)
 
@@ -571,7 +716,14 @@ def report(results: dict) -> str:
     lines = [
         f"labelled {results['labelled_documents']} documents over {results['labelled_domains']} domains; "
         f"trainable {results['trainable_documents']} over {results['trainable_domains']}",
-        f"escalation base rate {results['escalate_rate']:.4f} (page-weighted {results['escalate_rate_pages']:.4f})",
+        f"escalation base rate {results['escalate_rate']:.4f} (page-weighted {results['escalate_rate_pages']:.4f})"
+        " over the routable remainder",
+        "corpus split: "
+        f"{results['corpus_share']['forced_escalate_page_share']:.2%} of pages forced to the VLM "
+        f"({results['corpus_share']['forced_escalate_documents']} documents pdf-inspector read nothing from), "
+        f"{results['corpus_share']['forced_keep_page_share']:.2%} forced to stay "
+        f"({results['corpus_share']['forced_keep_documents']} below the legibility floor), "
+        f"{results['corpus_share']['routable_page_share']:.2%} routable",
         f"noise floor: {results['noise_floor']['noise_floor']:.4f} page-weighted quality loss "
         f"over {results['noise_floor']['splits']} domain splits at "
         f"{results['noise_floor']['document_budget']:.0%} of documents",
@@ -601,6 +753,22 @@ def report(results: dict) -> str:
                 + ", ".join(f"{name} {share:.1%}" for name, share in arm["gains"]["share_by_group"].items())
             )
             lines.append("  top: " + ", ".join(name for name, _ in arm["gains"]["top_features"][:12]))
+    lines.append("\n== equal quality, priced in corpus CPU core-hours per million pages ==")
+    for target, byarm in results["equal_quality"].items():
+        reached = {name: row for name, row in byarm.items() if row}
+        if not reached:
+            continue
+        best = min(reached.values(), key=lambda row: row["cpu_core_hours"])["cpu_core_hours"]
+        lines.append(f"  loss <= {target:.2f}:")
+        for name, row in sorted(reached.items(), key=lambda item: item[1]["cpu_core_hours"]):
+            lines.append(
+                f"    {name:<46} {row['cpu_core_hours']:>7.2f} core-h/M "
+                f"({row['cpu_core_hours'] - best:+.2f}), {row['corpus_page_budget']:>6.1%} of pages, "
+                f"{row['crawl_core_hours']:>7.0f} crawl core-h"
+            )
+        unreached = sorted(name for name, row in byarm.items() if not row)
+        if unreached:
+            lines.append(f"    cannot reach at any budget: {', '.join(unreached)}")
     lines.append("\n== gates ==")
     lines.append(json.dumps(results["gates"], indent=2))
     return "\n".join(lines)
@@ -622,11 +790,27 @@ def main() -> None:
     rows = trainable(frame, present)
     logger.info("trainable %d rows, %d domains", rows.height, rows["domain"].n_unique())
 
+    share = corpus_share(frame)
+    logger.info(
+        "corpus: %d documents, %.1f%% forced-escalate pages (no text), %.1f%% forced-keep pages "
+        "(below the legibility floor), %.1f%% routable",
+        share.documents,
+        100 * share.forced_escalate_page_share,
+        100 * share.forced_keep_page_share,
+        100 * share.routable_page_share,
+    )
+
     split = split_by(rows, "domain", ESCALATE_COLUMN)
     arms = [
-        evaluate_rule(split, "rule: incumbent FinePDFs ocr_prob", "ocr_prob"),
-        evaluate_rule(split, "rule: inspector pages_needing_ocr fraction", "inspector_extract_ocr_page_fraction"),
-        *(evaluate(split, arm) for arm in ARMS),
+        evaluate_rule(split, "rule: incumbent FinePDFs ocr_prob", "ocr_prob", ("page_signals",), share),
+        evaluate_rule(
+            split,
+            "rule: inspector pages_needing_ocr fraction",
+            "inspector_extract_ocr_page_fraction",
+            ("inspector_extract",),
+            share,
+        ),
+        *(evaluate(split, arm, share) for arm in ARMS),
     ]
 
     pages = rows["num_pages"].cast(pl.Float64).to_numpy()
@@ -636,6 +820,9 @@ def main() -> None:
         "labelled_domains": labelled["domain"].n_unique(),
         "trainable_documents": rows.height,
         "trainable_domains": rows["domain"].n_unique(),
+        # Coverage of the output-statistics table, because the free feature groups depend on it and
+        # a partial table silently shrinks the trainable set rather than failing.
+        "inspector_output_coverage": float(frame["inspector_output_alpha_ratio"].is_not_null().mean()),
         "escalate_rate": float(escalate.mean()),
         "escalate_rate_pages": float(pages[escalate].sum() / pages.sum()),
         "label_sources": dict(labelled["label_source"].value_counts().iter_rows()),
@@ -646,8 +833,12 @@ def main() -> None:
             "vlm_feed_core_hours": contract.VLM_FEED_CORE_HOURS,
             "vlm_gpu_hours": contract.VLM_GPU_HOURS,
         },
+        "corpus_share": asdict(share),
         "arms": [asdict(arm) for arm in arms],
         "noise_floor": noise_floor(rows, ARMS[-1], 0.50),
+        # Quality targets spanning the useful part of the curve, set from the arms' own reach rather
+        # than from round numbers, so no target is unreachable for every arm at once.
+        "equal_quality": equal_quality_table(arms, EQUAL_QUALITY_TARGETS),
         "gates": gate_report(frame),
     }
     with fs.open(RESULT_PATH, "w") as stream:

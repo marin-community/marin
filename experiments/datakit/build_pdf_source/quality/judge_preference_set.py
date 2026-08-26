@@ -175,16 +175,24 @@ def parse_verdict(text: str) -> dict:
     return verdict
 
 
-async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Semaphore) -> dict | None:
-    """Buy one verdict, or return ``None`` if the judge never produced a usable one."""
-    payload = {
+def request(fs, task: Task) -> dict:
+    """The chat-completions body for one verdict."""
+    return {
         "model": task.model,
         "messages": build_request(fs, task.packet_id),
         "max_tokens": MAX_COMPLETION_TOKENS,
         "reasoning": {"effort": REASONING_EFFORT},
     }
+
+
+async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Semaphore) -> dict | None:
+    """Buy one verdict, or return ``None`` if the judge never produced a usable one."""
     for attempt in range(JUDGE_MAX_ATTEMPTS):
         async with gate:
+            # Built inside the gate, not before it: a packet is ~1.5 MB of base64 page images, and
+            # a batch is four times the concurrency, so materializing every request up front would
+            # hold gigabytes of images that no request is using yet.
+            payload = request(fs, task)
             try:
                 response = await client.post("/chat/completions", json=payload, timeout=JUDGE_TIMEOUT)
                 response.raise_for_status()
@@ -354,6 +362,26 @@ def label_table(entries: list[dict], primary: dict[str, dict], second: dict[str,
     return pl.DataFrame(rows, schema_overrides={ESCALATE_COLUMN: pl.Boolean, "second_judge_escalate": pl.Boolean})
 
 
+# Words that mark a verdict decided on something the prompt asks the judge to ignore. Figure and
+# chart text is the one that matters: the two systems are under different instructions about what to
+# do with axis labels, so a verdict resting on them is measuring a policy difference rather than a
+# quality difference. Spot checks found the judge citing tick labels despite the instruction, so the
+# rate is measured instead of assumed away.
+IGNORED_EVIDENCE = ("chart", "axis", "axes", "tick label", "figure text", "diagram")
+
+
+def prompt_compliance(verdicts: dict[str, dict]) -> dict:
+    """How often a verdict's stated reason rests on evidence the prompt excluded.
+
+    A rate rather than a filter: these verdicts are kept, because the reason field is a summary and
+    not the whole basis of the call, and dropping them would select on the judge's explanation
+    style. What the number does is bound how much of the label could be a figure-policy artifact.
+    """
+    reasons = [(result["verdict"].get("reason") or "").lower() for result in verdicts.values()]
+    flagged = sum(any(word in reason for word in IGNORED_EVIDENCE) for reason in reasons)
+    return {"verdicts": len(reasons), "cite_ignored_evidence": flagged, "rate": flagged / max(len(reasons), 1)}
+
+
 def _wilson(successes: int, total: int) -> tuple[float, float]:
     """A 95% Wilson interval, which is what a per-stratum ``n`` needs instead of a bare proportion."""
     if total == 0:
@@ -462,6 +490,7 @@ def main() -> None:
         "by_trustworthy": rates_by(known, "trustworthy"),
         "inter_judge": judge_agreement(labels),
         "margins": margin_distribution(labels),
+        "prompt_compliance": prompt_compliance(primary),
         "spend": spend,
     }
     with fs.open(REPORT_PATH, "w") as stream:

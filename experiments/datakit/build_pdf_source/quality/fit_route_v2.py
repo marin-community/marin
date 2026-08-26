@@ -12,8 +12,9 @@ reports the held-out numbers alongside, so the artifact is not the only thing th
 **The threshold is a quantile, not a fit.** The score is a probability of a judged preference, so its
 absolute value means nothing operationally and only its rank does. The emitted threshold is the
 quantile of the model's own output over the *whole* corpus -- all 100,000 documents, not just the
-20,000 that carry labels -- that sends :data:`TARGET_DOCUMENT_BUDGET` of documents to the VLM.
-Recalibrating for a different budget, or for a new crawl, is a quantile and not a retrain.
+20,000 that carry labels -- that spends the budget at the knee of this fit's own held-out frontier.
+Every other budget in :data:`CALIBRATION_BUDGETS` is written out beside it, so moving the operating
+point later is reading a row of ``threshold_by_budget`` rather than refitting anything.
 
 The sidecar records the threshold, the feature contract with each group's price, the measured
 operating point in CPU core-hours, and the two arithmetic gates that run before the score is
@@ -64,11 +65,11 @@ MODEL_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/model/pdf_route_v2
 BOOSTER_NAME = "route_v2_classifier.ubj"
 SIDECAR_NAME = "route_v2_classifier.json"
 
-# The operating point the artifact ships calibrated to. Not a claim that this is the right budget --
-# the frontier in `analyze_route_v2` is what the choice should be made from, and recalibrating is a
-# quantile. This is the knee the evaluation reported, so the artifact ships somewhere defensible
-# rather than somewhere round.
-TARGET_DOCUMENT_BUDGET = 0.50
+# The artifact ships calibrated to the *measured* knee of its own held-out frontier rather than to a
+# budget chosen in advance. A round number would be a decision this module is not entitled to make,
+# and the published v1 report's 50% sat above its own knee of 45.5% for exactly that reason. Every
+# other operating point is a lookup in `threshold_by_budget`, not a retrain.
+CALIBRATION_BUDGETS = tuple(round(0.05 * step, 2) for step in range(1, 19))
 
 # The arm the artifact ships. Read from the evaluation's own arm table so the shipped feature set is
 # one that was measured, rather than a list restated here and free to drift from it.
@@ -105,9 +106,11 @@ def main() -> None:
         SHIPPED_ARM.core_hours,
         SHIPPED_ARM.needs_inspector,
     )
-    operating = at_budget(held_out, TARGET_DOCUMENT_BUDGET)
+    bend = knee(held_out)
+    target_budget = round(bend.document_budget, 4)
+    operating = at_budget(held_out, target_budget)
     logger.info(
-        "held out (%d documents from %d unseen domains): %.1f%% of documents / %.1f%% of pages, "
+        "held out (%d documents from %d unseen domains): knee at %.1f%% of documents / %.1f%% of pages, "
         "quality loss %.4f, catches %.1f%%, %.1f core-h per million pages",
         split.test.height,
         split.test["domain"].n_unique(),
@@ -125,7 +128,17 @@ def main() -> None:
     # the corpus's and a quantile taken on it would spend a different budget in production.
     corpus = frame.drop_nulls(subset=features)
     scores = escalation_scores(booster, corpus, features)
-    threshold = float(np.quantile(scores, 1.0 - TARGET_DOCUMENT_BUDGET))
+    threshold = float(np.quantile(scores, 1.0 - target_budget))
+    # Every budget's threshold, so choosing a different operating point later is reading a row of
+    # this table rather than refitting anything. The score is a probability of a judged preference:
+    # only its rank means anything, so a budget *is* a quantile.
+    by_budget = {
+        budget: {
+            "threshold": float(np.quantile(scores, 1.0 - budget)),
+            **{name: value for name, value in asdict(at_budget(held_out, budget)).items() if name != "threshold"},
+        }
+        for budget in CALIBRATION_BUDGETS
+    }
     logger.info(
         "routing threshold: escalate when the score is at or above %.6f (%d corpus documents scored)",
         threshold,
@@ -152,7 +165,9 @@ def main() -> None:
         },
         "boost_rounds": rounds,
         "escalation_threshold": threshold,
-        "target_document_budget": TARGET_DOCUMENT_BUDGET,
+        "target_document_budget": target_budget,
+        "target_chosen_by": "knee of this fit's own held-out CPU-cost frontier",
+        "threshold_by_budget": by_budget,
         "training_documents": rows.height,
         "training_domains": rows["domain"].n_unique(),
         "corpus_documents_scored": corpus.height,
