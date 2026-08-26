@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export completed reference-pipeline decontamination marks for inspection."""
+"""Export completed reference-pipeline decontamination marks for inspection.
+
+Run this command after the mark steps complete::
+
+    uv run python experiments/datakit/decontam/viewer/export_reference_run.py \
+        --minimum-sources 292 --label v4 --out <report-directory>
+"""
 
 import argparse
 import hashlib
@@ -15,6 +21,7 @@ from collections import Counter
 import pyarrow.parquet as pq
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import read_artifact
+from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
@@ -69,26 +76,27 @@ def _sample_flagged_rows(output_dir: str, limit: int, seed: int) -> tuple[list[d
     return rows, used_files
 
 
-def _completed_marks() -> tuple[dict[str, object], dict[str, object]]:
+def _completed_marks() -> tuple[dict[str, StepSpec], dict[str, StepSpec]]:
     sources = select_sources(None)
     decon = decontamination_steps(sources)
-    complete: dict[str, object] = {}
+    complete: dict[str, StepSpec] = {}
     for name, step in decon.marks.items():
         if StoragePath(f"{step.output_path.rstrip('/')}/.artifact.json").exists():
             complete[name] = step
     return complete, decon.marks
 
 
-def _wait_for_marks(minimum_sources: int, timeout: int) -> tuple[dict[str, object], dict[str, object]]:
+def _wait_for_marks(minimum_sources: int, timeout: int) -> tuple[dict[str, StepSpec], dict[str, StepSpec]]:
     deadline = time.monotonic() + timeout
     while True:
         complete, all_marks = _completed_marks()
         logger.info("completed marks: %d/%d; gate=%d", len(complete), len(all_marks), minimum_sources)
         if len(complete) >= minimum_sources:
             return complete, all_marks
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError(f"only {len(complete)}/{len(all_marks)} marks completed before the timeout")
-        time.sleep(30)
+        time.sleep(min(30, remaining))
 
 
 def _hash_to_evals(index_path: str, needed_hashes: set[int]) -> dict[int, set[str]]:
@@ -174,6 +182,10 @@ def main() -> None:
     parser.add_argument("--label", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
+    if args.minimum_sources <= 0:
+        parser.error("--minimum-sources must be positive")
+    if args.timeout < 0:
+        parser.error("--timeout must be nonnegative")
 
     complete, all_marks = _wait_for_marks(args.minimum_sources, args.timeout)
     sampled_by_source: dict[str, list[dict]] = {}
@@ -312,6 +324,7 @@ def main() -> None:
     page = _single(run).replace("<main>", f"<main>{summary}", 1)
 
     output = args.out.rstrip("/")
+    StoragePath(output).mkdirs()
     with StoragePath(f"{output}/report.json").open("w") as fh:
         json.dump(run, fh)
     with StoragePath(f"{output}/sample_manifest.jsonl").open("w") as fh:

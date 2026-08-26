@@ -41,10 +41,10 @@ import os
 import random
 import re
 from collections import Counter, deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain, islice
-from typing import Any, Protocol
+from typing import Any
 
 import dupekit
 import pyarrow as pa
@@ -66,10 +66,6 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
-
-
-class _FeatureMembership(Protocol):
-    def __contains__(self, value: int, /) -> bool: ...
 
 
 # Bump when the ngram feature-extraction policy changes. Both the bloom build and
@@ -277,15 +273,6 @@ def _short_exact_feature(text: str, n: int) -> str | None:
     return " ".join(text[start:end] for start, end in spans)
 
 
-def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]:
-    """Yield n-grams, or one guarded exact feature for a short paragraph."""
-    short_exact = _short_exact_feature(text, n)
-    if short_exact is not None:
-        yield short_exact
-        return
-    yield from _extract_ngrams(text, n, stride)
-
-
 def _iter_nonempty_segments(text: str, delimiter: str) -> Iterator[str]:
     """Yield split segments one at a time to bound memory for large records."""
     if not delimiter:
@@ -340,7 +327,7 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
 
 def _paragraph_overlap_and_matches(
     paragraph: str,
-    bf: _FeatureMembership,
+    bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
 ) -> tuple[float, list[int]]:
@@ -360,7 +347,7 @@ def _paragraph_overlap_and_matches(
     tokens use one exact feature. Shorter and non-alphabetic paragraphs return
     ``(0.0, [])``.
     """
-    score, matched, _has_features, _feature_count, _has_ngram_features = _paragraph_overlap_matches_and_presence(
+    score, matched, _feature_count, _has_ngram_features = _paragraph_overlap_matches_and_presence(
         paragraph, bf, ngram, drop_hashes
     )
     return score, matched
@@ -368,18 +355,17 @@ def _paragraph_overlap_and_matches(
 
 def _paragraph_overlap_matches_and_presence(
     paragraph: str,
-    bf: _FeatureMembership,
+    bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, list[int], bool, int, bool]:
+) -> tuple[float, list[int], int, bool]:
     """Return overlap details, feature counts, and n-gram presence."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], True, 0, False
-        return (1.0, [h], True, 1, False) if h in bf else (0.0, [], True, 1, False)
+            return 0.0, [], 0, False
+        return (1.0, [h], 1, False) if h in bf else (0.0, [], 1, False)
 
-    has_features = False
     has_ngram_features = False
     feature_count = 0
     matched: list[int] = []
@@ -390,7 +376,6 @@ def _paragraph_overlap_matches_and_presence(
     else:
         features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
-        has_features = True
         has_ngram_features = short_exact is None
         hash_value = _bloom_hash(feature)
         if hash_value in drop_hashes:
@@ -399,32 +384,18 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], has_features, feature_count, has_ngram_features
-    return len(matched) / feature_count, matched, has_features, feature_count, has_ngram_features
+        return 0.0, [], feature_count, has_ngram_features
+    return len(matched) / feature_count, matched, feature_count, has_ngram_features
 
 
 def _document_overlap_and_matches(
     text: str,
-    bf: _FeatureMembership,
+    bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
 ) -> tuple[float, list[int]]:
     """Return the highest overlap and the hashes that cause a document mark."""
     minimum = ngram.min_matched_features if ngram is not None else 1
-    max_score, matches = _document_overlap_matches_by_minimum(text, bf, ngram, (minimum,), drop_hashes)
-    return max_score, matches[minimum]
-
-
-def _document_overlap_matches_by_minimum(
-    text: str,
-    bf: _FeatureMembership,
-    ngram: NGramConfig | None,
-    minimums: tuple[int, ...],
-    drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, dict[int, list[int]]]:
-    """Score a document once and return causal hashes for each evidence minimum."""
-    if not minimums or any(minimum < 1 for minimum in minimums):
-        raise ValueError("minimums must contain positive integers")
     threshold = ngram.overlap_threshold if ngram is not None else 0.0
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
     paragraph_iter = iter(_iter_paragraphs(text, delimiter))
@@ -438,13 +409,13 @@ def _document_overlap_matches_by_minimum(
     else:
         paragraphs = chain((first_paragraph, second_paragraph), paragraph_iter)
     max_score = 0.0
-    matched = {minimum: set() for minimum in minimums}
+    matched: set[int] = set()
     has_paragraph_ngrams = False
     document_ngram_feature_count = 0
     document_ngram_hits: set[int] = set()
 
     for paragraph in paragraphs:
-        score, hits, _has_features, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
+        score, hits, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
             paragraph, bf, ngram, drop_hashes
         )
         if ngram is not None and paragraph_has_ngrams:
@@ -455,21 +426,18 @@ def _document_overlap_matches_by_minimum(
         if not hits:
             continue
         if ngram is None:
-            for hashes in matched.values():
-                hashes.update(hits)
+            matched.update(hits)
             continue
 
         complete_single_feature_document = single_paragraph and feature_count == 1 and score == 1.0
         distinct_hits = len(set(hits))
-        for minimum, hashes in matched.items():
-            if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
-                hashes.update(hits)
+        if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+            matched.update(hits)
 
     # A complete eval record can have one n-gram and short answer metadata. Keep
     # the complete-record exception only when no other usable n-gram is present.
     if ngram is not None and document_ngram_feature_count == 1 and document_ngram_hits:
-        for hashes in matched.values():
-            hashes.update(document_ngram_hits)
+        matched.update(document_ngram_hits)
 
     if ngram is not None and not has_paragraph_ngrams:
         use_record_fallback = (
@@ -477,17 +445,16 @@ def _document_overlap_matches_by_minimum(
             or _short_exact_feature(text, ngram.ngram_length) is not None
         )
         if use_record_fallback:
-            score, hits, _has_features, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+            score, hits, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
                 text, bf, ngram, drop_hashes
             )
             max_score = max(max_score, score)
             distinct_hits = len(set(hits))
             complete_single_feature_document = feature_count == 1 and score == 1.0
-            for minimum, hashes in matched.items():
-                if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
-                    hashes.update(hits)
+            if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+                matched.update(hits)
 
-    return max_score, {minimum: sorted(hashes) for minimum, hashes in matched.items()}
+    return max_score, sorted(matched)
 
 
 def _record_feature_status(text: str, ngram: NGramConfig | None) -> tuple[bool, bool]:
@@ -708,7 +675,6 @@ def _merge_eval_index_shard(
     *,
     bloom_path: str,
     index_path: str,
-    parts_dir: str,
     estimated_doc_count: int,
     false_positive_rate: float,
 ) -> Iterator[int]:
@@ -719,7 +685,6 @@ def _merge_eval_index_shard(
         estimated_doc_count=estimated_doc_count,
         false_positive_rate=false_positive_rate,
     )
-    StoragePath(parts_dir).rmtree()
     yield n_records
 
 
@@ -1064,7 +1029,6 @@ def build_eval_bloom(
                     shard,
                     bloom_path=bloom_path,
                     index_path=index_path,
-                    parts_dir=parts_dir,
                     estimated_doc_count=estimated_doc_count,
                     false_positive_rate=false_positive_rate,
                 )
