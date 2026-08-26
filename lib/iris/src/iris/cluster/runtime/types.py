@@ -67,6 +67,7 @@ class ExecutionStage(StrEnum):
 
 class MountKind(StrEnum):
     WORKDIR = "workdir"  # task working directory (/app); tmpfs on Docker, emptyDir on K8s
+    OUTPUT = "output"  # attempt-local files captured after task termination
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
     CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
 
@@ -94,6 +95,7 @@ class ContainerConfig:
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
     workdir_host_path: Path | None = None
+    output_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     attempt_uid: str | None = None

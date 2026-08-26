@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import uuid
+from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -27,6 +29,7 @@ _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
+_LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 
 
@@ -287,6 +290,27 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
     ]
 
 
+def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
+    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+    with (
+        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
+        subprocess.Popen(command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace") as process,
+    ):
+        try:
+            assert process.stderr is not None
+            for line in process.stderr:
+                sys.stderr.write(line)
+                tail.append(line)
+            returncode = process.wait()
+        except BaseException:
+            # Popen.__exit__ waits but never kills, so without this an interrupt orphans the launcher.
+            process.kill()
+            raise
+        response.seek(0)
+        return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
+
+
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     """Run the pinned external launcher and return its validated model value."""
     envelope = {
@@ -299,18 +323,18 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
         json.dump(envelope, request_file, sort_keys=True)
         request_file.flush()
-        completed = subprocess.run(
-            _launcher_command(config.launcher_requirement, request_file.name),
-            check=False,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
+        completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
     if not completed.stdout.strip():
-        raise RuntimeError(f"MarinSkyRL launcher exited {completed.returncode} without a terminal response")
+        raise RuntimeError(
+            f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
+            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+        )
     response = json.loads(completed.stdout)
     if completed.returncode != 0 or response["state"] != "succeeded":
         failure = response.get("failure") or f"launcher exited {completed.returncode}"
-        raise RuntimeError(f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}")
+        raise RuntimeError(
+            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+        )
     model = response["model"]
     return SkyRLModel(
         path=config.request.output.terminal_manifest_uri,
@@ -357,8 +381,8 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         )
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
-            f"++terminal_bench_config.trials_dir={prefix_join(attempts_root, 'trace_jobs')}",
-            f"++generator.trajectory_retention.output_path={prefix_join(attempts_root, 'trajectories')}",
+            f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, 'trace_jobs')}'",
+            f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, 'trajectories')}'",
         )
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",

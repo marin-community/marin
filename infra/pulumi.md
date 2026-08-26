@@ -18,18 +18,35 @@ own image and deployment lifecycle.
 This project provisions cluster prerequisites and shared GCP infrastructure.
 Cluster-scoped resources use one stack per cluster, with configuration in
 `Pulumi.<cluster>.yaml`. Shared GCP resources, including IAM grants, belong to
-the `marin` stack and its `Pulumi.marin.yaml` configuration. Cross-cloud data
+the `marin` stack. Cross-cloud data
 buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, and R2
 buckets in a manually operated project because its provider credentials are not
 available to CI. Bucket-scoped GCP IAM remains in `marin`.
+
+The `marin` stack is the sole repository owner of IAM grants on
+`hai-gcp-models`, including project, service-account, Secret Manager, KMS,
+bucket, and Cloud Run IAP grants. Declare grants in
+`infra/pulumi/src/iac/gcp/iam_data.yaml` or the adjacent Echo, EvalDash, Grafana,
+and Loom modules; application stacks and deployment scripts must not declare or
+mutate them. This central ownership is the policy boundary required for
+authoritative IAM reconciliation. Each `*IAMBinding` resource owns the complete
+member set for one role and optional condition on its target. Pulumi removes
+undeclared members from managed bindings while leaving other roles untouched.
+Audit live policy before adopting a binding so its declaration includes every
+intended member.
+
+When a grant targets a resource owned by another stack, create that resource
+before applying the global IAM stack. Omit code-declared grants that the
+live-policy audit cannot find and record them for separate review; importing the
+inventory must not create them.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
 Use the Program-first import command in `infra/pulumi/README.md` for a one-time
 adoption. It generates a mode-`0600` transaction file outside the repository
 from the program's create preview, then validates and imports only the reviewed
 subset. The normal program never attaches import options. Provider IDs live
-beside their declarations, including all GCP `*IAMMember` grants, so a new grant
-can be imported without putting already-tracked grants into import mode.
+beside their declarations, including all GCP `*IAMBinding` grants, so a new
+binding can be imported without putting already-tracked resources into import mode.
 
 `infra/pulumi/src/iac` contains reusable components imported by other projects.
 For example, application projects use `iac.gcp.cloud_run.CloudRunService`

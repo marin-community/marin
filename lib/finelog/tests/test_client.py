@@ -18,12 +18,15 @@ from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePoli
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
+    NamespaceNotFoundError,
     QueryResultTooLargeError,
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.schema import (
+    FLOAT64_LIST,
+    INT64_LIST,
     MAP_STRING_STRING,
     Column,
     CoveringProjection,
@@ -101,6 +104,7 @@ class _FakeStatsServiceClient:
         self.queries: list[str] = []
         self.errors: list[Exception] = []
         self.query_handler = None
+        self.namespaces: list[stats_pb2.NamespaceInfo] = []
 
     def register_table(self, request):
         self.registered[request.namespace] = request.schema
@@ -132,6 +136,16 @@ class _FakeStatsServiceClient:
         with paipc.new_stream(sink, table.schema) as writer:
             writer.write_table(table)
         return stats_pb2.QueryResponse(arrow_ipc=sink.getvalue(), row_count=table.num_rows)
+
+    def list_namespaces(self, request):
+        del request
+        return stats_pb2.ListNamespacesResponse(namespaces=self.namespaces)
+
+    def get_table_schema(self, request):
+        for info in self.namespaces:
+            if info.namespace == request.namespace:
+                return stats_pb2.GetTableSchemaResponse(schema=info.schema)
+        raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} is not registered")
 
     def close(self):
         pass
@@ -660,6 +674,77 @@ def test_client_query_raises_on_too_large(tracked_clients):
         client.close()
 
 
+def test_client_lists_namespaces_with_schema_and_storage_stats(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")  # construct the stats client
+        tracked_clients[0].namespaces = [
+            stats_pb2.NamespaceInfo(
+                namespace="iris.worker",
+                schema=stats_pb2.Schema(
+                    columns=[
+                        stats_pb2.Column(
+                            name="worker_id",
+                            type=stats_pb2.COLUMN_TYPE_STRING,
+                            nullable=False,
+                        )
+                    ],
+                    key_column="worker_id",
+                ),
+                row_count=12,
+                byte_size=345,
+                min_seq=2,
+                max_seq=13,
+                segment_count=4,
+                storage_policy=stats_pb2.StoragePolicy(max_bytes=1024),
+            )
+        ]
+
+        assert client.list_namespaces() == [
+            log_client_mod.NamespaceInfo(
+                namespace="iris.worker",
+                schema=Schema(
+                    columns=(
+                        Column(
+                            name="worker_id",
+                            type=stats_pb2.COLUMN_TYPE_STRING,
+                            nullable=False,
+                        ),
+                    ),
+                    key_column="worker_id",
+                ),
+                row_count=12,
+                byte_size=345,
+                min_seq=2,
+                max_seq=13,
+                segment_count=4,
+                storage_policy=StoragePolicy(max_bytes=1024),
+            )
+        ]
+    finally:
+        client.close()
+
+
+def test_client_gets_registered_schema_without_table_handle(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")  # construct the stats client
+        tracked_clients[0].namespaces = [
+            stats_pb2.NamespaceInfo(
+                namespace="iris.task",
+                schema=stats_pb2.Schema(columns=[stats_pb2.Column(name="task_id", type=stats_pb2.COLUMN_TYPE_STRING)]),
+            )
+        ]
+
+        assert client.get_table_schema("iris.task") == Schema(
+            columns=(Column(name="task_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),)
+        )
+        with pytest.raises(NamespaceNotFoundError):
+            client.get_table_schema("missing")
+    finally:
+        client.close()
+
+
 def test_table_query_translates_invalid_argument(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
@@ -777,6 +862,25 @@ def test_schema_from_dataclass_infers_dict_str_str_as_map():
     assert types["labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["optional_labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["timestamp_ms"] == stats_pb2.COLUMN_TYPE_INT64
+
+
+def test_schema_from_dataclass_infers_numeric_lists():
+    @dataclass
+    class Histogram:
+        bucket_limits: list[float]
+        bucket_counts: list[int]
+        optional_counts: list[int] | None
+        timestamp_ms: int
+
+    schema = schema_from_dataclass(Histogram)
+    types = {column.name: column.type for column in schema.columns}
+    assert types["bucket_limits"] == stats_pb2.COLUMN_TYPE_FLOAT64_LIST
+    assert types["bucket_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+    assert types["optional_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+
+    arrow = schema_to_arrow(schema)
+    assert arrow.field("bucket_limits").type == FLOAT64_LIST
+    assert arrow.field("bucket_counts").type == INT64_LIST
 
 
 def test_schema_to_arrow_maps_map_column_to_native_map():

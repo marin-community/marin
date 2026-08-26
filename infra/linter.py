@@ -42,11 +42,14 @@ LINT_REVIEW_AGENT_DEFAULT = "claude -p"
 
 LINT_REVIEW_TIMEOUT = 600
 
+CODEX_SANDBOX_BYPASS_FLAGS = frozenset(("--dangerously-bypass-approvals-and-sandbox", "--yolo"))
+CODEX_READ_ONLY_SANDBOX = "read-only"
+
 # The lint review runs fully-headless agents over the working tree. They are REVIEWERS:
 # the only job is to READ the change and emit advisory findings on stdout — never to modify
 # a file or touch git/PR state. That contract is enforced two ways: the prompt mandate
-# (READ_ONLY_MANDATE, stated to every agent) and, for `claude`, a hard tool lockdown
-# (_readonly_agent_flags). Claude-specific flags are appended only when the binary is `claude`.
+# (READ_ONLY_MANDATE, stated to every agent) and a CLI-specific hard permission lockdown
+# (_with_readonly_access).
 
 # Built-in tools the headless `claude` agent may have AT ALL. Edit/Write/NotebookEdit are
 # absent, so the agent cannot modify a file regardless of what any inherited settings.json
@@ -223,9 +226,8 @@ COMPOSER_INSTRUCTIONS = (
     "or the output is empty. If zero findings survive, emit nothing."
 )
 
-# Env vars that mark a Claude Code session and would re-bind the spawned headless
-# agent to its parent's transcript / session. Stripped before exec so the
-# sub-agent runs as a fresh, isolated session.
+# Env vars that identify or authorize the calling agent session. Stripped before
+# exec so the sub-agent cannot re-bind to or act as its parent session.
 LINT_REVIEW_STRIPPED_ENV = (
     "ANTHROPIC_API_KEY",  # force subscription auth, not metered API billing
     "CLAUDECODE",
@@ -233,6 +235,10 @@ LINT_REVIEW_STRIPPED_ENV = (
     "CLAUDE_CODE_EXECPATH",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_CODE_SSE_PORT",
+    "CODEX_THREAD_ID",
+    "LOOM_SESSION_ID",
+    "LOOM_TOKEN",
+    "WEAVER_BRANCH",
 )
 
 
@@ -401,14 +407,31 @@ def _readonly_agent_flags() -> list[str]:
 
 
 def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
-    """Lock a headless `claude` agent to read-only review (see `_readonly_agent_flags`): it
-    can probe the changed files (read-only git + Read/Grep/Glob) but cannot edit a file or
-    run any state-changing git/gh command.
-
-    No-op for a non-`claude` agent or when `--allowedTools` is already set: the flags are
-    Claude Code's, and other agents (e.g. `codex exec`) manage their own permissions.
-    """
-    if os.path.basename(agent_cmd[0]) != "claude" or "--allowedTools" in agent_cmd:
+    """Return an agent command that enforces the review's read-only contract."""
+    agent_name = os.path.basename(agent_cmd[0])
+    if agent_name == "codex" and len(agent_cmd) > 1 and agent_cmd[1] in {"exec", "e"}:
+        command = [arg for arg in agent_cmd if arg not in CODEX_SANDBOX_BYPASS_FLAGS]
+        if "--ephemeral" not in command:
+            command.append("--ephemeral")
+        sandbox_assignment = next(
+            (index for index, arg in enumerate(command) if arg.startswith(("--sandbox=", "-s="))), None
+        )
+        if sandbox_assignment is not None:
+            flag = command[sandbox_assignment].split("=", maxsplit=1)[0]
+            command[sandbox_assignment] = f"{flag}={CODEX_READ_ONLY_SANDBOX}"
+        else:
+            for flag in ("--sandbox", "-s"):
+                if flag in command:
+                    sandbox_index = command.index(flag) + 1
+                    if sandbox_index == len(command):
+                        command.append(CODEX_READ_ONLY_SANDBOX)
+                    else:
+                        command[sandbox_index] = CODEX_READ_ONLY_SANDBOX
+                    break
+            else:
+                command.extend(("--sandbox", CODEX_READ_ONLY_SANDBOX))
+        return command
+    if agent_name != "claude" or "--allowedTools" in agent_cmd:
         return agent_cmd
     return [*agent_cmd, *_readonly_agent_flags()]
 

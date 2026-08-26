@@ -26,6 +26,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -452,6 +453,21 @@ task_attempts_table = Table(
     # Covers the failure/preemption derivation (COUNT by state, filtered on
     # started_at_ms), grouped per task — see iris.cluster.controller.attempt_counts.
     Index("idx_task_attempts_task_state", "task_id", "state", "started_at_ms"),
+)
+
+
+task_attempt_outputs_table = Table(
+    "task_attempt_outputs",
+    metadata,
+    Column("task_id", JobNameType, nullable=False),
+    Column("attempt_id", Integer, nullable=False),
+    Column("archive_json", String, nullable=False),
+    PrimaryKeyConstraint("task_id", "attempt_id"),
+    ForeignKeyConstraint(
+        ("task_id", "attempt_id"),
+        ("task_attempts.task_id", "task_attempts.attempt_id"),
+        ondelete="CASCADE",
+    ),
 )
 
 

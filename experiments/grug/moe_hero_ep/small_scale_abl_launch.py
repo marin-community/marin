@@ -39,13 +39,13 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_17_1 import (
     HARRIER_MIX_2026_08_17_1_TAG,
     harrier_mix_2026_08_17_1_data_config,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HeroThroughputResult,
 )
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_tokenizer import marin_tokenizer

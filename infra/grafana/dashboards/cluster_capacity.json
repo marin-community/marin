@@ -223,6 +223,30 @@
           ]
         },
         {
+          "refId": "J",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/iris/marin/jobs",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "job",
+              "text": "job",
+              "type": "string"
+            }
+          ]
+        },
+        {
           "refId": "N",
           "type": "json",
           "source": "url",
@@ -308,7 +332,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH latest AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, task_id AS task, worker_id AS pod, cpu_millicores, memory_mb * 1048576 AS memory_bytes, ts AS sampled_at, ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), task_id, worker_id ORDER BY ts DESC) AS row_number FROM \"iris.task\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ) SELECT source_cluster AS \"cluster\", task, pod, cpu_millicores, memory_bytes, sampled_at FROM latest WHERE row_number = 1 ORDER BY task, pod"
+                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS \"cluster\", task_id AS task, worker_id AS pod, first_value(cpu_millicores ORDER BY ts DESC) AS cpu_millicores, first_value(memory_mb ORDER BY ts DESC) * 1048576 AS memory_bytes, MAX(ts) AS sampled_at FROM \"iris.task\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), task_id, worker_id ORDER BY task, pod"
               },
               {
                 "key": "from",
@@ -365,7 +389,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "WITH latest AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, json_get(attributes_json, 'node_name') AS node, name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') AS gpu, value, timestamp_ms, ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), json_get(attributes_json, 'node_name'), name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') ORDER BY timestamp_ms DESC) AS row_number FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes', 'gpu_utilization_percent', 'gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT source_cluster AS \"cluster\", node, name, CASE WHEN name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') THEN SUM(value) ELSE AVG(value) END AS value, MAX(timestamp_ms) AS sampled_at FROM latest WHERE row_number = 1 AND node <> '' GROUP BY source_cluster, node, name ORDER BY node, name"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\"), samples AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, node_name AS node, name, '' AS gpu, value, timestamp_ms FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, node_name AS node, name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') AS gpu, value, timestamp_ms FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS source_cluster, node_name AS node, name, COALESCE(json_get(attributes_json, 'gpu_uuid'), '') AS gpu, value, timestamp_ms FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), latest AS ( SELECT source_cluster, node, name, gpu, first_value(value ORDER BY timestamp_ms DESC) AS value, MAX(timestamp_ms) AS timestamp_ms FROM samples GROUP BY source_cluster, node, name, gpu ) SELECT source_cluster AS \"cluster\", node, name, CASE WHEN name IN ('gpu_memory_used_bytes', 'gpu_memory_total_bytes') THEN SUM(value) ELSE AVG(value) END AS value, MAX(timestamp_ms) AS sampled_at FROM latest WHERE node <> '' GROUP BY source_cluster, node, name ORDER BY node, name"
               },
               {
                 "key": "from",

@@ -63,6 +63,7 @@ XPROF_TABLE_TOOLS = (
 
 _NANOSECONDS_PER_MICROSECOND = 1_000.0
 _PICOSECONDS_PER_MICROSECOND = 1_000_000.0
+_XLA_MODULE_TF_OP = "XlaModule"
 _XSPACE_MESSAGE_CLASS: Any | None = None
 
 
@@ -456,7 +457,6 @@ def summarize_xplane_tables(
     trace_overview = _trace_overview_from_xprof_tables(
         table_dir=table_dir,
         step_props=step_props,
-        step_rows=step_rows,
         kernel_rows=kernel_rows,
         trace_event_count=trace_event_count,
     )
@@ -751,12 +751,19 @@ def _xplane_stats_to_mapping(stats: Iterable[Any], *, stat_names: dict[int, str]
 
 def _trace_event_args_from_xplane_stats(stats: dict[str, Any], *, long_name: str | None) -> TraceEventArgs:
     return TraceEventArgs(
-        tf_op=_string_stat(stats, "tf_op"),
+        tf_op=_xplane_semantic_path(stats),
         source=_string_stat(stats, "source", "source_file", "file_name"),
         long_name=long_name,
         run_id=_string_like_stat(stats, "run_id"),
         step_num=_int_like_stat(stats, "step_num", "step"),
     )
+
+
+def _xplane_semantic_path(stats: dict[str, Any]) -> str | None:
+    tf_op = _string_stat(stats, "tf_op")
+    if tf_op is None or tf_op.strip().rstrip(":") != _XLA_MODULE_TF_OP:
+        return tf_op
+    return _string_stat(stats, "name") or tf_op
 
 
 def _xplane_event_args(event: Any, metadata: _XPlaneEventMetadata, *, stat_names: dict[int, str]) -> TraceEventArgs:
@@ -977,7 +984,6 @@ def _trace_overview_from_xprof_tables(
     *,
     table_dir: Path,
     step_props: dict[str, Any],
-    step_rows: list[dict[str, Any]],
     kernel_rows: list[dict[str, Any]],
     trace_event_count: int | None,
 ) -> TraceOverview:

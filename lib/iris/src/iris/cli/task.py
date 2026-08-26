@@ -32,6 +32,8 @@ from iris.client.workload import (
     ResourceRequest,
     TaskActionResult,
     TaskDescription,
+    TaskOutputArchiveState,
+    TaskOutputRetention,
     TaskStatus,
 )
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
@@ -151,6 +153,25 @@ def render_attempt_detail_text(description: TaskDescription, attempt: AttemptSta
         lines.append(f"Terminal reason: {attempt.terminal_reason}")
     if attempt.error_message and attempt.error_message != attempt.terminal_reason:
         lines.append(f"Error: {attempt.error_message}")
+    output = attempt.output_archive
+    if output is not None:
+        output_text = output.state.value
+        if output.state is TaskOutputArchiveState.UPLOADED:
+            if output.retention is TaskOutputRetention.TTL:
+                retention = f"{output.ttl_days}-day retention"
+            elif output.retention is TaskOutputRetention.LOCAL_CLUSTER:
+                retention = "local-cluster retention"
+            else:
+                retention = "retention unspecified"
+            output_text = (
+                f"uploaded {humanfriendly.format_size(output.size_bytes, binary=True)} {output.uri} ({retention}"
+            )
+            if output.skipped_count:
+                output_text += f"; {output.skipped_count} files skipped"
+            output_text += ")"
+        elif output.state is TaskOutputArchiveState.FAILED and output.error_message:
+            output_text = f"failed: {output.error_message}"
+        lines.append(f"Output: {output_text}")
     if is_current and description.root_cause_highlights:
         lines.extend(["", "Root cause:"])
         lines.extend(f"  {line}" for line in description.root_cause_highlights)

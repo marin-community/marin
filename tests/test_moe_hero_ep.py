@@ -24,12 +24,12 @@ from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
-from experiments.grug.moe_hero_ep import launch_mfu_test as launch
+from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
-def test_hero_run_without_shape_overrides_uses_the_selected_model():
-    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_diagnostic_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert (
@@ -43,9 +43,13 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.pooled_transport_capacity_factor,
         config.model.num_expert_waves,
         config.model.moe_implementation,
+        config.model.qb_estimator,
+        config.model.qb_hist_bins,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
         config.processes_per_task,
+        config.trainer.trainer.watch.interval,
+        config.tensorstore_cache_bytes,
         config.trainer.trainer.mp.param_dtype,
         config.trainer.trainer.mp.compute_dtype,
         config.trainer.master_param_mode,
@@ -60,9 +64,13 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         1.15,
         3,
         "fixed_pooled_wave_all_to_all",
+        model.QbEstimator.HIST,
+        10_000,
         1024,
         4096,
-        1,
+        4,
+        10,
+        1_000_000_000,
         jnp.bfloat16,
         jnp.bfloat16,
         train.MasterParamMode.FP32_PINNED_HOST,
@@ -74,7 +82,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="full-bank",
             dp_racks=1,
             num_steps=1,
@@ -87,7 +95,7 @@ def test_full_bank_top_k_is_rejected_before_launch():
 def test_checkpoint_path_overrides_the_step_output_path():
     """A run that only exercises the checkpoint write sends it to disposable storage."""
     temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="ckpt-elsewhere",
         dp_racks=1,
         num_steps=1,
@@ -101,7 +109,7 @@ def test_checkpoint_path_overrides_the_step_output_path():
 
 
 def test_checkpoint_path_defaults_under_the_step_output_path():
-    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
     ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
     config = step.build_config(ctx)
 
@@ -110,7 +118,7 @@ def test_checkpoint_path_defaults_under_the_step_output_path():
 
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-checkpoint-interval",
             dp_racks=1,
             num_steps=1,
@@ -125,7 +133,7 @@ def test_checkpoint_interval_must_be_positive():
 )
 def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_step):
     with pytest.raises(ValueError, match="profile"):
-        launch.build_hero_run(
+        launch.build_diagnostic_run(
             run_id="bad-profile-window",
             dp_racks=1,
             num_steps=3,
@@ -136,7 +144,7 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
-    step = launch.build_hero_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
@@ -145,7 +153,7 @@ def test_data_parallel_racks_keep_the_global_batch_explicit():
 
 
 def test_schedule_steps_do_not_extend_the_run():
-    step = launch.build_hero_run(
+    step = launch.build_diagnostic_run(
         run_id="schedule-head",
         dp_racks=1,
         num_steps=5,
@@ -183,12 +191,12 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match="must be divisible by 64"):
-        launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+        launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
 def test_expert_bank_override_must_support_three_waves():
     with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
-        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+        launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
 def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
@@ -223,6 +231,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+    assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
 
 
 def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
@@ -249,6 +259,8 @@ def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+    monkeypatch.setenv("MALLOC_CONF", "narenas:8")
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = _runtime_env_config()
 
@@ -257,6 +269,8 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
 
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+    assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+    assert os.environ["MALLOC_CONF"] == "narenas:8"
 
 
 @pytest.mark.parametrize(
@@ -437,8 +451,8 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
-    off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
-    on = launch.build_hero_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_diagnostic_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
 
@@ -447,6 +461,8 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
+    assert on_config.eval.eval_batch_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+    assert on_config.eval.dropless_eval is True
 
 
 def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
@@ -454,7 +470,7 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
     # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
-    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and top-k QB (the hero default).
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and the selected top-k QB arm.
     assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
     assert (m.num_experts, m.num_experts_per_token) == (384, 8)
     assert m.intermediate_dim == m.hidden_dim // 2

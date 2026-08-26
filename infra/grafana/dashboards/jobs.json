@@ -1406,7 +1406,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/jobs",
+          "url": "/job_counts",
           "url_options": {
             "method": "GET",
             "params": []
@@ -1466,7 +1466,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/jobs",
+          "url": "/job_counts",
           "url_options": {
             "method": "GET",
             "params": []

@@ -47,16 +47,12 @@ from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
-from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
 logger = logging.getLogger(__name__)
 
 # Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
-_PRIORITY_BANDS = {
-    "production": job_pb2.PRIORITY_BAND_PRODUCTION,
-    "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
-    "batch": job_pb2.PRIORITY_BAND_BATCH,
-}
+_PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALUES}
 
 
 def make_task_backend(
@@ -131,6 +127,7 @@ def make_task_backend(
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
+                task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
@@ -183,6 +180,7 @@ def build_base_worker_config(
     worker_config.controller_address = controller_address
     worker_config.platform = config.platform.model_copy(deep=True)
     worker_config.storage_prefix = storage_prefix
+    worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config

@@ -110,9 +110,9 @@ message Controller {
     // ISO date (YYYY-MM-DD) of the client's marin-iris build. For wheels this
     // is stamped at build time by scripts/python_libs_package.py; for editable
     // installs it's derived from `git log` on the iris source tree. Root
-    // submissions older than FRESHNESS_WINDOW (today - 14d) are rejected.
-    // Nested submissions (is_root == false) are exempt. Empty string is
-    // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
+    // submissions more than FRESHNESS_WINDOW (14d) older than the controller's
+    // own build are rejected. Nested submissions (is_root == false) are exempt,
+    // as is an empty string, which means the build can't identify itself.
     string client_revision_date = 36;
 
     // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
@@ -611,7 +611,7 @@ message Controller {
   message SetUserBudgetRequest {
     string user_id = 1;
     int64 budget_limit = 2;      // max budget value (0 = unlimited)
-    iris.job.PriorityBand max_band = 3;   // highest band this user can submit to (lower number = higher priority)
+    iris.job.PriorityBand max_band = 3;   // highest-priority band this user can submit to
   }
   message SetUserBudgetResponse {}
 

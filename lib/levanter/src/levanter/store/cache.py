@@ -6,6 +6,7 @@ import concurrent.futures
 import copy
 import dataclasses
 import gc
+import json
 import logging as pylogging
 import operator
 import os
@@ -30,7 +31,7 @@ from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr import counters as zephyr_counters
 from rigging.filesystem.atomic import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
@@ -41,7 +42,7 @@ from levanter.utils.thread_utils import blocking_wait
 from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore, heuristic_is_leaf
+from .tree_store import TreeStore, heuristic_is_leaf, render_tree_path
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -55,6 +56,7 @@ LEDGER_FILE_NAME = "shard_ledger.json"
 CONSOLIDATE_DATA_SIZE_WORKERS = 32
 CACHE_LAYOUT_CONSOLIDATED = "consolidated"
 CACHE_LAYOUT_SHARDED = "sharded"
+CACHE_CATALOG_VERSION = 1
 
 
 def _cache_zephyr_context(*, resources: ResourceConfig, max_workers: int, name: str) -> ZephyrContext:
@@ -207,8 +209,8 @@ class TreeCache(AsyncDataset[T_co]):
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         return await self._reader.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
-        return self._reader.get_batch_sync(indices_or_slice, timeout=timeout)
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
+        return self._reader.get_batch_sync(indices_or_slice)
 
     def flat_field_length(self, field: str) -> int:
         return self._reader.flat_field_length(field)
@@ -369,10 +371,8 @@ class TreeCache(AsyncDataset[T_co]):
             open_field_store,
         )
 
-    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
-        if len(indices) == 0:
-            return []
-
+    def _group_indices_by_shard(self, indices: Sequence[int]) -> Tuple[List[str], Dict[int, List[Tuple[int, int]]]]:
+        """Map global row indices onto ``(output position, row within shard)`` pairs per shard."""
         shard_names, shard_offsets = self._ensure_shard_row_offsets()
         shard_batches: Dict[int, List[Tuple[int, int]]] = {}
         for output_index, index in enumerate(indices):
@@ -383,6 +383,14 @@ class TreeCache(AsyncDataset[T_co]):
             shard_index = int(np.searchsorted(shard_offsets, index, side="right"))
             shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
             shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
+
+        return shard_names, shard_batches
+
+    async def _get_sharded_batch(self, indices: Sequence[int]) -> List[T_co]:
+        if len(indices) == 0:
+            return []
+
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
 
         output: List[Optional[T_co]] = [None] * len(indices)
 
@@ -404,16 +412,7 @@ class TreeCache(AsyncDataset[T_co]):
         if len(indices) == 0:
             return []
 
-        shard_names, shard_offsets = self._ensure_shard_row_offsets()
-        shard_batches: Dict[int, List[Tuple[int, int]]] = {}
-        for output_index, index in enumerate(indices):
-            index = int(index)
-            if index < 0 or index >= self.ledger.total_num_rows:
-                raise ValueError("Requested indices beyond the end of the dataset")
-
-            shard_index = int(np.searchsorted(shard_offsets, index, side="right"))
-            shard_start = int(shard_offsets[shard_index - 1]) if shard_index > 0 else 0
-            shard_batches.setdefault(shard_index, []).append((output_index, index - shard_start))
+        shard_names, shard_batches = self._group_indices_by_shard(indices)
 
         output: List[Optional[T_co]] = [None] * len(indices)
         for shard_index, batch in shard_batches.items():
@@ -462,7 +461,22 @@ class TreeCache(AsyncDataset[T_co]):
     @staticmethod
     def load(cache_dir: str, exemplar: T, options: Optional["CacheMetadata"] = None) -> "TreeCache":
         logger.info(f"Loading cache from {cache_dir}")
-        ledger = CacheLedger.load(cache_dir, options)
+        ledger = CacheLedger.load(cache_dir)
+
+        return TreeCache.load_from_ledger(cache_dir, exemplar, ledger, options)
+
+    @staticmethod
+    def load_from_ledger(
+        cache_dir: str,
+        exemplar: T,
+        ledger: "CacheLedger",
+        options: Optional["CacheMetadata"] = None,
+    ) -> "TreeCache":
+        """Load a cache from supplied ledger metadata."""
+        if options:
+            diff = ledger.metadata.compare_to(options)
+            if diff:
+                logger.warning(f"Metadata mismatch: {diff}")
 
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
@@ -498,7 +512,7 @@ class _TreeCacheReader(Protocol[T_co]):
 
     async def get_batch(self, indices: Union[Sequence[int], slice]) -> Sequence[T_co]: ...
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]: ...
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]: ...
 
     def flat_field_length(self, field: str) -> int: ...
 
@@ -538,7 +552,7 @@ class _MaterializedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._store.get_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
@@ -596,7 +610,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
             indices = range(start, stop, step)
         return await self._cache._get_sharded_batch(indices)
 
-    def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None) -> Sequence[T_co]:
+    def get_batch_sync(self, indices_or_slice) -> Sequence[T_co]:
         if isinstance(indices_or_slice, slice):
             start, stop, step = indices_or_slice.indices(len(self))
             indices_or_slice = range(start, stop, step)
@@ -625,8 +639,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
 
     def jagged_array_tree(self) -> Any:
         def field_store(path, _):
-            field = "/".join(_render_path_elem(part) for part in path)
-            return _ShardedJaggedArrayStore(self._cache, field)
+            return _ShardedJaggedArrayStore(self._cache, render_tree_path(path))
 
         return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
@@ -667,6 +680,76 @@ class CacheLedger:
     def _serialize_and_commit(self, cache_dir):
         path = ShardedCacheLayout.parse(cache_dir).ledger
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class CacheCatalogEntry:
+    """A cache location and its embedded ledger."""
+
+    cache_dir: str
+    ledger: CacheLedger
+
+
+@dataclass(frozen=True)
+class CacheCatalog:
+    """A versioned snapshot of cache ledgers grouped by dataset split."""
+
+    splits: Dict[str, Dict[str, CacheCatalogEntry]]
+    version: int = CACHE_CATALOG_VERSION
+
+    def entry(self, split: str, name: str) -> CacheCatalogEntry | None:
+        return self.splits.get(split, {}).get(name)
+
+    def to_json(self) -> str:
+        splits = {
+            split: {
+                name: {"cache_dir": entry.cache_dir, "ledger": entry.ledger.to_dict()}
+                for name, entry in sorted(entries.items())
+            }
+            for split, entries in sorted(self.splits.items())
+        }
+        return json.dumps({"version": self.version, "splits": splits}, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def from_json(contents: str) -> "CacheCatalog":
+        payload = json.loads(contents)
+        if not isinstance(payload, dict):
+            raise ValueError("Cache catalog must contain a JSON object")
+
+        version = payload.get("version")
+        if version != CACHE_CATALOG_VERSION:
+            raise ValueError(f"Unsupported cache catalog version {version}; expected {CACHE_CATALOG_VERSION}")
+
+        raw_splits = payload.get("splits")
+        if not isinstance(raw_splits, dict):
+            raise ValueError("Cache catalog must contain a splits object")
+
+        splits: Dict[str, Dict[str, CacheCatalogEntry]] = {}
+        for split, raw_entries in raw_splits.items():
+            if not isinstance(split, str) or not isinstance(raw_entries, dict):
+                raise ValueError("Cache catalog split names must map to entry objects")
+            entries: Dict[str, CacheCatalogEntry] = {}
+            for name, raw_entry in raw_entries.items():
+                if not isinstance(name, str) or not isinstance(raw_entry, dict):
+                    raise ValueError(f"Invalid cache catalog entry in split {split}")
+                cache_dir = raw_entry.get("cache_dir")
+                raw_ledger = raw_entry.get("ledger")
+                if not isinstance(cache_dir, str) or not isinstance(raw_ledger, dict):
+                    raise ValueError(f"Cache catalog entry {split}/{name} must contain cache_dir and ledger")
+                ledger = CacheLedger.from_dict(raw_ledger)  # type: ignore[arg-type]
+                entries[name] = CacheCatalogEntry(cache_dir=cache_dir, ledger=ledger)
+            splits[split] = entries
+        return CacheCatalog(splits=splits, version=version)
+
+    @staticmethod
+    def load(path: str) -> "CacheCatalog":
+        """Load and validate a cache catalog."""
+        logger.info("Loading cache catalog from %s", path)
+        return CacheCatalog.from_json(StoragePath(path).read_text())
+
+    def write(self, path: str) -> None:
+        """Write this catalog after all referenced caches are complete."""
+        _serialize_json_and_commit(path, self)
 
 
 def _validate_sharded_ledger(ledger: CacheLedger) -> None:
@@ -1483,21 +1566,8 @@ def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:
 def _field_counts_from_data_sizes(data_sizes) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for path, value in jtu.tree_leaves_with_path(data_sizes):
-        field = "/".join(_render_path_elem(part) for part in path)
-        counts[field] = int(value)
+        counts[render_tree_path(path)] = int(value)
     return counts
-
-
-def _render_path_elem(path_elem) -> str:
-    if isinstance(path_elem, jtu.DictKey):
-        return str(path_elem.key)
-    if isinstance(path_elem, jtu.GetAttrKey):
-        return str(path_elem.name)
-    if isinstance(path_elem, jtu.SequenceKey):
-        return str(path_elem.idx)
-    if isinstance(path_elem, jtu.FlattenedIndexKey):
-        return str(path_elem.key)
-    return str(path_elem)
 
 
 def _sanitize_shard_name(name: str) -> str:

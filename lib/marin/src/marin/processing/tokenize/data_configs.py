@@ -61,10 +61,9 @@ def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
     )
 
 
-def step_to_lm_mixture_component(step: TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
+def step_to_lm_mixture_component(step: TokenizeConfig) -> DatasetComponent:
     """Convert a tokenize config to a Levanter dataset component, for building data mixtures."""
-    source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    return dataset_component(source)
+    return dataset_component(step.as_lm_dataset_source_config(step.cache_path))
 
 
 def lm_mixture_data_config(
@@ -73,7 +72,6 @@ def lm_mixture_data_config(
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
-    include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     shuffle_before_trainval_split: bool = True,
@@ -89,16 +87,12 @@ def lm_mixture_data_config(
         shuffle: shuffling policy. Defaults to hierarchical block shuffle.
             `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
-        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
         shuffle_before_trainval_split: Whether to shuffle before splitting into train/val. Defaults to True.
         block_cross_document_attention: Whether to mask attention across document boundaries.
     """
-    component_configs = {
-        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
-        for name, step in components.items()
-    }
+    component_configs = {name: step_to_lm_mixture_component(step) for name, step in components.items()}
 
     if missing_weights_are_validation:
         missing_keys = {k: 0.0 for k in components if k not in weights}

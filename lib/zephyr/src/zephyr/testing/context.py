@@ -10,7 +10,7 @@ from pathlib import Path
 from fray.client import Client
 from fray.types import ResourceConfig
 
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 
 
 @contextmanager

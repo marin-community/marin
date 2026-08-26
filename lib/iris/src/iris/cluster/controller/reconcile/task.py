@@ -507,6 +507,7 @@ def apply_one_transition(
             pod_uid=update.pod_uid,
             node_name=update.node_name,
             terminal_reason=update.terminal_reason,
+            output_archive=update.output_archive,
         )
     )
     state.merge_task(

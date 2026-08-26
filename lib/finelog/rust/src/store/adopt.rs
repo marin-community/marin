@@ -237,6 +237,7 @@ pub fn adopt_namespace_from_disk(
             created_at_ms,
             min_key_value: meta.min_key_value.map(|v| v.to_string()),
             max_key_value: meta.max_key_value.map(|v| v.to_string()),
+            partition: meta.partition,
             location: SegmentLocation::Local,
         });
     }
@@ -261,8 +262,15 @@ pub fn adopt_namespace_from_disk(
 /// Returns `None` when the directory has no readable segment (a namespace dir
 /// with no parquet contributes nothing — the caller skips it).
 pub fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
-    // Newest segment = highest min_seq = last after the sorted discover.
-    let newest = discover_segments(ns_dir).into_iter().next_back()?;
+    let newest = discover_segments(ns_dir)
+        .into_iter()
+        .filter_map(|path| {
+            let (_, min_seq) =
+                crate::store::types::parse_seg_filename(path.file_name()?.to_str()?)?;
+            Some((min_seq, path))
+        })
+        .max_by_key(|(min_seq, _)| *min_seq)?
+        .1;
     let file = std::fs::File::open(&newest).ok()?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file).ok()?;
     let arrow_schema = builder.schema();
@@ -669,6 +677,7 @@ mod tests {
                 created_at_ms: 1,
                 min_key_value: None,
                 max_key_value: None,
+                partition: None,
                 location: SegmentLocation::Local,
             },
             SegmentRow {
@@ -682,6 +691,7 @@ mod tests {
                 created_at_ms: 1,
                 min_key_value: None,
                 max_key_value: None,
+                partition: None,
                 location: SegmentLocation::Local,
             },
         ];
@@ -979,7 +989,15 @@ mod tests {
         let staging = tempdir("staging");
         let (l1_path, _) =
             write_segment_to_dir(&staging, 1, 1, &worker_batch(1, vec![10, 20])).unwrap();
-        assert!(remote.upload("iris.worker", &l1_path).await);
+        assert!(
+            remote
+                .upload(
+                    "iris.worker",
+                    l1_path.file_name().unwrap().to_str().unwrap(),
+                    &l1_path,
+                )
+                .await
+        );
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         adopt_remote_segments(

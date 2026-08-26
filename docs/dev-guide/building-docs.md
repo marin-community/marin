@@ -44,25 +44,32 @@ uv run mkdocs build --clean
 
 ## Documentation Structure
 
-The documentation follows the [Diátaxis](https://diataxis.fr/) framework with four main sections:
+The documentation follows the [Diátaxis](https://diataxis.fr/) framework. The `nav` in
+`mkdocs.yml` publishes five sections:
 
 1. **Tutorials** (`docs/tutorials/`)
    - Step-by-step guides
    - Getting started guides
    - Learning-oriented content
 
-2. **Technical References** (`docs/references/`)
-   - API documentation
-   - Configuration options
-   - Technical specifications
-
-3. **Explanations** (`docs/explanations/`)
+2. **Explanations** (`docs/explanations/`)
    - Background information
    - Design decisions
    - Best practices
 
+3. **Experiments** (`docs/experiments/`, `docs/reports/`)
+   - Experiment reports and digests
 
-We deviate slightly, adding design docs as a fifth section.
+4. **Developer Guide** (`docs/dev-guide/`)
+   - Contributing, releasing, and repository workflow
+
+5. **Technical Reference** (`docs/references/`)
+   - API documentation
+   - Configuration options
+   - Technical specifications
+
+Pages outside those directories — `docs/design/`, `docs/ops/`, `docs/recipes/`, `docs/model-cards/` —
+build but are not in the `nav`, so link to them from a page that is.
 
 ## Writing Documentation
 

@@ -118,9 +118,12 @@ uv run --no-project infra/ci/run_tests.py
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
   `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
-  Invoke `wait_for.py` once as a foreground blocking call and let it resume the
-  task when an event fires; do not poll a yielded process handle or narrate
-  unchanged state while it waits.
+  Keep one `wait_for.py` process attached in the foreground until it exits.
+  Never background it or give the shell, tool, or agent a separate timeout;
+  `wait_for.py --timeout` owns the deadline. If the execution interface yields
+  a process handle, keep making blocking wait/resume calls on that same handle
+  until the process exits. A runner yield is not a monitoring event: do not
+  narrate it or inspect GitHub while the process is still running.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

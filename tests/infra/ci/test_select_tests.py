@@ -213,6 +213,20 @@ def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
     assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
 
 
+def test_deploy_change_selects_deploy_test(tmp_path: Path) -> None:
+    write(tmp_path, "infra/deploy/src/marin_deploy/__init__.py")
+    write(tmp_path, "infra/deploy/src/marin_deploy/cli.py", "def cli(): ...\n")
+    write(
+        tmp_path,
+        "infra/deploy/tests/test_cli.py",
+        "from marin_deploy.cli import cli\n\ndef test_cli(): ...\n",
+    )
+
+    matrix = select_matrix(["infra/deploy/src/marin_deploy/cli.py"], tmp_path)
+
+    assert leg_paths(matrix, "deploy") == ["infra/deploy/tests/test_cli.py"]
+
+
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
     matrix = select_matrix(["uv.lock"], tmp_path)

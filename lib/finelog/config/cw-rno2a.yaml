@@ -1,5 +1,5 @@
 # finelog log server for the CoreWeave RNO2A cluster (cw-rno2a): k8s Deployment in the
-# `iris` namespace, archiving to CoreWeave AI Object Storage. See OPS.md to deploy.
+# `iris` namespace, archiving to CoreWeave AI Object Storage. See infra/finelog/README.md.
 name: finelog-cw-rno2a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
@@ -14,10 +14,8 @@ deployment:
     storage_gb: 250
     # CoreWeave AI Object Storage via LOTA (in-cluster cache endpoint).
     object_storage_endpoint: http://cwlota.com
-    # Control-plane priority, shared with the iris controller; keep in sync
-    # with iris's IRIS_PRIORITY_CLASSES.
+    # Control-plane priority owned by the cluster substrate stack.
     priority_class_name: iris-system
-    priority_class_value: 10000
 # cidr admits this cluster's private network and loopback; no jwt layer, since this
 # server only sends to the hub and accepts no pushes.
 auth:

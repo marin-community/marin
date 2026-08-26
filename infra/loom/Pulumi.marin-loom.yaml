@@ -8,9 +8,6 @@ config:
   marin-loom:network: default
   marin-loom:instanceName: loom
   marin-loom:vmServiceAccountName: loom-vm
-  marin-loom:vmProjectRoles: []
-  marin-loom:vmPulumiKmsKeys:
-    - projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
   marin-loom:machineType: c4d-highmem-4
   marin-loom:bootDiskName: loom-hyperdisk
   marin-loom:bootDiskType: hyperdisk-balanced
@@ -99,12 +96,14 @@ config:
       envClear: true
       ambientAllowlist: []
       idleArchiveSeconds: 3600
-      maxConcurrent: 1
+      maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
       instructionsFile: profiles/ops/AGENTS.md
       env: *loomIrisUser
       restricted: false
+      githubRepositories:
+        - marin-community/marin
       allowedTools: []
       mcpAccess:
         mode: all

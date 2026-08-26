@@ -15,14 +15,18 @@ import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
+import levanter.checkpoint as checkpoint_module
+import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
 import pytest
+from rigging import telemetry
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
 from rigging.filesystem.storage_path import StoragePath
+from rigging.testing import RecordingTelemetryTransport
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
@@ -438,6 +442,16 @@ def test_trainer_config_checkpoint_search_paths():
     )
     assert config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1", "/tmp/test-temp/run1"]
 
+    multi_config = dataclasses.replace(
+        config,
+        load_checkpoint_path=["/tmp/test-perm/run1", "/tmp/test-temp/run1", "/tmp/test-old-temp"],
+    )
+    assert multi_config.checkpoint_search_paths("run1") == [
+        "/tmp/test-perm/run1",
+        "/tmp/test-temp/run1",
+        "/tmp/test-old-temp",
+    ]
+
     pinned_config = dataclasses.replace(config, load_checkpoint_path="/tmp/test-perm/run1/step-100")
     assert pinned_config.checkpoint_search_paths("run1") == ["/tmp/test-perm/run1/step-100"]
 
@@ -467,6 +481,122 @@ def test_checkpointer_config_propagates_debug_settings():
     assert checkpointer.debug.top_allocations == 5
     assert checkpointer.debug.force_gc_before_serialize is False
     assert checkpointer.debug.flush_logs is False
+
+
+def test_debug_checkpoint_exports_phase_and_staging_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(
+        tensorstore_serialization,
+        "flush_debug_output",
+        lambda logger: pytest.fail("flush_logs=False forced TensorStore log output"),
+    )
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        save_checkpoint(
+            {"weight": np.arange(8, dtype=np.float32)},
+            step=7,
+            checkpoint_path=tmp_path / "checkpoint",
+            debug=CheckpointDebugConfig(
+                enabled=True,
+                tracemalloc_frames=None,
+                force_gc_before_serialize=False,
+                top_allocations=0,
+                flush_logs=False,
+            ),
+        )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+    values_by_name = {record["name"]: record["value"] for record in checkpoint_records}
+    assert values_by_name["checkpoint_staged_host_bytes"] == 32
+
+    phase_records = [record for record in checkpoint_records if record["name"] == "checkpoint_phase_duration_seconds"]
+    assert {record["attributes"]["phase"] for record in phase_records} == {
+        "starting",
+        "filesystem_ready",
+        "tensorstore_serialize",
+        "async_commit_in_flight",
+        "metadata_write",
+    }
+    total_record = next(
+        record for record in checkpoint_records if record["name"] == "checkpoint_total_duration_seconds"
+    )
+    assert total_record["attributes"]["status"] == "completed"
+    assert total_record["value"] >= max(record["value"] for record in phase_records)
+    assert all(record["attributes"]["checkpoint_step"] == "7" for record in checkpoint_records)
+    assert all(record["attributes"]["source_temporality"] == "current_snapshot" for record in checkpoint_records)
+
+
+def test_debug_checkpoint_nonprimary_process_finishes_local_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(jax, "process_index", lambda: 1)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        save_checkpoint(
+            {"weight": np.arange(8, dtype=np.float32)},
+            step=7,
+            checkpoint_path=tmp_path / "checkpoint",
+            debug=CheckpointDebugConfig(
+                enabled=True,
+                tracemalloc_frames=None,
+                force_gc_before_serialize=False,
+                top_allocations=0,
+                flush_logs=False,
+            ),
+        )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+    assert "async_commit_in_flight" in {
+        record["attributes"]["phase"]
+        for record in checkpoint_records
+        if record["name"] == "checkpoint_phase_duration_seconds"
+    }
+    assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
+
+
+def test_debug_checkpoint_nonprimary_serialization_failure_omits_total_telemetry(tmp_path, monkeypatch):
+    telemetry.shutdown(0)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    monkeypatch.setattr(jax, "process_index", lambda: 1)
+
+    def fail_serialization(*args, **kwargs):
+        raise RuntimeError("serialization failed")
+
+    monkeypatch.setattr(checkpoint_module, "tree_serialize_leaves_tensorstore", fail_serialization)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="levanter", attributes={"run_id": "run-42"})
+
+    try:
+        with pytest.raises(RuntimeError, match="serialization failed"):
+            save_checkpoint(
+                {"weight": np.arange(8, dtype=np.float32)},
+                step=7,
+                checkpoint_path=tmp_path / "checkpoint",
+                debug=CheckpointDebugConfig(
+                    enabled=True,
+                    tracemalloc_frames=None,
+                    force_gc_before_serialize=False,
+                    top_allocations=0,
+                    flush_logs=False,
+                ),
+            )
+        telemetry.shutdown()
+    finally:
+        telemetry.shutdown(0)
+
+    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+    assert not any(record["name"] == "checkpoint_total_duration_seconds" for record in checkpoint_records)
 
 
 def test_debug_checkpointer_state_providers_register_and_unregister():
@@ -718,6 +848,44 @@ def test_checkpointer_force_save_uses_permanent_path_even_when_time_policy_elaps
 
         assert _get_checkpoint_steps(permanent_dir) == [1]
         assert list(pathlib.Path(temporary_dir).iterdir()) == []
+
+
+def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint()
+    _on_step(checkpointer, 1)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(temporary_path) == [1]
+    assert not permanent_path.exists()
+
+
+def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [CheckpointInterval(every=1)],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint()
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [1]
+    assert not temporary_path.exists()
 
 
 def test_load_from_checkpoint_or_initialize():

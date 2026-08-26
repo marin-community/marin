@@ -45,6 +45,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     meta_table,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -317,12 +318,15 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
+@writes_to(
+    jobs_table,
+    cascades_into=(task_attempts_table, task_attempt_outputs_table, job_config_table, job_workdir_files_table),
+)
 def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
-    ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
-    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, output metadata,
+    config, and workdir files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
     explicitly through the projection, which keeps the in-memory endpoint cache in
     sync as well as the row.
 
@@ -1037,7 +1041,7 @@ def mirror_federated_task(
     )
 
 
-@writes_to(task_attempts_table)
+@writes_to(task_attempts_table, task_attempt_outputs_table)
 def mirror_federated_attempts(
     tx: Tx,
     *,
@@ -1070,6 +1074,10 @@ def mirror_federated_attempts(
                 error=attempt.error or None,
                 attempt_uid=attempt_uid,
                 backend_id="",
+                pod_name=attempt.pod_name,
+                pod_uid=attempt.pod_uid,
+                node_name=attempt.node_name,
+                terminal_reason=attempt.terminal_reason,
             )
             .on_conflict_do_update(
                 index_elements=["task_id", "attempt_id"],
@@ -1079,9 +1087,23 @@ def mirror_federated_attempts(
                     "finished_at_ms": finished,
                     "exit_code": attempt.exit_code or None,
                     "error": attempt.error or None,
+                    "pod_name": attempt.pod_name,
+                    "pod_uid": attempt.pod_uid,
+                    "node_name": attempt.node_name,
+                    "terminal_reason": attempt.terminal_reason,
                 },
             )
         )
+        if attempt.HasField("output_archive"):
+            tx.execute(
+                sqlite_insert(task_attempt_outputs_table)
+                .values(
+                    task_id=task_id,
+                    attempt_id=attempt.attempt_id,
+                    archive_json=proto_to_json(attempt.output_archive),
+                )
+                .on_conflict_do_nothing(index_elements=["task_id", "attempt_id"])
+            )
 
 
 @writes_to(federation_sync_state_table)

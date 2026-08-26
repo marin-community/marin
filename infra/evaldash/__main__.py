@@ -6,8 +6,7 @@
 Deploys this directory as an IAP-gated Cloud Run service through the reusable
 ``iac.gcp.cloud_run.CloudRunService`` component. The service's fixed shape — project,
 region, one warm instance for the background ingest loop, the CloudSQL connection, and
-the record bucket — lives here. The shared component owns the common IAP access policy;
-additional members are stack config (``marin-evaldash:viewers``).
+the record bucket — lives here. GCP IAM grants live in the ``marin`` infrastructure stack.
 
 The image build context is the repo root (the runtime image copies the eval record/DB
 modules from ``lib/marin``), so ``build_context`` points there and ``dockerfile`` is the
@@ -49,10 +48,6 @@ DOCKERFILE = "infra/evaldash/Dockerfile"
 
 def main() -> None:
     config = pulumi.Config()
-    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
-    #   pulumi config set --path 'viewers[0]' group:someone@example.com
-    viewers = config.get_object("viewers") or []
-
     provider = gcp.Provider("gcp", project=PROJECT)
     service = CloudRunService(
         "evaldash",
@@ -65,6 +60,7 @@ def main() -> None:
             # The reconciler lists object storage between requests, so CPU must stay allocated
             # while idle. The service boots from PostgreSQL and remains single-instance.
             cpu_always_allocated=True,
+            startup_cpu_boost=True,
             cpu="1",
             env={
                 "RECORDS_PREFIXES": RECORDS_PREFIXES,
@@ -80,16 +76,8 @@ def main() -> None:
                 SecretEnv(name="CW_KEY_ID", secret="cw-object-storage-key-id"),
                 SecretEnv(name="CW_KEY_SECRET", secret="cw-object-storage-key-secret"),
             ),
-            # Read access to the eval record bucket. roles/storage.objectViewer is
-            # project-wide (the component grants project roles, not per-bucket); scope it to
-            # the bucket with a bucket IAM binding if project-wide read is later judged too
-            # broad. roles/compute.viewer lets the run-detail jobs/logs endpoints resolve the
-            # iris controller and finelog VM internal IPs through the Compute API for Direct VPC
-            # egress reads. roles/cloudsql.client comes with cloudsql_instances below.
-            service_account_roles=("roles/storage.objectViewer", "roles/compute.viewer"),
             # Attaches the CloudSQL instance to the service so the connector can dial it.
             cloudsql_instances=(CLOUDSQL_INSTANCE,),
-            iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
     )

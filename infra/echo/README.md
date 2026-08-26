@@ -101,8 +101,8 @@ evidence helps without allowing a large file to dominate. Paraphrases can enter 
 BGE semantic retrieval.
 
 The API retrieves at least 20 candidates from each selected domain, takes the best 24
-after first-stage fusion, and reranks their complete indexed chunks with the INT8 ONNX
-build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
+after first-stage fusion, and reranks their complete indexed chunks one at a time with
+the INT8 ONNX build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
 first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Wiki candidates need
 a raw cross-encoder score of at least -1; other domains retain the -2 floor. These are
 empirical relevance floors, not calibrated probabilities. The wiki cutoff retains 93%
@@ -112,8 +112,17 @@ with new result snapshots so other domain cutoffs can use stable data. A search 
 return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
 
-CLI search prints one table with an execution-specific grading key, source ID, title,
-and source-derived detail. Grading keys use `<domain>:<numeric-key>` and remain attached
+The API runs four ONNX inference threads on each 4-vCPU Cloud Run instance. Request-based
+billing retains one warm instance, admits one request per instance, and scales concurrent
+searches out to at most four instances. Startup CPU boost reduces model initialization time
+for burst instances without allocating CPU to idle instances continuously.
+
+CLI search prints one result block with an execution-specific grading key, title,
+source ID, and one primary source excerpt of at most 240 characters. File results use
+their highest-ranked `path:line` reference, wiki results use `use_when`, and activity
+results use the matching source excerpt. The detail line is independent of terminal
+width, so long source IDs do not consume its display budget. Grading keys use
+`<domain>:<numeric-key>` and remain attached
 to the stored row even when a later corpus sync replaces an activity chunk ID.
 Run `uv run infra/echo/cli.py get <domain:id>` to fetch the full indexed wiki body,
 repository file, pull request or issue chunk, or Discord message and its canonical URL.
@@ -124,9 +133,11 @@ Wiki summaries use the `use_when` hint; files and activity use the matching sour
 excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
 latency and an additional prompt-injection path.
 
-`search` reports the number of results and elapsed wall-clock time before its table. The
-measurement covers token acquisition, the network request, server retrieval and
-reranking, and response decoding: the time the caller waited for Echo.
+`search` reports the number of results, elapsed wall-clock time, and the API's
+`Server-Timing` stages before its table. The wall-clock measurement covers token
+acquisition, the network request, server retrieval and reranking, history persistence,
+and response decoding. The server stages separate query embedding, database setup,
+selected-domain retrieval, reranking, history persistence, and total application time.
 
 ### Record and inspect search feedback
 
@@ -340,22 +351,23 @@ printed by `wiki add` or `wiki edit` from the associated PR or issue.
 
 The `marin-echo` Pulumi stack creates the database, IAM database users, Cloud Run
 service, and one scheduled sync job with one task. The job mirrors activity every ten
-minutes and then advances one globally serialized repository turn. Database migrations in
+minutes and then advances one globally serialized repository turn. GCP IAM grants for those
+resources live in `infra/pulumi/src/iac/gcp/echo.py` and are applied by the `marin`
+infrastructure stack;
+the Echo stack still owns Cloud SQL users and PostgreSQL grants. Database migrations in
 `infra/echo/migrations/` create tables and apply PostgreSQL grants.
 `infra/echo/migrate.py` records applied migrations in `schema_migrations`.
 
-Preview or deploy from the service directory:
+Deploy the production stack from the repository root through the shared command.
+Pulumi previews the update before asking for confirmation:
 
 ```bash
-cd infra/echo
-pulumi stack select marin-echo
-pulumi preview
-pulumi up
+uv run --all-packages --extra deploy marin-deploy echo rollout
 ```
 
-`pulumi up` applies pending migrations from the operator's machine. It requires ADC
+The rollout applies pending migrations from the operator's machine. It requires ADC
 with access to `cloudsql-pulumi-admin-password`. When a release adds tables queried by
-new API or sync images, run `infra/echo/migrate.py` before `pulumi up` to avoid a
+new API or sync images, run `infra/echo/migrate.py` before the rollout to avoid a
 missing-table window. The first repository build fetches a GitHub archive and embeds
 all eligible files in resumable ten-file batches; later hourly runs normally process
 only changed paths. Review database grant changes before deploying them.

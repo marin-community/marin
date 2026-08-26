@@ -16,6 +16,7 @@ import types
 from typing import Any
 
 import pytest
+import finestore.cache as finestore_cache
 from finestore.cache import PersistentKvCache
 from finestore.layout import BlobTables
 from finestore.reader import ReadView
@@ -116,6 +117,17 @@ def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_c
     assert fake_cutlass.compiled == ["tile128-bf16"]
     assert warm.module == cold.module
     assert warm.fingerprint == hashlib.sha256(cold.module).digest()
+
+
+def test_non_primary_process_does_not_publish_compiled_kernel(fake_cutlass, tmp_path, monkeypatch):
+    root = tmp_path / "cutlass-kernels"
+    monkeypatch.setattr(finestore_cache, "marin_temp_bucket", lambda _ttl, _prefix: str(root))
+    monkeypatch.setattr(cutlass_kernel_cache.jax, "process_index", lambda: 1)
+
+    install(cutlass_kernel_cache.cutlass_kernel_cache())
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+
+    assert not root.exists()
 
 
 def test_configuration_and_specification_both_discriminate_stored_kernels(fake_cutlass, tmp_path):

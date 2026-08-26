@@ -108,6 +108,7 @@ def test_configure_stamps_canonical_resource_identity(
         task_id=JobName.from_wire("/alice/train/worker/3"),
         worker_id="w-7",
         attempt_id=1,
+        attempt_uid="controller-attempt-abc123",
     )
     with _iris_metadata(info, telemetry_receiver.endpoint):
         telemetry.configure(
@@ -129,15 +130,46 @@ def test_configure_stamps_canonical_resource_identity(
             "model_revision": "abc123",
             "role": "trainer",
             "run_id": "pretrain-42",
-            "execution_uid": "iris:/alice/train/worker/3:attempt:1",
+            "execution_uid": "iris:controller-attempt-abc123",
         },
     }
+
+
+def test_configure_separates_reused_numeric_attempts(telemetry_receiver: TelemetryReceiver) -> None:
+    first = JobInfo(
+        task_id=JobName.from_wire("/alice/train/0"),
+        attempt_id=0,
+        attempt_uid="controller-attempt-first",
+    )
+    with _iris_metadata(first, telemetry_receiver.endpoint):
+        telemetry.configure("levanter", run_id="run-42")
+        rigging_telemetry.gauge("identity_probe").set(1)
+    rigging_telemetry.shutdown(0.1)
+    first_execution_uid = telemetry_receiver.latest_resource()["attributes"]["execution_uid"]
+
+    telemetry_receiver.received.clear()
+    second = JobInfo(
+        task_id=JobName.from_wire("/alice/train/0"),
+        attempt_id=0,
+        attempt_uid="controller-attempt-second",
+    )
+    with _iris_metadata(second, telemetry_receiver.endpoint):
+        telemetry.configure("levanter", run_id="run-42")
+        rigging_telemetry.gauge("identity_probe").set(1)
+    rigging_telemetry.shutdown(0.1)
+    second_execution_uid = telemetry_receiver.latest_resource()["attributes"]["execution_uid"]
+
+    assert first_execution_uid == "iris:controller-attempt-first"
+    assert second_execution_uid == "iris:controller-attempt-second"
 
 
 def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/serve/0"), worker_id="w-1", attempt_id=0)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("vllm", attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value})
+        telemetry.configure(
+            "vllm",
+            attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value},
+        )
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]

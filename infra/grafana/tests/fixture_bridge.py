@@ -20,7 +20,6 @@ _LANES = (
     ("datakit-t1", "Data T1", "marin", "data"),
     ("datakit-t2", "Data T2", "marin", "data"),
     ("datakit-t3", "Data T3", "marin", "data"),
-    ("cluster-smoke", "Cluster", "marin", "cluster"),
     ("evalchemy", "Evalchemy", "forks", "evaluation"),
     ("harbor", "Harbor", "forks", "evaluation"),
     ("marinskyrl", "SkyRL", "forks", "rl"),
@@ -82,7 +81,7 @@ def _builds() -> list[dict]:
 def _wandb(chart: str) -> list[dict]:
     titles = {"train-loss": "Train cross-entropy loss", "paloma-macro-loss": "Paloma macro loss", "mfu": "MFU (%)"}
     rows = []
-    for run_index, run in enumerate(("67b-a2b-10t", "67b-a2b-resume")):
+    for run_index, run in enumerate(("hero-12d8b6f0-dee637",)):
         for index in range(40):
             tokens = (index + 1) * 250_000_000_000
             if chart == "mfu":
@@ -95,14 +94,29 @@ def _wandb(chart: str) -> list[dict]:
                     "run": run,
                     "tokens": tokens,
                     "value": value,
-                    "report_title": "67B-A2B MoE on 10T tokens",
+                    "report_title": "535B-A23B 18T Token Hero Run + Scaling Ladder",
                     "report_url": (
                         "https://wandb.ai/marin-community/marin_moe/reports/"
-                        "67B-A2B-MoE-on-10T-tokens--VmlldzoxNzM1OTMxMQ"
+                        "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
                     ),
                 }
             )
     return rows
+
+
+def _wandb_history(params: dict[str, list[str]]) -> list[dict]:
+    """A whole-run curve: the point of the panel is that it starts at step 0."""
+    run = params.get("run", ["hero-preview"])[0]
+    return [
+        {
+            "run": run,
+            "project": "marin_moe",
+            "run_url": f"https://wandb.ai/marin-community/marin_moe/runs/{run}",
+            "step": step,
+            "value": 3.4 - 1.9 * (step / 40_000) ** 0.35,
+        }
+        for step in range(0, 40_000, 200)
+    ]
 
 
 def _finelog(query: str) -> list[dict]:
@@ -276,12 +290,14 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             }
             for region, healthy, chips in (("us-east5", 84, 512), ("us-central2", 51, 256), ("cw-us-east", 37, 0))
         ]
-    if path == "/iris/marin/jobs":
+    if path == "/iris/marin/job_counts":
         return [
             {"bucket": "inflight", "state": "running", "count": 43},
             {"bucket": "last24h", "state": "succeeded", "count": 318},
             {"bucket": "last24h", "state": "failed", "count": 9},
         ]
+    if path == "/iris/marin/jobs":
+        return [{"job": job} for job in ("/alice/llama", "/bob/eval", "/carol/embed", "/ops/loader", "/dave/train")]
     if path == "/finelog/marin/fleet_health":
         return [
             {
@@ -459,7 +475,9 @@ def _rows(path: str, query: str) -> list[dict] | dict:
                 "last_seen": round(_NOW.timestamp() * 1000),
             }
         ]
-    if path.startswith("/wandb/"):
+    if path == "/wandb/history":
+        return _wandb_history(parse_qs(query))
+    if path.startswith("/wandb/report/"):
         return _wandb(path.rsplit("/", 1)[-1])
     if path == "/finelog/marin/query":
         return _finelog(query)

@@ -32,6 +32,7 @@ use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::index_cache::IndexCache;
 
 /// A live namespace as one DataFusion table.
@@ -49,8 +50,11 @@ pub struct NamespaceProvider {
     segment_paths: Vec<String>,
     segment_key_column: Option<String>,
     segment_key_bounds: BTreeMap<String, (i64, i64)>,
+    partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
+    segment_partitions: BTreeMap<String, SegmentPartition>,
     index_cache: Arc<IndexCache>,
     exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
+    segment_indexes_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -119,31 +123,46 @@ impl NamespaceProvider {
     }
 
     fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let Some(key_column) = self.segment_key_column.as_ref() else {
-            return self.segment_paths.clone();
-        };
         let ranges = crate::query::predicate::int_column_ranges(filters);
-        let Some(range) = ranges.get(key_column) else {
-            return self.segment_paths.clone();
-        };
+        let key_range = self
+            .segment_key_column
+            .as_ref()
+            .and_then(|column| ranges.get(column).map(|range| (column, range)));
+        let exact_values = crate::query::exact_prune::values_by_column(filters);
+        let partition_candidates = self
+            .partition_policy
+            .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
         let paths = self
             .segment_paths
             .iter()
             .filter(|path| {
-                self.segment_key_bounds
-                    .get(path.as_str())
-                    .is_none_or(|&(minimum, maximum)| {
-                        minimum > maximum || range.overlaps(minimum, maximum)
-                    })
+                let key_matches = key_range.is_none_or(|(_, range)| {
+                    self.segment_key_bounds
+                        .get(path.as_str())
+                        .is_none_or(|&(minimum, maximum)| {
+                            minimum > maximum || range.overlaps(minimum, maximum)
+                        })
+                });
+                let partition_matches = partition_candidates.as_ref().is_none_or(|candidates| {
+                    let Some(policy) = self.partition_policy else {
+                        return true;
+                    };
+                    self.segment_partitions
+                        .get(path.as_str())
+                        .is_none_or(|partition| {
+                            !policy.is_current_partition(partition)
+                                || candidates.contains(partition)
+                        })
+                });
+                key_matches && partition_matches
             })
             .cloned()
             .collect::<Vec<_>>();
         if paths.len() != self.segment_paths.len() {
             tracing::debug!(
-                key_column,
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range"
+                "scoped segment planning to key range and physical partitions"
             );
         }
         paths
@@ -170,8 +189,11 @@ impl NamespaceProvider {
                 segment_paths: Vec::new(),
                 segment_key_column: None,
                 segment_key_bounds: BTreeMap::new(),
+                partition_policy: None,
+                segment_partitions: BTreeMap::new(),
                 index_cache,
                 exact_postings_policy: None,
+                segment_indexes_enabled: true,
             });
         }
 
@@ -182,8 +204,11 @@ impl NamespaceProvider {
             segment_paths: segment_paths.to_vec(),
             segment_key_column: None,
             segment_key_bounds: BTreeMap::new(),
+            partition_policy: None,
+            segment_partitions: BTreeMap::new(),
             index_cache,
             exact_postings_policy: None,
+            segment_indexes_enabled: true,
         })
     }
 
@@ -199,6 +224,17 @@ impl NamespaceProvider {
         self
     }
 
+    /// Attach hidden physical partitions captured with the path snapshot.
+    pub fn with_segment_partitions(
+        mut self,
+        policy: Option<&'static dyn PhysicalPartitionPolicy>,
+        partitions: BTreeMap<String, SegmentPartition>,
+    ) -> Self {
+        self.partition_policy = policy;
+        self.segment_partitions = partitions;
+        self
+    }
+
     /// Supply the registered values for which segment indexes may contain exact postings.
     pub fn with_exact_postings_policy(mut self, mut policy: BTreeMap<String, Vec<String>>) -> Self {
         for values in policy.values_mut() {
@@ -206,6 +242,15 @@ impl NamespaceProvider {
             values.dedup();
         }
         self.exact_postings_policy = Some(policy);
+        self
+    }
+
+    /// Enable or disable every derived segment index for this provider.
+    ///
+    /// Source Parquet remains authoritative. A disabled managed policy ignores
+    /// any derived files that an older schema left beside its segments.
+    pub fn with_segment_indexes_enabled(mut self, enabled: bool) -> Self {
+        self.segment_indexes_enabled = enabled;
         self
     }
 }
@@ -257,6 +302,9 @@ impl TableProvider for NamespaceProvider {
                         .scan(state, projection, filters, limit)
                         .await?
                 };
+                if !self.segment_indexes_enabled {
+                    return Ok(plan);
+                }
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let mut exact = crate::query::exact_prune::values_by_column(filters);
                 if let Some(policy) = &self.exact_postings_policy {
@@ -328,6 +376,7 @@ impl TableProvider for NamespaceProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
@@ -337,12 +386,16 @@ mod tests {
     use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::execution::FunctionRegistry;
+    use datafusion::logical_expr::{col, expr::ScalarFunction, lit};
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::levanter_metrics_policy::LEVANTER_RUN_PARTITION_POLICY;
+    use crate::partition_policy::PhysicalPartitionPolicy;
     use crate::store::segment::write_segment_to_dir;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
@@ -376,6 +429,53 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn exact_run_id_prunes_current_partitions_but_keeps_transition_files() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("run_id", DataType::Utf8, false),
+        ]));
+        let paths = vec![
+            "/tmp/current-run-a.parquet".to_string(),
+            "/tmp/current-run-b.parquet".to_string(),
+            "/tmp/unpartitioned.parquet".to_string(),
+            "/tmp/old-spec.parquet".to_string(),
+        ];
+        let partition_for = |run_id: &str| {
+            LEVANTER_RUN_PARTITION_POLICY
+                .partitions_for_exact_values(&HashMap::from([(
+                    "run_id".to_string(),
+                    vec![run_id.to_string()],
+                )]))
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        let mut old_spec = partition_for("run-a");
+        old_spec.spec_id = 0;
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_partitions(
+            Some(&LEVANTER_RUN_PARTITION_POLICY),
+            BTreeMap::from([
+                (paths[0].clone(), partition_for("run-a")),
+                (paths[1].clone(), partition_for("run-b")),
+                (paths[3].clone(), old_spec),
+            ]),
+        );
+
+        assert_eq!(
+            provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
+            vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
+        );
+        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
     }
 
     #[tokio::test]
@@ -1178,9 +1278,6 @@ mod tests {
     /// rather than the rendered text, which qualifies column names inconsistently
     /// across plan stages and would make a substring check pass vacuously.
     fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
-        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-        use datafusion::logical_expr::Expr;
-
         let mut found = false;
         plan.apply(|node| {
             for e in node.expressions() {
@@ -1263,9 +1360,6 @@ mod tests {
 
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::logical_expr::{col, lit};
-        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
         let needle = "Bootstrap completed for TPU-xyz";
@@ -1314,10 +1408,7 @@ mod tests {
         // 2) Evidence of pruning: the injected access plan skips row group 0 and
         //    keeps row group 1.
         let state = ctx.state();
-        let udf = {
-            use datafusion::execution::FunctionRegistry;
-            ctx.udf("contains").unwrap()
-        };
+        let udf = ctx.udf("contains").unwrap();
         let filter =
             Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
         let probe = NamespaceProvider::build(
@@ -1328,6 +1419,46 @@ mod tests {
         .unwrap();
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
         assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn disabled_segment_indexes_ignore_existing_bundle() {
+        let dir = tempdir("disabled_segment_indexes");
+        let needle = "Bootstrap completed for TPU-xyz";
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["Bootstrap completed for TPU-xyz"],
+        );
+        let ctx = crate::query::make_ctx();
+        let udf = ctx.udf("contains").unwrap();
+        let filter =
+            Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_indexes_enabled(false)
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        let config = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1399,9 +1530,6 @@ mod tests {
 
     #[tokio::test]
     async fn regex_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::logical_expr::{col, lit};
-        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-
         let dir = tempdir("regex_prune");
         let pattern = r"Bootstrap.*TPU-[a-z]+";
         let rg1 = vec![
@@ -1438,10 +1566,7 @@ mod tests {
             vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()]
         );
 
-        let udf = {
-            use datafusion::execution::FunctionRegistry;
-            ctx.udf("regexp_matches").unwrap()
-        };
+        let udf = ctx.udf("regexp_matches").unwrap();
         let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
             udf,
             vec![col("data"), lit(pattern)],
@@ -1518,9 +1643,6 @@ mod tests {
     async fn non_contains_query_leaves_plan_unchanged() {
         // A query with no contains() filter must not be rewritten — the hot path
         // pays nothing. The returned plan is the untouched ListingTable scan.
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion::logical_expr::{col, lit};
-
         let dir = tempdir("no_contains");
         let path =
             write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["one match here"]);

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -73,7 +74,7 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
+        CREATE TABLE "telemetry_v1.vllm"(
             cluster VARCHAR,
             service VARCHAR,
             job_id VARCHAR,
@@ -89,12 +90,13 @@ def _database(rows: list[TelemetryRow]) -> duckdb.DuckDBPyConnection:
         )
         """
     )
+    database.execute('CREATE VIEW telemetry_v1 AS SELECT * FROM "telemetry_v1.vllm" WHERE FALSE')
     database.execute(
         "CREATE MACRO json_get(document, field_name) " "AS json_extract_string(document, concat('$.', field_name))"
     )
     if rows:
         database.executemany(
-            "INSERT INTO telemetry_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            'INSERT INTO "telemetry_v1.vllm" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [(*row, seq) for seq, row in enumerate(rows)],
         )
     return database
@@ -137,6 +139,16 @@ def _one(rows: list[dict], section: str, metric: str, stat: str, series: str | N
     ]
     assert len(matches) == 1
     return matches[0]
+
+
+def test_query_names_every_output_projection_for_finelog():
+    query = vllm_overview_query(VllmIdentityField.JOB_ID, "/serve", START_MS, END_MS, BUCKET_MS)
+    output_cte = query.sql.split("), output AS (\n", 1)[1].split("\n)\nSELECT t, section", 1)[0]
+    output_columns = ("t", "section", "metric", "stat", "series", "value", "unit", "status", "samples", "gap_seconds")
+    output_alias = re.compile(rf"\bAS ({'|'.join(output_columns)})\b")
+
+    for branch in output_cte.split("\n\n    UNION ALL\n\n"):
+        assert output_alias.findall(branch) == list(output_columns)
 
 
 def _counter_records() -> list[TelemetryRow]:
@@ -206,6 +218,7 @@ def _latency_records() -> list[TelemetryRow]:
         ),
     ]
     for family, total_sum, count in (
+        ("request_time_per_output_token_seconds", 0.9, 3),
         ("inter_token_latency_seconds", 0.4, 4),
         ("request_queue_time_seconds", 0.6, 3),
         ("e2e_request_latency_seconds", 4.5, 3),
@@ -213,9 +226,9 @@ def _latency_records() -> list[TelemetryRow]:
         rows.extend(
             [
                 _record("a", f"{family}_sum", 0, 105_000, cumulative),
-                _record("a", f"{family}_count", 0, 105_000, cumulative),
+                _record("a", f"{family}_count", 0, 105_001, cumulative),
                 _record("a", f"{family}_sum", total_sum, 135_000, cumulative),
-                _record("a", f"{family}_count", count, 135_000, cumulative),
+                _record("a", f"{family}_count", count, 135_001, cumulative),
             ]
         )
     return rows
@@ -262,15 +275,15 @@ def test_query_reports_the_stalest_replica_and_bounded_replica_detail():
     records = [
         _record("stale", "num_requests_running", 1, 105_000, current),
         _record("stale", "num_requests_running", 1, 120_000, current),
-        _record("healthy", "num_requests_running", 1, 150_000, current),
-        _record("healthy", "num_requests_running", 1, 165_000, current),
+        _record("healthy", "num_requests_running", 1, 330_000, current),
+        _record("healthy", "num_requests_running", 1, 345_000, current),
     ]
-    rows = _query_rows(_database(records))
+    rows = _query_rows(_database(records), end_ms=360_000)
 
     summary = _one(rows, "freshness", "telemetry", "latest_sample_age")
     assert (summary["status"], summary["value"], summary["series"]) == (
         "stale_or_stopped",
-        60.0,
+        240.0,
         f"cw-a:vllm:{_resource('/serve', 'stale')}",
     )
     details = [row for row in rows if row["section"] == "freshness_detail"]
@@ -293,7 +306,8 @@ def test_query_derives_histogram_means_and_only_bounded_quantiles(overview_rows)
     assert _one(overview_rows, "latency", "ttft", "mean")["value"] == pytest.approx(0.875)
     assert _one(overview_rows, "latency", "ttft", "p50")["value"] == pytest.approx(0.5)
     assert _one(overview_rows, "latency", "ttft", "p90")["value"] is None
-    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.1)
+    assert _one(overview_rows, "latency", "tpot", "mean")["value"] == pytest.approx(0.3)
+    assert _one(overview_rows, "latency", "inter_token_latency", "mean")["value"] == pytest.approx(0.1)
     assert _one(overview_rows, "latency", "queue", "mean")["value"] == pytest.approx(0.2)
     assert _one(overview_rows, "latency", "e2e", "mean")["value"] == pytest.approx(1.5)
 
@@ -404,7 +418,7 @@ def test_query_quotes_identity_as_data():
         [
             _record("a", "generation_tokens_total", 0, 105_000, cumulative, job="job'quoted"),
             _record("a", "generation_tokens_total", 5, 135_000, cumulative, job="job'quoted"),
-            _record("a", "generation_tokens_total", 1_005, END_MS + 15_000, cumulative, job="job'quoted"),
+            _record("a", "generation_tokens_total", 1_005, END_MS + 60_000, cumulative, job="job'quoted"),
             _record("b", "generation_tokens_total", 0, 105_000, cumulative, job="other"),
             _record("b", "generation_tokens_total", 500, 135_000, cumulative, job="other"),
         ]
@@ -420,7 +434,7 @@ def test_query_uses_more_than_one_scrape_interval_for_predecessors():
     rows = _query_rows(
         _database(
             [
-                _record("a", "generation_tokens_total", 10, 88_000, cumulative),
+                _record("a", "generation_tokens_total", 10, 0, cumulative),
                 _record("a", "generation_tokens_total", 15, 120_000, cumulative),
             ]
         )
@@ -432,11 +446,11 @@ def test_query_uses_more_than_one_scrape_interval_for_predecessors():
 def test_query_computes_kv_peak_before_adaptive_bin_averaging():
     current = _attributes("current_snapshot")
     records = [
-        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 15_000, current)
+        _record("a", "kv_cache_usage_perc", 1.0 if sample == 0 else 0.0, sample * 60_000, current)
         for sample in range(56)
     ]
 
-    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=15_000)
+    rows = _query_rows(_database(records), start_ms=0, end_ms=VLLM_MAX_WINDOW_MS, bucket_ms=60_000)
 
     assert _one(rows, "saturation_summary", "kv_cache_usage", "peak")["value"] == pytest.approx(1.0)
     assert _one(rows, "saturation_summary", "kv_cache_usage", "average")["value"] == pytest.approx(1 / 56)

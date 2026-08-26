@@ -51,6 +51,7 @@ from iris.cluster.controller.budget import (
 from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
+    proto_from_json,
     reconstruct_launch_job_request,
     resource_spec_from_job_row,
     resource_spec_from_scalars,
@@ -112,12 +113,16 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
+    ADMIN_PRIORITY_BAND_VALUES,
+    PRIORITY_BAND_VALUES,
     job_state_friendly,
     priority_band_name,
+    priority_band_rank,
     resolve_container_profile,
     task_state_friendly,
 )
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
+from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
@@ -182,16 +187,9 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
     "IAP or present a user token so the submission carries your identity."
 )
 
-# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# What LaunchJob accepts in priority_band: the real bands, plus INHERIT for a
 # client that wants the parent's band (or the INTERACTIVE default at a root).
-_SUBMITTABLE_PRIORITY_BANDS = frozenset(
-    {
-        job_pb2.PRIORITY_BAND_INHERIT,
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-        job_pb2.PRIORITY_BAND_INTERACTIVE,
-        job_pb2.PRIORITY_BAND_BATCH,
-    }
-)
+_SUBMITTABLE_PRIORITY_BANDS = frozenset((job_pb2.PRIORITY_BAND_INHERIT, *PRIORITY_BAND_VALUES))
 
 
 def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
@@ -223,40 +221,49 @@ def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.Rou
 
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
-# than FRESHNESS_WINDOW older than today. Clients get exactly this long to
-# upgrade after a new marin-iris release is cut.
+# than FRESHNESS_WINDOW older than the controller's own build. Clients get
+# exactly this long to upgrade after the cluster moves to a new marin-iris.
 FRESHNESS_WINDOW = timedelta(days=14)
 
-# Date this freshness check shipped. An empty client_revision_date is
-# interpreted as this date — already-deployed clients that don't set the field
-# start being rejected FRESHNESS_WINDOW after rollout.
-FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
 
+def _check_client_freshness(client_date_str: str, controller_date_str: str, today: date) -> None:
+    """Reject root LaunchJob submissions built long before the controller's own marin-iris.
 
-def _check_client_freshness(client_date_str: str, now: date) -> None:
-    """Reject root LaunchJob submissions whose client is older than FRESHNESS_WINDOW.
+    Both dates come from `iris.version.client_revision_date`: the stamp baked into
+    an image or wheel, the last commit touching the iris tree in a source checkout.
+    Comparing the two anchors staleness to the code the cluster actually runs, so a
+    quiet week in the iris tree cannot strand a client that is current with it.
 
-    Empty string is treated as FEATURE_INTRODUCTION_DATE so old clients (which
-    don't set the field at all) behave as if they shipped the day this check
-    rolled out.
+    A controller that cannot identify its own build measures from today instead,
+    which is the rule that predates the stamp. Every image built before the stamp
+    existed lands here, so holding the old behavior for them keeps the gate
+    enforced across the rollout rather than silently opening it.
+
+    An empty client date means that build cannot identify itself, which leaves no
+    basis for a verdict, so the gate does not apply to it.
     """
     if not client_date_str:
-        client_date = FEATURE_INTRODUCTION_DATE
-    else:
-        try:
-            client_date = date.fromisoformat(client_date_str)
-        except ValueError as err:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
-            ) from err
-    floor = now - FRESHNESS_WINDOW
+        return
+    try:
+        client_date = date.fromisoformat(client_date_str)
+    except ValueError as err:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"client_revision_date must be ISO YYYY-MM-DD, got {client_date_str!r}",
+        ) from err
+    reference = date.fromisoformat(controller_date_str) if controller_date_str else today
+    floor = reference - FRESHNESS_WINDOW
     if client_date < floor:
+        measured = (
+            f"this controller runs {controller_date_str}" if controller_date_str else "today is " + today.isoformat()
+        )
         raise ConnectError(
             Code.FAILED_PRECONDITION,
-            f"marin-iris client is too old (build {client_date.isoformat()}; "
-            f"minimum {floor.isoformat()}). Run `uv sync` or upgrade "
-            f"marin-iris and retry.",
+            f"marin-iris client is too old: your build is {client_date.isoformat()}, "
+            f"{measured}, and the oldest client accepted is {floor.isoformat()} "
+            f"({FRESHNESS_WINDOW.days} days). A build date is the last commit touching "
+            f"lib/iris. From a checkout, merge or rebase onto a newer main; from an "
+            f"installed marin-iris, upgrade it and re-run `uv sync`.",
         )
 
 
@@ -407,6 +414,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             node_name=attempt.node_name or "",
             terminal_reason=attempt.terminal_reason or "",
         )
+        if attempt.output_archive_json:
+            proto_attempt.output_archive.CopyFrom(
+                proto_from_json(attempt.output_archive_json, job_pb2.TaskOutputArchive)
+            )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
         if attempt.finished_at_ms is not None:
@@ -512,7 +523,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAtte
         if task_row is None:
             return None
         attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
+            reads.attempt_select()
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
@@ -617,7 +628,7 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     ).all()
     # Current attempt per task (composite-PK lookup, at most one row each).
     current_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS).where(
+        reads.attempt_select().where(
             tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                 select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
                     tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
@@ -641,10 +652,12 @@ def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
         .subquery()
     )
     failed_attempt_rows = tx.execute(
-        select(*reads.ATTEMPT_COLS).join(
-            latest_failed,
-            (task_attempts_table.c.task_id == latest_failed.c.task_id)
-            & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+        reads.attempt_select(
+            reads.ATTEMPTS_WITH_OUTPUT.join(
+                latest_failed,
+                (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+            )
         )
     ).all()
     # Merge, deduping the current attempt when it is itself a failure.
@@ -970,7 +983,7 @@ def _attempts_for_worker(
     """
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
+            reads.attempt_select()
             .where(task_attempts_table.c.worker_id == worker_id)
             .order_by(
                 case(
@@ -1458,7 +1471,7 @@ class ControllerServiceImpl:
         # queue for longer than the window before it is delivered. Runs after the
         # handoff is authorized, so a forged ``federation`` field cannot dodge the gate.
         if job_id.is_root and ctx is not None and not is_received_handoff:
-            _check_client_freshness(request.client_revision_date, date.today())
+            _check_client_freshness(request.client_revision_date, client_revision_date(), date.today())
 
         # A received handoff carries the acting owner in its handoff name (from the
         # parent's signed ``owner_principal``), so it is exempt from re-pinning — the
@@ -1484,14 +1497,14 @@ class ControllerServiceImpl:
 
         # Priority band validation.
         #
-        # - PRODUCTION additionally requires MANAGE_BUDGETS when auth is on;
-        #   admins pass here and skip the max_band cap below.
+        # - SYSTEM and PRODUCTION additionally require MANAGE_BUDGETS when auth
+        #   is on; admins pass here and skip the max_band cap below.
         # - The max_band cap fires regardless of auth mode, keyed on the
         #   claimed job_id.user. In anonymous mode this doesn't guarantee the
         #   user is who they claim to be, but it ensures the cluster's
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
-        #   PRODUCTION just by skipping auth.
+        #   SYSTEM or PRODUCTION just by skipping auth.
         # A received handoff's band was authorized by the parent against the original
         # submitter and their budget tier; the receiving cluster does not manage that
         # user, so it trusts the parent rather than re-gating on its own tiers (the
@@ -1499,8 +1512,8 @@ class ControllerServiceImpl:
         #
         # This is the one place INHERIT becomes a real band: resolve it here, gate that
         # result, and store it. Everything behind this point — the scheduler, spend, the
-        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
-        # BATCH, so none of them re-derive a band of their own.
+        # k8s mapping, a federated handoff — only ever sees SYSTEM, PRODUCTION,
+        # INTERACTIVE, or BATCH, so none of them re-derive a band of their own.
         #
         # Gating the resolved band rather than the request matters because the client
         # chooses whether to send the field; gating the request would let it pick whether
@@ -1524,13 +1537,13 @@ class ControllerServiceImpl:
         # reads the same real band without re-deriving one.
         request.priority_band = band
         if not is_received_handoff:
-            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+            if band in ADMIN_PRIORITY_BAND_VALUES and self._auth.provider:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:
                     user_budget = reads.get_user_budget(_snap, job_id.user)
                 max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-                if band < max_band:
+                if priority_band_rank(band) < priority_band_rank(max_band):
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
                         f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
@@ -3110,11 +3123,7 @@ class ControllerServiceImpl:
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
         max_band = request.max_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if max_band not in (
-            job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_INTERACTIVE,
-            job_pb2.PRIORITY_BAND_BATCH,
-        ):
+        if max_band not in PRIORITY_BAND_VALUES:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
         with self._db.transaction() as _tx:
@@ -3412,7 +3421,7 @@ class ControllerServiceImpl:
                     summary.availability.total_amounts[token] = device_capacity.total
                     for band, amount in device_capacity.held_by_band.items():
                         held_by_band.setdefault(band, {})[token] = amount
-                for band, amounts in sorted(held_by_band.items()):
+                for band, amounts in sorted(held_by_band.items(), key=lambda item: priority_band_rank(item[0])):
                     summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":

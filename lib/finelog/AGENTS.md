@@ -18,7 +18,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
   `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
-- `deploy/` — Dockerfile, k8s manifests, GCP snippets
+- `deploy/` — Docker image definition; deployment helpers live under `src/finelog/deploy/`,
+  the shared operator CLI lives in `infra/deploy/`, and the Kubernetes Pulumi project
+  lives in `infra/finelog/`
 
 ## Boundaries
 
@@ -61,8 +63,8 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
-`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
-`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+`telemetry_v1.*` and `levanter.metrics` are server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry or metric schema or its physical layout.
 If the sender is ahead by an optional column, the hub reports the ignored column once,
 drops that column from forwarded batches, and appends the compatible fields. Required
 unknown columns and shared-column type changes remain errors. Other namespaces retain
@@ -129,7 +131,9 @@ layout, and per-query `EXPLAIN ANALYZE` metrics.
 - `log_query_bench` — the operator query corpus for `log`: job substring
   scoping, task tails, first-error lookups, body search. `generate` builds a
   corpus; `measure` runs it over a directory that already holds segments.
-- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `grafana_dashboard_bench` — every Finelog query in one or more checked-in
+  Grafana dashboards, with fixed values supplied through repeatable
+  `--variable NAME=VALUE` arguments.
 - `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
 
 Point `--log-dir` at a **disposable copy**: starting Finelog activates
@@ -179,14 +183,14 @@ each namespace this process registers for itself that is not registered.
 carries the per-namespace error, first-failure time, and attempt count, and the
 dashboard's System page renders it.
 
-The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
-(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
-`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+The deploy paths gate on the body: the VM bootstrap loop and `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), plus the `infra/finelog`
+Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
 ## Changing a server-owned schema
 
-`log` and `telemetry_v1` are registered by the server itself, and every boot
+`log`, the semantic `telemetry_v1.*` tables, and `levanter.metrics` are registered by the server itself, and every boot
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
 deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
@@ -220,7 +224,12 @@ benchmark; there is no free-form plugin registry.
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
 required literal runs prune instead of full-scan. Today it is on `log.key`,
-`log.data`, and `telemetry_v1.name`.
+`log.data`, and telemetry `name` columns. `levanter.metrics` intentionally has no
+secondary indexes: its queries use exact `run_id` and `name` predicates, which
+are served by the hidden exact run partition and Parquet sort/statistics. Its
+managed policy also disables adaptive string value counts and removes stale
+bundles written under the old telemetry-derived schema in bounded maintenance
+batches.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
@@ -256,8 +265,9 @@ remains.
 predicate and an explicit included-column list. The planner substitutes one
 only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
-source Parquet. The initial `training-status` projection covers three metric
-names and seven columns.
+source Parquet. The legacy root `telemetry_v1` table retains its training
+projections during migration. Typed training queries use `levanter.metrics`,
+whose exact hidden `run_id` partitions provide their primary pruning boundary.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already

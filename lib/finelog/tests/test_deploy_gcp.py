@@ -9,12 +9,13 @@ import time
 import click
 import pytest
 from finelog.deploy._gcp import _wait_health_via_ssh, render_bootstrap_for
-from finelog.deploy.bootstrap import HEALTH_OK
+from finelog.deploy.bootstrap import CONTAINER_STOP_TIMEOUT, HEALTH_OK
 from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
     ForwardingConfig,
     GcpDeployment,
+    TelemetryMigrationMode,
 )
 
 
@@ -68,3 +69,34 @@ def test_health_wait_holds_out_for_an_ingesting_server(monkeypatch: pytest.Monke
     # reason reaches the caller, so a failed deploy names the namespace.
     answer("degraded: telemetry_v1: registration failed: column type mismatch")
     assert "telemetry_v1" in _wait_health_via_ssh(cfg, cfg.port, max_attempts=5)
+
+
+def test_bootstrap_allows_the_server_to_finish_its_bounded_shutdown() -> None:
+    cfg = FinelogConfig(
+        name="finelog-marin",
+        port=10001,
+        image="ghcr.io/example/finelog:latest",
+        remote_log_dir="gs://bucket/finelog/marin",
+        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
+    )
+
+    script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
+
+    stop = f"docker stop --timeout {CONTAINER_STOP_TIMEOUT} finelog"
+    assert stop in script
+    assert script.index(stop) < script.index("docker rm -f finelog")
+
+
+def test_bootstrap_sets_the_configured_telemetry_migration_mode() -> None:
+    cfg = FinelogConfig(
+        name="finelog-marin",
+        port=10001,
+        image="ghcr.io/example/finelog:latest",
+        remote_log_dir="gs://bucket/finelog/marin",
+        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
+        telemetry_migration_mode=TelemetryMigrationMode.DUAL_WRITE,
+    )
+
+    script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
+
+    assert "-e FINELOG_TELEMETRY_MIGRATION_MODE=dual-write" in script
