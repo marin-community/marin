@@ -10,10 +10,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-HEALTH_PATH = "/healthz"
-HEALTH_PORT_FILE_ENV = "IRIS_HEALTH_PORT_FILE"
-HEALTH_FAILURE_COUNT_FILE_ENV = "IRIS_HEALTH_FAILURE_COUNT_FILE"
-HEALTH_TERMINATION_FILE_ENV = "IRIS_HEALTH_TERMINATION_FILE"
+from iris.runtime.health import (
+    HEALTH_FAILURE_COUNT_FILE,
+    HEALTH_PATH,
+    HEALTH_PORT_FILE,
+    HEALTH_TERMINATION_FILE,
+)
+
 MAX_RESPONSE_BYTES = 4096
 
 
@@ -24,7 +27,7 @@ class ProbeResult:
 
 
 def _read_port() -> int:
-    path = Path(os.environ[HEALTH_PORT_FILE_ENV])
+    path = Path(HEALTH_PORT_FILE)
     port = int(path.read_text(encoding="utf-8").strip())
     if not 1 <= port <= 65535:
         raise ValueError(f"published port {port} is outside the valid range")
@@ -70,7 +73,7 @@ def _write_atomic(path: Path, value: str) -> None:
 
 
 def _failure_count() -> int:
-    path = Path(os.environ[HEALTH_FAILURE_COUNT_FILE_ENV])
+    path = Path(HEALTH_FAILURE_COUNT_FILE)
     try:
         return int(path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
@@ -78,16 +81,16 @@ def _failure_count() -> int:
 
 
 def _record_live_result(result: ProbeResult, failure_threshold: int) -> None:
-    count_path = Path(os.environ[HEALTH_FAILURE_COUNT_FILE_ENV])
+    count_path = Path(HEALTH_FAILURE_COUNT_FILE)
     if result.healthy:
         _write_atomic(count_path, "0\n")
-        Path(os.environ[HEALTH_TERMINATION_FILE_ENV]).unlink(missing_ok=True)
+        Path(HEALTH_TERMINATION_FILE).unlink(missing_ok=True)
         return
 
     count = _failure_count() + 1
     _write_atomic(count_path, f"{count}\n")
     if count >= failure_threshold:
-        termination_path = Path(os.environ[HEALTH_TERMINATION_FILE_ENV])
+        termination_path = Path(HEALTH_TERMINATION_FILE)
         _write_atomic(termination_path, f"Task health check failed {count} consecutive times: {result.detail}\n")
 
 

@@ -3,12 +3,14 @@
 
 from types import SimpleNamespace
 
+import iris.cluster.health as health_module
 import pytest
 from iris.cluster.health import (
     IrisTaskHealthCheck,
     NoopIrisTaskHealthCheck,
     TaskHealthCheck,
     publish_task_health,
+    task_health_enabled,
     task_health_port,
 )
 from iris.rpc import controller_pb2
@@ -66,9 +68,10 @@ def test_iris_task_health_check_uses_a_noop_for_an_absent_request():
 
 def test_publish_task_health_uses_the_backend_selected_port(monkeypatch, tmp_path):
     port_file = tmp_path / "health-port"
-    monkeypatch.setenv("IRIS_HEALTH_PORT_FILE", str(port_file))
+    monkeypatch.setattr(health_module, "HEALTH_PORT_FILE", str(port_file))
     monkeypatch.setenv("IRIS_PORT_HEALTHZ", "43210")
 
+    assert task_health_enabled()
     assert task_health_port() == 43210
     publish_task_health(43210)
     assert port_file.read_text() == "43210\n"
