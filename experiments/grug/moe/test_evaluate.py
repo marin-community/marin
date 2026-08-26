@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import cast
+import os
+import subprocess
+import sys
+import textwrap
 
 import jax
 import jax.numpy as jnp
@@ -14,7 +17,6 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.checkpoint import save_checkpoint
-from levanter.data.text import GrugLmExample
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.distributed import DistributedConfig
 from levanter.tracker import NoopConfig
@@ -27,7 +29,9 @@ from experiments.grug.moe.evaluate import (
     MrcrExampleLoss,
     _canonical_67b_model,
     _gather_flattened,
-    _loss_sums,
+    _offload_array,
+    _restore_array,
+    _score_sums,
     derive_mrcr_metrics,
     evaluate_grug_checkpoint,
     load_grug_checkpoint_params,
@@ -46,15 +50,6 @@ class _TrackerInitialized(Exception):
 
 class _ShapeExemplarObserved(Exception):
     pass
-
-
-@jax.tree_util.register_dataclass
-@dataclasses.dataclass(frozen=True)
-class _LossModel:
-    weight: jax.Array
-
-    def next_token_loss(self, tokens, loss_weight, **_kwargs):
-        return self.weight * jnp.ones_like(loss_weight)
 
 
 @jax.tree_util.register_dataclass
@@ -181,24 +176,93 @@ def test_summarize_per_example_losses_scores_only_response_body_tokens():
     assert byte_count.tolist() == [10.0]
 
 
-def test_loss_sums_treats_model_parameters_as_dynamic_arguments():
+def test_score_sums_treats_output_projection_as_a_dynamic_argument():
     mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape((1, 1, 1)),
-        ("replica_dcn", "data", "expert"),
-        axis_types=(AxisType.Explicit,) * 3,
+        np.asarray(jax.devices()[:1]).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "context"),
+        axis_types=(AxisType.Explicit,) * 4,
     )
-    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
-    example = GrugLmExample.causal(jnp.asarray([0, 1, 2], dtype=jnp.int32))
-    batch = dataclasses.replace(example, tokens=example.tokens[None, :], loss_weight=example.loss_weight[None, :])
+    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), "context"))
+    positions = jnp.arange(512, dtype=jnp.float32)
+    hidden = jnp.stack((positions / 512, 1 - positions / 512), axis=-1)[None, ...]
+    labels = (jnp.arange(512, dtype=jnp.int32) % 3)[None, ...]
+    weights = jnp.ones((1, 512), dtype=jnp.float32).at[:, 0].set(0)
     byte_lengths = jnp.asarray([1, 2, 3], dtype=jnp.int32)
-    compiled_loss_sums = jax.jit(_loss_sums, static_argnames="sharding")
+    compiled_score_sums = jax.jit(_score_sums, static_argnames="sharding")
 
-    def total_loss(weight):
-        model = cast(Transformer, _LossModel(weight))
-        loss_sum, _, _ = compiled_loss_sums(model, batch, byte_lengths, sharding=sharding)
+    def total_loss(output_proj):
+        loss_sum, _, _ = compiled_score_sums(hidden, output_proj, labels, weights, byte_lengths, sharding=sharding)
         return jnp.sum(loss_sum)
 
-    assert jax.grad(total_loss)(jnp.asarray(2.0)) == pytest.approx(2.0)
+    gradient = jax.grad(total_loss)(jnp.ones((2, 3), dtype=jnp.float32))
+    assert np.any(np.asarray(gradient) != 0)
+
+
+def test_host_sharded_array_round_trip_preserves_values_and_sharding():
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    sharding = NamedSharding(mesh, P("data", None))
+    original = jax.device_put(jnp.arange(8).reshape(2, 4), sharding)
+
+    restored = _restore_array(_offload_array(original))
+
+    assert restored.sharding == sharding
+    np.testing.assert_array_equal(np.asarray(restored), np.asarray(original))
+
+
+def test_score_sums_runs_on_v4_64_cp8_ep4_logical_mesh():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=32"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from experiments.grug.moe.evaluate import _score_sums
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 8, 4, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        token_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), "context"))
+        hidden_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), "context", None))
+        hidden = jax.device_put(jnp.ones((4, 4096, 8), dtype=jnp.bfloat16), hidden_sharding)
+        labels = jax.device_put(
+            jnp.arange(4 * 4096, dtype=jnp.int32).reshape(4, 4096) % 16,
+            token_sharding,
+        )
+        weights = jax.device_put(jnp.ones((4, 4096), dtype=jnp.float32), token_sharding)
+        output_proj = jax.device_put(
+            jnp.arange(8 * 16, dtype=jnp.bfloat16).reshape(8, 16) / 100,
+            NamedSharding(mesh, P(None, None)),
+        )
+        with jax.set_mesh(mesh):
+            loss, tokens, byte_count = jax.jit(_score_sums, static_argnames="sharding")(
+                hidden,
+                output_proj,
+                labels,
+                weights,
+                jnp.arange(16, dtype=jnp.int32) + 1,
+                sharding=token_sharding,
+            )
+        loss.block_until_ready()
+
+        assert loss.sharding.spec == P(("replica_dcn", "data", "expert"))
+        assert np.all(np.isfinite(np.asarray(loss)))
+        assert np.asarray(tokens).tolist() == [4096.0] * 4
+        assert np.all(np.asarray(byte_count) > 0)
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_gather_flattened_uses_tiled_global_array_semantics(monkeypatch):
@@ -319,6 +383,43 @@ def test_context_sharded_param_exemplar_combines_data_and_context_mesh_axes():
     assert sharded["left"].sharding.spec == P(("data", "context"), None)
     assert sharded["right"].sharding.spec == P(None, ("data", "context"))
     assert sharded["replicated"].sharding.spec == P(None)
+
+
+def test_next_token_labels_preserve_context_sharded_sequence():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from haliax.partitioning import set_mesh
+        from jax.sharding import NamedSharding, PartitionSpec as P
+
+        from experiments.grug.moe.model import _next_token_labels
+        from levanter.grug.sharding import compact_grug_mesh
+
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2)
+        token_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), "context"))
+        tokens = jax.device_put(jnp.arange(16, dtype=jnp.int32).reshape(2, 8), token_sharding)
+        with set_mesh(mesh):
+            labels = _next_token_labels(tokens)
+
+        np.testing.assert_array_equal(
+            np.asarray(labels),
+            np.asarray([[1, 2, 3, 4, 5, 6, 7, 0], [9, 10, 11, 12, 13, 14, 15, 0]], dtype=np.int32),
+        )
+        assert labels.sharding.is_equivalent_to(token_sharding, labels.ndim)
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_persist_grug_checkpoint_eval_is_idempotent_and_rejects_conflicts(monkeypatch, tmp_path):

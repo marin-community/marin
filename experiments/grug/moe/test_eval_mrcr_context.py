@@ -130,6 +130,7 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     steps = build_default_steps("aggregate_262k", tpu_variant="v4-128-cp4")
     probe_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-128-cp4")
     fallback_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp2")
+    proven_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp8-ep4")
     fsdp_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-32-cp4-fsdp")
 
     assert len(aggregate_262k_evaluation_cells()) == 3
@@ -154,6 +155,14 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     assert fallback_steps[0].config.evaluation.runtime.value.data_axis_size == 16
     assert fallback_steps[0].config.evaluation.runtime.value.context_axis_size == 2
     assert fallback_steps[0].name.endswith("-v464cp2")
+    assert proven_steps[0].config.resources.value.device.variant == "v4-64"
+    assert proven_steps[0].config.resources.value.ram == "350g"
+    assert proven_steps[0].config.evaluation.runtime.value.eval_batch_size == 4
+    assert proven_steps[0].config.evaluation.runtime.value.data_axis_size == 1
+    assert proven_steps[0].config.evaluation.runtime.value.context_axis_size == 8
+    assert proven_steps[0].config.evaluation.runtime.value.expert_axis_size == 4
+    assert proven_steps[0].config.evaluation.model.value.expert_weight_hidden_axis == "context"
+    assert proven_steps[0].name.endswith("-v464cp8ep4")
     assert fsdp_steps[0].config.resources.value.device.variant == "v4-32"
     assert fsdp_steps[0].config.evaluation.runtime.value.eval_batch_size == 4
     assert fsdp_steps[0].config.evaluation.runtime.value.data_axis_size == 4

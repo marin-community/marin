@@ -7,16 +7,16 @@ import subprocess
 import sys
 import textwrap
 
-import numpy as np
-import pytest
-
 import jax
 import jax.numpy as jnp
-from jax._src import config as jax_config
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
+import numpy as np
+import pytest
 from haliax.nn.ragged_dot import ragged_dot
+from jax._src import config as jax_config
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
 
-import levanter.grug.grug_moe as grug_moe
+from levanter.grug import grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.sonic import sonic_gather_sum
@@ -471,35 +471,36 @@ def test_moe_ep_auxiliary_hidden_sharding_matches_dense_value_and_gradients():
                 pspecs=MoEExpertMlpPspecs(expert="expert", hidden="context", intermediate=None),
             )
 
-        assert mlp.w_gate.sharding.spec == P("expert", "context", None)
-        assert mlp.w_up.sharding.spec == P("expert", "context", None)
+        assert mlp.w_gate_up.sharding.spec == P("expert", "context", None)
         assert mlp.w_down.sharding.spec == P("expert", None, "context")
-        assert mlp.w_gate.addressable_shards[0].data.shape == (2, 2, 3)
+        assert mlp.w_gate_up.addressable_shards[0].data.shape == (2, 2, 6)
 
-        def dense_output(x, w_gate, w_up, w_down):
+        def dense_output(x, w_gate_up, w_down):
+            w_gate, w_up = jnp.split(w_gate_up, 2, axis=-1)
             gate = jnp.einsum("th,tkhi->tki", x, w_gate[selected_experts])
             up = jnp.einsum("th,tkhi->tki", x, w_up[selected_experts])
             expert_output = jnp.einsum("tki,tkih->tkh", jax.nn.silu(gate) * up, w_down[selected_experts])
             return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
 
-        def ep_output(x, w_gate, w_up, w_down):
-            return moe_mlp(
+        def ep_output(x, w_gate_up, w_down):
+            output = moe_mlp(
                 x,
                 selected_experts,
                 combine_weights,
-                jnp.concatenate([w_gate, w_up], axis=-1),
+                w_gate_up,
                 w_down,
                 activation=jax.nn.silu,
                 implementation="ring",
                 mesh=mesh,
             )
+            return jax.sharding.reshard(output, NamedSharding(mesh, P("expert", None)))
 
-        weights = (mlp.w_gate, mlp.w_up, mlp.w_down)
+        weights = (mlp.w_gate_up, mlp.w_down)
         dense_weights = tuple(jnp.asarray(np.asarray(weight)) for weight in weights)
         expected = dense_output(x, *dense_weights)
         expected_gradients = jax.grad(
             lambda x, *weights: jnp.sum(dense_output(x, *weights) * cotangent),
-            argnums=(0, 1, 2, 3),
+            argnums=(0, 1, 2),
         )(x, *dense_weights)
 
         token_sharding = NamedSharding(mesh, P("expert", None))
@@ -511,10 +512,10 @@ def test_moe_ep_auxiliary_hidden_sharding_matches_dense_value_and_gradients():
             actual = ep_output(x, *weights)
             actual_gradients = jax.grad(
                 lambda x, *weights: jnp.sum(ep_output(x, *weights) * cotangent),
-                argnums=(0, 1, 2, 3),
+                argnums=(0, 1, 2),
             )(x, *weights)
 
-        assert actual.sharding.spec == P("expert")
+        assert actual.sharding.spec == P("expert", None)
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
         for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
             np.testing.assert_allclose(

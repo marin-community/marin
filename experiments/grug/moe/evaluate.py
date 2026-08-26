@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import gc
 import hashlib
 import json
 import math
@@ -33,17 +34,22 @@ from levanter.data.text import GrugLmExample
 from levanter.data.text.datasets import LmDataConfig
 from levanter.distributed import DistributedConfig
 from levanter.eval import _calculate_bytes_per_token_type
+from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tracker import TrackerConfig
 
 from experiments.datasets.mrcr import MRCR_DATASET_REVISION, MrcrPromptVariant
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer, _next_token_labels
 
 CP_BASE_COMMIT = "db7ffddd339dd4db71fbb83ae2555abe3522c894"
-_APPROVED_MODEL_OVERRIDES = frozenset(("max_seq_len", "qk_mult", "attention_implementation"))
+_APPROVED_MODEL_OVERRIDES = frozenset(
+    ("max_seq_len", "qk_mult", "attention_implementation", "expert_weight_hidden_axis")
+)
 _BATCH_AXES = ("replica_dcn", "data", "expert")
+_CE_CHUNK_SIZE = 512
+_CE_BLOCK_SIZES = BlockSizes(b_block_size=128, h_block_size=256, v_block_size=256)
 ParamsT = TypeVar("ParamsT")
 
 
@@ -133,6 +139,22 @@ class MrcrExampleLoss:
             "query_only_nll": self.query_only_nll,
             "context_gain_nll": self.context_gain_nll,
         }
+
+
+@dataclass(frozen=True)
+class _HostShardedArray:
+    shape: tuple[int, ...]
+    sharding: NamedSharding
+    devices: tuple[jax.Device, ...]
+    shards: tuple[np.ndarray, ...]
+
+
+@dataclass(frozen=True)
+class _DeferredMrcrBatch:
+    component: str
+    hidden: _HostShardedArray
+    labels: _HostShardedArray
+    weights: _HostShardedArray
 
 
 def _jsonable(value: Any) -> Any:
@@ -548,24 +570,56 @@ def summarize_per_example_losses(
     )
 
 
-def _loss_sums(
+def _offload_array(array: jax.Array) -> _HostShardedArray:
+    if not isinstance(array.sharding, NamedSharding):
+        raise ValueError("MRCR host staging requires NamedSharding")
+    addressable_shards = array.addressable_shards
+    return _HostShardedArray(
+        shape=array.shape,
+        sharding=array.sharding,
+        devices=tuple(shard.device for shard in addressable_shards),
+        shards=tuple(np.asarray(shard.data) for shard in addressable_shards),
+    )
+
+
+def _restore_array(array: _HostShardedArray) -> jax.Array:
+    device_arrays = [jax.device_put(shard, device) for shard, device in zip(array.shards, array.devices, strict=True)]
+    return jax.make_array_from_single_device_arrays(array.shape, array.sharding, device_arrays)
+
+
+def _forward_hidden(
     model: Transformer,
     batch: GrugLmExample,
+    *,
+    policy: jmp.Policy,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    hidden, _ = policy.cast_to_compute(model)(batch.tokens, mask=batch.attn_mask)
+    return hidden, _next_token_labels(batch.tokens), batch.loss_weight
+
+
+def _score_sums(
+    hidden: jax.Array,
+    output_proj: jax.Array,
+    labels: jax.Array,
+    weights: jax.Array,
     byte_lengths: jax.Array,
     *,
     sharding: NamedSharding,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    losses = model.next_token_loss(
-        batch.tokens,
-        batch.loss_weight,
-        mask=batch.attn_mask,
+    losses = fused_linear_softmax_cross_entropy_loss(
+        hidden,
+        output_proj,
+        labels,
         reduction="none",
         logsumexp_weight=None,
+        dtype=jnp.float32,
+        implementation="xla",
+        block_sizes=_CE_BLOCK_SIZES,
+        batch_chunk_size=_CE_CHUNK_SIZE,
     )
     losses = jax.sharding.reshard(losses, sharding)
-    weights = jax.sharding.reshard(batch.loss_weight, sharding)
-    target_ids = jnp.roll(batch.tokens, -1, axis=-1)
-    bytes_per_position = byte_lengths.at[target_ids].get(out_sharding=sharding)
+    weights = jax.sharding.reshard(weights, sharding)
+    bytes_per_position = byte_lengths.at[labels].get(out_sharding=sharding)
     return summarize_per_example_losses(losses, weights, bytes_per_position)
 
 
@@ -574,26 +628,21 @@ def _gather_flattened(values: jax.Array) -> np.ndarray:
     return np.asarray(gathered).reshape(-1)
 
 
-def _evaluate_components(
-    config: GrugCheckpointEvalConfig, model: Transformer, mesh: jax.sharding.Mesh
-) -> list[MrcrConditionLoss]:
-    manifests = _manifest_records(config)
+def _forward_components(
+    config: GrugCheckpointEvalConfig,
+    model: Transformer,
+    mesh: jax.sharding.Mesh,
+    policy: jmp.Policy,
+) -> tuple[list[_DeferredMrcrBatch], _HostShardedArray]:
     eval_sets = config.data.tagged_eval_grug_sets(seq_len=config.context_cap)
-    byte_lengths = _calculate_bytes_per_token_type(config.data.the_tokenizer)
-    if byte_lengths is None:
-        raise ValueError("MRCR BPB evaluation requires a tokenizer")
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    loss_sums = jax.jit(_loss_sums, static_argnames="sharding")
+    forward_hidden = jax.jit(_forward_hidden, static_argnames="policy")
 
-    output: list[MrcrConditionLoss] = []
+    output: list[_DeferredMrcrBatch] = []
     for dataset, tags in eval_sets:
         component_names = [tag for tag in tags if tag in config.data.components]
         if len(component_names) != 1:
             raise ValueError(f"could not identify one component from tags: {tags}")
         component = component_names[0]
-        cell = _cell_name(component)
-        condition = component.rsplit("/", 1)[-1]
-        manifest = manifests[cell]
         loader = DataLoader(
             dataset,
             config.runtime.eval_batch_size,
@@ -601,41 +650,83 @@ def _evaluate_components(
             axis_resources={"batch": _BATCH_AXES},
             pad_final_batch=True,
         )
-        ordinal = 0
         for batch in loader:
-            batch_loss, batch_tokens, batch_bytes = loss_sums(model, batch, byte_lengths, sharding=sharding)
-            gathered_loss = _gather_flattened(batch_loss)
-            gathered_tokens = _gather_flattened(batch_tokens)
-            gathered_bytes = _gather_flattened(batch_bytes)
-            if jax.process_index() != 0:
-                continue
-            for loss_sum, scored_tokens, scored_bytes in zip(
-                gathered_loss, gathered_tokens, gathered_bytes, strict=True
-            ):
-                if scored_tokens == 0:
-                    continue
-                if ordinal >= len(manifest):
-                    raise ValueError(f"tokenized cache contains more rows than manifest for {cell}")
-                record = manifest[ordinal]
-                if int(scored_tokens) != record["scored_tokens"]:
-                    raise ValueError(f"assistant-mask sum disagrees with manifest for source_id {record['source_id']}")
-                output.append(
-                    MrcrConditionLoss(
-                        source_id=record["source_id"],
-                        prompt_variant=config.prompt_variant.value,
-                        context_cap=config.context_cap,
-                        n_needles=int(cell.split("/")[2].removesuffix("needle")),
-                        distance_band=cell.split("/")[3],
-                        evidence_distance_tokens=record["evidence_distance_tokens"],
-                        condition=condition,
-                        scored_tokens=int(scored_tokens),
-                        loss_sum=float(loss_sum),
-                        scored_bytes=int(scored_bytes),
-                    )
+            hidden, labels, weights = forward_hidden(model, batch, policy=policy)
+            jax.block_until_ready(hidden)
+            output.append(
+                _DeferredMrcrBatch(
+                    component=component,
+                    hidden=_offload_array(hidden),
+                    labels=_offload_array(labels),
+                    weights=_offload_array(weights),
                 )
-                ordinal += 1
-        if jax.process_index() == 0 and ordinal != len(manifest):
-            raise ValueError(f"tokenized cache row count disagrees with manifest for {cell}")
+            )
+            del hidden, labels, weights
+    output_proj = _offload_array(policy.cast_to_compute(model.output_proj))
+    return output, output_proj
+
+
+def _score_components(
+    config: GrugCheckpointEvalConfig,
+    deferred_batches: list[_DeferredMrcrBatch],
+    output_proj_host: _HostShardedArray,
+    mesh: jax.sharding.Mesh,
+) -> list[MrcrConditionLoss]:
+    manifests = _manifest_records(config)
+    byte_lengths = _calculate_bytes_per_token_type(config.data.the_tokenizer)
+    if byte_lengths is None:
+        raise ValueError("MRCR BPB evaluation requires a tokenizer")
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, "context"))
+    score_sums = jax.jit(_score_sums, static_argnames="sharding")
+    output_proj = _restore_array(output_proj_host)
+    ordinals: defaultdict[str, int] = defaultdict(int)
+    output: list[MrcrConditionLoss] = []
+    for deferred in deferred_batches:
+        component = deferred.component
+        cell = _cell_name(component)
+        condition = component.rsplit("/", 1)[-1]
+        manifest = manifests[cell]
+        hidden = _restore_array(deferred.hidden)
+        labels = _restore_array(deferred.labels)
+        weights = _restore_array(deferred.weights)
+        batch_loss, batch_tokens, batch_bytes = score_sums(
+            hidden, output_proj, labels, weights, byte_lengths, sharding=sharding
+        )
+        gathered_loss = _gather_flattened(batch_loss)
+        gathered_tokens = _gather_flattened(batch_tokens)
+        gathered_bytes = _gather_flattened(batch_bytes)
+        del hidden, labels, weights, batch_loss, batch_tokens, batch_bytes
+        if jax.process_index() != 0:
+            continue
+        for loss_sum, scored_tokens, scored_bytes in zip(gathered_loss, gathered_tokens, gathered_bytes, strict=True):
+            if scored_tokens == 0:
+                continue
+            ordinal = ordinals[component]
+            if ordinal >= len(manifest):
+                raise ValueError(f"tokenized cache contains more rows than manifest for {cell}")
+            record = manifest[ordinal]
+            if int(scored_tokens) != record["scored_tokens"]:
+                raise ValueError(f"assistant-mask sum disagrees with manifest for source_id {record['source_id']}")
+            output.append(
+                MrcrConditionLoss(
+                    source_id=record["source_id"],
+                    prompt_variant=config.prompt_variant.value,
+                    context_cap=config.context_cap,
+                    n_needles=int(cell.split("/")[2].removesuffix("needle")),
+                    distance_band=cell.split("/")[3],
+                    evidence_distance_tokens=record["evidence_distance_tokens"],
+                    condition=condition,
+                    scored_tokens=int(scored_tokens),
+                    loss_sum=float(loss_sum),
+                    scored_bytes=int(scored_bytes),
+                )
+            )
+            ordinals[component] += 1
+    if jax.process_index() == 0:
+        for component in config.data.components:
+            cell = _cell_name(component)
+            if ordinals[component] != len(manifests[cell]):
+                raise ValueError(f"tokenized cache row count disagrees with manifest for {cell}")
     return output
 
 
@@ -711,7 +802,11 @@ def evaluate_grug_checkpoint(config: GrugCheckpointEvalConfig) -> dict[str, floa
         checkpoint_step, params = load_grug_checkpoint_params(
             config.checkpoint_path, initialized_params=model_shape, mesh=mesh
         )
-        condition_losses = _evaluate_components(config, policy.cast_to_compute(params), mesh)
+        deferred_batches, output_proj_host = _forward_components(config, params, mesh, policy)
+        del params
+        jax.clear_caches()
+        gc.collect()
+        condition_losses = _score_components(config, deferred_batches, output_proj_host, mesh)
     if jax.process_index() != 0:
         tracker.finish()
         return {}

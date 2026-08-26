@@ -53,7 +53,7 @@ PRE_EXTENSION_STEP = 141_000
 TRAINING_OFFSETS = (250, 500, 750, 1_000)
 SENSITIVITY_CONTEXT_CAPS = (8_192, 32_768)
 AGGREGATE_CONTEXT_CAP = 262_144
-CONTEXT_PARALLEL_TPU_SHAPES = ("v4-32-cp4-fsdp", "v4-64-cp2", "v4-128-cp4")
+CONTEXT_PARALLEL_TPU_SHAPES = ("v4-32-cp4-fsdp", "v4-64-cp2", "v4-64-cp8-ep4", "v4-128-cp4")
 
 
 @dataclass(frozen=True)
@@ -230,11 +230,14 @@ class _MrcrEvaluationShape:
     data_axis_size: int
     context_axis_size: int
     preemptible: bool
+    expert_axis_size: int = 1
+    expert_weight_hidden_axis: str = "data"
+    ram: str = "4g"
     parameter_sharding_axes: tuple[str, ...] = ("data",)
 
     @property
     def resources(self) -> ResourceConfig:
-        return ResourceConfig.with_tpu(self.tpu_variant, preemptible=self.preemptible)
+        return ResourceConfig.with_tpu(self.tpu_variant, preemptible=self.preemptible, ram=self.ram)
 
 
 def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
@@ -273,6 +276,18 @@ def _evaluation_shape(tpu_variant: str) -> _MrcrEvaluationShape:
             data_axis_size=16,
             context_axis_size=2,
             preemptible=True,
+        )
+    if tpu_variant == "v4-64-cp8-ep4":
+        return _MrcrEvaluationShape(
+            "v4-64",
+            output_suffix="v464cp8ep4",
+            eval_batch_size=4,
+            data_axis_size=1,
+            context_axis_size=8,
+            expert_axis_size=4,
+            expert_weight_hidden_axis="context",
+            preemptible=True,
+            ram="350g",
         )
     if tpu_variant == "v4-32-cp4-fsdp":
         return _MrcrEvaluationShape(
@@ -355,6 +370,7 @@ def build_evaluation_steps(
             CANONICAL_CONTEXT_MODEL,
             max_seq_len=cell.context_cap,
             qk_mult=cell.package.qk_mult,
+            expert_weight_hidden_axis=shape.expert_weight_hidden_axis,
         )
         resource_suffix = f"-{shape.output_suffix}" if shape.output_suffix else ""
         run_id = f"{cell.run_id}{resource_suffix}"
@@ -380,6 +396,7 @@ def build_evaluation_steps(
                     eval_batch_size=shape.eval_batch_size,
                     data_axis_size=shape.data_axis_size,
                     context_axis_size=shape.context_axis_size,
+                    expert_axis_size=shape.expert_axis_size,
                     parameter_sharding_axes=shape.parameter_sharding_axes,
                 )
             ),  # type: ignore[arg-type]

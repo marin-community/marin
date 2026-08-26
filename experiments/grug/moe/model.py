@@ -115,6 +115,14 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _seq_spec_3d())
 
 
+def _next_token_labels(token_ids: Int[Array, "B S"]) -> Int[Array, "B S"]:
+    """Shift labels while the sequence axis is replicated, then restore context sharding."""
+
+    replicated_tokens = reshard(token_ids, P(_BATCH_AXES, None))
+    labels = jnp.concatenate([replicated_tokens[:, 1:], replicated_tokens[:, :1] * 0], axis=1)
+    return reshard(labels.astype(jnp.int32), P(_BATCH_AXES, _seq_axis()))
+
+
 def _flatten_bs(x: jax.Array) -> jax.Array:
     """Reshape ``[B, S, D] -> [B*S, D]`` under context sharding.
 
@@ -894,7 +902,7 @@ class Transformer(eqx.Module):
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        labels = _next_token_labels(token_ids)
         loss_weight = loss_weight.astype(loss_dtype)
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
