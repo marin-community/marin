@@ -65,8 +65,10 @@ class CloudRunServiceArgs:
     memory: str = "2Gi"
     # Keep CPU allocated between requests. Cloud Run's default throttles CPU to near-zero
     # off the request path, which stalls a service whose background work runs while idle
-    # (an apiserver, indexers, reconcilers). True also enables startup CPU boost.
+    # (an apiserver, indexers, reconcilers).
     cpu_always_allocated: bool = False
+    # Temporarily allocate additional CPU during startup and for ten seconds afterward.
+    startup_cpu_boost: bool = False
     request_timeout: int = 60
     max_instance_request_concurrency: int | None = None
     # Service-level min == max == 1 for a service whose local SQLite is per-instance:
@@ -287,7 +289,7 @@ class CloudRunService(pulumi.ComponentResource):
                         resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
                             limits={"cpu": args.cpu, "memory": args.memory},
                             cpu_idle=not args.cpu_always_allocated,
-                            startup_cpu_boost=args.cpu_always_allocated,
+                            startup_cpu_boost=args.startup_cpu_boost,
                         ),
                         volume_mounts=cloudsql_volume_mounts,
                     )

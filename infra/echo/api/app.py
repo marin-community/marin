@@ -101,7 +101,7 @@ def environment_config() -> EchoConfig:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     instance, database, user = os.environ["CLOUDSQL_CONNECTION"], os.environ["PGDATABASE"], os.environ["PGUSER"]
-    with Connector() as connector:
+    with Connector(refresh_strategy="lazy") as connector:
         app.state.config = environment_config()
         app.state.engine = sqlalchemy.create_engine(
             "postgresql+pg8000://",
@@ -392,6 +392,22 @@ class RepositoryIndexState:
 class SearchCandidate:
     result: SearchResult
     text: str
+
+
+@dataclass(frozen=True)
+class SearchStageTimings:
+    query_embedding_ms: float
+    database_setup_ms: float
+    wiki_retrieval_ms: float | None
+    file_retrieval_ms: float | None
+    activity_retrieval_ms: float | None
+    rerank_ms: float
+
+
+@dataclass(frozen=True)
+class FederatedSearchRun:
+    results: list[SearchResult]
+    timings: SearchStageTimings
 
 
 @dataclass(frozen=True)
@@ -1147,21 +1163,61 @@ def federated_search(
     domains: list[search_config.SearchDomain],
     repository_targets: tuple[search_config.RepositoryTarget, ...],
     limit: int,
-) -> list[SearchResult]:
+) -> FederatedSearchRun:
     """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
     retrieval_limit = max(limit, search_config.RERANK_MIN_RESULTS_PER_DOMAIN)
+    stage_started_at = time.perf_counter()
     params = hybrid_search_params(model, query, retrieval_limit)
+    query_embedding_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
     candidates: list[SearchCandidate] = []
+    wiki_retrieval_ms = None
+    file_retrieval_ms = None
+    activity_retrieval_ms = None
+    stage_started_at = time.perf_counter()
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
+        database_setup_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
         if "wiki" in domains:
+            stage_started_at = time.perf_counter()
             candidates.extend(wiki_candidates(conn, params, config))
+            wiki_retrieval_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
         if "file" in domains:
+            stage_started_at = time.perf_counter()
             candidates.extend(repository_file_candidates(conn, params, retrieval_limit, query, repository_targets))
+            file_retrieval_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
         activity_domains = [candidate for candidate in domains if candidate in ("discord", "pr", "issue")]
         if activity_domains:
+            stage_started_at = time.perf_counter()
             candidates.extend(activity_candidates(conn, params, activity_domains))
-    return rerank_candidates(candidates, query, reranker, limit)
+            activity_retrieval_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
+    stage_started_at = time.perf_counter()
+    results = rerank_candidates(candidates, query, reranker, limit)
+    rerank_ms = (time.perf_counter() - stage_started_at) * MILLISECONDS_PER_SECOND
+    return FederatedSearchRun(
+        results,
+        SearchStageTimings(
+            query_embedding_ms,
+            database_setup_ms,
+            wiki_retrieval_ms,
+            file_retrieval_ms,
+            activity_retrieval_ms,
+            rerank_ms,
+        ),
+    )
+
+
+def server_timing_header(timings: SearchStageTimings, history_ms: float, total_ms: float) -> str:
+    metrics = [
+        ("query_embedding", timings.query_embedding_ms),
+        ("database_setup", timings.database_setup_ms),
+        ("wiki_retrieval", timings.wiki_retrieval_ms),
+        ("file_retrieval", timings.file_retrieval_ms),
+        ("activity_retrieval", timings.activity_retrieval_ms),
+        ("rerank", timings.rerank_ms),
+        ("history", history_ms),
+        ("total", total_ms),
+    ]
+    return ", ".join(f"{name};dur={duration:.1f}" for name, duration in metrics if duration is not None)
 
 
 @api.get("/federated-search", response_model=list[SearchResult])
@@ -1195,7 +1251,10 @@ def federated_search_endpoint(
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
     started_at = time.perf_counter()
-    results = federated_search(engine, model, reranker, config, query, domains, repository_targets, limit)
+    search_run = federated_search(engine, model, reranker, config, query, domains, repository_targets, limit)
+    results = search_run.results
+    search_duration_ms = (time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND
+    history_started_at = time.perf_counter()
     execution = attach_search_execution(
         response,
         engine,
@@ -1207,7 +1266,7 @@ def federated_search_endpoint(
             filters={"repository": repository_scope} if "file" in domains else {},
             requested_limit=limit,
             returned_count=len(results),
-            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
+            duration_ms=search_duration_ms,
             # A federated file result set may span several commits. Per-result pinned URLs
             # carry the exact provenance; the legacy scalar remains nullable.
             repository_commit=None,
@@ -1215,6 +1274,10 @@ def federated_search_endpoint(
             results=tuple(recorded_search_result(result) for result in results),
         ),
     )
+    history_ms = (time.perf_counter() - history_started_at) * MILLISECONDS_PER_SECOND
+    total_ms = (time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND
+    response.headers[search_config.SERVER_TIMING_HEADER] = server_timing_header(search_run.timings, history_ms, total_ms)
+    logger.info("Federated search timing: %s", response.headers[search_config.SERVER_TIMING_HEADER])
     if execution is None:
         return results
     assert len(execution.search_result_ids) == len(results)
