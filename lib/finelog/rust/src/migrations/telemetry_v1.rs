@@ -293,13 +293,49 @@ pub fn verify_store(
             "migration manifest is incomplete; rerun prepare",
         ));
     }
+    let total_outputs = manifest
+        .source_segments
+        .iter()
+        .map(|source| source.outputs.len())
+        .sum::<usize>();
+    tracing::info!(
+        source_segments = manifest.source_segments.len(),
+        output_files = total_outputs,
+        output_rows = manifest.output_rows,
+        "telemetry migration verification started"
+    );
     verify_source_segments(source_dir, &manifest)?;
+    let output_verification_started = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut verified_outputs = 0_usize;
+    let mut verified_rows = 0_i64;
     for source in &manifest.source_segments {
         for output in &source.outputs {
             let path = output_dir.join(&output.relative_path);
             verify_output_file(&path, output, batch_rows)?;
+            verified_outputs += 1;
+            verified_rows += output.rows;
+            if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
+                tracing::info!(
+                    verified_outputs,
+                    total_outputs,
+                    verified_rows,
+                    output_rows = manifest.output_rows,
+                    elapsed_seconds = output_verification_started.elapsed().as_secs(),
+                    "telemetry migration output verification progress"
+                );
+                last_progress = Instant::now();
+            }
         }
     }
+    tracing::info!(
+        verified_outputs,
+        total_outputs,
+        verified_rows,
+        output_rows = manifest.output_rows,
+        elapsed_seconds = output_verification_started.elapsed().as_secs(),
+        "telemetry migration output verification complete"
+    );
     if manifest.input_rows != manifest.output_rows + manifest.suppressed_rows {
         return Err(validation_error(format!(
             "migration row mismatch: {} source rows, {} output rows, {} intentionally suppressed rows",
@@ -1390,6 +1426,16 @@ fn verify_source_segments(
     source_dir: &Path,
     manifest: &MigrationManifest,
 ) -> Result<(), StatsError> {
+    let verification_started = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut verified_segments = 0_usize;
+    let mut verified_bytes = 0_u64;
+    let total_segments = manifest.source_segments.len();
+    let total_bytes = manifest
+        .source_segments
+        .iter()
+        .map(|segment| segment.byte_size)
+        .sum::<u64>();
     let canonical_source = std::fs::canonicalize(source_dir)
         .map_err(internal_error("resolve source store for verification"))?;
     if canonical_source.to_string_lossy() != manifest.source_dir {
@@ -1452,7 +1498,28 @@ fn verify_source_segments(
             }
             None => {}
         }
+        verified_segments += 1;
+        verified_bytes += segment.byte_size;
+        if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
+            tracing::info!(
+                verified_segments,
+                total_segments,
+                verified_bytes,
+                total_bytes,
+                elapsed_seconds = verification_started.elapsed().as_secs(),
+                "telemetry migration source verification progress"
+            );
+            last_progress = Instant::now();
+        }
     }
+    tracing::info!(
+        verified_segments,
+        total_segments,
+        verified_bytes,
+        total_bytes,
+        elapsed_seconds = verification_started.elapsed().as_secs(),
+        "telemetry migration source verification complete"
+    );
     Ok(())
 }
 
