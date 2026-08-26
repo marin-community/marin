@@ -1267,7 +1267,7 @@ def main() -> None:
 
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
-    if args.target in ("decon-drop", "decon-mark", "decon-report"):
+    if args.target in ("decon-drop", "decon-mark"):
         _require_normalized_sources(sources)
 
     mark_source_names = None

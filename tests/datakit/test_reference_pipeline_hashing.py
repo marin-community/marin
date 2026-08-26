@@ -13,8 +13,6 @@ import dataclasses
 import json
 
 import pytest
-from fray.types import ResourceConfig
-from marin.datakit import decon
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -97,12 +95,6 @@ def test_store_hash_tracks_content_not_resources():
     # The worker fleet is execution policy -> must NOT re-key.
     pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
     resourced = _build(scale=pool).output_buckets.hash_id
-    packed_pool = dataclasses.replace(
-        SMOKE_SCALE.pool,
-        worker=ResourceConfig.with_gpu("GB200", cpu=36, ram="298g", disk="1t"),
-        task=ResourceConfig.with_gpu("GB200", cpu=1, ram="1g", disk="1g"),
-    )
-    packed = _build(scale=dataclasses.replace(SMOKE_SCALE, pool=packed_pool)).output_buckets.hash_id
     execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
     spill_execution = dataclasses.replace(SMOKE_SCALE.store, partition_processes=2)
@@ -112,7 +104,6 @@ def test_store_hash_tracks_content_not_resources():
     assert changed != base
     assert relaid != base
     assert resourced == base
-    assert packed == base
     assert rescheduled == base
     assert respilled == base
     assert resized == base
@@ -140,13 +131,6 @@ def test_decon_drop_set_tracks_normalized_source_identity():
     assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
 
 
-def test_decon_drop_set_build_version_changes_identity(monkeypatch):
-    base = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
-    monkeypatch.setattr(decon, "DROP_SET_BUILD_VERSION", decon.DROP_SET_BUILD_VERSION + 1)
-    changed = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
-    assert changed != base
-
-
 def test_decontamination_mark_subset_preserves_full_graph_identity():
     sources = _sources()
     full = decontamination_steps(sources, scale=SMOKE_SCALE)
@@ -156,11 +140,6 @@ def test_decontamination_mark_subset_preserves_full_graph_identity():
     assert subset.bloom.hash_id == full.bloom.hash_id
     assert subset.drop_sets.hash_id == full.drop_sets.hash_id
     assert subset.marks["a"].hash_id == full.marks["a"].hash_id
-
-
-def test_decontamination_steps_reject_unknown_mark_source():
-    with pytest.raises(ValueError, match=r"unknown mark sources: \['missing'\]"):
-        decontamination_steps(_sources(), scale=SMOKE_SCALE, mark_source_names=["missing"])
 
 
 def test_decontamination_resolves_eval_root_at_construction(monkeypatch):

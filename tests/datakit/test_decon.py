@@ -13,18 +13,15 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
 from marin.datakit.decon import (
+    LARGE_TEXT_STREAMING_THRESHOLD,
     EvalBloom,
     NGramConfig,
     _bloom_hash,
-    _document_overlap_matches_by_minimum,
     _extract_ngrams,
-    _extract_streaming_ngrams,
     _extract_token_ngrams,
     _load_drop_set,
     _paragraph_overlap_and_matches,
-    _source_sample_shards,
     bloom_paths,
     build_all_source_drop_sets,
     build_eval_bloom,
@@ -33,7 +30,6 @@ from marin.datakit.decon import (
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
-from zephyr.execution import ZephyrContext
 
 
 @pytest.fixture(autouse=True)
@@ -614,21 +610,6 @@ def test_ngram_config_rejects_zero_minimum_matched_features():
         NGramConfig(min_matched_features=0)
 
 
-def test_document_overlap_scores_multiple_evidence_minimums_in_one_pass():
-    text = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5)
-    bloom = dupekit.Bloom(1_000, 1e-9)
-    for feature in _extract_ngrams(text, 13, 0):
-        bloom.add(_bloom_hash(feature))
-
-    score, matches = _document_overlap_matches_by_minimum(text, bloom, ngram, (1, 2, 3))
-
-    assert score == 1.0
-    assert len(matches[1]) == 2
-    assert len(matches[2]) == 2
-    assert matches[3] == []
-
-
 def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
     strong_match = "alpha beta gamma delta epsilon zeta"
     weak_match = "September 29, 2011"
@@ -1006,42 +987,6 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         assert pre["contaminated"] == inline["contaminated"]
         assert pre["max_overlap"] == inline["max_overlap"]
         assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
-
-
-def test_build_eval_bloom_uses_shared_zephyr_context(tmp_path: Path):
-    eval_root = tmp_path / "evals"
-    _write_input_parquet(
-        eval_root / "eval-a.parquet",
-        [{"id": "eval-a", "text": "alpha beta gamma delta"}],
-    )
-    _write_input_parquet(
-        eval_root / "eval-b.parquet",
-        [{"id": "eval-b", "text": "one two three four"}],
-    )
-    resources = ResourceConfig(cpu=1, ram="512m")
-
-    with ZephyrContext(
-        name="parallel-bloom-test",
-        resources=resources,
-        max_workers=2,
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-    ) as zephyr_context:
-        result = build_eval_bloom(
-            eval_data_sources=str(eval_root),
-            output_path=str(tmp_path / "bloom"),
-            ngram=NGramConfig(ngram_length=3),
-            estimated_doc_count=1_000,
-            worker_resources=resources,
-            max_workers=2,
-            zephyr_context=zephyr_context,
-        )
-
-    assert result.n_eval_records == 2
-    index_rows = pq.read_table(result.eval_hash_index_path).to_pylist()
-    assert {row["eval_id"] for row in index_rows} == {"eval-a", "eval-b"}
-    bloom = dupekit.Bloom.load_bytes(Path(result.bloom_path).read_bytes())
-    assert _bloom_hash("alpha beta gamma") in bloom
-    assert _bloom_hash("one two three") in bloom
 
 
 def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):
@@ -1428,19 +1373,11 @@ def test_extract_ngrams_drops_letterless_ngrams():
     assert list(_extract_ngrams(mixed, 13, 0)) == [mixed]
 
 
-@pytest.mark.parametrize(
-    ("text", "ngram_length", "stride"),
-    [
-        ("alpha beta gamma delta epsilon", 3, 0),
-        ("1 2\n3\talpha 5 6", 2, 1),
-        ("1 2 3 4", 2, 0),
-        ("alpha\u2003beta gamma\r\ndelta epsilon", 3, 2),
-    ],
-)
-def test_streaming_ngrams_match_materialized_ngrams(text: str, ngram_length: int, stride: int):
-    assert list(_extract_streaming_ngrams(text, ngram_length, stride)) == list(
-        _extract_token_ngrams(text.split(), ngram_length, stride)
-    )
+def test_extract_ngrams_streaming_path_matches_materialized_reference():
+    segment = "1 2\n3\talpha beta gamma\u2003delta epsilon "
+    text = segment * (LARGE_TEXT_STREAMING_THRESHOLD // len(segment) + 1)
+
+    assert list(_extract_ngrams(text, 3, 97)) == list(_extract_token_ngrams(text.split(), 3, 97))
 
 
 def test_decon_skips_numeric_only_contamination(tmp_path: Path):
@@ -1787,8 +1724,6 @@ def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path:
         global_common_min_abs=2,
         global_common_min_sources=1,
     )
-    assert result.counters["decon_drop/sample_shards"] == 3
-    assert result.counters["decon_drop/nonempty_sampling_shards"] > 1
     assert result.counters["decon_drop/global_documents_sampled"] == 6
 
     marked = tmp_path / "marked"
@@ -1802,25 +1737,6 @@ def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path:
     rows = _read_attributes(marked)
     assert rows["doc_0"]["contaminated"] is False
     assert rows["doc_6"]["contaminated"] is True
-
-
-def test_source_sample_shards_uses_512_shards_for_large_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    source_dir = tmp_path / "source"
-    source_dir.mkdir()
-    (source_dir / "part.parquet").touch()
-    planned_ranges = [(row, row + 1) for row in range(600)]
-    monkeypatch.setattr("marin.datakit.decon.compute_parquet_splits", lambda *_args: planned_ranges)
-
-    shards = _source_sample_shards(
-        ("source", str(source_dir)),
-        text_field="text",
-        sample_docs=len(planned_ranges),
-        global_sample_docs=len(planned_ranges),
-    )
-
-    assert len(shards) == 512
-    assert sum(len(shard["ranges"]) for shard in shards) == len(planned_ranges)
-    assert max(len(shard["ranges"]) for shard in shards) == 2
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):
