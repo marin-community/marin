@@ -4,11 +4,12 @@
 """Relaxed schema unification helpers for Polars frames."""
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Literal
 
 import polars as pl
 
 ConcatHow = Literal["vertical_relaxed", "diagonal_relaxed"]
+PolarsDataType = type[pl.DataType] | pl.DataType
 
 
 def unified_schema(
@@ -34,7 +35,7 @@ def unified_schema(
     return out.schema
 
 
-def is_safe_sort_key_dtype_pair(left: Any, right: Any) -> bool:
+def is_safe_sort_key_dtype_pair(left: PolarsDataType, right: PolarsDataType) -> bool:
     """Whether two sort-key field dtypes can be unified without reordering risk.
 
     Allows identical types, ``Null`` ↔ T, integer family widenings, float family
@@ -57,7 +58,7 @@ def is_safe_sort_key_dtype_pair(left: Any, right: Any) -> bool:
     return False
 
 
-def sort_key_field_dtype(schema: pl.Schema, sort_key_col: str, field: str) -> Any | None:
+def sort_key_field_dtype(schema: pl.Schema, sort_key_col: str, field: str) -> PolarsDataType | None:
     """Return dtype of ``schema[sort_key_col].struct.field``, or ``None`` if absent."""
     if sort_key_col not in schema:
         return None
@@ -77,7 +78,7 @@ def assert_compatible_sort_key_dtypes(
     field: str = "key",
 ) -> None:
     """Raise ``ValueError`` if *field* dtypes across *schemas* are not merge-safe."""
-    dtypes: list[Any] = []
+    dtypes: list[PolarsDataType] = []
     for schema in schemas:
         dt = sort_key_field_dtype(schema, sort_key_col, field)
         if dt is not None:

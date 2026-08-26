@@ -121,6 +121,8 @@ _SCATTER_HASH_SEED = 0
 # not collide with these names.
 _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
+_SORT_KEY_FIELD = "key"
+_SORT_VALUE_FIELD = "sort_value"
 # A cloudpickle-serialized Python object representing the item
 _PAYLOAD_COL = "__payload__"
 # Temporary flat columns folded into the _SORT_KEY_COL struct during
@@ -162,15 +164,13 @@ def _with_routing_columns(
     sort_value_expr: pl.Expr,
     num_output_shards: int,
 ) -> pl.DataFrame:
-    """Append ``_SHARD_COL`` / ``_SORT_KEY_COL`` from a key and sort-value expression."""
     return df.with_columns(
         (key_expr.hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32).alias(_SHARD_COL),
-        pl.struct(key_expr.alias("key"), sort_value_expr.alias("sort_value")).alias(_SORT_KEY_COL),
+        pl.struct(key_expr.alias(_SORT_KEY_FIELD), sort_value_expr.alias(_SORT_VALUE_FIELD)).alias(_SORT_KEY_COL),
     )
 
 
 def _column_routing_exprs(key: ColumnExpr, sort_by: ColumnExpr | None) -> tuple[pl.Expr, pl.Expr]:
-    """Polars expressions for ``col(...)`` key/sort columns already present on a frame."""
     return pl.col(key.name), pl.col(sort_by.name) if sort_by is not None else pl.lit(None)
 
 
@@ -180,19 +180,7 @@ def _columns_to_dataframe(
     sort_values: list[Any],
     num_output_shards: int,
 ) -> pl.DataFrame:
-    """Build the scatter DataFrame from pre-computed flat columns.
-
-    The sort-key struct is folded from two flat columns rather than per-row
-    Python dicts: series construction from homogeneous lists is the native
-    fast path, and ``pl.struct`` over existing columns is cheap. Field order
-    (key first) drives the (key, sort_value) sort order.
-
-    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so
-    that ``_KEY_TMP_COL`` is always ``Binary`` — preventing sort-key schema
-    mismatches when different mapper shards produce keys of different Python
-    types. Shard routing hashes those bytes with Polars (see
-    :func:`_with_routing_columns`).
-    """
+    """Build a routed scatter DataFrame from serialized payloads and sort keys."""
     try:
         df = pl.DataFrame(
             {
@@ -220,16 +208,7 @@ def _items_to_dataframe(
     sort_fn: Callable | None,
     num_output_shards: int,
 ) -> pl.DataFrame:
-    """Convert a list of Python items to a DataFrame with routing columns.
-
-    Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
-    (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
-    between Python-item pipelines and the DataFrame-based
-    :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
-    directly. Keys are msgpack-encoded to Binary before routing so every
-    mapper writes the same sort-key dtype; shard indices then use the same
-    Polars hash as :meth:`ScatterWriter.write_batch`.
-    """
+    """Serialize Python items into a routed scatter DataFrame."""
     key_bytes: list[bytes] = []
     sort_values: list[Any] = []
     for item in items:
@@ -370,7 +349,7 @@ def _unify_frame_schemas(frames: list[_FrameWithSchema]) -> list[pl.LazyFrame]:
         return [frame.frame for frame in frames]
     # Build the supertype from sidecar schemas so drift such as Null versus
     # Int64 is resolved without reading the Parquet footer for every input.
-    assert_compatible_sort_key_dtypes(schemas, sort_key_col=_SORT_KEY_COL, field="key")
+    assert_compatible_sort_key_dtypes(schemas, sort_key_col=_SORT_KEY_COL, field=_SORT_KEY_FIELD)
     unified = unified_schema([pl.DataFrame(schema=schema) for schema in schemas], how="diagonal_relaxed")
     return [frame.frame.cast(dict(unified)) for frame in frames]
 
@@ -817,17 +796,7 @@ class ScatterWriter:
             self._flush()
 
     def write_batch(self, df: pl.DataFrame) -> None:
-        """Ingest a raw batch DataFrame directly — no per-row Python conversion.
-
-        ``key``/``sort_by`` must be a ``zephyr.expr.col(...)`` (a
-        ``ColumnExpr``): an arbitrary Python callable can't be turned into a
-        vectorized Polars expression, which is the whole point of this path.
-        ``_SHARD_COL``/``_SORT_KEY_COL`` are computed directly from *df*'s own
-        columns via Polars expressions and appended; *df*'s remaining columns
-        are buffered as-is (no ``_PAYLOAD_COL``, no cloudpickle) and become
-        the written chunk file's schema. If a ``combiner_fn`` is configured, it
-        runs at flush time over dict rows from those columns.
-        """
+        """Route and buffer a DataFrame using ``ColumnExpr`` key and sort columns."""
         assert isinstance(
             self._key, ColumnExpr
         ), f"DataFrame/RecordBatch scatter items require key=zephyr.expr.col(...), got {self._key!r}"
@@ -962,13 +931,6 @@ def _write_scatter(
             if isinstance(item, pa.RecordBatch):
                 item = pl.from_arrow(item)
             if isinstance(item, pl.DataFrame):
-                assert isinstance(
-                    key, ColumnExpr
-                ), "DataFrame/RecordBatch scatter items require key=zephyr.expr.col(...)"
-                assert sort_by is None or isinstance(
-                    sort_by, ColumnExpr
-                ), "DataFrame/RecordBatch scatter items require sort_by=zephyr.expr.col(...)"
-
                 writer.write_batch(item)
                 continue
 

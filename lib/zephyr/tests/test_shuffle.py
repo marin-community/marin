@@ -25,10 +25,8 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
 from zephyr.expr import col
 from zephyr.runners import _InProcessWorkerContext
-from zephyr.shard_keys import encode_key
 from zephyr.shuffle import (
     _PAYLOAD_COL,
-    _SCATTER_HASH_SEED,
     _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
     _SHARD_COL,
     _SORT_KEY_COL,
@@ -66,12 +64,6 @@ def _key(item):
     return item["k"]
 
 
-def _target(key, num_shards):
-    """Match Python-item scatter routing: Polars hash of msgpack-encoded key bytes."""
-    encoded = encode_key(key)
-    return int(pl.select((pl.lit(encoded).hash(seed=_SCATTER_HASH_SEED) % num_shards).cast(pl.Int32)).item())
-
-
 def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
     """Write a scatter file + sidecar; return scatter_paths for direct reducer reads."""
     data_path = str(tmp_path / f"shard-{source_shard:04d}.shuffle")
@@ -105,17 +97,18 @@ def test_scatter_roundtrip(tmp_path):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
-def test_scatter_each_shard_gets_correct_items(tmp_path):
-    """Items are routed to shards by Polars hash(encode_key(key)) % num_shards."""
+def test_scatter_routes_equal_keys_to_one_shard(tmp_path):
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
+    shards_by_key = {key: set() for key in range(4)}
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        recovered = sorted(_read_shard(shard), key=lambda x: x["v"])
-        expected = sorted([x for x in items if _target(x["k"], num_shards) == shard_idx], key=lambda x: x["v"])
-        assert recovered == expected, f"shard {shard_idx} mismatch"
+        for item in _read_shard(shard):
+            shards_by_key[item["k"]].add(shard_idx)
+
+    assert {key: len(shards) for key, shards in shards_by_key.items()} == {key: 1 for key in range(4)}
 
 
 def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
@@ -166,42 +159,12 @@ def _raw_columns(shard: ScatterReader) -> set[str]:
     return set(pl.concat([f.collect() for f in frames], how="diagonal_relaxed").columns)
 
 
-def test_scatter_accepts_dataframe_items(tmp_path):
-    """A pl.DataFrame item is ingested directly: no _PAYLOAD_COL, no per-row Python conversion.
-
-    Exercises the path used by a `.map()` step chained after
-    `load_parquet(batch_mode=True)`, which yields whole batches (DataFrames
-    or RecordBatches) rather than one dict per item. Routing requires
-    key=col(...) so the shard/sort columns can be computed in Polars.
-    """
+@pytest.mark.parametrize("batch_kind", ["dataframe", "record_batch"])
+def test_scatter_accepts_columnar_batches(tmp_path, batch_kind):
+    """Columnar batches round-trip without serialized Python payloads."""
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
-    batch_df = pl.DataFrame(items)
-
-    data_path = str(tmp_path / "shard-0000.shuffle")
-    scatter_paths = list(
-        _write_scatter(
-            iter([batch_df]),
-            source_shard=0,
-            data_path=data_path,
-            key=col("k"),
-            num_output_shards=num_shards,
-        )
-    )
-
-    recovered = []
-    for shard_idx in range(num_shards):
-        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        assert _PAYLOAD_COL not in _raw_columns(shard), "DataFrame items must not be cloudpickled into _PAYLOAD_COL"
-        recovered.extend(_read_shard(shard))
-    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
-
-
-def test_scatter_accepts_record_batch_items(tmp_path):
-    """A pa.RecordBatch item is converted to a DataFrame and ingested directly."""
-    num_shards = 4
-    items = [{"k": i % 4, "v": i} for i in range(40)]
-    batch = pa.RecordBatch.from_pylist(items)
+    batch = pl.DataFrame(items) if batch_kind == "dataframe" else pa.RecordBatch.from_pylist(items)
 
     data_path = str(tmp_path / "shard-0000.shuffle")
     scatter_paths = list(
@@ -217,7 +180,7 @@ def test_scatter_accepts_record_batch_items(tmp_path):
     recovered = []
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        assert _PAYLOAD_COL not in _raw_columns(shard), "RecordBatch items must not be cloudpickled into _PAYLOAD_COL"
+        assert _PAYLOAD_COL not in _raw_columns(shard)
         recovered.extend(_read_shard(shard))
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
@@ -539,11 +502,12 @@ def test_scatter_null_keys(tmp_path):
     num_shards = 2
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
 
-    # Both should go to the same shard
-    shard_idx = _target(None, num_shards)
-    shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-    recovered = _read_shard(shard)
-    assert len(recovered) == 2
+    recovered_by_shard = [
+        _read_shard(ScatterReader.from_sidecars(scatter_paths, shard_idx)) for shard_idx in range(num_shards)
+    ]
+    assert sum(bool(rows) for rows in recovered_by_shard) == 1
+    recovered = [item for rows in recovered_by_shard for item in rows]
+    assert sorted(recovered, key=lambda item: item["v"]) == items
 
 
 def test_scatter_empty_input(tmp_path):

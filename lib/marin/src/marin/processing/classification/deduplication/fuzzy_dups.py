@@ -132,15 +132,7 @@ _CC_ID_SEP = "|"
 
 
 def _cc_id(source_tag: str, doc_id: str) -> str:
-    """Prefix *doc_id* with *source_tag* so CC treats cross-source collisions as distinct nodes.
-
-    ``connected_components`` keys nodes by a hash of the record id. Two
-    inputs can carry byte-identical normalized ids (e.g. exact text overlap
-    across datasets), and without this prefix they collapse to a single
-    node — under-reporting dups and potentially clobbering co-partitioned
-    attr files. The prefix is split back off (on the first ``_CC_ID_SEP``) in
-    :func:`_cc_records_to_attrs` before the final attr parquet is written.
-    """
+    """Keep identical document IDs distinct across connected-components sources."""
     return f"{source_tag}{_CC_ID_SEP}{doc_id}"
 
 

@@ -47,6 +47,7 @@ from rigging.log_setup import configure_logging
 from zephyr import memory_budget
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
+from zephyr.shard_keys import encode_key
 from zephyr.shuffle import _SCATTER_HASH_SEED
 
 logger = logging.getLogger(__name__)
@@ -60,13 +61,14 @@ def _make_payload(rnd: random.Random, n: int) -> str:
 def _hot_keys_for_shard(target_shard: int, num_output_shards: int, count: int) -> list[int]:
     """Find the first ``count`` integer keys whose hash routes to ``target_shard``.
 
-    Used by the skewed benchmark to bias most items toward one reducer.
-    Matches the Python-item scatter path: Polars ``Expr.hash`` of the raw key value.
+    Used by the skewed benchmark to bias most items toward one reducer. Python
+    scatter hashes the key's canonical msgpack bytes.
     """
     keys: list[int] = []
     k = 0
     while len(keys) < count:
-        shard = int(pl.select((pl.lit(k).hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32)).item())
+        encoded = pl.Series([encode_key(k)], dtype=pl.Binary)
+        shard = int(((encoded.hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32)).item())
         if shard == target_shard:
             keys.append(k)
         k += 1

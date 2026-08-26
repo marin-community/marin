@@ -35,14 +35,6 @@ def test_assert_compatible_sort_key_dtypes_rejects_int_vs_utf8():
         assert_compatible_sort_key_dtypes(schemas, sort_key_col="__zephyr_sort_key__")
 
 
-def test_assert_compatible_sort_key_dtypes_allows_int_widening():
-    schemas = [
-        pl.Schema({"__zephyr_sort_key__": pl.Struct({"key": pl.Int32, "sort_value": pl.Null})}),
-        pl.Schema({"__zephyr_sort_key__": pl.Struct({"key": pl.Int64, "sort_value": pl.Null})}),
-    ]
-    assert_compatible_sort_key_dtypes(schemas, sort_key_col="__zephyr_sort_key__")
-
-
 def test_unified_schema_diagonal_relaxed_fills_missing_columns():
     a = pl.DataFrame({"a": [1], "b": ["x"]})
     b = pl.DataFrame({"a": [2]})

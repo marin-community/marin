@@ -54,6 +54,7 @@ DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
 
 # Counter name for documents that had whitespace runs compacted.
 COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
+EMPTY_TEXT_FILTERED_COUNTER = "normalize/empty_text_filtered"
 
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
 # a single normalize spans thousands of shards over very large staged dumps.
@@ -160,19 +161,7 @@ def _align_dataframe_vertical_relaxed(
 
 
 def _iter_input_batches(path: str) -> Iterator[pl.DataFrame]:
-    """Yield Polars DataFrames from one input file.
-
-    Parquet goes through ``load_file_batch`` (one batch per row group), converted
-    to DataFrames. Other supported formats are loaded as dicts and packed into
-    DataFrames of ``_INPUT_BATCH_ROWS`` so the rest of the pipeline can stay
-    columnar.
-
-    Non-Parquet batches use ``infer_schema_length=None`` within each chunk. The
-    first chunk's schema is the file contract: later chunks must be unifiable
-    under ``pl.concat(..., how="vertical_relaxed")`` (same columns; null/integer
-    widenings). Incompatible drift raises with a hint to enlarge
-    ``_INPUT_BATCH_ROWS`` when a field appears only after the first chunk.
-    """
+    """Yield DataFrames with the first batch's columns and compatible dtypes."""
     if path.endswith(".parquet"):
         for batch in load_file_batch(path):
             yield pl.DataFrame(batch)
@@ -236,7 +225,7 @@ def _make_normalize_batch_fn(
 ) -> Callable[[pa.RecordBatch | pl.DataFrame], Iterator[pl.DataFrame]]:
     """Return a batch → zero-or-one normalized DataFrame transform.
 
-    Drops blank ``text_field`` rows (``normalize/empty_text_filtered``),
+    Drops blank ``text_field`` rows (``EMPTY_TEXT_FILTERED_COUNTER``),
     compacts over-long whitespace runs (``COMPACTED_WHITESPACE_COUNTER``),
     assigns deterministic ``id`` via xxh3_128 of the compacted text, and
     renames *id_field* → ``source_id`` when present. Other columns are kept
@@ -257,14 +246,14 @@ def _make_normalize_batch_fn(
 
         if text_field not in df.columns:
             if df.height:
-                counters.pipeline.update_counter("normalize/empty_text_filtered", df.height)
+                counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, df.height)
             return
 
         text_raw = _as_text_series(df.get_column(text_field))
         keep_mask = text_raw.is_not_null() & (text_raw.str.strip_chars() != "")
         dropped = int((~keep_mask).sum())
         if dropped:
-            counters.pipeline.update_counter("normalize/empty_text_filtered", dropped)
+            counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, dropped)
 
         df = df.filter(keep_mask)
         if df.height == 0:
@@ -453,12 +442,6 @@ def _build_pipeline(
     drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
-    """Build the Zephyr pipeline that normalizes *files* into *output_dir*.
-
-    Loads inputs as columnar batches, normalizes each batch, then
-    ``group_by(key=col("id"), sort_by=col("id"), ...)`` so Scatter can ingest
-    DataFrames directly.
-    """
     normalize_batch = _make_normalize_batch_fn(
         text_field,
         id_field,
@@ -603,7 +586,7 @@ def normalize_to_parquet(
     counters_dict = dict(outcome.counters)
 
     total_in = counters_dict.get("zephyr/records_in", 0)
-    total_filtered = counters_dict.get("normalize/empty_text_filtered", 0)
+    total_filtered = counters_dict.get(EMPTY_TEXT_FILTERED_COUNTER, 0)
     if total_in > 0 and total_filtered == total_in:
         raise ValueError(
             f"All {total_in} records were filtered out due to missing/empty text. "
