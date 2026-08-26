@@ -189,11 +189,13 @@ physical layout `levanter.metrics/run_id/00..31/`, while each footer and catalog
 row retains the full run id for exact pruning and future run deletion. The
 bucket only limits directory fanout; it does not replace the logical partition.
 
-Secondary indexes are disabled for `levanter.metrics` while its index layout is
-redesigned. The server-owned registration removes index declarations, queries
-ignore existing `.fidx` bundles, compaction writes no new bundles, and backfill
-is a no-op. Source Parquet remains authoritative. Existing derived files can be
-removed separately and rebuilt only after a corrected policy is registered.
+`levanter.metrics` intentionally has no secondary indexes. Exact `run_id`
+partition pruning and the `(run_id, name, step, timestamp_ms)` Parquet order
+serve its deployed exact-match queries without telemetry's `name` trigram,
+`kind` postings, or adaptive string value counts. Server-owned registration
+removes the old declarations, queries ignore old `.fidx` bundles, and bounded
+maintenance deletes those derived files online. Source Parquet remains
+authoritative throughout cleanup.
 
 Maintenance converges older layouts online. It merges migration-produced or
 partition-stamped L0s into partitioned L1, rebuilds stale local partition

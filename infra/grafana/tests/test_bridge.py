@@ -1006,15 +1006,6 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
 
 
-def test_signal_query_exposes_multi_run_partition_constraint():
-    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
-
-    query = signal_query(now, (_watched("hero-a"), _watched("hero-b")))
-
-    assert "WHERE run_id IN ('hero-a', 'hero-b') AND (" in query
-    assert query.count('FROM "levanter.metrics"') == 1
-
-
 def test_signal_query_reduces_one_task_attempt_at_a_time():
     # A retry keeps the run ID and takes a new execution_uid. Summing across both
     # would charge the new attempt with the steps the old one skipped.

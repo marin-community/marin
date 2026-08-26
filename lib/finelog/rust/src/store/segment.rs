@@ -617,12 +617,7 @@ fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<
     Some((segment_identity, rows))
 }
 
-/// All `seg_L*_*.parquet` files under `dir`, sorted by path.
-///
-/// L0 lives directly in the namespace directory. Physical policies may place
-/// L1+ segments in bounded subdirectories, so discovery is recursive. Symlinked
-/// directories are not followed. Returns an empty list if `dir` does not exist.
-pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn discover_files(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -630,7 +625,7 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
             Ok(entries) => entries,
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %directory.display(), %error, "segment discovery could not read directory");
+                    tracing::warn!(path = %directory.display(), %error, "file discovery could not read directory");
                 }
                 continue;
             }
@@ -639,14 +634,14 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    tracing::warn!(path = %directory.display(), %error, "segment discovery could not read directory entry");
+                    tracing::warn!(path = %directory.display(), %error, "file discovery could not read directory entry");
                     continue;
                 }
             };
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
-                    tracing::warn!(path = %entry.path().display(), %error, "segment discovery could not read file type");
+                    tracing::warn!(path = %entry.path().display(), %error, "file discovery could not read file type");
                     continue;
                 }
             };
@@ -655,18 +650,29 @@ pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
                 pending.push(path);
                 continue;
             }
-            if file_type.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| parse_seg_filename(name).is_some())
-            {
+            if file_type.is_file() {
                 out.push(path);
             }
         }
     }
     out.sort();
     out
+}
+
+/// All `seg_L*_*.parquet` files under `dir`, sorted by path.
+///
+/// L0 lives directly in the namespace directory. Physical policies may place
+/// L1+ segments in bounded subdirectories, so discovery is recursive. Symlinked
+/// directories are not followed. Returns an empty list if `dir` does not exist.
+pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
+    discover_files(dir)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| parse_seg_filename(name).is_some())
+        })
+        .collect()
 }
 
 #[cfg(test)]

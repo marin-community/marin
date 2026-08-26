@@ -247,9 +247,8 @@ impl NamespaceProvider {
 
     /// Enable or disable every derived segment index for this provider.
     ///
-    /// Source Parquet remains authoritative. Disabling this ignores even an
-    /// existing `.fidx` bundle, which is required while a broken policy is
-    /// withdrawn and its artifacts await a later rebuild.
+    /// Source Parquet remains authoritative. A disabled managed policy ignores
+    /// any derived files that an older schema left beside its segments.
     pub fn with_segment_indexes_enabled(mut self, enabled: bool) -> Self {
         self.segment_indexes_enabled = enabled;
         self

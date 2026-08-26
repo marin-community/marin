@@ -18,7 +18,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as OsPath;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::errors::StatsError;
 
@@ -152,36 +152,47 @@ impl RemoteStore {
     }
 
     /// Copy an object between two keys in the same namespace.
-    pub async fn copy(&self, namespace: &str, from_key: &str, to_key: &str) -> bool {
+    pub async fn copy(
+        &self,
+        namespace: &str,
+        from_key: &str,
+        to_key: &str,
+    ) -> Result<(), StatsError> {
         let from = self.object_path(namespace, from_key);
         let to = self.object_path(namespace, to_key);
-        match self.store.copy(&from, &to).await {
-            Ok(()) => true,
-            Err(error) => {
-                tracing::warn!(from = %from, to = %to, %error, "remote copy failed");
-                false
-            }
+        self.store.copy(&from, &to).await.map_err(|error| {
+            StatsError::Internal(format!("remote copy {from} -> {to} failed: {error}"))
+        })
+    }
+
+    async fn list_objects(&self, namespace: &str) -> Result<Vec<(String, ObjectMeta)>, StatsError> {
+        let prefix = self.namespace_prefix(namespace);
+        let mut stream = self.store.list(Some(&prefix));
+        let mut objects = Vec::new();
+        while let Some(item) = stream.next().await {
+            let meta = item.map_err(|error| {
+                StatsError::Internal(format!("remote list {namespace:?}: {error}"))
+            })?;
+            let Some(parts) = meta.location.prefix_match(&prefix) else {
+                continue;
+            };
+            let key = parts
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>()
+                .join("/");
+            objects.push((key, meta));
         }
+        Ok(objects)
     }
 
     /// List the relative keys of every object under `{namespace}/`.
     pub async fn list_keys(&self, namespace: &str) -> Result<Vec<String>, StatsError> {
-        let prefix = self.namespace_prefix(namespace);
-        let mut stream = self.store.list(Some(&prefix));
-        let mut out = Vec::new();
-        while let Some(item) = stream.next().await {
-            let meta =
-                item.map_err(|e| StatsError::Internal(format!("remote list {namespace:?}: {e}")))?;
-            if let Some(parts) = meta.location.prefix_match(&prefix) {
-                out.push(
-                    parts
-                        .map(|part| part.as_ref().to_string())
-                        .collect::<Vec<_>>()
-                        .join("/"),
-                );
-            };
-        }
-        Ok(out)
+        Ok(self
+            .list_objects(namespace)
+            .await?
+            .into_iter()
+            .map(|(key, _meta)| key)
+            .collect())
     }
 
     /// List `(relative_key, byte_size)` for every parquet object under
@@ -191,27 +202,16 @@ impl RemoteStore {
         &self,
         namespace: &str,
     ) -> Result<Vec<(String, u64)>, StatsError> {
-        let prefix = self.namespace_prefix(namespace);
-        let mut stream = self.store.list(Some(&prefix));
-        let mut out = Vec::new();
-        while let Some(item) = stream.next().await {
-            let meta =
-                item.map_err(|e| StatsError::Internal(format!("remote list {namespace:?}: {e}")))?;
-            let Some(filename) = meta.location.filename() else {
-                continue;
-            };
-            if crate::store::types::parse_seg_filename(filename).is_none() {
-                continue;
-            }
-            if let Some(parts) = meta.location.prefix_match(&prefix) {
-                let key = parts
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                out.push((key, meta.size));
-            };
-        }
-        Ok(out)
+        Ok(self
+            .list_objects(namespace)
+            .await?
+            .into_iter()
+            .filter_map(|(key, meta)| {
+                let filename = meta.location.filename()?;
+                crate::store::types::parse_seg_filename(filename)?;
+                Some((key, meta.size))
+            })
+            .collect())
     }
 
     /// Delete `{namespace}/{relative_key}` from the remote store. Best-effort; logs
@@ -335,15 +335,14 @@ mod tests {
             .join(local_file.file_name().unwrap());
         assert!(on_disk.exists());
 
-        assert!(
-            store
-                .copy(
-                    "ns.a",
-                    "run_id/07/seg_L1_0000000000000000001.parquet",
-                    "run_id/08/seg_L1_0000000000000000001.parquet",
-                )
-                .await
-        );
+        store
+            .copy(
+                "ns.a",
+                "run_id/07/seg_L1_0000000000000000001.parquet",
+                "run_id/08/seg_L1_0000000000000000001.parquet",
+            )
+            .await
+            .unwrap();
         let copied = remote_dir
             .join("ns.a")
             .join("run_id/08")

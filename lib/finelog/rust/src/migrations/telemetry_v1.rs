@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::partition_policy::{select_rows, SegmentPartition};
+use crate::partition_policy::select_rows;
 use crate::policies::{
     eager_storage_namespaces_for, schema_for_namespace, storage_policy_for, PolicyRegistry,
 };
@@ -182,8 +182,6 @@ pub struct SourceSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedOutput {
     pub namespace: String,
-    #[serde(default)]
-    pub partition: Option<SegmentPartition>,
     pub relative_path: String,
     pub min_seq: i64,
     pub max_seq: i64,
@@ -197,7 +195,6 @@ pub struct PlannedOutput {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct MigrationDestination {
     namespace: String,
-    partition: Option<SegmentPartition>,
 }
 
 struct DestinationWriter {
@@ -662,7 +659,7 @@ fn replace_catalog_for_publish(
                 created_at_ms,
                 min_key_value: Some(output.min_timestamp_ms.to_string()),
                 max_key_value: Some(output.max_timestamp_ms.to_string()),
-                partition: output.partition.clone(),
+                partition: None,
                 location: SegmentLocation::Local,
             })
         })
@@ -1119,7 +1116,6 @@ fn write_source_outputs(
         )? {
             let destination = MigrationDestination {
                 namespace: partition.destination.logical_namespace,
-                partition: None,
             };
             if !writers.contains_key(&destination) {
                 let writer =
@@ -1216,7 +1212,7 @@ fn create_destination_writer(
         ArrowWriterOptions::new().with_properties(segment_writer_properties_with_partition(
             usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
                 .expect("telemetry row-group limit fits usize"),
-            destination.partition.as_ref(),
+            None,
         )?);
     let writer = ArrowWriter::try_new_with_options(file, Arc::clone(&target_schema), options)
         .map_err(internal_error("create output parquet writer"))?;
@@ -1294,7 +1290,6 @@ fn finish_destination_writers(
             .into_owned();
         outputs.push(PlannedOutput {
             namespace: writer.destination.namespace,
-            partition: writer.destination.partition,
             relative_path,
             min_seq: writer.min_seq,
             max_seq: writer.next_seq - 1,
@@ -1309,9 +1304,7 @@ fn finish_destination_writers(
             file_sha256: Some(file_sha256(&writer.final_path)?),
         });
     }
-    outputs.sort_by(|left, right| {
-        (&left.namespace, &left.partition).cmp(&(&right.namespace, &right.partition))
-    });
+    outputs.sort_by(|left, right| left.namespace.cmp(&right.namespace));
     Ok(outputs)
 }
 
@@ -1499,7 +1492,7 @@ fn verify_output_file(
     if footer.row_count != output.rows
         || footer.min_seq != output.min_seq
         || footer.max_seq != output.max_seq
-        || footer.partition != output.partition
+        || footer.partition.is_some()
     {
         return Err(validation_error(format!(
             "output segment metadata differs from plan: {}",
@@ -2068,7 +2061,6 @@ mod tests {
             .filter(|output| output.namespace == LEVANTER_NAMESPACE)
             .collect::<Vec<_>>();
         assert_eq!(levanter_outputs.len(), 1);
-        assert!(levanter_outputs[0].partition.is_none());
         let staged_dir = dirs.store.join(MIGRATION_DIRECTORY).join(STAGED_DIRECTORY);
         assert!(manifest
             .source_segments
@@ -2188,7 +2180,6 @@ mod tests {
             crate::levanter_metrics_policy::LEVANTER_METRICS_NAMESPACE
         );
         assert_eq!(output.rows, 1);
-        assert!(output.partition.is_none());
 
         let staged_path = dirs
             .store
