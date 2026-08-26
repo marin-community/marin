@@ -14,6 +14,7 @@ from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.splash_attention import (
@@ -255,6 +256,30 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
+def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | None:
+    """Describe the surviving dimensions when attention contracts a sharded head dimension."""
+
+    def _named_sharding(x: jax.Array) -> NamedSharding | None:
+        try:
+            sharding = x.sharding  # type: ignore[attr-defined]
+        except Exception:
+            sharding = None
+        if sharding is None:
+            sharding = getattr(getattr(x, "aval", None), "sharding", None)
+        return sharding if isinstance(sharding, NamedSharding) else None
+
+    q_sharding = _named_sharding(q)
+    k_sharding = _named_sharding(k)
+    if q_sharding is None or k_sharding is None or q_sharding.mesh != k_sharding.mesh:
+        return None
+
+    q_spec = (*q_sharding.spec, *((None,) * (q.ndim - len(q_sharding.spec))))
+    k_spec = (*k_sharding.spec, *((None,) * (k.ndim - len(k_sharding.spec))))
+    if q_spec[0] != k_spec[0] or q_spec[3] is None or q_spec[3] != k_spec[3]:
+        return None
+    return NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[2], q_spec[1], k_spec[1]))
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -269,7 +294,12 @@ def reference_attention(
     v = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q * scale,
+        k,
+        out_sharding=_reference_score_sharding(q, k),
+    )
 
     explicit = None
     if mask is None:
