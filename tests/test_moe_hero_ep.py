@@ -3,6 +3,7 @@
 
 import math
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -1108,7 +1109,7 @@ def test_the_ragged_transport_refuses_a_jax_that_cannot_honor_its_flags(monkeypa
     monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
     config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
 
-    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(RuntimeError, match="99.0.0"):
+    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(RuntimeError, match=re.escape("99.0.0")):
         train.run_grug(config)
 
 
