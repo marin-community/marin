@@ -93,9 +93,17 @@ class VllmBackend:
     name: str = "vllm"
 
     @contextlib.contextmanager
-    def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
-        with self.start(spec) as environment:
-            environment.wait_until_ready()
+    def serve(
+        self,
+        spec: ModelSpec,
+        *,
+        extra_args: Sequence[str] = (),
+        subprocess_env: Mapping[str, str] | None = None,
+        wait_until_ready: bool = True,
+    ) -> Iterator[VllmServedModel]:
+        with self.start(spec, extra_args=extra_args, subprocess_env=subprocess_env) as environment:
+            if wait_until_ready:
+                environment.wait_until_ready()
             yield VllmServedModel(
                 base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
                 model_id=spec.api_model,

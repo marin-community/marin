@@ -217,6 +217,73 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     assert len(requests) == 1
 
 
+def test_pipeline_parallel_direct_inference_submits_one_three_task_gang(monkeypatch) -> None:
+    class _Job:
+        job_id = "pp3-serve"
+        terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    submitted = []
+    job = _Job()
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        iris_module,
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: submitted.append(request) or job),
+    )
+    monkeypatch.setattr(
+        iris_module,
+        "_wait_for_endpoint",
+        lambda *_args, **_kwargs: (
+            "http://10.0.0.1:8000",
+            {"tensor_parallel_size": "1", "backend": "vllm"},
+        ),
+    )
+    config = RemoteInferenceConfig(
+        model=ServedModelConfig(
+            weights="s3://bucket/model/",
+            tensor_parallel_size=1,
+            pipeline_parallel_size=3,
+            data_parallel_size=8,
+        ),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=3),
+            worker_environment=create_environment(docker_image="test"),
+        ),
+    )
+
+    with remote_inference(config):
+        pass
+
+    (request,) = submitted
+    (service,) = request.entrypoint.callable_entrypoint.args
+    assert request.resources.replicas == 3
+    assert service.model.pipeline_parallel_size == 3
+    assert service.instances == 1
+    assert service.broker is None
+    assert job.terminated
+
+
+def test_pipeline_parallel_config_rejects_mismatched_iris_task_count() -> None:
+    with pytest.raises(ValueError, match=r"requires 3 Iris task\(s\), got 2"):
+        RemoteInferenceConfig(
+            model=ServedModelConfig(
+                weights="s3://bucket/model/",
+                tensor_parallel_size=1,
+                pipeline_parallel_size=3,
+                data_parallel_size=8,
+            ),
+            engine=VllmEngineConfig(),
+            iris=IrisConfig(
+                worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
+                worker_environment=create_environment(docker_image="test"),
+            ),
+        )
+
+
 @dataclass
 class _SessionJob:
     job_status: JobStatus

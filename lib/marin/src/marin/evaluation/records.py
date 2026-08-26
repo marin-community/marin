@@ -74,6 +74,7 @@ class ModelServeConfig(BaseModel):
 
     backend: str
     tensor_parallel_size: int | None
+    pipeline_parallel_size: int | None = None
     data_parallel_size: int | None
     max_model_len: int | None
     max_num_batched_tokens: int | None
@@ -82,6 +83,8 @@ class ModelServeConfig(BaseModel):
     limit_mm_per_prompt: str | None
     tool_call_parser: str | None
     reasoning_parser: str | None
+    vllm_batch_invariant: bool | None = None
+    vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...]
     chat_template: str | None
     auto_overrides: bool

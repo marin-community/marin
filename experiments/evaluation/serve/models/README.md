@@ -36,6 +36,7 @@ resource_hint:                  # ResourceHint -> experiment fleet placement
 
 serve:                          # ServeConfig -> model-server behavior
   tensor_parallel_size: 2
+  pipeline_parallel_size: null # PP stages; one complete Iris task/GPU node per stage
   data_parallel_size: null
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
@@ -44,6 +45,8 @@ serve:                          # ServeConfig -> model-server behavior
   limit_mm_per_prompt: null     # JSON string, e.g. '{"image":0,"video":0}' for text-only eval
   tool_call_parser: hermes      # enables --enable-auto-tool-choice + --tool-call-parser
   reasoning_parser: qwen3
+  vllm_batch_invariant: null    # VLLM_BATCH_INVARIANT; true/false is preserved
+  vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false selects the built-in sampler
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json

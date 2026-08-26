@@ -1,0 +1,32 @@
+name: rav-ladder-d1536
+location: s3://marin-us-east-02a/marin/exports/grug/rav-ladder-d1536/step-15128/hf-bf16-vllm/8cc7d8f1f49a387bc51058d0deb3cfe47cb843126465cbc1b22f3fe3f7f7261b/
+tokenizer: marin-community/marin-tokenizer
+apply_chat_template: false
+
+resource_hint:
+  gpu:
+    H100: 8
+  cpu: 64
+  memory: 512g
+  disk: 128g
+
+serve:
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 4096
+  max_num_batched_tokens: 4096
+  max_num_seqs: 64
+  vllm_batch_invariant: true
+  vllm_use_flashinfer_sampler: false
+  vllm_extra_args:
+    - --enable-expert-parallel
+    - --model-loader-extra-config
+    - '{"distributed":true}'
+    - --enforce-eager
+    - --no-enable-prefix-caching
+    - --gpu-memory-utilization
+    - "0.9"
+    - --max-logprobs
+    - "64"
+  auto_overrides: false

@@ -5,6 +5,7 @@
 
 import dataclasses
 import json
+import logging
 import os
 import re
 import socket
@@ -52,6 +53,7 @@ from marin.inference.iris_cli import (
     _resolve_serving_plan,
     main,
 )
+from marin.inference.iris_vllm import IrisVllmLaunch
 from marin.inference.levanter_backend import (
     DEFAULT_LEVANTER_MAX_SEQ_LEN,
     inference_mesh,
@@ -505,6 +507,165 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
         set_job_info(None)
 
     assert "accelerator" not in registered_metadata
+
+
+def _pipeline_parallel_service() -> IrisServiceConfig:
+    return IrisServiceConfig(
+        model=ServedModelConfig(
+            weights="s3://bucket/grug/",
+            tensor_parallel_size=1,
+            pipeline_parallel_size=3,
+            data_parallel_size=8,
+            chat_template_content="{{ messages }}",
+        ),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=3),
+            worker_environment=create_environment(docker_image="test"),
+        ),
+        endpoint_name="/serve/grug",
+        timeout_hours=0,
+        port_name=None,
+    )
+
+
+def test_pipeline_parallel_leader_alone_registers_and_coordinates_shutdown(monkeypatch, caplog):
+    events: list[object] = []
+    observed_prepare: dict[str, object] = {}
+    launch = IrisVllmLaunch(
+        task_index=0,
+        num_tasks=3,
+        extra_cli_args=("--node-rank", "0"),
+        host_ip="10.0.0.1",
+        gloo_interface="eth0",
+        coordinator_name="coordinator",
+    )
+
+    @contextmanager
+    def launched(**kwargs):
+        events.append(("launch-enter", kwargs))
+        yield launch
+        events.append("launch-exit")
+
+    @contextmanager
+    def prepared(*_args, **kwargs):
+        observed_prepare.update(kwargs)
+        events.append("local-enter")
+        yield SimpleNamespace(
+            model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", "grug")),
+            backend_name="vllm",
+            check_alive=lambda: None,
+        )
+        events.append("local-exit")
+
+    @contextmanager
+    def followers(observed_launch):
+        assert observed_launch is launch
+        events.append("followers-enter")
+        yield
+        events.append("followers-exit")
+
+    @contextmanager
+    def registered(*_args, **_kwargs):
+        events.append("dashboard-enter")
+        yield
+        events.append("dashboard-exit")
+
+    monkeypatch.setattr("marin.inference.iris.iris_vllm_launch", launched)
+    monkeypatch.setattr("marin.inference.iris._prepared_local_inference", prepared)
+    monkeypatch.setattr("marin.inference.iris.iris_vllm_followers", followers)
+    monkeypatch.setattr("marin.inference.iris._register_dashboard", registered)
+    monkeypatch.setattr("marin.inference.iris._block_until_timeout", lambda *_args: events.append("block"))
+    monkeypatch.setattr(
+        "marin.inference.iris.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="0, 71000, 81559\n1, 71100, 81559\n",
+            stderr="",
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="marin.inference.iris"):
+        run_iris_service(_pipeline_parallel_service())
+
+    assert (
+        'vLLM leader GPU memory snapshot: [{"gpu": 0, "total_mib": 81559, "used_mib": 71000}, '
+        '{"gpu": 1, "total_mib": 81559, "used_mib": 71100}]' in caplog.text
+    )
+
+    assert events == [
+        ("launch-enter", {"pipeline_parallel_size": 3, "data_parallel_size": 8}),
+        "local-enter",
+        "followers-enter",
+        "dashboard-enter",
+        "block",
+        "dashboard-exit",
+        "followers-exit",
+        "local-exit",
+        "launch-exit",
+    ]
+    assert observed_prepare == {
+        "vllm_extra_args": ("--node-rank", "0"),
+        "vllm_subprocess_env": {"VLLM_HOST_IP": "10.0.0.1", "GLOO_SOCKET_IFNAME": "eth0"},
+        "wait_until_ready": True,
+        "render_tensor_parallel_size": False,
+    }
+
+
+def test_pipeline_parallel_follower_stops_before_acknowledging(monkeypatch):
+    events: list[str] = []
+    launch = IrisVllmLaunch(
+        task_index=1,
+        num_tasks=3,
+        extra_cli_args=("--node-rank", "1", "--headless"),
+        host_ip="10.0.0.2",
+        gloo_interface="eth0",
+        coordinator_name="coordinator",
+    )
+
+    @contextmanager
+    def launched(**_kwargs):
+        events.append("launch-enter")
+        yield launch
+        events.append("launch-exit")
+
+    @contextmanager
+    def prepared(*_args, **kwargs):
+        assert kwargs["wait_until_ready"] is False
+        assert kwargs["render_tensor_parallel_size"] is False
+        events.append("local-enter")
+        yield SimpleNamespace(check_alive=lambda: None)
+        events.append("local-exit")
+
+    def wait_for_shutdown(observed_launch, check_alive):
+        assert observed_launch is launch
+        check_alive()
+        events.append("wait-for-shutdown")
+
+    def acknowledge(observed_launch):
+        assert observed_launch is launch
+        events.append("acknowledge")
+
+    monkeypatch.setattr("marin.inference.iris.iris_vllm_launch", launched)
+    monkeypatch.setattr("marin.inference.iris._prepared_local_inference", prepared)
+    monkeypatch.setattr("marin.inference.iris.wait_for_iris_vllm_shutdown", wait_for_shutdown)
+    monkeypatch.setattr("marin.inference.iris.notify_iris_vllm_stopped", acknowledge)
+    monkeypatch.setattr(
+        "marin.inference.iris._register_dashboard",
+        lambda *_args, **_kwargs: pytest.fail("a follower must not register an endpoint"),
+    )
+
+    run_iris_service(_pipeline_parallel_service())
+
+    assert events == [
+        "launch-enter",
+        "local-enter",
+        "wait-for-shutdown",
+        "local-exit",
+        "acknowledge",
+        "launch-exit",
+    ]
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():

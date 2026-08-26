@@ -39,6 +39,8 @@ _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
+_VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+_VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
 
 # vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
 # loader stages shard buffers on the way to device memory. Both are charged to the serve child's
@@ -190,6 +192,16 @@ def _vllm_engine_config(
     )
 
 
+def _vllm_environment_variables(serve: ServeConfig) -> dict[str, str]:
+    """Render catalog-owned vLLM process settings, preserving explicit false values."""
+    environment: dict[str, str] = {}
+    if serve.vllm_batch_invariant is not None:
+        environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
+    if serve.vllm_use_flashinfer_sampler is not None:
+        environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    return environment
+
+
 def inference_config_for_model(
     model: ModelConfig,
     accelerator: AcceleratorChoice,
@@ -203,6 +215,17 @@ def inference_config_for_model(
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = model.serve
+    pipeline_parallel_size = serve.pipeline_parallel_size
+    if pipeline_parallel_size is not None:
+        if accelerator.platform is not Platform.GPU:
+            raise ValueError("pipeline-parallel vLLM serving requires GPU workers")
+        if serve.data_parallel_size != accelerator.gpu_count:
+            raise ValueError(
+                "pipeline-parallel vLLM serving requires data_parallel_size to equal the per-task GPU count; "
+                f"got data_parallel_size={serve.data_parallel_size} and {accelerator.label}"
+            )
+        if instances != 1 or broker is not None:
+            raise ValueError("pipeline-parallel vLLM serving supports one direct instance without a broker")
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
     if serve.backend is ServeBackend.VLLM and serve.auto_overrides:
@@ -227,6 +250,7 @@ def inference_config_for_model(
             ram=memory,
             disk=disk,
             regions=regions,
+            replicas=pipeline_parallel_size or 1,
         )
         if serve.backend is ServeBackend.VLLM:
             engine: VllmEngineConfig | LevanterEngineConfig = _vllm_engine_config(
@@ -234,7 +258,7 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=dict(env_vars),
+                env_vars={**env_vars, **_vllm_environment_variables(serve)},
             )
         else:
             engine = LevanterEngineConfig()
@@ -264,6 +288,8 @@ def inference_config_for_model(
             tokenizer=model.tokenizer or model.location,
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
+            pipeline_parallel_size=pipeline_parallel_size,
+            data_parallel_size=serve.data_parallel_size,
             chat_template_content=serve.chat_template,
         ),
         engine=engine,

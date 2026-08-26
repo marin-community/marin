@@ -21,11 +21,23 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Callable, Sequence
+from functools import wraps
+from importlib import import_module
 from pathlib import Path
 
 import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+
+# Run Evalchemy through this file so Marin can normalize the pinned evaluator's outgoing request
+# payload before its CLI imports the model registry. Keep the mode private to this subprocess.
+_EVALCHEMY_CLI_MODE = "--marin-run-evalchemy"
+
+# OpenAI-compatible completion endpoints accept at most four stop sequences. Pinned lm-eval already
+# applies this limit to chat completions, but its LocalCompletionsAPI forwards an arbitrary-length
+# task list unchanged. vLLM validates the same four-item contract.
+_OPENAI_MAX_STOP_SEQUENCES = 4
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
@@ -36,6 +48,77 @@ _CONTEXT_PROMPT_RESERVE = 1024
 # max_length-long prompt). Report a context this much below the true served window so prompt +
 # output never crosses it; on a large-context model the shave is negligible.
 _CONTEXT_MARGIN = 64
+
+
+def _install_completion_stop_compatibility() -> Callable[[], None]:
+    """Fit pinned lm-eval's completion stops to the OpenAI request limit without changing results.
+
+    Evalchemy is an isolated external runtime, so import it only inside the wrapped subprocess. The
+    endpoint receives the first four stops, matching lm-eval's chat implementation. If a task has
+    more, truncate the returned text at the earliest configured stop and replace lm-eval's cached
+    value too. That preserves the task's full visible stop policy even though the endpoint cannot
+    represent it in one request.
+    """
+    completions_module = import_module("lm_eval.models.openai_completions")
+    local_completions_api = completions_module.LocalCompletionsAPI
+    original_create_payload = local_completions_api._create_payload
+    original_generate_until = local_completions_api.generate_until
+
+    @wraps(original_create_payload)
+    def create_openai_compatible_payload(self, *args, **kwargs):
+        payload = original_create_payload(self, *args, **kwargs)
+        stop = payload.get("stop")
+        if isinstance(stop, (list, tuple)) and len(stop) > _OPENAI_MAX_STOP_SEQUENCES:
+            payload["stop"] = stop[:_OPENAI_MAX_STOP_SEQUENCES]
+        return payload
+
+    @wraps(original_generate_until)
+    def generate_with_full_stop_semantics(self, requests, *args, **kwargs):
+        generations = original_generate_until(self, requests, *args, **kwargs)
+        corrected: list[object] = []
+        for request, generation in zip(requests, generations, strict=True):
+            request_args = getattr(request, "args", ())
+            context = request_args[0] if request_args else None
+            gen_kwargs = request_args[1] if len(request_args) >= 2 else None
+            stops = gen_kwargs.get("until") if isinstance(gen_kwargs, dict) else None
+            if not isinstance(generation, str) or not isinstance(stops, (list, tuple)):
+                corrected.append(generation)
+                continue
+            if len(stops) <= _OPENAI_MAX_STOP_SEQUENCES:
+                corrected.append(generation)
+                continue
+
+            indexes = [
+                index for stop in stops if isinstance(stop, str) and stop and (index := generation.find(stop)) >= 0
+            ]
+            truncated = generation[: min(indexes)] if indexes else generation
+            corrected.append(truncated)
+            if truncated != generation and context is not None:
+                # lm-eval caches inside its original generate_until. Replace that entry so a resumed
+                # evaluation sees the same task-visible text as this run.
+                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), truncated)
+        return corrected
+
+    local_completions_api._create_payload = create_openai_compatible_payload
+    local_completions_api.generate_until = generate_with_full_stop_semantics
+
+    def restore() -> None:
+        local_completions_api.generate_until = original_generate_until
+        local_completions_api._create_payload = original_create_payload
+
+    return restore
+
+
+def run_evalchemy_cli(argv: Sequence[str]) -> None:
+    """Run Evalchemy in a fresh process with Marin's OpenAI payload compatibility installed."""
+    restore = _install_completion_stop_compatibility()
+    original_argv = sys.argv
+    try:
+        sys.argv = ["evalchemy", *argv]
+        import_module("eval.serve_eval.cli").main()
+    finally:
+        sys.argv = original_argv
+        restore()
 
 
 def generation_budget(max_gen_toks: int, max_length: int | None) -> int:
@@ -119,7 +202,9 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
     )
     cmd = [
-        str(Path(python).with_name("evalchemy")),
+        python,
+        str(Path(__file__).resolve()),
+        _EVALCHEMY_CLI_MODE,
         "--model",
         model,
         "--model_args",
@@ -233,4 +318,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == [_EVALCHEMY_CLI_MODE]:
+        run_evalchemy_cli(sys.argv[2:])
+    else:
+        main()

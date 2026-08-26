@@ -12,7 +12,10 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
+import sys
+from types import SimpleNamespace
 
+import marin.evaluation.evalchemy.client as evalchemy_client
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.runner import (
@@ -119,7 +122,9 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     config = _payload(_config(max_eval_instances=7))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
 
-    assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
+    assert cmd[0] == "/opt/py"
+    assert cmd[1].endswith("/marin/evaluation/evalchemy/client.py")
+    assert cmd[2:5] == ["--marin-run-evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
     assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
@@ -155,6 +160,66 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
+
+
+def test_wrapped_evalchemy_cli_preserves_completion_stops_beyond_openai_limit(monkeypatch):
+    # Evalchemy's pinned GSM8K task has 12 stops. Its task-specific ``Question:`` boundary is not
+    # among the first four, so merely slicing the request would let a repeated prompt reach scoring.
+    stops = [
+        "<|im_end|>",
+        "<|eot_id|>",
+        "<|end_of_text|>",
+        "<|endoftext|>",
+        "</s>",
+        "\nYou are an AI assistant",
+        "Question:",
+        "\nQ:",
+        "\n[Question]",
+        "\nUser:",
+        "\nuser\n",
+        "\nAssistant:",
+    ]
+    observed: dict[str, object] = {}
+
+    class FakeCacheHook:
+        def __init__(self) -> None:
+            self.entries: list[tuple[str, object, str]] = []
+
+        def add_partial(self, method: str, key: object, value: str) -> None:
+            self.entries.append((method, key, value))
+
+    class FakeLocalCompletionsAPI:
+        def __init__(self) -> None:
+            self.cache_hook = FakeCacheHook()
+
+        def _create_payload(self) -> dict[str, object]:
+            return {"model": "served-model", "stop": stops}
+
+        def generate_until(self, requests) -> list[str]:
+            return ["42\nQuestion: unrelated continuation"] * len(requests)
+
+    def fake_evalchemy_main() -> None:
+        request = SimpleNamespace(args=("prompt", {"until": stops, "max_gen_toks": 64}))
+        adapter = FakeLocalCompletionsAPI()
+        observed["argv"] = list(sys.argv)
+        observed["payload"] = adapter._create_payload()
+        observed["generations"] = adapter.generate_until([request])
+        observed["cache"] = adapter.cache_hook.entries
+
+    modules = {
+        "lm_eval.models.openai_completions": SimpleNamespace(LocalCompletionsAPI=FakeLocalCompletionsAPI),
+        "eval.serve_eval.cli": SimpleNamespace(main=fake_evalchemy_main),
+    }
+    monkeypatch.setattr(evalchemy_client, "import_module", modules.__getitem__, raising=False)
+    original_argv = list(sys.argv)
+
+    evalchemy_client.run_evalchemy_cli(["--model", "local-completions", "--tasks", "gsm8k"])
+
+    assert observed["argv"] == ["evalchemy", "--model", "local-completions", "--tasks", "gsm8k"]
+    assert observed["payload"] == {"model": "served-model", "stop": stops[:4]}
+    assert observed["generations"] == ["42\n"]
+    assert observed["cache"] == [("generate_until", ("prompt", {"until": stops, "max_gen_toks": 64}), "42\n")]
+    assert sys.argv == original_argv
 
 
 def test_build_command_chat_route_needs_template_and_generation():
