@@ -129,6 +129,7 @@ def test_v4_64_smoke_builder_uses_full_data_sharding_without_context_parallelism
 def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_parallelism():
     steps = build_default_steps("aggregate_262k", tpu_variant="v4-128-cp4")
     probe_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-128-cp4")
+    extension_steps = build_default_steps("aggregate_262k_extension", tpu_variant="v4-64-cp8-ep4")
     fallback_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp2")
     proven_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp8-ep4")
     fsdp_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-32-cp4-fsdp")
@@ -150,6 +151,10 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     assert all(step.name.endswith("-v4128cp4") for step in steps)
     assert len(probe_steps) == 1
     assert probe_steps[0].config.evaluation.run_id.startswith("mrcr-67b-step141000-")
+    assert [step.config.evaluation.run_id.split("-qk", 1)[0] for step in extension_steps] == [
+        "mrcr-67b-step156000",
+        "mrcr-67b-step157000",
+    ]
     assert fallback_steps[0].config.resources.value.device.variant == "v4-64"
     assert fallback_steps[0].config.evaluation.runtime.value.eval_batch_size == 16
     assert fallback_steps[0].config.evaluation.runtime.value.data_axis_size == 16

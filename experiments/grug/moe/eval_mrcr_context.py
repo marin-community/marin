@@ -207,6 +207,8 @@ def evaluation_cells(selection: str) -> tuple[MrcrEvaluationCell, ...]:
         return aggregate_262k_evaluation_cells()
     if selection == "aggregate_262k_probe":
         return aggregate_262k_evaluation_cells()[:1]
+    if selection == "aggregate_262k_extension":
+        return aggregate_262k_evaluation_cells()[1:]
     if selection == "primary":
         return primary_evaluation_cells()
     if selection == "sensitivity":
@@ -420,7 +422,7 @@ def build_default_steps(
     """Build the selected checked-in matrix without submitting any other cells."""
 
     cells = evaluation_cells(selection)
-    bounded_262k_selections = ("aggregate_262k", "aggregate_262k_probe")
+    bounded_262k_selections = ("aggregate_262k", "aggregate_262k_probe", "aggregate_262k_extension")
     if selection in bounded_262k_selections and tpu_variant not in CONTEXT_PARALLEL_TPU_SHAPES:
         raise ValueError(f"{selection} requires a context-parallel TPU shape")
     if tpu_variant != DEFAULT_TPU_VARIANT and selection not in ("smoke", *bounded_262k_selections):
@@ -829,7 +831,8 @@ if __name__ == "__main__":
     selection = os.environ.get("MRCR_MATRIX_SELECTION")
     if selection is None:
         raise ValueError(
-            "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k_probe, aggregate_262k, primary, "
+            "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k_probe, aggregate_262k_extension, "
+            "aggregate_262k, primary, "
             "sensitivity, or complete; "
             "the launcher does not default to an expensive matrix"
         )
