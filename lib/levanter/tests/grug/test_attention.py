@@ -75,7 +75,7 @@ def test_reference_attention_supports_model_sharded_head_dimension():
     assert actual.sharding.spec == qkv_sharding.spec
 
 
-def test_reference_attention_lowers_with_model_sharded_grouped_query_heads():
+def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_heads():
     mesh = AbstractMesh(
         axis_sizes=(2, 2),
         axis_names=("data", "model"),

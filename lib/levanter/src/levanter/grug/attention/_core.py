@@ -17,6 +17,7 @@ from jax.sharding import NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
     SplashAttentionMaskSpec,
@@ -256,14 +257,9 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
-def _named_sharding(x: jax.Array) -> NamedSharding | None:
-    sharding = jax.typeof(x).sharding
-    return sharding if isinstance(sharding, NamedSharding) else None
-
-
 def _match_attention_batch_sharding(x: jax.Array, reference: jax.Array) -> jax.Array:
-    x_sharding = _named_sharding(x)
-    reference_sharding = _named_sharding(reference)
+    x_sharding = named_sharding_of(x)
+    reference_sharding = named_sharding_of(reference)
     if x_sharding is None or reference_sharding is None or reference_sharding.mesh.empty:
         return x
 
@@ -280,8 +276,8 @@ def _match_attention_batch_sharding(x: jax.Array, reference: jax.Array) -> jax.A
 
 def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | None:
     """Describe the surviving dimensions when attention contracts a sharded head dimension."""
-    q_sharding = _named_sharding(q)
-    k_sharding = _named_sharding(k)
+    q_sharding = named_sharding_of(q)
+    k_sharding = named_sharding_of(k)
     if q_sharding is None or k_sharding is None or q_sharding.mesh != k_sharding.mesh:
         return None
 
