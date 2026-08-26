@@ -37,12 +37,13 @@ from contextlib import contextmanager, suppress
 from typing import Any, TypeVar
 
 import cloudpickle
-import polars as pl
 import psutil
 import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters, memory_budget
+from zephyr.batches import iter_record_batches
+from zephyr.expr import ColumnExpr
 from zephyr.plan import Scatter, StageContext, run_stage
 from zephyr.stage_io import (
     ShardTask,
@@ -162,10 +163,8 @@ _T = TypeVar("_T")
 
 def _stage_item_count_and_bytes(item: Any) -> tuple[int, int]:
     """Return logical row count and in-memory payload bytes for a stage item."""
-    if isinstance(item, pl.DataFrame):
-        return item.height, int(item.estimated_size())
     if isinstance(item, pa.RecordBatch):
-        return item.num_rows, item.nbytes
+        return item.num_rows, item.get_total_buffer_size()
     return 1, sys.getsizeof(item)
 
 
@@ -308,8 +307,11 @@ def _run_stage_with_ctx(
     if external_sort_dir is None:
         external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
+    stage_gen = run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)
+    if scatter_op is not None and isinstance(scatter_op.key, ColumnExpr):
+        stage_gen = iter_record_batches(stage_gen)
     return _write_stage_output(
-        _wrap_stage_stats(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
+        _wrap_stage_stats(stage_gen),
         source_shard=task.shard_idx,
         stage_dir=stage_dir,
         shard_idx=task.shard_idx,

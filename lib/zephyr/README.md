@@ -35,6 +35,28 @@ ctx.execute(pipeline)
 - `.select(columna, columnb)` - select out the given columns
 - `.window(n)` - group into batches
 - `.reshard(n)` - redistribute across n shards
+- `.group_by(key=..., reducer=...)` - shuffle and reduce items by key
+
+### Columnar group-by
+
+`group_by` has a columnar path for batches implementing Arrow's
+`__arrow_c_stream__` protocol. Use `zephyr.expr.col(...)` for `key` and
+`sort_by`; Zephyr converts each exported stream to `pyarrow.RecordBatch` at the
+stage boundary. A producer may therefore return RecordBatches, Tables, or
+batches from another columnar library that implements the Arrow protocol.
+Every batch in the stage must have the same columns, order, data types, and
+schema metadata. Reducers receive ordinary dictionaries.
+
+```python
+from zephyr.dataset import Dataset
+from zephyr.expr import col
+
+pipeline = Dataset.from_list(files).load_parquet(batch_mode=True).group_by(
+    key=col("document_id"),
+    sort_by=col("timestamp"),
+    reducer=reduce_document,
+)
+```
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)

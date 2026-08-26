@@ -159,12 +159,11 @@ def _raw_columns(shard: ScatterReader) -> set[str]:
     return set(pl.concat([f.collect() for f in frames], how="diagonal_relaxed").columns)
 
 
-@pytest.mark.parametrize("batch_kind", ["dataframe", "record_batch"])
-def test_scatter_accepts_columnar_batches(tmp_path, batch_kind):
-    """Columnar batches round-trip without serialized Python payloads."""
+def test_scatter_accepts_record_batches(tmp_path):
+    """Canonical Arrow batches round-trip without serialized Python payloads."""
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
-    batch = pl.DataFrame(items) if batch_kind == "dataframe" else pa.RecordBatch.from_pylist(items)
+    batch = pa.RecordBatch.from_pylist(items)
 
     data_path = str(tmp_path / "shard-0000.shuffle")
     scatter_paths = list(
@@ -185,16 +184,16 @@ def test_scatter_accepts_columnar_batches(tmp_path, batch_kind):
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
 
-def test_scatter_dataframe_items_with_sort_by(tmp_path):
+def test_scatter_record_batch_items_with_sort_by(tmp_path):
     """sort_by=col(...) orders items within each group on the reduce side, same as the Python-item path."""
     num_shards = 2
     items = [{"k": "a", "ts": 3, "v": 1}, {"k": "a", "ts": 1, "v": 2}, {"k": "a", "ts": 2, "v": 3}]
-    batch_df = pl.DataFrame(items)
+    batch = pa.RecordBatch.from_pylist(items)
 
     data_path = str(tmp_path / "shard-0000.shuffle")
     scatter_paths = list(
         _write_scatter(
-            iter([batch_df]),
+            iter([batch]),
             source_shard=0,
             data_path=data_path,
             key=col("k"),
@@ -214,7 +213,7 @@ def test_scatter_dataframe_items_with_sort_by(tmp_path):
     assert [item["v"] for item in non_empty[0]] == [2, 3, 1]  # sorted by ts: 1, 2, 3
 
 
-def test_scatter_dataframe_items_with_combiner(tmp_path):
+def test_scatter_record_batch_items_with_combiner(tmp_path):
     """combiner_fn runs over dict rows from native columns (no _PAYLOAD_COL)."""
     items = [
         {"k": "a", "v": 1},
@@ -222,7 +221,7 @@ def test_scatter_dataframe_items_with_combiner(tmp_path):
         {"k": "b", "v": 10},
         {"k": "b", "v": 20},
     ]
-    batch_df = pl.DataFrame(items)
+    batch = pa.RecordBatch.from_pylist(items)
 
     def sum_combiner(key, group_items):
         yield {"k": key, "v": sum(i["v"] for i in group_items)}
@@ -230,7 +229,7 @@ def test_scatter_dataframe_items_with_combiner(tmp_path):
     data_path = str(tmp_path / "shard-0000.shuffle")
     scatter_paths = list(
         _write_scatter(
-            iter([batch_df]),
+            iter([batch]),
             source_shard=0,
             data_path=data_path,
             key=col("k"),
@@ -247,14 +246,21 @@ def test_scatter_dataframe_items_with_combiner(tmp_path):
     assert sorted(recovered, key=lambda x: x["k"]) == [{"k": "a", "v": 3}, {"k": "b", "v": 30}]
 
 
-def test_scatter_dataframe_items_require_column_expr_key(tmp_path):
-    """A plain lambda key can't be vectorized, so a DataFrame item must raise rather than misroute."""
-    batch_df = pl.DataFrame([{"k": 0, "v": 1}])
+@pytest.mark.parametrize(
+    "batch",
+    [
+        pytest.param(pa.RecordBatch.from_pylist([{"k": 0, "v": 1}]), id="record-batch"),
+        pytest.param(pa.Table.from_pylist([{"k": 0, "v": 1}]), id="table"),
+        pytest.param(pl.DataFrame([{"k": 0, "v": 1}]), id="polars-dataframe"),
+    ],
+)
+def test_arrow_exportable_items_require_column_expr_key(tmp_path, batch):
+    """A plain lambda key cannot route an Arrow-exportable item as Python rows."""
     data_path = str(tmp_path / "shard-0000.shuffle")
-    with pytest.raises(AssertionError, match=re.escape("zephyr.expr.col")):
+    with pytest.raises(TypeError, match=re.escape("zephyr.expr.col")):
         list(
             _write_scatter(
-                iter([batch_df]),
+                iter([batch]),
                 source_shard=0,
                 data_path=data_path,
                 key=_key,
@@ -419,20 +425,34 @@ def test_scatter_reader_uses_sidecar_schemas_at_scan_boundary(tmp_path, monkeypa
     assert scanned_schemas == expected_schemas
 
 
-def test_merge_sorted_chunks_rejects_incompatible_columnar_key_dtypes(tmp_path):
-    """Int vs Utf8 columnar keys must not be silently cast before merge_sorted."""
-    path_int = str(tmp_path / "shard-0000/scatter/")
-    path_str = str(tmp_path / "shard-0001/scatter/")
-    with ScatterWriter(data_path=path_int, key=col("k"), source_shard=0, num_output_shards=1) as w0:
-        w0.write_batch(pl.DataFrame({"k": pl.Series([2, 10], dtype=pl.Int64), "v": [1, 2]}))
+def test_merge_sorted_chunks_rejects_columnar_schema_drift(tmp_path):
+    """Mapper chunks with different Arrow schemas must not be cast after hashing."""
+    path_string = str(tmp_path / "shard-0000/scatter/")
+    path_large_string = str(tmp_path / "shard-0001/scatter/")
+    with ScatterWriter(data_path=path_string, key=col("k"), source_shard=0, num_output_shards=1) as w0:
+        w0.write_batch(pa.RecordBatch.from_arrays([pa.array(["a"], type=pa.string()), pa.array([1])], ["k", "v"]))
         paths_0 = list(w0.close())
-    with ScatterWriter(data_path=path_str, key=col("k"), source_shard=1, num_output_shards=1) as w1:
-        w1.write_batch(pl.DataFrame({"k": pl.Series(["2", "10"], dtype=pl.Utf8), "v": [3, 4]}))
+    with ScatterWriter(data_path=path_large_string, key=col("k"), source_shard=1, num_output_shards=1) as w1:
+        w1.write_batch(pa.RecordBatch.from_arrays([pa.array(["a"], type=pa.large_string()), pa.array([2])], ["k", "v"]))
         paths_1 = list(w1.close())
 
-    shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
-    with pytest.raises(ValueError, match="incompatible scatter sort-key"):
-        list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+    with pytest.raises(ValueError, match="Arrow batch schema mismatch across mapper shards"):
+        ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
+
+
+def test_scatter_rejects_arrow_schema_drift_within_mapper(tmp_path):
+    """A key dtype change is rejected before the second batch is routed."""
+    float32 = pa.RecordBatch.from_arrays([pa.array([1.0], type=pa.float32()), pa.array([1])], ["k", "v"])
+    float64 = pa.RecordBatch.from_arrays([pa.array([1.0], type=pa.float64()), pa.array([2])], ["k", "v"])
+
+    with pytest.raises(ValueError, match="Arrow batch schema mismatch within mapper shard"):
+        _write_scatter(
+            iter([float32, float64]),
+            source_shard=0,
+            data_path=str(tmp_path / "shard-0000/scatter/"),
+            key=col("k"),
+            num_output_shards=3,
+        )
 
 
 def test_scatter_with_combiner(tmp_path):

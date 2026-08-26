@@ -792,12 +792,10 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            shard = ctx.shard
-            if not isinstance(shard, ScatterReader):
-                # Shard contains every mapper's scatter-data path — reducer
-                # reads all sidecars in parallel and filters for its target.
-                scatter_paths = list(shard)
-                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
+            # Shard contains every mapper's scatter-data path — reducer reads
+            # all sidecars in parallel and filters for its target.
+            scatter_paths = list(ctx.shard)
+            shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
             stream = _reduce_gen(shard, op.key, op.reducer_fn, external_sort_dir)
             op_index += 1
 

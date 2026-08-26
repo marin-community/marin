@@ -198,15 +198,9 @@ def finelog_server(tmp_path):
     server.stop()
 
 
-@pytest.mark.parametrize(
-    "batch",
-    [
-        pytest.param(pl.DataFrame({"value": [1, 2, 3]}), id="dataframe"),
-        pytest.param(pa.RecordBatch.from_pydict({"value": pa.array([1, 2, 3], type=pa.int64())}), id="record-batch"),
-    ],
-)
-def test_finelog_stats_count_columnar_rows_and_buffer_bytes(local_client, tmp_path, finelog_server, monkeypatch, batch):
-    """Columnar batches contribute their logical rows and buffers to stage throughput."""
+def test_finelog_stats_count_record_batch_rows_and_buffer_bytes(local_client, tmp_path, finelog_server, monkeypatch):
+    """Canonical Arrow batches contribute logical rows and buffers to throughput."""
+    batch = pa.RecordBatch.from_pydict({"value": pa.array([1, 2, 3], type=pa.int64())})
 
     def make_writer(_url: str | None = None) -> StatsWriter:
         return StatsWriter(LogClient.connect(finelog_server))

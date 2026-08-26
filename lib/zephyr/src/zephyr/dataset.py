@@ -16,6 +16,7 @@ from pyarrow import RecordBatch
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
+from zephyr.batches import ArrowBatch
 from zephyr.expr import ColumnExpr, Expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
@@ -870,10 +871,10 @@ class Dataset(Generic[T]):
     @overload
     def group_by(
         self,
-        key: Callable[[T], K] | ColumnExpr,
+        key: Callable[[T], K],
         *,
         reducer: Callable[[K, Iterator[T]], Iterator[R]],
-        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
+        sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]": ...
@@ -881,12 +882,34 @@ class Dataset(Generic[T]):
     @overload
     def group_by(
         self,
-        key: Callable[[T], K] | ColumnExpr,
+        key: Callable[[T], K],
         *,
         reducer: Callable[[K, Iterator[T]], R],
-        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
+        sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+    ) -> "Dataset[R]": ...
+
+    @overload
+    def group_by(
+        self: "Dataset[ArrowBatch]",
+        key: ColumnExpr,
+        *,
+        reducer: Callable[[Any, Iterator[dict[str, Any]]], Iterator[R]],
+        sort_by: ColumnExpr | None = None,
+        num_output_shards: int | None = None,
+        combiner: Callable[[Any, Iterator[dict[str, Any]]], Iterator[dict[str, Any]]] | None = None,
+    ) -> "Dataset[R]": ...
+
+    @overload
+    def group_by(
+        self: "Dataset[ArrowBatch]",
+        key: ColumnExpr,
+        *,
+        reducer: Callable[[Any, Iterator[dict[str, Any]]], R],
+        sort_by: ColumnExpr | None = None,
+        num_output_shards: int | None = None,
+        combiner: Callable[[Any, Iterator[dict[str, Any]]], Iterator[dict[str, Any]]] | None = None,
     ) -> "Dataset[R]": ...
 
     def group_by(
@@ -896,24 +919,23 @@ class Dataset(Generic[T]):
         reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
         sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
-        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+        combiner: Callable | None = None,
     ) -> "Dataset[R]":
         """Group items by key and apply reducer function.
 
         The reducer receives ``(key, iterator_of_items)`` and returns a single
         result or an iterator of results for that group. After scatter, items
-        delivered to the reducer are always plain dict rows (including when the
-        map side ingested ``pl.DataFrame`` / ``pa.RecordBatch`` batches).
+        delivered to the reducer are always plain dict rows, including when the
+        map side ingested Arrow batches.
 
         ``key`` / ``sort_by`` must match the item shape:
 
         * Python items (dicts, objects) — pass Callables.
-        * ``pl.DataFrame`` / ``pa.RecordBatch`` batches — pass
-          ``zephyr.expr.col(...)``. A Callable raises at scatter time because
-          routing needs a vectorized Polars expression. Columnar key columns
-          must share a stable dtype across mapper shards (null/integer/float
-          widenings only); incompatible key dtypes are rejected before
-          ``merge_sorted``.
+        * Arrow-exportable batches — pass ``zephyr.expr.col(...)``. Each stage
+          item must implement Arrow's ``__arrow_c_stream__`` protocol. Zephyr
+          canonicalizes those items to ``pyarrow.RecordBatch`` before scatter,
+          so users may create them with any compatible columnar library. Every
+          batch must have the same Arrow schema, including metadata.
 
         Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
         Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
@@ -957,12 +979,12 @@ class Dataset(Generic[T]):
             ...     )
             ... )
 
-            >>> # DataFrame-batch pipeline: col(...) lets Scatter ingest batches directly
+            >>> # Arrow batch pipeline: col(...) lets scatter ingest batches directly
             >>> from zephyr.expr import col
             >>> ds = (Dataset
             ...     .from_list(files)
             ...     .load_parquet(batch_mode=True)
-            ...     .map(my_batch_transform)  # RecordBatch -> pl.DataFrame
+            ...     .map(my_batch_transform)  # returns an Arrow-exportable batch
             ...     .group_by(key=col("cat"), sort_by=col("id"), reducer=my_reducer)
             ... )
         """
