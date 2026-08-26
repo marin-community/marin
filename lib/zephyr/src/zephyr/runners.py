@@ -42,7 +42,7 @@ import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters, memory_budget
-from zephyr.batches import iter_record_batches
+from zephyr.batches import _iter_record_batches
 from zephyr.expr import ColumnExpr
 from zephyr.plan import Scatter, StageContext, run_stage
 from zephyr.stage_io import (
@@ -309,7 +309,7 @@ def _run_stage_with_ctx(
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
     stage_gen = run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)
     if scatter_op is not None and isinstance(scatter_op.key, ColumnExpr):
-        stage_gen = iter_record_batches(stage_gen)
+        stage_gen = _iter_record_batches(stage_gen)
     return _write_stage_output(
         _wrap_stage_stats(stage_gen),
         source_shard=task.shard_idx,

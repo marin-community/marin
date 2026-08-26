@@ -48,7 +48,6 @@ from zephyr import memory_budget
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.shard_keys import encode_key
-from zephyr.shuffle import _SCATTER_HASH_SEED
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ def _hot_keys_for_shard(target_shard: int, num_output_shards: int, count: int) -
     k = 0
     while len(keys) < count:
         encoded = pl.Series([encode_key(k)], dtype=pl.Binary)
-        shard = int(((encoded.hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32)).item())
+        shard = int(((encoded.hash() % num_output_shards).cast(pl.Int32)).item())
         if shard == target_shard:
             keys.append(k)
         k += 1

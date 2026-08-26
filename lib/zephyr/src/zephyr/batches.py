@@ -16,7 +16,7 @@ class ArrowBatch(Protocol):
     def __arrow_c_stream__(self, requested_schema: object | None = None) -> object: ...
 
 
-def iter_record_batches(items: Iterable[object]) -> Iterator[pa.RecordBatch]:
+def _iter_record_batches(items: Iterable[object]) -> Iterator[pa.RecordBatch]:
     """Canonicalize Arrow-exportable stage items to RecordBatches."""
     for item in items:
         if not isinstance(item, ArrowBatch):

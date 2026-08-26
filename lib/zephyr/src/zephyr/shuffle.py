@@ -113,9 +113,6 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # row group per target gives ideal predicate pruning, but makes every reducer
 # read multi-megabyte footers from every mapper chunk before it can read data.
 _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
-# Seed for the vectorized shard-routing hash used by ScatterWriter.write_batch.
-_SCATTER_HASH_SEED = 0
-
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
 # not collide with these names.
@@ -165,7 +162,7 @@ def _with_routing_columns(
     num_output_shards: int,
 ) -> pl.DataFrame:
     return df.with_columns(
-        (key_expr.hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32).alias(_SHARD_COL),
+        (key_expr.hash() % num_output_shards).cast(pl.Int32).alias(_SHARD_COL),
         pl.struct(key_expr.alias(_SORT_KEY_FIELD), sort_value_expr.alias(_SORT_VALUE_FIELD)).alias(_SORT_KEY_COL),
     )
 
