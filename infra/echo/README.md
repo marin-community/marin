@@ -311,7 +311,7 @@ work-log entries), `/feedback` (recent result grades), `/wiki/<id>` (a note), an
 `/chunk/<id>` (an activity chunk). Conversation details load when an entry is opened.
 The feedback table links each grade to its source and keeps explanation-only submissions
 visible. The API's catch-all route serves `index.html` for any path that isn't
-`/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
+`/api/...`, `/health`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
 history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
