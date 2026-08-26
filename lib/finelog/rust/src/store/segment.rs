@@ -623,27 +623,28 @@ pub(crate) fn discover_files(dir: &Path) -> Vec<PathBuf> {
     while let Some(directory) = pending.pop() {
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
-            Err(error) => {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %directory.display(), %error, "file discovery could not read directory");
-                }
-                continue;
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!(
+                "file discovery could not read directory {}: {error}",
+                directory.display()
+            ),
         };
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(error) => {
-                    tracing::warn!(path = %directory.display(), %error, "file discovery could not read directory entry");
-                    continue;
-                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!(
+                    "file discovery could not read an entry in {}: {error}",
+                    directory.display()
+                ),
             };
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
-                Err(error) => {
-                    tracing::warn!(path = %entry.path().display(), %error, "file discovery could not read file type");
-                    continue;
-                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!(
+                    "file discovery could not read the type of {}: {error}",
+                    entry.path().display()
+                ),
             };
             let path = entry.path();
             if file_type.is_dir() {
