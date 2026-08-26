@@ -79,6 +79,7 @@ local one.
 import base64
 import json
 import logging
+import os
 import platform
 import random
 import sys
@@ -370,9 +371,9 @@ def _pixels(payload: bytes) -> dict:
             rows, columns = min(left.shape[0], right.shape[0]), min(left.shape[1], right.shape[1])
             if rows == 0 or columns == 0:
                 continue
-            difference = np.abs(
-                left[:rows, :columns].astype(np.int16) - right[:rows, :columns].astype(np.int16)
-            ).max(axis=2)
+            difference = np.abs(left[:rows, :columns].astype(np.int16) - right[:rows, :columns].astype(np.int16)).max(
+                axis=2
+            )
             changed = float((difference > PIXEL_TOLERANCE).mean())
             differing.append(changed)
             mean_absolute.append(float(difference.mean()))
@@ -420,24 +421,35 @@ def _measure(op: str, payload: bytes) -> dict:
 
 
 def worker_main() -> None:
-    """Serve length-prefixed documents from stdin until the driver closes it."""
+    """Serve length-prefixed documents from stdin until the driver closes it.
+
+    The reply channel is a *duplicate* of the inherited stdout, and file descriptor 1 is then
+    pointed at stderr. Both libraries write diagnostics to fd 1 -- MuPDF sends its "syntax error in
+    content stream" warnings there by default, and pdf_oxide's Rust logger does the same -- which
+    lands them in the middle of the length-prefixed protocol and makes the driver read a warning
+    where a JSON reply should be. Moving the descriptor rather than configuring each library's
+    logger keeps this correct for whatever either of them prints next.
+    """
     import faulthandler  # noqa: PLC0415
 
     faulthandler.enable()
+
+    replies = os.fdopen(os.dup(sys.stdout.fileno()), "wb")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
     print(
         f"worker: pdf-oxide {version('pdf-oxide')}, pymupdf {version('pymupdf')}",
         file=sys.stderr,
     )
-    stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
+    stdin = sys.stdin.buffer
     while True:
         header = stdin.readline()
         if not header:
             return
         request = json.loads(header)
         payload = read_exactly(stdin, request["size"])
-        stdout.write(json.dumps(_measure(request["op"], payload)).encode() + b"\n")
-        stdout.flush()
+        replies.write(json.dumps(_measure(request["op"], payload)).encode() + b"\n")
+        replies.flush()
 
 
 # ---------------------------------------------------------------------------
