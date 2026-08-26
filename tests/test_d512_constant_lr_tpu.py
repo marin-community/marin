@@ -3,11 +3,13 @@
 
 import pytest
 
+from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config
 from experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch import (
     D512_CONSTANT_LR_POINTS,
     D512_LR_MULTIPLIERS,
     D512_STEPS,
     D512_TOKEN_MULTIPLES,
+    TPU_STORE_PREFIX,
     constant_lr_optimizer,
     d512_model_config,
     select_d512_points,
@@ -70,3 +72,16 @@ def test_d512_constant_lr_model_matches_historical_architecture():
     assert (model.max_seq_len, model.sliding_window, model.global_every) == (8192, 512, 4)
     assert model.attention_implementation is None
     assert model.moe_implementation is None
+
+
+def test_d512_constant_lr_reads_datakit_tensorstores_from_training_region():
+    data = _datakit_data_config(
+        store_prefix=TPU_STORE_PREFIX,
+        total_steps=D512_STEPS[30],
+        batch_size=64,
+        max_seq_len=8192,
+        enable_simulated_epoching=True,
+        val_components={},
+    )
+
+    assert data.components["c01q1"].cache_dir == ("gs://marin-us-central2/datakit/store_8ac06c74/cluster=1/quality=1")

@@ -49,7 +49,7 @@ EXPERIMENT_PREFIX = "AUG-LRC-TPU"
 EXPERIMENT_VERSION = "2026.08.26"
 WANDB_PROJECT = "marin_moe"
 WANDB_GROUP = "issue-7856-d512-constant-lr-tpu"
-TPU_STORE_PREFIX = "mirror://datakit/store_8ac06c74"
+TPU_STORE_PREFIX = "gs://marin-us-central2/datakit/store_8ac06c74"
 
 D512_HIDDEN_DIM = 512
 D512_BATCH_SIZE = 64

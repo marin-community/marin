@@ -10,7 +10,9 @@ changing only the learning-rate schedule after warmup:
 The model, batch 64, sequence length 8192, seed 0, two-stage datakit mixture,
 five token budgets, five peak-LR multipliers, and Paloma evaluation cadence
 match the completed `aug-hero-d512-*-v2` W&B runs. TPU training uses a v4-8 in
-`us-central2-b` so the datakit store remains in-region.
+`us-central2-b` and reads the TensorStore caches from
+`gs://marin-us-central2/datakit/store_8ac06c74`. TensorStore requires a native
+GCS URI; the generic `mirror://` fsspec scheme cannot open its shard arrays.
 
 ## Launch
 
