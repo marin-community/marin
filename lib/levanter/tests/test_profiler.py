@@ -13,6 +13,18 @@ from levanter.callbacks import profiler as profiler_module
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig, profile
 
 
+def _step(step: int):
+    state = SimpleNamespace(step=step + 1, model="model", eval_model="eval_model", opt_state="opt_state")
+    return SimpleNamespace(
+        step=step,
+        state=state,
+        model=state.model,
+        eval_model=state.eval_model,
+        opt_state=state.opt_state,
+        loss="loss",
+    )
+
+
 def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
     calls = []
 
@@ -41,9 +53,9 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
 
     assert profile_dir.exists()
 
-    callback.on_step(SimpleNamespace(step=4))
-    callback.on_step(SimpleNamespace(step=4), force=True)
-    callback.on_step(SimpleNamespace(step=4), force=True)
+    callback.on_step(_step(4))
+    callback.on_step(_step(4), force=True)
+    callback.on_step(_step(4), force=True)
 
     assert calls == [
         ("start", str(profile_dir), False, False, options),
@@ -51,6 +63,40 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
         ("barrier",),
     ]
     assert profile_dir.exists()
+
+
+def test_profile_waits_for_step_outputs_before_stopping_trace(monkeypatch, tmp_path):
+    calls = []
+    completed_step = _step(5)
+
+    monkeypatch.setattr(profiler_module.jax.profiler, "start_trace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(profiler_module.jax, "block_until_ready", lambda value: calls.append(("ready", value)))
+    monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", lambda: calls.append(("stop",)))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda: calls.append(("barrier",)))
+
+    callback = profile(
+        str(tmp_path / "capture"),
+        start_step=5,
+        num_steps=1,
+        create_perfetto_link=False,
+    )
+    callback(_step(4))
+    callback(completed_step)
+
+    assert calls == [
+        (
+            "ready",
+            (
+                completed_step.state.step,
+                completed_step.model,
+                completed_step.eval_model,
+                completed_step.opt_state,
+                completed_step.loss,
+            ),
+        ),
+        ("stop",),
+        ("barrier",),
+    ]
 
 
 def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tmp_path, caplog):
@@ -83,8 +129,8 @@ def test_profile_uploads_new_xplane_session_and_logs_viewer_link(monkeypatch, tm
         )
     )
     with caplog.at_level("INFO", logger=profiler_module.__name__):
-        callback.on_step(SimpleNamespace(step=4))
-        callback.on_step(SimpleNamespace(step=5))
+        callback.on_step(_step(4))
+        callback.on_step(_step(5))
 
     uploaded_session = upload_dir / "plugins" / "profile" / "steps-5-to-6"
     assert (uploaded_session / "worker-0.xplane.pb").read_bytes() == b"xplane"
@@ -167,9 +213,9 @@ def test_upload_error_reaches_second_barrier_before_propagating(monkeypatch, tmp
         create_perfetto_link=False,
         upload_uri=f"file://{tmp_path}/upload",
     )
-    callback(SimpleNamespace(step=4))
+    callback(_step(4))
     with pytest.raises(RuntimeError, match="Failed to upload XProf profile"):
-        callback(SimpleNamespace(step=5))
+        callback(_step(5))
 
     assert calls == ["barrier", "barrier"]
 
@@ -188,9 +234,9 @@ def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, t
     profile_dir = tmp_path / "stress" / "profiler"
     callback = LambdaCallback(profile(str(profile_dir), start_step=10, num_steps=2, create_perfetto_link=False))
     for _ in range(50):
-        callback.on_step(SimpleNamespace(step=9))
-        callback.on_step(SimpleNamespace(step=10))
-        callback.on_step(SimpleNamespace(step=10), force=True)
+        callback.on_step(_step(9))
+        callback.on_step(_step(10))
+        callback.on_step(_step(10), force=True)
 
     assert calls.count(("start", str(profile_dir))) == 50
     assert calls.count(("stop",)) == 50

@@ -167,7 +167,7 @@ def profile(
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal existing_sessions, profile_window_started, trace_started
         if force and profile_window_started:
-            _stop_profile(max(start_step, step.step + 1))
+            _stop_profile(step, max(start_step, step.step + 1))
             return
 
         # -1 b/c step is the finished step
@@ -187,12 +187,17 @@ def profile(
                 )
                 trace_started = True
         elif step.step == start_step + num_steps - 1:
-            _stop_profile(start_step + num_steps)
+            _stop_profile(step, start_step + num_steps)
 
-    def _stop_profile(end_step: int):
+    def _stop_profile(step: StepInfo, end_step: int):
         nonlocal profile_window_started, trace_started
         if not profile_window_started:
             return
+
+        # JAX dispatch is asynchronous. Waiting on the scalar loss alone does not guarantee that the
+        # model and optimizer outputs from the profiled step have finished on device before CUPTI is
+        # shut down. Materialize every output visible to the callback before ending the trace.
+        jax.block_until_ready((step.state.step, step.model, step.eval_model, step.opt_state, step.loss))
 
         captured_profile = trace_started
         if trace_started:
