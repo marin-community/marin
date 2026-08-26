@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{new_null_array, Array, ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::compute::cast;
@@ -52,6 +52,7 @@ const MIGRATED_SEQ_OUTPUTS_PER_SOURCE: i64 = 100_000;
 const MIGRATED_SEQ_ROWS_PER_SOURCE: i64 =
     MIGRATED_SEQ_ROWS_PER_OUTPUT * MIGRATED_SEQ_OUTPUTS_PER_SOURCE;
 const SNAPSHOT_ATTEMPTS: usize = 8;
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 fn migration_source_namespaces() -> impl Iterator<Item = &'static str> {
     MIGRATION_SOURCE_NAMESPACES.iter().copied()
@@ -239,6 +240,18 @@ pub fn prepare_store(config: &PrepareConfig) -> Result<MigrationManifest, StatsE
         write_manifest(&manifest_path, &manifest)?;
         manifest
     };
+
+    tracing::info!(
+        source_segments = manifest.source_segments.len(),
+        input_rows = manifest.input_rows,
+        legacy_max_seq = ?manifest.legacy_max_seq,
+        completed_segments = manifest
+            .source_segments
+            .iter()
+            .filter(|source| source.complete)
+            .count(),
+        "telemetry migration plan ready"
+    );
 
     verify_source_segments(&config.source_dir, &manifest)?;
     if manifest.complete {
@@ -935,6 +948,9 @@ fn write_planned_outputs(
     let policies = PolicyRegistry::default();
     index_migration_state(config, manifest, &policies)?;
     let manifest_path = config.output_dir.join(MANIFEST_FILENAME);
+    let conversion_started = Instant::now();
+    let mut last_conversion_progress = Instant::now();
+    let total_sources = manifest.source_segments.len();
     for source_index in 0..manifest.source_segments.len() {
         let source_path = config
             .source_dir
@@ -942,6 +958,7 @@ fn write_planned_outputs(
         write_source_outputs(
             &policies,
             source_index,
+            total_sources,
             &source_path,
             config,
             manifest.legacy_max_seq,
@@ -958,6 +975,23 @@ fn write_planned_outputs(
             .map(|source| source.suppressed_rows)
             .sum();
         write_manifest(&manifest_path, manifest)?;
+        if last_conversion_progress.elapsed() >= PROGRESS_LOG_INTERVAL
+            || source_index + 1 == total_sources
+        {
+            tracing::info!(
+                completed_segments = manifest
+                    .source_segments
+                    .iter()
+                    .filter(|source| source.complete)
+                    .count(),
+                total_segments = total_sources,
+                output_rows = manifest.output_rows,
+                suppressed_rows = manifest.suppressed_rows,
+                elapsed_seconds = conversion_started.elapsed().as_secs(),
+                "telemetry migration conversion progress"
+            );
+            last_conversion_progress = Instant::now();
+        }
     }
     Ok(())
 }
@@ -979,7 +1013,11 @@ fn index_migration_state(
         "resource_attributes_json",
         "attributes_json",
     ];
-    for source in &manifest.source_segments {
+    let index_started = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut indexed_rows = 0_i64;
+    let total_sources = manifest.source_segments.len();
+    for (source_index, source) in manifest.source_segments.iter().enumerate() {
         let source_path = config.source_dir.join(&source.relative_path);
         for batch in parquet_reader_projected(&source_path, config.batch_rows, &INDEX_COLUMNS)? {
             let batch = batch.map_err(internal_error("read migration index batch"))?;
@@ -987,19 +1025,39 @@ fn index_migration_state(
             if batch.num_rows() == 0 {
                 continue;
             }
+            indexed_rows += batch.num_rows() as i64;
             policies.index_migration_batch(
                 IngestionBatchSource::Stored(source.namespace.as_str()),
                 &batch,
             )?;
+            if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
+                tracing::info!(
+                    indexed_rows,
+                    input_rows = manifest.input_rows,
+                    source_segment = source_index + 1,
+                    total_segments = total_sources,
+                    elapsed_seconds = index_started.elapsed().as_secs(),
+                    "telemetry migration indexing progress"
+                );
+                last_progress = Instant::now();
+            }
         }
     }
     policies.finish_migration_index();
+    tracing::info!(
+        indexed_rows,
+        input_rows = manifest.input_rows,
+        total_segments = total_sources,
+        elapsed_seconds = index_started.elapsed().as_secs(),
+        "telemetry migration indexing complete"
+    );
     Ok(())
 }
 
 fn write_source_outputs(
     policies: &PolicyRegistry,
     source_index: usize,
+    total_sources: usize,
     source_path: &Path,
     config: &PrepareConfig,
     legacy_max_seq: Option<i64>,
@@ -1010,12 +1068,16 @@ fn write_source_outputs(
     }
     let source_offset = migrated_source_offset(source_index)?;
     let mut writers = BTreeMap::new();
+    let source_started = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut source_rows_processed = 0_i64;
     for batch in parquet_reader(source_path, config.batch_rows)? {
         let batch = batch.map_err(internal_error("read source batch"))?;
         let batch = filter_legacy_rows(&batch, legacy_max_seq)?;
         if batch.num_rows() == 0 {
             continue;
         }
+        source_rows_processed += batch.num_rows() as i64;
         for partition in policies.route_ingestion_batch(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
@@ -1040,6 +1102,17 @@ fn write_source_outputs(
                     &batch,
                 )?;
             }
+        }
+        if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
+            tracing::info!(
+                source_segment = source_index + 1,
+                total_segments = total_sources,
+                source_rows_processed,
+                source_rows = source.rows,
+                elapsed_seconds = source_started.elapsed().as_secs(),
+                "telemetry migration source progress"
+            );
+            last_progress = Instant::now();
         }
     }
     let outputs = finish_destination_writers(writers, &config.output_dir)?;
