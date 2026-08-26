@@ -12,11 +12,13 @@ import lzma
 import os
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import rigging.filesystem.bulk_deletion as bulk_deletion
 import rigging.fsutil.cli as cli_module
 import rigging.fsutil.transfer as transfer_module
+import rigging.fsutil.verified_copy as verified_copy_module
 import rigging.timing as timing
 from botocore.exceptions import EndpointConnectionError
 from click.testing import CliRunner
@@ -34,6 +36,7 @@ from rigging.fsutil.usage import (
     scan_usage,
     threshold_prefix_groups,
 )
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST, VerifiedCopyError, verified_copy_prefix
 
 
 @pytest.fixture
@@ -114,6 +117,260 @@ def test_cp_no_clobber_preserves_existing_destination(tree, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert (destination / "b.txt").read_text() == "keep"
+
+
+def test_verified_copy_publishes_content_manifest_after_verification(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "nested").mkdir(parents=True)
+    (source / "config.json").write_bytes(b"config")
+    (source / "nested" / "weights.bin").write_bytes(b"weights")
+
+    result = verified_copy_prefix(str(source), str(destination), workers=2)
+
+    manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
+    assert result.total_files == 2
+    assert result.copied_files == 2
+    assert result.resumed_files == 0
+    assert {entry["path"]: entry["size"] for entry in manifest["files"]} == {
+        "config.json": 6,
+        "nested/weights.bin": 7,
+    }
+    assert (destination / "config.json").read_bytes() == b"config"
+    assert (destination / "nested" / "weights.bin").read_bytes() == b"weights"
+
+
+def test_verified_copy_retry_uses_verified_objects_without_source_reads(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    status_filesystem, status_path = verified_copy_module.filesystem_for(f"{destination}.verified-copy-status")
+
+    class UnreadableSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, _path, _mode):
+            raise AssertionError("a verified resumed object must not reread its source")
+
+    def routed_filesystem(url, *, fixed_upload_size=False):
+        del fixed_upload_size
+        if url == str(source):
+            return UnreadableSource(), source_path
+        if url == str(destination):
+            return destination_filesystem, destination_path
+        return status_filesystem, status_path
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 0
+    assert result.resumed_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"weights"
+    assert (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_interruption_leaves_no_completion_and_retry_resumes(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "a.bin").write_bytes(b"first")
+    (source / "b.bin").write_bytes(b"second")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class FailingSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def open(self, path, mode):
+            if path.endswith("b.bin") and mode == "rb":
+                raise OSError("injected source failure")
+            return source_filesystem.open(path, mode)
+
+    def failing_route(url, *, fixed_upload_size=False):
+        if url == str(source):
+            return FailingSource(), source_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", failing_route)
+    with pytest.raises(OSError, match="injected source failure"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+    assert not (destination / COMPLETION_MANIFEST).exists()
+    assert (destination / "a.bin").read_bytes() == b"first"
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", original_filesystem_for)
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 1
+    assert (destination / "b.bin").read_bytes() == b"second"
+    assert (destination / COMPLETION_MANIFEST).exists()
+
+
+def test_verified_copy_does_not_reuse_status_from_another_source(tmp_path):
+    first_source = tmp_path / "first-source"
+    second_source = tmp_path / "second-source"
+    destination = tmp_path / "destination"
+    first_source.mkdir()
+    second_source.mkdir()
+    (first_source / "weights.bin").write_bytes(b"first!!")
+    (second_source / "weights.bin").write_bytes(b"second!")
+    verified_copy_prefix(str(first_source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+
+    result = verified_copy_prefix(str(second_source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"second!"
+
+
+def test_verified_copy_same_size_source_overwrite_invalidates_resume_marker(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    (destination / COMPLETION_MANIFEST).unlink()
+    original_mtime = source_file.stat().st_mtime_ns
+    source_file.write_bytes(b"second!")
+    os.utime(source_file, ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000))
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert result.resumed_files == 0
+    assert (destination / "weights.bin").read_bytes() == b"second!"
+
+
+def test_verified_copy_same_size_source_overwrite_invalidates_completion(tmp_path):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    original_mtime = source_file.stat().st_mtime_ns
+    source_file.write_bytes(b"second!")
+    os.utime(source_file, ns=(original_mtime + 1_000_000_000, original_mtime + 1_000_000_000))
+
+    with pytest.raises(VerifiedCopyError, match="source identity changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert (destination / "weights.bin").read_bytes() == b"first!!"
+
+
+def test_verified_copy_identityless_source_rereads_content_on_completion(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    source_file = source / "weights.bin"
+    source_file.write_bytes(b"first!!")
+
+    source_filesystem, source_path = verified_copy_module.filesystem_for(str(source))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    identity_keys = {
+        "generation",
+        "version_id",
+        "VersionId",
+        "md5Hash",
+        "crc32c",
+        "checksum",
+        "ChecksumSHA256",
+        "etag",
+        "ETag",
+        "updated",
+        "mtime",
+        "LastModified",
+    }
+
+    class IdentitylessSource:
+        def __getattr__(self, name):
+            return getattr(source_filesystem, name)
+
+        def find(self, path, *, detail):
+            found = source_filesystem.find(path, detail=detail)
+            return {
+                name: {key: value for key, value in info.items() if key not in identity_keys}
+                for name, info in found.items()
+            }
+
+        def info(self, path):
+            return {key: value for key, value in source_filesystem.info(path).items() if key not in identity_keys}
+
+    def identityless_route(url, *, fixed_upload_size=False):
+        if url == str(source):
+            return IdentitylessSource(), source_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", identityless_route)
+    verified_copy_prefix(str(source), str(destination), workers=1)
+    source_file.write_bytes(b"second!")
+
+    with pytest.raises(VerifiedCopyError, match="source content changed"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+
+def test_verified_copy_hash_mismatch_removes_object_and_withholds_completion(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"weights")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    class CorruptingWriter:
+        def __init__(self, file, path):
+            self.file = file
+            self.path = path
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            result = self.file.__exit__(exc_type, exc_value, traceback)
+            if exc_type is None:
+                path = Path(self.path)
+                path.write_bytes(b"x" * path.stat().st_size)
+            return result
+
+        def write(self, data):
+            return self.file.write(data)
+
+    class CorruptingDestination:
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def open(self, path, mode):
+            file = destination_filesystem.open(path, mode)
+            if mode == "wb" and path.endswith("weights.bin"):
+                return CorruptingWriter(file, path)
+            return file
+
+    def corrupting_route(url, *, fixed_upload_size=False):
+        if url == str(destination):
+            return CorruptingDestination(), destination_path
+        return original_filesystem_for(url, fixed_upload_size=fixed_upload_size)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", corrupting_route)
+
+    with pytest.raises(VerifiedCopyError, match="destination hash mismatch"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / "weights.bin").exists()
+    assert not (destination / COMPLETION_MANIFEST).exists()
 
 
 @pytest.mark.parametrize(("command", "destination"), [(["cp", "-r"], "copy"), (["rsync"], "sync")])

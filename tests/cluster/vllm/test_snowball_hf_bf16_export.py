@@ -10,15 +10,12 @@ Run from the repository root:
       -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
-import dataclasses
 import hashlib
 import json
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, cast
 
-import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -33,42 +30,23 @@ from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
 from marin.testing.inference.snowball import SNOWBALL
 from marin.testing.inference.snowball_checkpoint import (
-    VendoredTransformer,
-    apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
 )
 
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.export_hf_bf16 import (
+    apply_pending_qb_betas,
+    inference_config,
+    inference_model,
+    save_hf_bf16,
+)
+from experiments.grug.moe.model import GrugModelConfig
 from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
 pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
-
-
-def _decode_main_config(model_config: dict[str, Any]) -> GrugModelConfig:
-    main_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
-    return draccus.decode(
-        GrugModelConfig,
-        {name: value for name, value in model_config.items() if name in main_fields},
-    )
-
-
-def _to_main_model(params: VendoredTransformer, config: GrugModelConfig) -> Transformer:
-    assert params.stacked_blocks is not None
-    source = cast(Any, params)
-    return Transformer(
-        token_embed=source.token_embed,
-        embed_norm=source.embed_norm,
-        embed_gated_norm=source.embed_gated_norm,
-        output_proj=source.output_proj,
-        blocks=tuple(source.stacked_blocks.unstacked()),
-        final_norm=source.final_norm,
-        final_gated_norm=source.final_gated_norm,
-        config=config,
-    )
 
 
 def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
@@ -100,7 +78,11 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
     executor_info = read_executor_info()
     model_config = executor_info["config"]["model"]
     vendored_config = decode_vendored_config(executor_info)
-    main_config = _decode_main_config(model_config)
+    main_config = inference_config(
+        model_config,
+        max_seq_len=model_config["max_seq_len"],
+        qk_mult=model_config["qk_mult"],
+    )
     tokenizer_name = executor_info["config"]["data"]["tokenizer"]
 
     mesh = compact_grug_mesh()
@@ -117,19 +99,13 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
         jax.block_until_ready(params)
 
         tokenizer = load_tokenizer(tokenizer_name)
-        converter = (
-            main_config.hf_checkpoint_converter()
-            .replaced(tokenizer=tokenizer)
-            .with_config_overrides({"dtype": "bfloat16"})
-        )
-        export_model = _to_main_model(params, main_config)
-
         with tempfile.TemporaryDirectory(prefix="snowball-bf16-export-") as export_dir_str:
             export_dir = Path(export_dir_str)
-            converter.save_pretrained(
-                export_model,
+            save_hf_bf16(
+                inference_model(params, main_config),
+                main_config,
                 export_dir_str,
-                dtype=jnp.bfloat16,
+                tokenizer=tokenizer,
             )
             _assert_vllm_bf16(export_dir, main_config)
             actual_sha256 = _tree_sha256(export_dir)

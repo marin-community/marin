@@ -18,6 +18,7 @@ uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
 uv run fsutil mv /tmp/run.json gs://marin-us-central2/archive/
 uv run fsutil rsync --dry-run --delete /tmp/checkpoints gs://marin-us-central2/checkpoints
+uv run fsutil verified-copy gs://marin-us-central2/exports/model s3://marin-na/marin/exports/model
 uv run fsutil hash gs://marin-us-central2/archive/run.json
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix s3://marin-us-east-02a/tmp/old-prefix
 ```
@@ -64,6 +65,7 @@ that touch its buckets; the rest keep working.
 | `cp SRC ... DST [-r] [-n]` | Copy one or more sources between any backends. `-r` includes directories; `-n` preserves existing destination files |
 | `mv SRC ... DST [-r]` | Move or rename one or more sources. Sources are removed after every copy succeeds |
 | `rsync SRC DST [--delete] [--dry-run] [--checksum]` | Synchronize the files beneath two directories or prefixes |
+| `verified-copy SRC DST [--workers N] [--status-prefix URL]` | Resume and verify a cross-backend prefix copy, then publish a completion manifest |
 | `hash URL ... [--hex]` | Stream complete files and print MD5 digests in base64 or hexadecimal |
 | `rm URL ... [-r] [--workers N]` | Remove one or more objects. `-r` or `-R` recursively removes every prefix; remote prefixes delete while they list and show progress |
 | `browse [URL]` | The interactive browser |
@@ -84,6 +86,17 @@ neither side supplies comparable timestamps or digests, equal sizes are treated 
 Extra destination files remain by default. `--delete` removes them after all copies succeed.
 `--dry-run` prints the same copy and delete plan without changing the destination. Source and
 destination directories may not overlap.
+
+`verified-copy` hashes each source object while uploading it, reads the destination object back,
+and records the verified SHA-256 plus source object identity under a sibling
+`<DST>.verified-copy-status` prefix. A retry skips the source read when the source identity,
+destination path and size, verified record, and destination hash still match. Sources without stable
+generation, version, checksum, ETag, or modification metadata are read again. The command writes
+`<DST>/.verified-copy-manifest.json` after every object verifies;
+consumers should treat that manifest as the prefix's readiness marker. R2 uploads use fixed-size
+multipart parts. An existing completion manifest makes the destination immutable: the command
+returns immediately when source paths and sizes still match and fails if they changed. Use a fresh
+destination prefix for a changed export.
 
 `hash` reads each complete object. Its columns are `url` and `md5`; digests use base64
 by default. `--hex` selects hexadecimal output.
