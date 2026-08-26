@@ -924,9 +924,9 @@ class Dataset(Generic[T]):
         """Group items by key and apply reducer function.
 
         The reducer receives ``(key, iterator_of_items)`` and returns a single
-        result or an iterator of results for that group. After scatter, items
-        delivered to the reducer are always plain dict rows, including when the
-        map side ingested Arrow batches.
+        result or an iterator of results for that group. Callable-key pipelines
+        preserve their Python items. Column-expression pipelines materialize
+        Arrow batches as plain dict rows.
 
         ``key`` / ``sort_by`` must match the item shape:
 

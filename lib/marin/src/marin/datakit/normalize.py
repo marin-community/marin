@@ -202,7 +202,7 @@ def _make_normalize_batch_fn(
     max_whitespace_run_chars: int,
     bare: bool = False,
     drop_fields: tuple[str, ...] = (),
-) -> Callable[[pa.RecordBatch | pl.DataFrame], Iterator[pl.DataFrame]]:
+) -> Callable[[pa.RecordBatch], Iterator[pl.DataFrame]]:
     """Return a batch → zero-or-one normalized DataFrame transform.
 
     Drops blank ``text_field`` rows (``EMPTY_TEXT_FILTERED_COUNTER``),
@@ -217,12 +217,9 @@ def _make_normalize_batch_fn(
     """
     whitespace_pattern = rf"(\s{{{max_whitespace_run_chars}}})\s+"
 
-    def normalize_batch(batch: pa.RecordBatch | pl.DataFrame) -> Iterator[pl.DataFrame]:
-        if isinstance(batch, pa.RecordBatch):
-            df = pl.from_arrow(batch)
-            assert isinstance(df, pl.DataFrame)
-        else:
-            df = batch
+    def normalize_batch(batch: pa.RecordBatch) -> Iterator[pl.DataFrame]:
+        df = pl.from_arrow(batch)
+        assert isinstance(df, pl.DataFrame)
 
         if text_field not in df.columns:
             if df.height:
