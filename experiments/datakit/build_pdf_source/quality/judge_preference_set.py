@@ -93,6 +93,14 @@ MAX_SPEND = 140.0
 # Share of the key's remaining credit this pass is allowed to reach for. Below 1.0 so an
 # under-estimate does not exhaust a shared key.
 MAX_KEY_SHARE = 0.8
+
+# Packets above this are never sent. A packet is the page images inline as base64, and a
+# large-format scan can reach 100 MB; measured, the requests that fail deterministically with a 502
+# are 51.6 MB and 68.6 MB while p99 of the distribution is 12.6 MB. Spending six attempts and an
+# upload apiece on a request that cannot succeed costs minutes and blocks the pilot's projection
+# behind it. Skipped packets are simply never judged, which the label table already records as
+# `unjudged` rather than treating as an escalation either way.
+MAX_PACKET_BYTES = 30_000_000
 # Verdicts between progress lines. Small enough that a stalled run is visible within a minute.
 PROGRESS_EVERY = 250
 
@@ -233,7 +241,9 @@ async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Sem
             # Backed off *outside* the gate. Holding a concurrency slot while sleeping turns a burst
             # of upstream 502s into a throughput collapse: the slots fill with coroutines that are
             # waiting rather than working, and nothing else can start.
-            logger.info("%s attempt %d: %s", task.packet_id, attempt + 1, failed)
+            # `repr`, not `str`: httpx's timeout and protocol errors carry no message, and an
+            # empty one in the log makes a real failure mode look like a blank line.
+            logger.info("%s attempt %d: %r", task.packet_id, attempt + 1, failed)
             await asyncio.sleep(min(2**attempt, 30))
             continue
         result = {
@@ -308,9 +318,22 @@ async def buy(fs, tasks: list[Task]) -> dict:
     # packet is judged by two of them and their verdicts live under different prefixes.
     bought = {model: bought_packets(fs, model) for model in {task.model for task in tasks}}
     pending = [task for task in tasks if task.packet_id not in bought[task.model]]
-    logger.info("judging: %d tasks, %d already bought", len(tasks), len(tasks) - len(pending))
+    oversized = {
+        entry["name"].rsplit("/", 1)[-1].removesuffix(".json")
+        for entry in fs.ls(PACKETS_PREFIX, detail=True)
+        if entry["size"] > MAX_PACKET_BYTES
+    }
+    skipped = [task for task in pending if task.packet_id in oversized]
+    pending = [task for task in pending if task.packet_id not in oversized]
+    logger.info(
+        "judging: %d tasks, %d already bought, %d skipped as larger than %.0f MB",
+        len(tasks),
+        len(tasks) - len(pending) - len(skipped),
+        len(skipped),
+        MAX_PACKET_BYTES / 1e6,
+    )
     if not pending:
-        return {"pilot_verdicts": 0, "projected": 0.0, "spent": 0.0}
+        return {"pilot_verdicts": 0, "projected": 0.0, "spent": 0.0, "oversized_skipped": len(skipped)}
 
     headers = {"Authorization": f"Bearer {os.environ[JUDGE_KEY_VAR]}"}
     async with httpx.AsyncClient(base_url=BASE_URL, headers=headers, limits=CONNECTION_LIMITS) as client:
@@ -342,6 +365,8 @@ async def buy(fs, tasks: list[Task]) -> dict:
         "cost_per_verdict": per_verdict,
         "projected": projected,
         "spent": pilot_spend + rest,
+        "oversized_skipped": len(skipped),
+        "max_packet_bytes": MAX_PACKET_BYTES,
     }
 
 
