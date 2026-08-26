@@ -3,7 +3,7 @@
 
 import asyncio
 import os
-from typing import Generic, List, Sequence, TypeVar
+from typing import Any, Generic, List, Sequence, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -184,9 +184,9 @@ def _construct_builder_tree(exemplar, path, mode, cache_metadata):
     def open_builder(tree_path, item):
         item = np.asarray(item)
         rank = item.ndim
-        render_tree_path = "/".join(_render_path_elem(x) for x in tree_path)
+        field = render_tree_path(tree_path)
         return JaggedArrayStore.open(
-            os.path.join(path, render_tree_path),
+            os.path.join(path, field),
             mode=mode,
             item_rank=rank,
             dtype=item.dtype,
@@ -200,9 +200,9 @@ async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
     def open_builder(tree_path, item):
         item = np.asarray(item)
         rank = item.ndim
-        render_tree_path = "/".join(_render_path_elem(x) for x in tree_path)
+        field = render_tree_path(tree_path)
         return JaggedArrayStore.open_async(
-            os.path.join(path, render_tree_path),
+            os.path.join(path, field),
             mode=mode,
             item_rank=rank,
             dtype=item.dtype,
@@ -215,13 +215,22 @@ async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
     return jtu.tree_unflatten(treedef, opened_leaves)
 
 
-def _render_path_elem(x):
-    if isinstance(x, jtu.DictKey):
-        return f"{x.key}"
-    if isinstance(x, jtu.GetAttrKey):
-        return f"{x.name}"
-    if isinstance(x, jtu.SequenceKey):
-        return f"{x.idx}"
-    if isinstance(x, jtu.FlattenedIndexKey):
-        return f"{x.key}"
-    return str(x)
+def render_tree_path(tree_path: Sequence[Any]) -> str:
+    """Render a JAX key path as the field name used for that leaf's store directory.
+
+    This is the canonical mapping from an exemplar's tree structure to on-disk layout: the
+    `TreeStore` opens each leaf under this path, and `CacheLedger.field_counts` is keyed by it.
+    """
+    return "/".join(_render_path_elem(part) for part in tree_path)
+
+
+def _render_path_elem(path_elem: Any) -> str:
+    if isinstance(path_elem, jtu.DictKey):
+        return str(path_elem.key)
+    if isinstance(path_elem, jtu.GetAttrKey):
+        return str(path_elem.name)
+    if isinstance(path_elem, jtu.SequenceKey):
+        return str(path_elem.idx)
+    if isinstance(path_elem, jtu.FlattenedIndexKey):
+        return str(path_elem.key)
+    return str(path_elem)

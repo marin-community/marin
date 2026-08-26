@@ -250,6 +250,10 @@ pub fn map_utf8_utf8_type() -> DataType {
     )
 }
 
+fn list_type(element_type: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new("item", element_type, true)))
+}
+
 /// Whether a map's entries `DataType` is a `Struct` of a string key and a
 /// string value (the shape `COLUMN_TYPE_MAP` accepts), regardless of the field
 /// names or their nullability.
@@ -287,6 +291,8 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
         ColumnType::COLUMN_TYPE_MAP => Some(map_utf8_utf8_type()),
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => Some(list_type(DataType::Float64)),
+        ColumnType::COLUMN_TYPE_INT64_LIST => Some(list_type(DataType::Int64)),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
     }
 }
@@ -498,6 +504,8 @@ fn column_type_name(t: ColumnType) -> &'static str {
         ColumnType::COLUMN_TYPE_BYTES => "COLUMN_TYPE_BYTES",
         ColumnType::COLUMN_TYPE_INT32 => "COLUMN_TYPE_INT32",
         ColumnType::COLUMN_TYPE_MAP => "COLUMN_TYPE_MAP",
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => "COLUMN_TYPE_FLOAT64_LIST",
+        ColumnType::COLUMN_TYPE_INT64_LIST => "COLUMN_TYPE_INT64_LIST",
     }
 }
 
@@ -513,6 +521,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "timestamp_ms" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "bytes" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "map" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "float64_list" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "int64_list" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         "COLUMN_TYPE_UNKNOWN" => Some(ColumnType::COLUMN_TYPE_UNKNOWN),
         "COLUMN_TYPE_STRING" => Some(ColumnType::COLUMN_TYPE_STRING),
         "COLUMN_TYPE_INT64" => Some(ColumnType::COLUMN_TYPE_INT64),
@@ -522,6 +532,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "COLUMN_TYPE_BYTES" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "COLUMN_TYPE_INT32" => Some(ColumnType::COLUMN_TYPE_INT32),
         "COLUMN_TYPE_MAP" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "COLUMN_TYPE_FLOAT64_LIST" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "COLUMN_TYPE_INT64_LIST" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         _ => None,
     };
     resolved.ok_or_else(|| {
@@ -1119,13 +1131,19 @@ pub fn ignored_forwarded_schema_columns(
 /// reported). A `Map<Utf8,Utf8>` maps to `COLUMN_TYPE_MAP` regardless of its
 /// entries/key/value field names or sorted flag (so a parquet-round-tripped or
 /// non-pyarrow map still decodes); a map with any other key/value type is
-/// rejected. list/large-list/struct/union and any other unsupported type are
-/// rejected.
+/// rejected. Only lists of float64 and int64 are supported; large-list,
+/// fixed-size-list, struct, union, and other nested types are rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
         DataType::Map(field, _) if is_utf8_utf8_entries(field.data_type()) => {
             Ok(ColumnType::COLUMN_TYPE_MAP)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Float64 => {
+            Ok(ColumnType::COLUMN_TYPE_FLOAT64_LIST)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Int64 => {
+            Ok(ColumnType::COLUMN_TYPE_INT64_LIST)
         }
         DataType::List(_)
         | DataType::LargeList(_)
@@ -1462,6 +1480,14 @@ mod tests {
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_MAP),
             Some(map_utf8_utf8_type())
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+            Some(list_type(DataType::Float64))
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_INT64_LIST),
+            Some(list_type(DataType::Int64))
         );
         assert_eq!(arrow_type_for(ColumnType::COLUMN_TYPE_UNKNOWN), None);
     }

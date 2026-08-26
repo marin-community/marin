@@ -18,7 +18,7 @@ from rigging import telemetry
 from iris.cluster.controller.native_proxy import NativeProxy
 
 IN_FLIGHT_METRIC_NAME = "rpc_in_flight"
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 60.0
 
 logger = logging.getLogger(__name__)
 

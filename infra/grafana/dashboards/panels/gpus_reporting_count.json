@@ -50,7 +50,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "SELECT COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+            "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
           },
           {
             "key": "from",

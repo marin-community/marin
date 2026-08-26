@@ -30,4 +30,5 @@ pub mod trigram;
 pub mod store;
 pub mod types;
 
+pub use crate::telemetry_policy::TelemetryRootWriteMode;
 pub use store::{ServeMode, Store};

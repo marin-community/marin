@@ -37,6 +37,7 @@ from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
+from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
 
 
 def test_dont_blow_up_without_validation_set():
@@ -898,3 +899,72 @@ def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
         component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
     ).as_sync_dataset()
     np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
+
+
+def test_build_caches_uses_catalog_after_component_ledgers_are_removed(tmp_path):
+    records_by_name = {
+        "cluster-a/high": [[1, 2, 3], [4, 5]],
+        "cluster-b/low": [[6], [7, 8, 9]],
+    }
+    catalog_components = {}
+    cache_paths = {}
+    for name, records in records_by_name.items():
+        cache_path = tmp_path / name.replace("/", "-")
+        write_levanter_cache(
+            ({"input_ids": np.asarray(tokens, dtype=np.int32)} for tokens in records),
+            str(cache_path),
+            metadata={},
+        )
+        cache_paths[name] = cache_path
+        catalog_components[name] = DatasetComponent(
+            source=None,
+            cache_dir=str(cache_path),
+            format=PrebuiltLmDatasetFormat(),
+            flat_cache=True,
+        )
+
+    catalog_path = tmp_path / "cache-catalog.json"
+    catalog_config = LmDataConfig(
+        components=catalog_components,
+        cache_dir=None,
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+    catalog_config.build_cache_catalog(str(catalog_path))
+
+    for cache_path in cache_paths.values():
+        (cache_path / LEDGER_FILE_NAME).unlink()
+
+    runtime_components = {
+        name: DatasetComponent(source=None, format=PrebuiltLmDatasetFormat(), flat_cache=True)
+        for name in records_by_name
+    }
+    runtime_config = LmDataConfig(
+        components=runtime_components,
+        cache_dir=None,
+        cache_catalog=str(catalog_path),
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    caches = runtime_config.build_caches("train")
+
+    assert set(caches) == set(records_by_name)
+    for name, records in records_by_name.items():
+        actual = caches[name].get_batch_sync(range(len(records)))
+        assert [row["input_ids"].tolist() for row in actual] == records
+
+
+def test_build_caches_rejects_required_component_missing_from_catalog(tmp_path):
+    catalog_path = tmp_path / "cache-catalog.json"
+    CacheCatalog(splits={"train": {}}).write(str(catalog_path))
+    config = LmDataConfig(
+        components={"missing": DatasetComponent(source=None, format=PrebuiltLmDatasetFormat())},
+        cache_dir=None,
+        cache_catalog=str(catalog_path),
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    with pytest.raises(KeyError):
+        config.build_caches("train")

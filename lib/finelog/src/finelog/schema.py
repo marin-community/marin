@@ -34,6 +34,8 @@ ColumnTypeValue = int
 # form the Rust server declares (entries/key/value field names, a non-null key
 # and a nullable value), so a batch built from it is accepted cast-free.
 MAP_STRING_STRING = pa.map_(pa.string(), pa.string())
+FLOAT64_LIST = pa.list_(pa.float64())
+INT64_LIST = pa.list_(pa.int64())
 
 _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_STRING: pa.string(),
@@ -44,6 +46,8 @@ _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: pa.timestamp("ms"),
     stats_pb2.COLUMN_TYPE_BYTES: pa.binary(),
     stats_pb2.COLUMN_TYPE_MAP: MAP_STRING_STRING,
+    stats_pb2.COLUMN_TYPE_FLOAT64_LIST: FLOAT64_LIST,
+    stats_pb2.COLUMN_TYPE_INT64_LIST: INT64_LIST,
 }
 
 

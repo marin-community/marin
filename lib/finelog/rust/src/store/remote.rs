@@ -189,8 +189,8 @@ impl RemoteStore {
         }
     }
 
-    /// Async footer read of `{namespace}/{basename}` — `(row_count, key_min,
-    /// key_max)` where the key bounds are the Int64 statistics for `key_column`.
+    /// Async footer read of `{namespace}/{basename}`, including actual seq
+    /// bounds and hidden partition metadata.
     /// Returns `None` on an unreadable footer.
     ///
     /// `file_size` is the object size already known from `list_segment_objects`,
@@ -202,10 +202,11 @@ impl RemoteStore {
         basename: &str,
         file_size: u64,
         key_column: Option<&str>,
-    ) -> Option<(i64, Option<i64>, Option<i64>)> {
+    ) -> Option<crate::store::segment::SegmentMetadata> {
         use parquet::arrow::async_reader::ParquetObjectReader;
         use parquet::file::metadata::ParquetMetaDataReader;
-        use parquet::file::statistics::Statistics;
+
+        let (level, filename_min_seq) = crate::store::types::parse_seg_filename(basename)?;
 
         let remote = self.object_path(namespace, basename);
         let mut reader =
@@ -215,27 +216,12 @@ impl RemoteStore {
             .load_via_suffix_and_finish(&mut reader)
             .await
             .ok()?;
-        let num_rows = md.file_metadata().num_rows();
-        let mut lo: Option<i64> = None;
-        let mut hi: Option<i64> = None;
-        if let Some(kc) = key_column {
-            let schema = md.file_metadata().schema_descr();
-            if let Some(col_idx) =
-                (0..schema.num_columns()).find(|&i| schema.column(i).name() == kc)
-            {
-                for rg in md.row_groups() {
-                    if let Some(Statistics::Int64(s)) = rg.column(col_idx).statistics() {
-                        if let Some(&m) = s.min_opt() {
-                            lo = Some(lo.map_or(m, |x: i64| x.min(m)));
-                        }
-                        if let Some(&m) = s.max_opt() {
-                            hi = Some(hi.map_or(m, |x: i64| x.max(m)));
-                        }
-                    }
-                }
-            }
-        }
-        Some((num_rows, lo, hi))
+        crate::store::segment::segment_metadata_from_parquet(
+            &md,
+            level,
+            filename_min_seq,
+            key_column,
+        )
     }
 }
 

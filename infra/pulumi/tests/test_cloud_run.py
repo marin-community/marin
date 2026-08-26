@@ -101,3 +101,30 @@ def test_cloud_run_components_leave_iam_to_the_infrastructure_stack() -> pulumi.
         assert iam_resource_types.isdisjoint(resource.typ for resource in mocks.resources)
 
     return pulumi.Output.all(service.uri, job.job_name).apply(check)
+
+
+@pulumi.runtime.test
+def test_cloud_run_service_can_boost_startup_with_request_based_cpu() -> pulumi.Output[None]:
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-iac", stack="test", preview=False)
+    provider = gcp.Provider("gcp", project="example")
+    service = CloudRunService(
+        "service",
+        CloudRunServiceArgs(
+            project="example",
+            region="us-central1",
+            service_name="service",
+            build_context="/tmp/service",
+            cpu_always_allocated=False,
+            startup_cpu_boost=True,
+        ),
+        gcp_provider=provider,
+    )
+
+    def check(_: str) -> None:
+        resource = next(resource for resource in mocks.resources if resource.typ == "gcp:cloudrunv2/service:Service")
+        resources = resource.inputs["template"]["containers"][0]["resources"]
+        assert resources["cpuIdle"] is True
+        assert resources["startupCpuBoost"] is True
+
+    return service.uri.apply(check)

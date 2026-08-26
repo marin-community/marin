@@ -13,6 +13,7 @@ use connectrpc::{ConnectError, RequestContext, ServiceResult};
 use datafusion::error::DataFusionError;
 
 use crate::errors::StatsError;
+use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
     DropTableResponse, GetTableSchemaResponse, ListNamespacesResponse, NamespaceInfo,
     OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedListNamespacesRequestView,
@@ -21,7 +22,6 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
-use crate::server::telemetry::TELEMETRY_NAMESPACE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -31,6 +31,7 @@ use crate::store::schema::{
 };
 use crate::store::store::ForwardedWrite;
 use crate::store::Store;
+use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
 
 pub struct StatsServiceImpl {
     store: Arc<Store>,
@@ -62,7 +63,7 @@ impl StatsServiceImpl {
 }
 
 fn is_forwarded_telemetry(ctx: &RequestContext, namespace: &str) -> bool {
-    namespace == TELEMETRY_NAMESPACE
+    is_forwarded_telemetry_namespace(namespace)
         && matches!(request_identity(ctx), Some(AuthIdentity::Jwt { .. }))
 }
 
@@ -139,12 +140,14 @@ impl StatsService for StatsServiceImpl {
             .as_option()
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
-        let policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        let requested_policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
         let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
-        let ns = namespace.clone();
+        let requested_namespace = namespace.clone();
         let (effective, effective_policy, ignored_columns) = run_blocking(move || {
+            let ns = registration_namespace_for(&requested_namespace)?;
+            let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
             if forwarded_telemetry {
                 match store.get_table_schema(&ns) {
                     Ok(effective) => {
@@ -185,10 +188,9 @@ impl StatsService for StatsServiceImpl {
         // Resolve the origin cluster from the credential before the blocking
         // hop so a forwarding writer's rows are stamped with its cluster.
         let origin_cluster = write_origin_cluster(&ctx)?;
-        let forwarded_telemetry = origin_cluster.is_some() && namespace == TELEMETRY_NAMESPACE;
+        let forwarded_telemetry =
+            origin_cluster.is_some() && is_forwarded_telemetry_namespace(&namespace);
 
-        // Decode + validate + align + append on the blocking pool; the size/row
-        // caps and IPC decode live in `Store::write_rows`.
         let store = Arc::clone(&self.store);
         let ns = namespace.clone();
         let outcome = run_blocking(move || {
@@ -201,18 +203,12 @@ impl StatsService for StatsServiceImpl {
                         .expect("forwarded telemetry has an origin cluster"),
                 );
             }
-            let (rows_written, last_seq) =
-                store.write_rows(&ns, &arrow_ipc, origin_cluster.as_deref())?;
-            Ok(ForwardedWrite {
-                rows_written,
-                last_seq,
-                ignored_columns: Vec::new(),
-            })
+            store.write_ingestion_rows(&ns, &arrow_ipc, origin_cluster.as_deref())
         })
         .await?;
         let ForwardedWrite {
             rows_written,
-            last_seq,
+            persisted_targets,
             ignored_columns,
         } = outcome;
         self.report_ignored_forwarded_telemetry_columns(ignored_columns);
@@ -220,10 +216,12 @@ impl StatsService for StatsServiceImpl {
         // The server does not auto-cancel on the client deadline; enforce the
         // durability await ourselves, bounded by the remaining budget (falling
         // back to DEFAULT_PERSIST_TIMEOUT).
-        let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
-        self.store
-            .await_persisted(&namespace, last_seq, budget)
-            .await?;
+        for (destination, last_seq) in persisted_targets {
+            let budget = ctx.time_remaining().unwrap_or(DEFAULT_PERSIST_TIMEOUT);
+            self.store
+                .await_persisted(&destination, last_seq, budget)
+                .await?;
+        }
 
         connectrpc::Response::ok(WriteRowsResponse::default().with_rows_written(rows_written))
     }

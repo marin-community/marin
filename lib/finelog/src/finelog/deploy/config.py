@@ -18,6 +18,7 @@ with. A server's own key pair is its identity: the hub records rows under the
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 
@@ -30,6 +31,11 @@ K8S_APP_LABEL = "app"
 K8S_CONTAINER_NAME = "finelog"
 K8S_ENV_SECRET_SUFFIX = "-env"
 SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
+
+
+class TelemetryMigrationMode(StrEnum):
+    NORMAL = "normal"
+    DUAL_WRITE = "dual-write"
 
 
 def _bundled_config_dir() -> Path:
@@ -232,6 +238,7 @@ class FinelogConfig:
     query_metadata_cache_mb: int | None = None
     # Decoded `.fidx` section cache limit. Unset keeps the server default.
     query_index_cache_mb: int | None = None
+    telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
 
     def __post_init__(self) -> None:
         if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
@@ -380,6 +387,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         query_metadata_cache_mb=(
             None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
         ),
+        telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
     )
 
 
