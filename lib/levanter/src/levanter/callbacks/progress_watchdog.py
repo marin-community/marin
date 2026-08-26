@@ -288,13 +288,17 @@ class ProgressWatchdogConfig:
         if self.diagnostic_timeout is not None and self.diagnostic_timeout.total_seconds() <= 0:
             raise ValueError("diagnostic_timeout must be positive")
 
+    @property
+    def is_enabled(self) -> bool:
+        return self.step_timeout is not None or self.process_timeout is not None or self.startup_timeout is not None
+
     def create(
         self,
         *,
         process_index: int = 0,
         diagnostic: Callable[[ProgressTimeout], None] | None = None,
     ) -> ProgressWatchdog | None:
-        if self.step_timeout is None and self.process_timeout is None and self.startup_timeout is None:
+        if not self.is_enabled:
             return None
         runs_diagnostic = self.diagnostic_timeout is not None and process_index == 0
         if runs_diagnostic and diagnostic is None:
