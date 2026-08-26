@@ -1,6 +1,7 @@
-# Marin GCS storage tooling
+# Marin storage tooling
 
-Tooling for the `marin-*` GCS buckets.
+Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
+object storage.
 
 ## Weekly storage report
 
@@ -81,10 +82,13 @@ COREWEAVE_API_TOKEN=... \
   uv run python -m scripts.ops.storage.coreweave_usage --dry-run
 ```
 
-`.github/workflows/ops-coreweave-storage.yaml` runs the collector each hour.
-The workflow writes to the `marin` Finelog server through the standard GCP SSH
-tunnel. It needs the repository secret `COREWEAVE_API_TOKEN` and fails without
-it, because a green run that collects nothing hides a frozen dashboard.
+`.github/workflows/ops-coreweave-storage.yaml` runs the collector at minutes 17
+and 47 of each hour. The workflow writes to the `marin` Finelog server through
+the standard GCP SSH tunnel. It needs the repository secret
+`COREWEAVE_API_TOKEN` and fails without it, because a green run that collects
+nothing hides a frozen dashboard. The collector does not run on an Iris
+CoreWeave controller or worker, so restarting those services does not restart
+collection.
 
 The Grafana `Storage` dashboard shows bucket bytes and quota use for each zone.
 The `CoreWeaveStorageCapacity` rule pages after quota use stays above 80 percent
@@ -94,9 +98,22 @@ above 720 TiB. The rule reads the quota metric, so it also follows a later quota
 change.
 
 The `CoreWeaveStorageTelemetryStale` rule sends a Slack warning when a known
-storage series is more than three hours old. For a stale-data warning, check the
-hourly workflow and the token first. For a quota warning, check the zone values
-in the Storage dashboard and in the [CoreWeave quota page].
+storage series is more than three hours old. Check the workflow history first:
+
+```bash
+gh run list --workflow ops-coreweave-storage.yaml --limit 10
+```
+
+If GitHub did not create a run during the window, restore collection with
+`gh workflow run ops-coreweave-storage.yaml`. If a run failed, inspect it with
+`gh run view <run-id> --log-failed`. A successful run can still contain an old
+CoreWeave sample: `collected_at` is when the workflow fetched a row, while
+`observed_at` is the source metric timestamp. Fresh `collected_at` with stale
+`observed_at` points to CoreWeave Observability; stale values for both point to
+the workflow or its Finelog write path.
+
+For a quota warning, check the zone values in the Storage dashboard and in the
+[CoreWeave quota page].
 
 Both rules read the `storage.usage` namespace, which exists only after the
 collector writes its first rows. Until then the query fails, and because both

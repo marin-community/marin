@@ -4,7 +4,7 @@ name: "Ops - CoreWeave Storage"
 
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17,47 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
