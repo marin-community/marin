@@ -5,7 +5,7 @@
       "exploitation_rows": 16,
       "local_refinement_rows": 12,
       "model_disagreement_rows": 12,
-      "rule": "Select runtime-exact, epoch-cap-feasible mixtures from a deterministic candidate pool after excluding every Wave-1 coordinate. Exploitation spans the frozen Hellinger-squared penalty grid; local refinement uses count transfers around those optima; disagreement maximizes standardized prediction spread across eligible scalar models. Ties are broken by runtime-count tuple."
+      "rule": "Select runtime-exact, epoch-cap-feasible mixtures from a deterministic candidate pool after excluding every Wave-1 coordinate. Exploitation spans the frozen Hellinger-squared penalty grid using one representative ridge setting per eligible coordinate model; local refinement uses count transfers around those optima and the validated-frontier transfer anchor; disagreement maximizes prediction spread across eligible coordinate models, or across the frozen spatial-fold ensemble if only one coordinate model is eligible. Ties are broken by runtime-count tuple."
     },
     "outcome_blind_coverage_rows": 40,
     "outcome_blind_policy": "Before opening Wave-1 endpoints, reserve full-rank square-root-coordinate maximin coverage outside the Wave-1 coordinates. These rows do not depend on outcomes or model predictions.",
@@ -27,7 +27,14 @@
     "rule": "Confirm the three distinct predicted mixtures with the best spatial-crossfit-supported selection scores, paired against exact tied continuations under common random numbers. A canonical frontier claim additionally requires same-hardware confirmation."
   },
   "contract_version": "delphi_phase1_proportional_prefix_wave2_20260826_v1",
+  "corrective_amendment": {
+    "outcomes_used": false,
+    "reason": "A read-only CC review found an unpaired Wave-2 data seed, a row-budget overflow for three eligible ridge settings, and a mismatch between coordinate model classes and ridge hyperparameter settings. The amendment restores the Wave-1 common-random-number seed, chooses one representative ridge setting per coordinate model, and uses the fold ensemble only when one coordinate model survives. No observed endpoint value or ordering was used.",
+    "visible_wave1_rows_when_amended": 13
+  },
   "eligibility": {
+    "baseline_rule": "Use data seed 970000 for every Wave-2 fit row so effects remain paired to the existing Wave-1 common-random-number tied control.",
+    "fit_data_seed": 970000,
     "forbidden_features": [
       "semantic bucket families",
       "sealed referee outcomes",
@@ -67,5 +74,6 @@
     "wave1_continuation_weights_sha256": "b026cdea1277217cfa728cc25b3c989398b16190169e63c8563f411248592928",
     "wave1_design_manifest_sha256": "d475c2dcb68b273e53017810b0c610148e3e29035fcc2d88a6212c27d319eb2e"
   },
-  "sealed_before_wave1_outcomes": true
+  "initial_contract_sealed_before_wave1_outcomes": true,
+  "sealed_before_wave1_outcomes": false
 }

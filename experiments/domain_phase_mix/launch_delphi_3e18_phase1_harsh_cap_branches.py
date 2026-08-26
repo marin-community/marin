@@ -302,6 +302,9 @@ def load_design(
     manifest_path: Path,
     expected_manifest_sha256: str,
     candidate_ids: tuple[str, ...],
+    *,
+    expected_fit_rows_per_prefix: int = FIT_ROWS_PER_PREFIX,
+    expected_referee_rows_per_prefix: int = REFEREE_ROWS_PER_PREFIX,
 ) -> list[dict[str, object]]:
     for path, expected in (
         (summary_path, expected_summary_sha256),
@@ -318,11 +321,11 @@ def load_design(
     if not isinstance(rows_contract, dict):
         raise ValueError("Frozen branch allocation is missing")
     controls_per_prefix = int(rows_contract.get("controls_per_prefix", -1))
-    rows_per_prefix = FIT_ROWS_PER_PREFIX + REFEREE_ROWS_PER_PREFIX + controls_per_prefix
+    rows_per_prefix = expected_fit_rows_per_prefix + expected_referee_rows_per_prefix + controls_per_prefix
     if rows_contract != {
         "controls_per_prefix": controls_per_prefix,
-        "fit_per_prefix": FIT_ROWS_PER_PREFIX,
-        "sealed_referees_per_prefix": REFEREE_ROWS_PER_PREFIX,
+        "fit_per_prefix": expected_fit_rows_per_prefix,
+        "sealed_referees_per_prefix": expected_referee_rows_per_prefix,
         "total": len(candidate_ids) * rows_per_prefix,
     }:
         raise ValueError("Frozen branch allocation changed")
@@ -361,8 +364,8 @@ def load_design(
         candidate_rows = [row for row in rows if row["prefix_candidate_id"] == candidate_id]
         roles = pd.Series([row["role"] for row in candidate_rows]).value_counts().to_dict()
         expected_roles = manifest.get("role_counts_per_prefix") or {
-            "fixed_prefix_response_fit": FIT_ROWS_PER_PREFIX,
-            "sealed_geometry_referee": REFEREE_ROWS_PER_PREFIX,
+            "fixed_prefix_response_fit": expected_fit_rows_per_prefix,
+            "sealed_geometry_referee": expected_referee_rows_per_prefix,
             "prefix_state_tied_control": 4,
             "fresh_tied_control": 3,
             "common_random_tied_control": 1,

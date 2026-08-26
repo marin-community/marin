@@ -2,7 +2,7 @@
 
 ## Current status
 
-**TL;DR:** Exact phase-boundary checkpoints exist for three independently trained proportional prefixes. Wave 1 is being frozen as a single-prefix, outcome-blind continuation panel for v6e-8 in `us-east5-b`; no branch job has been submitted yet.
+**TL;DR:** Wave 1 is running as 102 v6e-8 continuations in `us-east5-b` from exact proportional phase-boundary checkpoints. The model and Wave-2 acquisition contracts were frozen before endpoint outcomes were available.
 
 **Primary question:** Can optimizing only phase 1 from a proportional phase-0 state match or beat the validated cap-4 two-phase frontier on Uncheatable BPB?
 
@@ -44,3 +44,8 @@
 - Bound each source checkpoint to a successful GCS executor record that pins v5p-8/east5a, exact seeds, and tensor parallelism.
 - Added the exact validated cap-4 frontier mixture and four fresh repeats without using it as a geometry repeller; the 80-row fit panel remains full rank.
 - Froze the proportional Wave-2 allocation and model/acquisition policy before opening any Wave-1 endpoint.
+- Submitted `/calvinxu/dm-delphi-3e18-phase1-proportional-prefix-wave1-v6e8-east5b-20260826` at interactive priority from commit `af65494a1ea74d84e03f7cfba4d3e525112279bd` after a successful 102-row dry run and east5 launch-safety validation.
+- CC's read-only review found five launch blockers in the first draft. Repairs added the exact frontier anchor, repeat groups, rank-preserving geometry, cross-hardware provenance, and a sealed Wave-2 contract; the follow-up verdict was launch-ready after runtime-path tests passed.
+- A second CC review of the adaptive implementation found three Wave-2 blockers: an unpaired data seed, exploitation overflow when more than two ridge settings survived, and disagreement across ridge settings rather than coordinate model classes. The corrected design reuses data seed `970000`, selects one alpha representative per eligible direct/square-root model, caps exploitation at 16, and uses fold-ensemble spread when only one coordinate model survives.
+- The second correction happened after 13 Wave-1 endpoints were visible. The contract records this deviation explicitly; the endpoint values and ordering did not enter any correction. The revised code also fails closed when no model passes the gain-sign gate, enforces contract provenance and bucket order, and refuses to overwrite a differing frozen Wave-2 artifact.
+- CC's follow-up found no Wave-2 launch blocker. Before submission, the generic launcher now requires an explicit branch run-ID base, the combined-wave materializer rejects run-ID overlap, the validated frontier BPB is a required fit argument, and tests assert the generated `970000` seed plus the 16/12/12 adaptive composition.

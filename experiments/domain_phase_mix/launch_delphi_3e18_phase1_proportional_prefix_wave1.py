@@ -195,6 +195,7 @@ def load_and_validate_prefixes(
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--experiment-name", default=EXPERIMENT_NAME)
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
     parser.add_argument("--expected-candidate-sha256", required=True)
     parser.add_argument("--continuation-summary", type=Path, default=DEFAULT_CONTINUATION_SUMMARY)
@@ -207,7 +208,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--expected-selected-prefixes-sha256", required=True)
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--analysis-output-path", default=base.DEFAULT_ANALYSIS_OUTPUT_PATH)
-    parser.add_argument("--branch-run-id-base", type=int, default=BRANCH_RUN_ID_BASE)
+    parser.add_argument("--branch-run-id-base", type=int, required=True)
+    parser.add_argument("--expected-fit-rows-per-prefix", type=int, default=runtime.FIT_ROWS_PER_PREFIX)
+    parser.add_argument("--expected-referee-rows-per-prefix", type=int, default=runtime.REFEREE_ROWS_PER_PREFIX)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
@@ -243,6 +246,8 @@ def main() -> None:
         args.design_manifest,
         args.expected_design_manifest_sha256,
         (TARGET_PREFIX,),
+        expected_fit_rows_per_prefix=args.expected_fit_rows_per_prefix,
+        expected_referee_rows_per_prefix=args.expected_referee_rows_per_prefix,
     )
     all_rows = runtime.enrich_rows(design_rows, checkpoints, specs, args.branch_run_id_base)
     full_design_rows = len(all_rows)
@@ -265,12 +270,15 @@ def main() -> None:
                 "prefix_replay_code_commit": args.prefix_replay_code_commit,
                 "branch_code_commit": code_commit,
                 "branch_run_id_base": args.branch_run_id_base,
+                "experiment_name": args.experiment_name,
+                "expected_fit_rows_per_prefix": args.expected_fit_rows_per_prefix,
+                "expected_referee_rows_per_prefix": args.expected_referee_rows_per_prefix,
             },
             sort_keys=True,
         ).encode()
     ).hexdigest()
     manifest_config = runtime.SaveManifestConfig(
-        experiment_name=EXPERIMENT_NAME,
+        experiment_name=args.experiment_name,
         output_path=str(args.dry_run_output_dir or LOCAL_DRY_RUN_DIR),
         selected_prefixes_json=json.dumps([asdict(row) for row in checkpoints], sort_keys=True),
         selected_prefixes_sha256=args.expected_selected_prefixes_sha256,
@@ -307,8 +315,8 @@ def main() -> None:
                 run_id=int(row["run_id"]),
                 run_name=str(row["run_name"]),
                 source_run_name=str(row["run_name"]),
-                source_experiment=EXPERIMENT_NAME,
-                panel_source="sequential_phase1_proportional_prefix_wave1",
+                source_experiment=args.experiment_name,
+                panel_source="sequential_phase1_proportional_prefix_branch_search",
                 data_seed=int(row["data_seed"]),
                 trainer_seed=int(row["trainer_seed"]),
                 tpu_type=CONTINUATION_HARDWARE.tpu_type,
@@ -330,7 +338,7 @@ def main() -> None:
             )
             steps.append(
                 ExecutorStep(
-                    name=f"{EXPERIMENT_NAME}/{run_spec.run_name}",
+                    name=f"{args.experiment_name}/{run_spec.run_name}",
                     fn=remote(
                         runtime.run_phase_1_branch,
                         resources=resources,
@@ -338,7 +346,7 @@ def main() -> None:
                     ),
                     resources=resources,
                     config=runtime.HarshBranchTrainingConfig(
-                        experiment_name=EXPERIMENT_NAME,
+                        experiment_name=args.experiment_name,
                         analysis_output_path=args.analysis_output_path,
                         output_path=this_output_path(),
                         run_spec=run_spec,
@@ -358,7 +366,7 @@ def main() -> None:
             )
         steps.append(
             ExecutorStep(
-                name=f"{EXPERIMENT_NAME}/manifest",
+                name=f"{args.experiment_name}/manifest",
                 fn=runtime.save_manifest,
                 config=replace(manifest_config, output_path=this_output_path()),
             )
@@ -369,7 +377,7 @@ def main() -> None:
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=steps,
-        description=("Delphi 3e18 proportional-prefix Wave 1: fixed-prefix phase-1 response coverage and controls"),
+        description=("Delphi 3e18 proportional-prefix sequential phase-1 branch search"),
     )
 
 

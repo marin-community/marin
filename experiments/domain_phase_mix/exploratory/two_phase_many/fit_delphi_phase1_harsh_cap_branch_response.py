@@ -46,7 +46,6 @@ OUTER_FOLDS = 5
 INNER_FOLDS = 4
 CV_SEED = 20_260_825
 MINIMUM_PROBABILITY = 0.70
-FRONTIER_BPB = 0.9824552536
 STABILITY_STANDARD_DEVIATIONS = 1.0
 
 
@@ -66,6 +65,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--design-weights", type=Path, default=DEFAULT_DESIGN_WEIGHTS)
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
     parser.add_argument("--candidate-id")
+    parser.add_argument("--frontier-bpb", type=float, required=True)
+    parser.add_argument("--expected-fit-rows", type=int, default=design.FIT_ROWS_PER_PREFIX)
+    parser.add_argument("--expected-referee-rows", type=int, default=design.REFEREE_ROWS_PER_PREFIX)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
@@ -183,26 +185,54 @@ def parameter_cv(
     for feature_kind in FEATURE_KINDS:
         for alpha in RIDGE_ALPHAS:
             predictions = np.empty(len(effects))
+            fold_rmse = []
+            selection_regret = []
+            gain_sign_reversals = 0
             for fold in sorted(set(folds)):
                 train = folds != fold
                 heldout = folds == fold
                 model = fit_model(weights[train], effects[train], center, feature_kind, alpha)
                 predictions[heldout] = predict(model, weights[heldout], center)
+                heldout_predictions = predictions[heldout]
+                heldout_effects = effects[heldout]
+                fold_rmse.append(float(np.sqrt(np.mean((heldout_predictions - heldout_effects) ** 2))))
+                selected = int(np.argmin(heldout_predictions))
+                selection_regret.append(float(heldout_effects[selected] - heldout_effects.min()))
+                if np.sign(heldout_predictions[selected]) != np.sign(heldout_effects[selected]):
+                    gain_sign_reversals += 1
             residual = predictions - effects
             rows.append(
                 {
                     "feature_kind": feature_kind,
                     "alpha": alpha,
                     "rmse_bpb": float(np.sqrt(np.mean(residual**2))),
+                    "fold_rmse_se_bpb": float(stats.sem(fold_rmse)),
                     "spearman": float(stats.spearmanr(predictions, effects).statistic),
                     "sign_accuracy": float(np.mean(np.sign(predictions) == np.sign(effects))),
+                    "mean_selection_regret_bpb": float(np.mean(selection_regret)),
+                    "gain_sign_reversals": gain_sign_reversals,
                 }
             )
     return pd.DataFrame(rows).sort_values(["rmse_bpb", "feature_kind", "alpha"]).reset_index(drop=True)
 
 
+def eligible_parameters(metrics: pd.DataFrame) -> pd.DataFrame:
+    ranked = metrics.sort_values(["rmse_bpb", "feature_kind", "alpha"]).reset_index(drop=True)
+    best = ranked.iloc[0]
+    eligible = ranked[
+        ranked.rmse_bpb.le(float(best.rmse_bpb) + float(best.fold_rmse_se_bpb)) & ranked.gain_sign_reversals.le(1)
+    ].copy()
+    if eligible.empty:
+        raise ValueError("No response model satisfies the preregistered gain-sign gate")
+    eligible["feature_complexity"] = eligible.feature_kind.map({"direct": 0, "sqrt": 1})
+    return eligible.sort_values(
+        ["feature_complexity", "alpha", "rmse_bpb"],
+        ascending=[True, False, True],
+    ).reset_index(drop=True)
+
+
 def selected_parameter(metrics: pd.DataFrame) -> tuple[str, float]:
-    row = metrics.sort_values(["rmse_bpb", "feature_kind", "alpha"]).iloc[0]
+    row = eligible_parameters(metrics).iloc[0]
     return str(row.feature_kind), float(row.alpha)
 
 
@@ -301,7 +331,7 @@ def control_baselines(results: pd.DataFrame) -> dict[str, float | int]:
         results.prefix_repeat_seed.eq(0) & results.role.isin(("common_random_tied_control", "fresh_tied_control"))
     ]
     stability = results[results.role.eq("prefix_state_tied_control")]
-    if len(matched) != 1 or len(expected) != 4 or len(stability) != 4:
+    if len(matched) != 1 or len(expected) < 4 or len(stability) != len(expected):
         raise ValueError(
             f"Tied controls are incomplete: matched={len(matched)}, expected={len(expected)}, stability={len(stability)}"
         )
@@ -348,13 +378,16 @@ def fit_candidate(
     design_weights_path: Path,
     candidate_weights_path: Path,
     candidate_id: str,
+    frontier_bpb: float,
+    expected_fit_rows: int,
+    expected_referee_rows: int,
 ) -> tuple[dict[str, object], dict[str, pd.DataFrame]]:
     candidate_results = results[results.prefix_candidate_id.eq(candidate_id)].copy()
     if candidate_results.role.eq("sealed_geometry_referee").any():
         raise ValueError("Referee outcomes were opened before model freeze")
     fit_rows = candidate_results[candidate_results.fit_budget.astype(bool)].sort_values("run_order")
-    if len(fit_rows) != design.FIT_ROWS_PER_PREFIX:
-        raise ValueError(f"Expected {design.FIT_ROWS_PER_PREFIX} fit rows, got {len(fit_rows)}")
+    if len(fit_rows) != expected_fit_rows:
+        raise ValueError(f"Expected {expected_fit_rows} fit rows, got {len(fit_rows)}")
     continuation_ids = tuple(fit_rows.continuation_id)
     buckets, weights = load_weights(design_weights_path, candidate_id, continuation_ids)
     summary = pd.read_csv(design_summary_path)
@@ -363,8 +396,8 @@ def fit_candidate(
             summary.prefix_candidate_id.eq(candidate_id) & summary.role.eq("sealed_geometry_referee")
         ].continuation_id
     )
-    if len(referee_ids) != design.REFEREE_ROWS_PER_PREFIX:
-        raise ValueError(f"Expected {design.REFEREE_ROWS_PER_PREFIX} sealed referee coordinates, got {len(referee_ids)}")
+    if len(referee_ids) != expected_referee_rows:
+        raise ValueError(f"Expected {expected_referee_rows} sealed referee coordinates, got {len(referee_ids)}")
     _, referee_weights = load_weights(design_weights_path, candidate_id, referee_ids)
     referee_counts = {tuple(design.common_design.runtime_counts(row).tolist()) for row in referee_weights}
     center = tied_center(candidate_weights_path, candidate_id, buckets)
@@ -443,7 +476,7 @@ def fit_candidate(
     best_effect = float(fold_mean[stable_index])
     expected_endpoint = float(baselines["expected_tied_bpb"]) + best_effect
     probability_beat_tied = float(stats.norm.cdf(-best_effect / predictive_sd))
-    probability_beat_frontier = float(stats.norm.cdf((FRONTIER_BPB - expected_endpoint) / predictive_sd))
+    probability_beat_frontier = float(stats.norm.cdf((frontier_bpb - expected_endpoint) / predictive_sd))
     candidate: dict[str, object] = {
         "candidate_id": candidate_id,
         "target": "Uncheatable BPB",
@@ -502,7 +535,9 @@ def main() -> None:
         "candidate_ids": list(candidate_ids),
         "model_class": "local direct-or-square-root ridge plus nonnegative scalar Hellinger-squared damage",
         "selection": "nested row-level cross-validation; referee outcomes excluded",
-        "frontier_bpb": FRONTIER_BPB,
+        "frontier_bpb": args.frontier_bpb,
+        "expected_fit_rows": args.expected_fit_rows,
+        "expected_referee_rows": args.expected_referee_rows,
         "inputs": {
             "results_sha256": file_sha256(args.results),
             "coverage_sha256": file_sha256(args.coverage),
@@ -527,6 +562,9 @@ def main() -> None:
             args.design_weights,
             args.candidate_weights,
             candidate_id,
+            args.frontier_bpb,
+            args.expected_fit_rows,
+            args.expected_referee_rows,
         )
         candidate_dir = args.output_dir / candidate_id
         candidate_dir.mkdir(exist_ok=True)
