@@ -28,6 +28,7 @@ from hero_runs import (
     as_utc,
     hero_run_id,
     root_job_for,
+    run_id_predicate,
     sql_epoch_ms,
     sql_timestamp,
 )
@@ -140,6 +141,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         if run.execution_uid is not None
     ]
     execution_predicate = " OR ".join(execution_predicates) or "FALSE"
+    run_predicate = run_id_predicate(runs)
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
     liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
     health_since = sql_epoch_ms(now - HEALTH_WINDOW)
@@ -151,7 +153,7 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
         "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
-        f"WHERE ({execution_predicate}) AND process_index = 0 "
+        f"WHERE {run_predicate} AND ({execution_predicate}) AND process_index = 0 "
         f"AND name IN ({metric_names}) "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
         f"AND (name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
