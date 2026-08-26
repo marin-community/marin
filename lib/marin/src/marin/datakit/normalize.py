@@ -35,7 +35,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.expr import col
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file, load_file_batch
-from zephyr.writers import ThreadedBatchWriter, write_parquet_file
+from zephyr.writers import ThreadedBatchWriter, batchify, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.datakit.source_key import DatakitArtifactPath
@@ -169,39 +169,26 @@ def _iter_input_batches(path: str) -> Iterator[pl.DataFrame]:
 
     schema: pl.Schema | None = None
     rows_before = 0
-    batch: list[dict[str, Any]] = []
 
-    def flush() -> Iterator[pl.DataFrame]:
-        nonlocal schema, rows_before, batch
-        if not batch:
-            return
+    for batch in batchify(load_file(path), n=_INPUT_BATCH_ROWS):
         df = pl.DataFrame(batch, infer_schema_length=None)
-        n = len(batch)
-        batch = []
         if schema is None:
             schema = df.schema
-            rows_before += n
-            yield df
-            return
-        try:
-            aligned, schema = _align_dataframe_vertical_relaxed(df, schema)
-        except (ValueError, pl.exceptions.ComputeError, pl.exceptions.SchemaError, pl.exceptions.ShapeError) as err:
-            raise ValueError(
-                f"Row structure changed after {rows_before} rows in {path} "
-                f"(batch size {_INPUT_BATCH_ROWS}). Running schema: {dict(schema)}. "
-                f"This batch could not be unified with pl.concat(how='vertical_relaxed'): {err}. "
-                f"If a field appears only later in the file, increase _INPUT_BATCH_ROWS so the "
-                f"first batch includes it. If row shape genuinely varies through the file, use "
-                f"Parquet or a homogeneous dump."
-            ) from err
-        rows_before += n
+            aligned = df
+        else:
+            try:
+                aligned, schema = _align_dataframe_vertical_relaxed(df, schema)
+            except (ValueError, pl.exceptions.ComputeError, pl.exceptions.SchemaError, pl.exceptions.ShapeError) as err:
+                raise ValueError(
+                    f"Row structure changed after {rows_before} rows in {path} "
+                    f"(batch size {_INPUT_BATCH_ROWS}). Running schema: {dict(schema)}. "
+                    f"This batch could not be unified with pl.concat(how='vertical_relaxed'): {err}. "
+                    f"If a field appears only later in the file, increase _INPUT_BATCH_ROWS so the "
+                    f"first batch includes it. If row shape genuinely varies through the file, use "
+                    f"Parquet or a homogeneous dump."
+                ) from err
+        rows_before += len(batch)
         yield aligned
-
-    for record in load_file(path):
-        batch.append(record)
-        if len(batch) >= _INPUT_BATCH_ROWS:
-            yield from flush()
-    yield from flush()
 
 
 def _as_text_series(series: pl.Series) -> pl.Series:

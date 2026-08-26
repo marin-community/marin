@@ -671,7 +671,7 @@ def _combine_scatter_buffer(
 
 
 class ScatterWriter:
-    """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
+    """Write one mapper's scatter data and metadata.
 
     Accepts routing-column DataFrames via :meth:`write` (see
     ``_items_to_dataframe`` for the Python-items adapter) and canonical Arrow

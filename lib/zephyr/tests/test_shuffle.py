@@ -151,8 +151,8 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     ]
 
 
-def _raw_columns(shard: ScatterReader) -> set[str]:
-    """Column names actually present in a shard's chunk files, before _dataframe_to_items strips anything."""
+def _reducer_frame_columns(shard: ScatterReader) -> set[str]:
+    """Return reducer-frame columns before rows are materialized."""
     frames = shard.get_frames()
     if not frames:
         return set()
@@ -179,7 +179,7 @@ def test_scatter_accepts_record_batches(tmp_path):
     recovered = []
     for shard_idx in range(num_shards):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        assert _PAYLOAD_COL not in _raw_columns(shard)
+        assert _PAYLOAD_COL not in _reducer_frame_columns(shard)
         recovered.extend(_read_shard(shard))
     assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
 
@@ -241,7 +241,7 @@ def test_scatter_record_batch_items_with_combiner(tmp_path):
     recovered = []
     for shard_idx in range(2):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        assert _PAYLOAD_COL not in _raw_columns(shard)
+        assert _PAYLOAD_COL not in _reducer_frame_columns(shard)
         recovered.extend(_read_shard(shard))
     assert sorted(recovered, key=lambda x: x["k"]) == [{"k": "a", "v": 3}, {"k": "b", "v": 30}]
 
