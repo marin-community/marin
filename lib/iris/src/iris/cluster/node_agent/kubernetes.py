@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import http.client
 import logging
 import math
+import ssl
 import threading
 import time
 import urllib.request
@@ -45,8 +47,13 @@ from iris.rpc import job_pb2
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 60.0
-K8S_API_TIMEOUT = 2.0
+# Generous enough that ordinary apiserver latency, including a control plane under
+# load, does not fail a collection cycle; collection runs once per interval, so a
+# slow call delays one sample rather than overlapping the next.
+K8S_API_TIMEOUT = 15.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
+KUBELET_RESOURCE_METRICS_URL = "https://127.0.0.1:10250/metrics/resource"
+SERVICE_ACCOUNT_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
 
 # CoreWeave runs both exporters as DaemonSets in this namespace. node-exporter
@@ -108,6 +115,41 @@ def _http_get(url: str, timeout: float = _SCRAPE_TIMEOUT) -> str | None:
     except Exception as e:
         logger.debug("node-metrics scrape failed for %s: %s", url, e)
         return None
+
+
+# The kubelet's serving certificate is issued by the node rather than the cluster
+# CA, so it does not verify against the service-account CA bundle. The connection
+# is to loopback on the agent's own node and carries no off-host exposure.
+_KUBELET_TLS_CONTEXT = ssl.create_default_context()
+_KUBELET_TLS_CONTEXT.check_hostname = False
+_KUBELET_TLS_CONTEXT.verify_mode = ssl.CERT_NONE
+
+
+class KubeletScrapeError(RuntimeError):
+    """The local kubelet did not return resource metrics."""
+
+
+def kubelet_resource_metrics(timeout: float = _SCRAPE_TIMEOUT) -> str:
+    """Return the local kubelet's ``metrics/resource`` text.
+
+    The node agent runs on the host network and reads its own kubelet directly.
+    Routing the same request through the apiserver's ``nodes/proxy`` subresource
+    sends every sample across the cluster's Konnectivity tunnel, behind the same
+    control-plane path that carries ``exec``, ``port-forward``, and ``logs``.
+
+    Authorization uses the pod's service-account token, which the kubelet checks
+    against the ``nodes/metrics`` subresource.
+    """
+    token = SERVICE_ACCOUNT_TOKEN_PATH.read_text().strip()
+    request = urllib.request.Request(KUBELET_RESOURCE_METRICS_URL, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=_KUBELET_TLS_CONTEXT) as resp:
+            body = resp.read(_MAX_SCRAPE_BYTES + 1)
+    except (OSError, http.client.HTTPException) as error:
+        raise KubeletScrapeError(f"kubelet resource-metrics scrape failed: {error}") from error
+    if len(body) > _MAX_SCRAPE_BYTES:
+        raise KubeletScrapeError(f"kubelet resource metrics exceeded {_MAX_SCRAPE_BYTES} bytes")
+    return body.decode("utf-8", errors="replace")
 
 
 def _parse_labels(body: str) -> dict[str, str]:
@@ -224,11 +266,13 @@ class TaskStatsCollector:
         table: Table,
         *,
         clock: Callable[[], float] = time.monotonic,
+        read_kubelet_metrics: Callable[[], str] = kubelet_resource_metrics,
     ) -> None:
         self._kubectl = kubectl
         self._node_name = node_name
         self._table = table
         self._clock = clock
+        self._read_kubelet_metrics = read_kubelet_metrics
         self._previous_cpu: dict[str, tuple[float, float]] = {}
         self._memory_peak: dict[str, int] = {}
 
@@ -241,8 +285,8 @@ class TaskStatsCollector:
                 labels=labels,
                 field_selector=f"spec.nodeName={self._node_name}",
             )
-            resources = parse_kubelet_resource_metrics(self._kubectl.node_resource_metrics(self._node_name))
-        except KubectlError as error:
+            resources = parse_kubelet_resource_metrics(self._read_kubelet_metrics())
+        except (KubectlError, KubeletScrapeError) as error:
             logger.warning("task-resource collection failed for node %s: %s", self._node_name, error)
             return
 

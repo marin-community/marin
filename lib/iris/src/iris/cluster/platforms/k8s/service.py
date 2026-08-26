@@ -24,11 +24,17 @@ try:
     from kubernetes.client.exceptions import ApiException
     from kubernetes.dynamic import DynamicClient
     from kubernetes.dynamic.exceptions import NotFoundError
+
+    # The kubernetes client reports transport failures — connect and read timeouts,
+    # connection resets, retry exhaustion — as urllib3 errors rather than
+    # ApiException, so they need the same conversion to KubectlError.
+    from urllib3.exceptions import HTTPError as TransportError
 except ImportError:
     kubernetes = None  # type: ignore[assignment]
     ApiException = Exception  # type: ignore[assignment,misc]
     NotFoundError = Exception  # type: ignore[assignment,misc]
     DynamicClient = None  # type: ignore[assignment,misc]
+    TransportError = Exception  # type: ignore[assignment,misc]
 
 
 from rigging.log_setup import slow_log
@@ -156,8 +162,6 @@ class K8sService(Protocol):
         self,
         field_selector: str | None = None,
     ) -> list[dict]: ...
-
-    def node_resource_metrics(self, node_name: str) -> str: ...
 
     def read_file(
         self,
@@ -315,6 +319,8 @@ class CloudK8sService:
                 raise KubectlError(
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
+            except TransportError as e:
+                raise KubectlError(f"apply {kind}/{name} failed: {e}") from e
 
     def _apply_pod(self, res: K8sResource, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
@@ -340,6 +346,8 @@ class CloudK8sService:
                 # leave it. A later reconcile re-applies once any deletion lands.
                 return
             raise
+        except TransportError as e:
+            raise KubectlError(f"create {res.plural} failed: {e}") from e
 
     # -- get -----------------------------------------------------------------
 
@@ -358,6 +366,8 @@ class CloudK8sService:
                 return None
             except ApiException as e:
                 raise KubectlError(f"get {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"get {resource.plural}/{name} failed: {e}") from e
 
     # -- list ----------------------------------------------------------------
 
@@ -398,6 +408,8 @@ class CloudK8sService:
                     result = api.get(**page_kwargs)
                 except ApiException as e:
                     raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+                except TransportError as e:
+                    raise KubectlError(f"list {resource.plural} failed: {e}") from e
                 for item in result.items:
                     yield item.to_dict()
                 meta = result.metadata
@@ -434,6 +446,8 @@ class CloudK8sService:
                 return
             except ApiException as e:
                 raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"delete {resource.plural}/{name} failed: {e}") from e
 
     def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
@@ -489,6 +503,8 @@ class CloudK8sService:
                 return
             except ApiException as e:
                 raise KubectlError(f"delete pod {namespace}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"delete pod {namespace}/{name} failed: {e}") from e
 
     # -- remove_finalizer ----------------------------------------------------
 
@@ -521,6 +537,8 @@ class CloudK8sService:
                 return
             except ApiException as e:
                 raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed: {e}") from e
 
     # -- set_image -----------------------------------------------------------
 
@@ -547,6 +565,8 @@ class CloudK8sService:
                 )
             except ApiException as e:
                 raise KubectlError(f"set_image {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"set_image {resource.plural}/{name} failed: {e}") from e
 
     # -- rollout_restart -----------------------------------------------------
 
@@ -576,6 +596,8 @@ class CloudK8sService:
                 )
             except ApiException as e:
                 raise KubectlError(f"rollout_restart {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
+            except TransportError as e:
+                raise KubectlError(f"rollout_restart {resource.plural}/{name} failed: {e}") from e
 
     # -- rollout_status ------------------------------------------------------
 
@@ -624,6 +646,8 @@ class CloudK8sService:
                 if e.status == 404:
                     return []
                 raise
+            except TransportError as e:
+                raise KubectlError(f"list events failed: {e}") from e
 
     # -- logs ----------------------------------------------------------------
 
@@ -646,6 +670,8 @@ class CloudK8sService:
                 if e.status == 404:
                     return ""
                 raise
+            except TransportError as e:
+                raise KubectlError(f"logs {pod_name} failed: {e}") from e
 
     # -- stream_logs ---------------------------------------------------------
 
@@ -686,6 +712,8 @@ class CloudK8sService:
                 if e.status == 404:
                     return KubectlLogResult(lines=[], last_timestamp=since_time)
                 raise
+            except TransportError as e:
+                raise KubectlError(f"stream_logs {pod_name} failed: {e}") from e
 
         # When limit_bytes is active the response may be truncated mid-line.
         # Drop the trailing partial line by trimming to the last newline.
@@ -753,7 +781,7 @@ class CloudK8sService:
                         return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()
-            except ApiException as e:
+            except (ApiException, TransportError) as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
 
     # -- read_file / rm_files ------------------------------------------------
@@ -768,25 +796,6 @@ class CloudK8sService:
     def rm_files(self, pod_name: str, paths: list[str], *, container: str | None = None) -> None:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
-
-    # -- node metrics ---------------------------------------------------------
-
-    def node_resource_metrics(self, node_name: str) -> str:
-        """Return kubelet ``metrics/resource`` text for one node."""
-        logger.debug("k8s: node resource metrics node=%s", node_name)
-        with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                response = self._core_v1.connect_get_node_proxy_with_path(
-                    name=node_name,
-                    path="metrics/resource",
-                    _preload_content=False,
-                    **self._request_timeout_kwargs(),
-                )
-                return response.data.decode("utf-8")
-            except ApiException as error:
-                raise KubectlError(
-                    f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"
-                ) from error
 
     # -- port_forward (subprocess-based) -------------------------------------
 
