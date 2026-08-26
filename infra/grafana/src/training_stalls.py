@@ -24,10 +24,8 @@ from hero_runs import (
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-# Every rank publishes `step` and `phase`, so an unfiltered scan of one hour of
-# the hero run reads about 1.4M rows a minute against the hub for the ~2k that
-# carry the tracker's own view. Process zero is that view, and the same replica
-# the training dashboard selects.
+# Typed training metrics publish from process zero. Keep that constraint in the
+# query so migrated legacy rows and direct typed rows select the same replica.
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
 _EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
 # The phase heartbeat reaches back a day so a run that went silent hours ago is

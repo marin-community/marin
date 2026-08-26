@@ -1555,6 +1555,7 @@ mod tests {
 
     use arrow::array::{Float64Array, Int32Array, UInt32Array};
     use arrow::datatypes::{Field, Schema};
+    use uuid::Uuid;
 
     use super::*;
     use crate::server::telemetry::telemetry_schema;
@@ -1578,12 +1579,10 @@ mod tests {
 
     impl TestDirs {
         fn new(name: &str) -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root =
-                std::env::temp_dir().join(format!("finelog_telemetry_migration_{name}_{nonce}"));
+            let root = std::env::temp_dir().join(format!(
+                "finelog_telemetry_migration_{name}_{}",
+                Uuid::new_v4()
+            ));
             let store = root.join("store");
             fs::create_dir_all(&store).unwrap();
             Self { root, store }

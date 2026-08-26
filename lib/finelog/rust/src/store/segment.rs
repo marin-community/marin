@@ -452,13 +452,13 @@ pub fn read_segment_footer(path: &Path, key_column: Option<&str>) -> Option<Segm
 }
 
 pub(crate) fn segment_metadata_from_parquet(
-    md: &ParquetMetaData,
+    metadata: &ParquetMetaData,
     level: i32,
     filename_min_seq: i64,
     key_column: Option<&str>,
 ) -> Option<SegmentMetadata> {
-    let partition = partition_of(md);
-    let num_rows = md.file_metadata().num_rows();
+    let partition = partition_of(metadata);
+    let num_rows = metadata.file_metadata().num_rows();
     if num_rows <= 0 {
         return Some(SegmentMetadata {
             level,
@@ -470,11 +470,11 @@ pub(crate) fn segment_metadata_from_parquet(
             partition,
         });
     }
-    let (seq_min, seq_max) = metadata_int64_bounds(md, "seq")?;
+    let (seq_min, seq_max) = metadata_int64_bounds(metadata, "seq")?;
     let min_seq = seq_min.unwrap_or(filename_min_seq);
     let max_seq = seq_max.unwrap_or(filename_min_seq + num_rows - 1);
     let (min_key, max_key) = key_column
-        .and_then(|kc| metadata_int64_bounds(md, kc))
+        .and_then(|kc| metadata_int64_bounds(metadata, kc))
         .unwrap_or((None, None));
     Some(SegmentMetadata {
         level,

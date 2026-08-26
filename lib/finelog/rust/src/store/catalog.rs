@@ -58,7 +58,7 @@ fn sqlite_err(e: rusqlite::Error) -> StatsError {
     StatsError::Internal(format!("catalog sqlite error: {e}"))
 }
 
-/// Decode the segment projection shared by every catalog reader.
+/// Decode one row from the ordered segment query projection.
 fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
     use crate::store::types::SegmentLocation;
     let loc: String = row.get(10)?;

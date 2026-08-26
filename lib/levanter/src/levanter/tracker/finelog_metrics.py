@@ -69,6 +69,7 @@ class LevanterMetricsWriter:
 
     @classmethod
     def from_iris(cls, run_id: str | None, process_index: int) -> "LevanterMetricsWriter | None":
+        """Create a writer from the Iris runtime, or return None outside Iris."""
         runtime = runtime_telemetry.resolve(run_id=run_id, process_index=process_index)
         if runtime is None:
             return None

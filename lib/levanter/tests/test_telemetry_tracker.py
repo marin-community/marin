@@ -27,7 +27,7 @@ from levanter.tracker.telemetry import TelemetryConfig, TelemetryTracker, Traini
 @dataclass(frozen=True)
 class _MetricWrite:
     name: str
-    kind: str
+    method: str
     step: int | None
     value: float | None = None
     summary: SummaryStats | None = None
@@ -43,8 +43,7 @@ class _RecordingWriter:
         self.rows.append(_MetricWrite(name, "scalar", step, value=value))
 
     def summary(self, name: str, stats: SummaryStats, *, step: int | None, **_kwargs) -> None:
-        kind = "histogram" if stats.histogram is not None else "summary"
-        self.rows.append(_MetricWrite(name, kind, step, summary=stats))
+        self.rows.append(_MetricWrite(name, "summary", step, summary=stats))
 
     def flush(self, _timeout: float | None = None) -> FlushResult:
         self.flushes += 1
@@ -121,7 +120,7 @@ def test_complex_scalar_does_not_poison_valid_metrics_in_same_log_call(writer):
     tracker.finish()
 
 
-def test_summary_stats_are_one_typed_histogram_row(writer):
+def test_summary_stats_are_one_summary_write(writer):
     tracker = TelemetryTracker(writer)
     values = jnp.asarray(np.linspace(0.0, 1.0, 1000))
     stats = SummaryStats.from_array(values, num_bins=64)
@@ -130,7 +129,7 @@ def test_summary_stats_are_one_typed_histogram_row(writer):
     tracker.log({"grad": stats}, step=10)
     grad = [row for row in writer.rows if row.name == "grad"]
     assert len(grad) == 1
-    assert grad[0].kind == "histogram"
+    assert grad[0].method == "summary"
     assert grad[0].step == 10
     assert grad[0].summary is stats
     tracker.finish()

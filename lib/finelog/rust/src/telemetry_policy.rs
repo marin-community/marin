@@ -23,6 +23,8 @@ const SEMANTIC_NAMESPACE_PREFIX: &str = "telemetry_v1.";
 const GIBIBYTE: i64 = 1024 * 1024 * 1024;
 const DEFAULT_STREAM_MAX_BYTES: i64 = 2 * GIBIBYTE;
 const IRIS_CONTROLLER_SERVICE: &str = "iris-controller";
+const LEVANTER_SERVICE: &str = "levanter";
+const PROCESS_INDEX_COLUMN: &str = "process_index";
 pub(crate) const LEVANTER_NAMESPACE: &str = "telemetry_v1.levanter";
 pub(crate) const NODE_AGENT_NAMESPACE: &str = "telemetry_v1.node_agent";
 pub(crate) const IRIS_RPC_NAMESPACE: &str = "telemetry_v1.iris.rpc";
@@ -60,7 +62,7 @@ const LOGICAL_INFERENCE_RULES: [LogicalInferenceRule; 6] = [
         logical_namespace: NODE_AGENT_NAMESPACE,
     },
     LogicalInferenceRule {
-        service: "levanter",
+        service: LEVANTER_SERVICE,
         name_prefixes: &[],
         logical_namespace: LEVANTER_NAMESPACE,
     },
@@ -308,7 +310,7 @@ impl TelemetryRecord<'_> {
     }
 
     fn is_legacy_levanter_metric(&self) -> Result<bool, StatsError> {
-        if self.required_string("service")? != "levanter" {
+        if self.required_string("service")? != LEVANTER_SERVICE {
             return Ok(false);
         }
         let attributes: serde_json::Value =
@@ -452,7 +454,7 @@ fn legacy_step_cursor(
         .get(resource_json)
         .expect("legacy resource was inserted");
     let process_index = record
-        .optional_string("process_index")?
+        .optional_string(PROCESS_INDEX_COLUMN)?
         .or(resource.process_index.as_deref())
         .ok_or_else(|| {
             StatsError::SchemaValidation("legacy Levanter metric has no process_index".to_string())
@@ -584,7 +586,7 @@ fn legacy_metric_row(
         .get(resource_json)
         .expect("legacy resource was inserted");
     let process_index = record
-        .optional_string("process_index")?
+        .optional_string(PROCESS_INDEX_COLUMN)?
         .or(resource.process_index.as_deref())
         .ok_or_else(|| {
             StatsError::SchemaValidation("legacy Levanter metric has no process_index".to_string())
@@ -655,7 +657,7 @@ fn parse_legacy_resource(json: &str) -> Result<LegacyResource, StatsError> {
         execution_uid: string("execution_uid"),
         job_id: string("job_id"),
         node_name: string("node_name"),
-        process_index: string("process_index"),
+        process_index: string(PROCESS_INDEX_COLUMN),
     })
 }
 
