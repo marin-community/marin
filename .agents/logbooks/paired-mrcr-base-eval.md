@@ -33,7 +33,7 @@ The deployable qk=1.75 arm adds +0.02379 BPB gain and +0.07995 NLL gain relative
 
 Macro NLL gain follows the same trajectory: -0.19691 at step 141000, +0.41089 at step 156000, +1.23319 at step 157000/qk1.57, and +1.31014 at step 157000/qk1.75.
 
-Confidence is exploratory. Each checkpoint was evaluated once on one two-shot MRCR sample. The within-checkpoint NLL intervals use 10,000 deterministic paired-bootstrap samples stratified by needle count and evidence-distance band. Aggregate BPB point estimates were reconstructed from the emitted per-cell loss, BPB, and scored-token totals; the current artifact does not emit an aggregate BPB bootstrap interval. One-shot, no-prefix, and the full 60+16 matrix have not run.
+Confidence is exploratory. Each checkpoint received one evaluation pass over the same 299 paired two-shot source examples: 598 full-context/query-only condition sequences per checkpoint. The four-checkpoint trajectory therefore contains 1,196 paired checkpoint-example comparisons and 2,392 condition sequences. The within-checkpoint NLL intervals use 10,000 deterministic paired-bootstrap samples stratified by needle count and evidence-distance band. Aggregate BPB point estimates were reconstructed from the emitted per-cell loss, BPB, and scored-token totals; the current artifact does not emit an aggregate BPB bootstrap interval. One-shot, no-prefix, and the full 60+16 matrix have not run.
 
 ## Experiment log
 
