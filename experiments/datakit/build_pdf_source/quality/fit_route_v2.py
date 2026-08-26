@@ -48,6 +48,7 @@ from experiments.datakit.build_pdf_source.quality import route_v2_features as co
 from experiments.datakit.build_pdf_source.quality.analyze_route_v2 import (
     ARMS,
     at_budget,
+    best_misroute,
     clumping,
     escalation_scores,
     frontier,
@@ -65,15 +66,24 @@ MODEL_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/model/pdf_route_v2
 BOOSTER_NAME = "route_v2_classifier.ubj"
 SIDECAR_NAME = "route_v2_classifier.json"
 
-# The artifact ships calibrated to the *measured* knee of its own held-out frontier rather than to a
-# budget chosen in advance. A round number would be a decision this module is not entitled to make,
-# and the published v1 report's 50% sat above its own knee of 45.5% for exactly that reason. Every
-# other operating point is a lookup in `threshold_by_budget`, not a retrain.
+# The artifact ships calibrated to the budget that misroutes the fewest pages in either direction,
+# measured on its own held-out frontier. Not the knee: the knee is read off one-sided quality loss,
+# which under this label is monotone in budget because escalating more can only reduce it, so it
+# describes where the curve bends rather than where the pipeline should sit. Total misroute counts
+# both errors -- pdf-inspector wins 26.5% of documents, so escalating those puts the VLM's worse
+# transcription in the corpus -- and it has a real minimum. Every other operating point is a lookup
+# in `threshold_by_budget`, not a retrain.
 CALIBRATION_BUDGETS = tuple(round(0.05 * step, 2) for step in range(1, 19))
 
-# The arm the artifact ships. Read from the evaluation's own arm table so the shipped feature set is
-# one that was measured, rather than a list restated here and free to drift from it.
-SHIPPED_ARM = ARMS[-1]
+# The arm the artifact ships, read from the evaluation's own table so the shipped feature set is one
+# that was measured rather than a list restated here and free to drift from it.
+#
+# `free + detect`, not `everything`. The paid PyMuPDF pass does not earn its 1.86 core-h/M: paired
+# within each domain split, adding `route_features` to the free groups made page-weighted loss
+# *worse* on all five splits (+0.0127 mean), and the incumbent's own extraction adds another 1.54
+# core-h/M for nothing. The free groups cost the router nothing because pdf-inspector runs on every
+# document regardless, and `detect` is 0.12 core-h/M for the lowest misroute of any arm measured.
+SHIPPED_ARM = next(arm for arm in ARMS if arm.name == "free + detect")
 
 
 def train_final(frame: pl.DataFrame, features: list[str], rounds: int) -> xgb.Booster:
@@ -106,7 +116,7 @@ def main() -> None:
         SHIPPED_ARM.core_hours,
         SHIPPED_ARM.needs_inspector,
     )
-    bend = knee(held_out)
+    bend = best_misroute(held_out)
     target_budget = round(bend.document_budget, 4)
     operating = at_budget(held_out, target_budget)
     logger.info(
@@ -166,7 +176,8 @@ def main() -> None:
         "boost_rounds": rounds,
         "escalation_threshold": threshold,
         "target_document_budget": target_budget,
-        "target_chosen_by": "knee of this fit's own held-out CPU-cost frontier",
+        "target_chosen_by": "minimum total misroute on this fit's own held-out frontier",
+        "held_out_knee": asdict(knee(held_out)),
         "threshold_by_budget": by_budget,
         "training_documents": rows.height,
         "training_domains": rows["domain"].n_unique(),
@@ -178,21 +189,33 @@ def main() -> None:
             ),
             "source": "experiments.datakit.build_pdf_source.quality.judge_preference_set",
         },
-        # The score is consulted only after these. A consumer that cannot reproduce them cannot use
-        # the threshold, because the model was neither trained nor calibrated on the rows they take.
+        # One routing gate, consulted before the score. A consumer that cannot reproduce it cannot
+        # use the threshold, because the model was neither trained nor calibrated on those rows.
         "gates": {
-            "inspector_failed": "escalate: pdf-inspector returned no text, so there is no cheap route to keep",
-            "below_legibility_floor": (
-                f"keep: every page renders under {DEFAULT_LEGIBILITY_FLOOR_DPI} DPI at the "
-                f"{DEFAULT_MAX_VISUAL_TOKENS}-token budget, so the VLM cannot read it either"
+            "inspector_no_text": (
+                "escalate: pdf-inspector returned no text, so there is no cheap route to keep. "
+                "Validated against the label at an escalation rate of 1.000 over 2,054 documents."
+            )
+        },
+        # Not a routing gate. Documents whose pages render below the floor were escalated by the
+        # judges 79% of the time (n=558), which refutes the premise that the VLM cannot read a page
+        # the render underresolves -- these are large-format scans where pdf-inspector produces
+        # nothing usable and the VLM at 50 DPI still reads more than that. What the arithmetic earns
+        # is a render policy: escalate them like anything else, at a raised visual-token budget.
+        "render_policy": {
+            "trigger": (
+                f"mean render DPI below {DEFAULT_LEGIBILITY_FLOOR_DPI} at the "
+                f"{DEFAULT_MAX_VISUAL_TOKENS}-token budget"
             ),
+            "action": "render at 16384 visual tokens",
+            "documents": 1630,
+            "corpus_gpu_cost_multiplier": 1.0029,
         },
         "held_out": {
             "documents": split.test.height,
             "domains": split.test["domain"].n_unique(),
             **asdict(operating),
         },
-        "held_out_knee": asdict(knee(held_out)),
         "corpus_score_clumping": clumping(scores),
         "gain": group_gains(booster, features),
         "cost_model": {

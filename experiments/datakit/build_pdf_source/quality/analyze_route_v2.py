@@ -156,19 +156,28 @@ def joined(fs: fsspec.AbstractFileSystem) -> pl.DataFrame:
 def trainable(frame: pl.DataFrame, features: list[str]) -> pl.DataFrame:
     """The labelled rows a router may learn from, after the arithmetic gates have taken theirs.
 
-    Gated documents are removed rather than labelled because their decision is not the model's to
-    make: pdf-inspector producing no text means escalate whatever the score says, and a document the
-    VLM cannot resolve means keep. Leaving them in would let the model spend capacity re-deriving
-    two rules that are already exact, and would flatter whichever feature set happens to encode
-    them -- ``inspector_markdown_chars == 0`` is a single split that captures ~9% of the corpus, and
-    an arm that owns that column would take credit for a decision arithmetic already made.
+    One gate is removed here and one is not, and the difference was decided by the label rather than
+    by argument.
+
+    ``inspector_markdown_chars == 0`` is removed. A document pdf-inspector produced no text for has
+    no cheap route to keep, and the judges agreed on every one of them: escalation rate 1.000 over
+    2,054 labelled documents. Leaving them in would let the model spend capacity re-deriving an
+    exact rule from a single split that captures ~9% of the corpus, and would flatter whichever
+    feature set happens to own that column.
+
+    The legibility floor is **not** removed, because the label says it is not a routing rule at all.
+    Documents whose pages render below the floor were escalated by the judges 79% of the time. The
+    gate's premise -- that the VLM cannot read a page the render underresolves, so escalating buys a
+    transcription of a blur -- is simply wrong on this corpus: these are large-format scans where
+    pdf-inspector produces nothing usable, and the VLM at 50 DPI still reads more of the page than
+    that. So they stay in the routable set and the score decides them like anything else. What the
+    floor arithmetic still earns is a *render* policy, not a routing one: see :func:`gate_report`.
     """
     return frame.filter(
         pl.col(ESCALATE_COLUMN).is_not_null()
         & (pl.col("domain") != "")
         & pl.col("inspector_error").is_null()
         & (pl.col("inspector_markdown_chars") > 0)
-        & contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS)
     ).drop_nulls(subset=features)
 
 
@@ -192,6 +201,14 @@ class RoutePoint:
     page_budget: float
     quality_loss_pages: float
     quality_loss_documents: float
+    misroute_pages: float
+    """Both errors together. Router v1 treated escalating needlessly as recoverable CPU rather than
+    quality damage, because the VLM was better on essentially every document it was sent. That no
+    longer holds: judges preferred pdf-inspector on 26.5% of documents, so sending those to the VLM
+    puts *its* worse transcription in the corpus. With both errors costing quality, total misroute
+    is the metric with a real minimum -- one-sided loss is monotone and would always recommend
+    escalating everything."""
+    misroute_documents: float
     wasted_escalation: float
     recall_of_escalations: float
     cpu_core_hours: float
@@ -231,6 +248,8 @@ def frontier(
                 page_budget=page_budget,
                 quality_loss_pages=float(pages[kept & escalate].sum() / total_pages),
                 quality_loss_documents=float((kept & escalate).mean()),
+                misroute_pages=float((pages[kept & escalate].sum() + pages[to_vlm & ~escalate].sum()) / total_pages),
+                misroute_documents=float(((kept & escalate) | (to_vlm & ~escalate)).mean()),
                 wasted_escalation=float(pages[to_vlm & ~escalate].sum() / total_pages),
                 recall_of_escalations=float(pages[to_vlm & escalate].sum() / max(bad_pages, 1.0)),
                 cpu_core_hours=(
@@ -279,6 +298,11 @@ def knee(points: list[RoutePoint]) -> RoutePoint:
         )
 
     return max(points, key=distance)
+
+
+def best_misroute(points: list[RoutePoint]) -> RoutePoint:
+    """The operating point that misroutes the fewest pages in either direction."""
+    return min(points, key=lambda point: point.misroute_pages)
 
 
 def clumping(scores: np.ndarray) -> dict:
@@ -343,6 +367,7 @@ class CorpusShare:
     forced_keep_documents: int
     forced_keep_page_share: float
     unreadable_by_either_documents: int
+    raised_budget_documents: int
     routable_documents: int
     routable_page_share: float
 
@@ -354,15 +379,13 @@ def corpus_share(frame: pl.DataFrame) -> CorpusShare:
     no_text = pl.col("inspector_error").is_not_null() | (pl.col("inspector_markdown_chars") == 0)
     illegible = contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS).not_()
 
-    # Legibility is checked first, and the order is the decision. A document can be both -- ~600 of
-    # them are -- and the two gates then disagree: one says escalate because there is no cheap text,
-    # the other says the VLM cannot read the page either. The second is the stronger statement, so
-    # it wins. Escalating a document rendered below the floor buys a transcription of a blur at full
-    # render and GPU price. Neither route can read these; they are candidates for tiling or for
-    # exclusion from the corpus, and that decision sits above the router.
-    keep_forced = frame.filter(illegible)
-    escalate_forced = frame.filter(illegible.not_() & no_text)
-    routable = frame.filter(illegible.not_() & no_text.not_())
+    # Only one gate forces a routing decision. The legibility floor used to force the other way --
+    # keep, on the grounds that the VLM cannot read a page the render underresolves -- and the label
+    # refuted it: judges escalated 79% of those documents. They are counted here as routable and
+    # flagged for a raised render budget instead, which is what the floor arithmetic actually earns.
+    keep_forced = frame.filter(pl.lit(False))
+    escalate_forced = frame.filter(no_text)
+    routable = frame.filter(no_text.not_())
     return CorpusShare(
         documents=frame.height,
         corpus_pages=total,
@@ -371,6 +394,7 @@ def corpus_share(frame: pl.DataFrame) -> CorpusShare:
         forced_keep_documents=keep_forced.height,
         forced_keep_page_share=float(keep_forced["num_pages"].cast(pl.Float64).sum()) / total,
         unreadable_by_either_documents=frame.filter(illegible & no_text).height,
+        raised_budget_documents=frame.filter(illegible & no_text.not_()).height,
         routable_documents=routable.height,
         routable_page_share=float(routable["num_pages"].cast(pl.Float64).sum()) / total,
     )
@@ -483,6 +507,7 @@ class ArmResult:
     points: dict[float, dict]
     marginal: dict[float, float]
     knee: dict
+    best_misroute: dict
     clumping: dict
     confusion: dict[float, dict]
     gains: dict
@@ -508,6 +533,7 @@ def read_out(arm: Arm, split: Split, scores: np.ndarray, gains: dict, share: Cor
         points={budget: asdict(at_budget(points, budget)) for budget in REPORTED_BUDGETS},
         marginal={budget: marginal_precision(points, budget) for budget in REPORTED_BUDGETS},
         knee=asdict(knee(points)),
+        best_misroute=asdict(best_misroute(points)),
         clumping=clumping(scores),
         confusion={budget: confusion(points, scores, escalate, budget) for budget in (0.25, 0.5, 0.75)},
         gains=gains,
@@ -577,6 +603,53 @@ def equal_quality_table(arms: list[ArmResult], targets: tuple[float, ...]) -> di
 # ---------------------------------------------------------------------------
 
 
+def _loss_at(rows: pl.DataFrame, arm: Arm, seed: int, budget: float) -> tuple[float, float]:
+    """One arm's page- and document-weighted loss on one domain split."""
+    split = split_by(rows, "domain", ESCALATE_COLUMN, seed=seed)
+    booster = fit(split, arm.features)
+    scores = escalation_scores(booster, split.test, arm.features)
+    escalate = split.test[ESCALATE_COLUMN].to_numpy().astype(bool)
+    pages = split.test["num_pages"].to_numpy().astype(np.float64)
+    point = at_budget(frontier(scores, escalate, pages, arm.core_hours, arm.needs_inspector), budget)
+    return point.quality_loss_pages, point.quality_loss_documents
+
+
+def paired_arms(rows: pl.DataFrame, arms: tuple[Arm, ...], budget: float) -> dict:
+    """Compare arms *within* each split rather than across independent draws.
+
+    This is the comparison that can actually resolve the arms. Held out on 625 domains, the
+    page-weighted loss of one arm moves by more between splits than any two arms differ by on one
+    split -- page counts are heavily skewed, so which long documents land in the test half dominates
+    the metric. Differencing two arms on the same split cancels that, and what is left is the part
+    attributable to the feature set. An unpaired table cannot separate the two and would report every
+    arm as tied.
+    """
+    baseline, *rest = arms
+    per_seed: dict[str, list[float]] = {arm.name: [] for arm in rest}
+    for seed in NOISE_SEEDS:
+        base_pages, _ = _loss_at(rows, baseline, 20260826 + seed, budget)
+        for arm in rest:
+            arm_pages, _ = _loss_at(rows, arm, 20260826 + seed, budget)
+            per_seed[arm.name].append(arm_pages - base_pages)
+    return {
+        "baseline": baseline.name,
+        "document_budget": budget,
+        "splits": len(NOISE_SEEDS),
+        "deltas": {
+            name: {
+                "mean": float(np.mean(values)),
+                "sd": float(np.std(values, ddof=1)),
+                "range": [float(min(values)), float(max(values))],
+                # Negative means the arm beats the baseline. Clears zero only if the whole spread
+                # sits on one side of it.
+                "beats_baseline_on_every_split": bool(max(values) < 0),
+                "loses_on_every_split": bool(min(values) > 0),
+            }
+            for name, values in per_seed.items()
+        },
+    }
+
+
 def noise_floor(rows: pl.DataFrame, arm: Arm, budget: float) -> dict:
     """Refit one arm under several domain splits and report how far its result moves.
 
@@ -584,17 +657,17 @@ def noise_floor(rows: pl.DataFrame, arm: Arm, budget: float) -> dict:
     procedure. The published v1 pass measured ~0.012 on 89,000 rows; this label set is a fifth of
     that size, so the floor is measured here rather than inherited.
     """
-    losses, budgets = [], []
+    losses, by_document = [], []
     for seed in NOISE_SEEDS:
-        split = split_by(rows, "domain", ESCALATE_COLUMN, seed=20260826 + seed)
-        booster = fit(split, arm.features)
-        scores = escalation_scores(booster, split.test, arm.features)
-        escalate = split.test[ESCALATE_COLUMN].to_numpy().astype(bool)
-        pages = split.test["num_pages"].to_numpy().astype(np.float64)
-        point = at_budget(frontier(scores, escalate, pages, arm.core_hours, arm.needs_inspector), budget)
-        losses.append(point.quality_loss_pages)
-        budgets.append(point.page_budget)
+        page_loss, document_loss = _loss_at(rows, arm, 20260826 + seed, budget)
+        losses.append(page_loss)
+        by_document.append(document_loss)
     return {
+        "document_weighted": {
+            "mean": float(np.mean(by_document)),
+            "sd": float(np.std(by_document, ddof=1)),
+            "noise_floor": float(max(by_document) - min(by_document)),
+        },
         "arm": arm.name,
         "document_budget": budget,
         "splits": len(NOISE_SEEDS),
@@ -604,7 +677,6 @@ def noise_floor(rows: pl.DataFrame, arm: Arm, budget: float) -> dict:
         # The floor a difference has to clear to mean anything: the spread of the same arm over
         # splits, read as the full range rather than as a standard error.
         "noise_floor": float(max(losses) - min(losses)),
-        "page_budget_mean": float(np.mean(budgets)),
     }
 
 
@@ -769,6 +841,12 @@ def report(results: dict) -> str:
         lines.append(f"\n{arm['name']} ({arm['documents_held_out']} documents, {arm['domains_held_out']} domains)")
         lines.append(frontier_table(ArmResult(**arm)))
         lines.append(
+            f"  min misroute: {arm['best_misroute']['document_budget']:.1%} of documents, "
+            f"misroute {arm['best_misroute']['misroute_pages']:.4f} pages / "
+            f"{arm['best_misroute']['misroute_documents']:.4f} documents, "
+            f"{arm['best_misroute']['cpu_core_hours']:.1f} core-h/M"
+        )
+        lines.append(
             f"  knee: {arm['knee']['document_budget']:.1%} of documents / "
             f"{arm['knee']['page_budget']:.1%} of pages, "
             f"{arm['knee']['cpu_core_hours']:.1f} core-h/M, loss {arm['knee']['quality_loss_pages']:.4f}"
@@ -862,7 +940,10 @@ def main() -> None:
         },
         "corpus_share": asdict(share),
         "arms": [asdict(arm) for arm in arms],
-        "noise_floor": noise_floor(rows, ARMS[-1], 0.50),
+        "noise_floor": noise_floor(rows, ARMS[0], 0.50),
+        # The free arm is the baseline every paid arm has to beat, so it is the one differenced
+        # against. Unpaired ranges cannot resolve these arms at this sample size.
+        "paired_arms": paired_arms(rows, ARMS, 0.50),
         # Quality targets spanning the useful part of the curve, set from the arms' own reach rather
         # than from round numbers, so no target is unreachable for every arm at once.
         "equal_quality": equal_quality_table(arms, EQUAL_QUALITY_TARGETS),

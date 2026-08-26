@@ -21,6 +21,7 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import DEFAULT_MAX_
 from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
 from experiments.datakit.build_pdf_source.quality.analyze_route_v2 import (
     at_budget,
+    best_misroute,
     clumping,
     confusion,
     corpus_cost,
@@ -465,10 +466,10 @@ def test_forced_escalations_consume_vlm_budget_before_the_score_does():
 
     assert share.forced_escalate_documents == 1
     assert share.forced_escalate_page_share == pytest.approx(0.10)
-    assert share.forced_keep_documents == 1
-    assert share.forced_keep_page_share == pytest.approx(0.10)
-    assert share.unreadable_by_either_documents == 0
-    assert share.routable_page_share == pytest.approx(0.80)
+    # The below-floor document is routable, not forced to stay: see the gate test below.
+    assert share.forced_keep_documents == 0
+    assert share.raised_budget_documents == 1
+    assert share.routable_page_share == pytest.approx(0.90)
 
 
 def test_corpus_cost_adds_the_forced_escalations_back_onto_the_learned_budget():
@@ -512,20 +513,56 @@ def test_the_empty_extraction_gate_forces_pdf_inspector_onto_every_page():
     assert priced["cpu_core_hours"] == pytest.approx(contract.INSPECTOR_CORE_HOURS + 0.5 * contract.VLM_FEED_CORE_HOURS)
 
 
-def test_a_document_neither_route_can_read_is_kept_rather_than_escalated():
-    """The two gates disagree on ~600 documents and legibility is the stronger statement.
+def test_the_legibility_floor_flags_a_render_budget_rather_than_forcing_a_route():
+    """The gate that said "the VLM cannot read this either, so keep it" was refuted by the label.
 
-    pdf-inspector returning no text argues for escalation; the page rendering below the floor says
-    the VLM cannot read it either. Escalating buys a transcription of a blur at full render and GPU
-    price, so the legibility gate wins and the document is counted as unreadable by either route.
+    Judges escalated 79% of the documents whose pages render below the floor (n=558). These are
+    large-format scans where pdf-inspector produces nothing usable and the VLM at 50 DPI still reads
+    more of the page than that, so the floor is not a routing rule. It stays as an accounting flag:
+    those documents are routable, and what the arithmetic earns is a raised render budget for them.
     """
+    frame = corpus_frame(
+        [{"num_pages": 5.0, "inspector_error": None, "inspector_markdown_chars": 800, "mean_render_dpi": 30.0}]
+    )
+
+    share = corpus_share(frame)
+
+    assert share.forced_keep_documents == 0
+    assert share.raised_budget_documents == 1
+    assert share.routable_documents == 1
+    assert share.routable_page_share == pytest.approx(1.0)
+
+
+def test_a_document_with_no_cheap_text_is_escalated_even_when_it_renders_badly():
+    """Both conditions at once still resolves to escalate, because only one of them gates now."""
     frame = corpus_frame(
         [{"num_pages": 5.0, "inspector_error": None, "inspector_markdown_chars": 0, "mean_render_dpi": 30.0}]
     )
 
     share = corpus_share(frame)
 
-    assert share.forced_escalate_documents == 0
-    assert share.forced_keep_documents == 1
+    assert share.forced_escalate_documents == 1
+    assert share.forced_keep_documents == 0
     assert share.unreadable_by_either_documents == 1
-    assert share.forced_escalate_page_share == pytest.approx(0.0)
+
+
+def test_total_misroute_has_a_minimum_where_one_sided_loss_does_not():
+    """With both errors costing quality, the metric must stop recommending "escalate everything".
+
+    Router v1 could treat a needless escalation as recoverable CPU because the VLM was better on
+    essentially everything it was sent. Under the preference label pdf-inspector wins 26.5% of
+    documents, so escalating those puts the VLM's worse transcription in the corpus. One-sided loss
+    is monotone in budget and always points at 100%; total misroute does not.
+    """
+    escalate = np.array([True] * 60 + [False] * 40)
+    scores = np.where(escalate, 0.8, 0.2) + np.linspace(0, 0.05, 100)
+    pages = np.ones(100)
+
+    points = frontier(scores, escalate, pages, 0.0, needs_inspector=True)
+    everything = at_budget(points, 1.0)
+    best = best_misroute(points)
+
+    assert everything.quality_loss_pages == pytest.approx(0.0, abs=1e-9)
+    assert everything.misroute_pages == pytest.approx(0.40, abs=0.02), "escalating all misroutes the 40 kept-wins"
+    assert best.misroute_pages < everything.misroute_pages
+    assert 0.5 < best.document_budget < 0.8
