@@ -376,8 +376,16 @@ def test_free_and_paid_groups_are_priced_apart():
     paid = contract.cost_of(contract.PAID_GROUPS)
 
     assert free == 0.0
-    assert paid == pytest.approx(contract.ROUTE_FEATURES_CORE_HOURS + contract.INSPECTOR_DETECT_CORE_HOURS)
+    assert paid == pytest.approx(
+        contract.ROUTE_FEATURES_CORE_HOURS
+        + contract.INSPECTOR_DETECT_CORE_HOURS
+        + contract.INCUMBENT_FEATURES_CORE_HOURS
+    )
     assert contract.cost_of(("page_signals",)) == contract.ROUTE_FEATURES_CORE_HOURS
+    # The two halves of the PyMuPDF pass are priced apart, so dropping the incumbent half is a
+    # measurable saving rather than a rounding change to one number.
+    assert contract.cost_of(("incumbent",)) == contract.INCUMBENT_FEATURES_CORE_HOURS
+    assert contract.cost_of(("page_signals", "incumbent")) == pytest.approx(3.40)
 
 
 def test_feature_groups_do_not_overlap_and_columns_survive_selection():

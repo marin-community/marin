@@ -53,9 +53,16 @@ from experiments.datakit.build_pdf_source.quality.route_feature_names import FEA
 # pdf-inspector's own extraction: 4.66 ms/page measured in the Stage 1 study. Paid on every
 # document, because it is both the cheap route and the source of the free feature groups.
 INSPECTOR_CORE_HOURS = 2.1
-# The PyMuPDF router pass: ~35 ms for each of 8 sampled pages per document, amortized over the
-# corpus's page distribution. This is the number the free-versus-paid comparison exists to price.
-ROUTE_FEATURES_CORE_HOURS = 3.4
+# The PyMuPDF router pass, split into the two feature sets it actually runs.
+#
+# `route_features`' own 36 page signals cost 1.86 core-h/M on x86 and 1.84 on aarch64, measured over
+# 1,000 documents in `pdf-oxide-evaluation.md`. The 3.4 core-h/M the pipeline has been budgeting is
+# that plus the 124-feature FinePDFs incumbent extraction, whose only surviving output is `ocr_prob`.
+# Splitting them is the point: Stage 2 found `ocr_prob` ranked 7th by gain when the model could use
+# everything and moved the frontier by 0.0019, so the incumbent half may be dead weight, and dropping
+# it would halve the paid pass rather than trimming it.
+ROUTE_FEATURES_CORE_HOURS = 1.86
+INCUMBENT_FEATURES_CORE_HOURS = 1.54
 # pdf-inspector's `detect_pdf_bytes`, at 0.441 ms/page. A second library call, so it is not free
 # even though it is nearly so; it reports pdf_type, confidence and per-page OCR reasons that the
 # extraction does not.
@@ -150,6 +157,12 @@ DOCUMENT_SHAPE_COLUMNS = (
     "legible_page_fraction",
 )
 
+# The FinePDFs incumbent's contribution, as the study table carries it: the router's shipped rule is
+# its probability with a garbled-text override, and those two columns are what a document gets for
+# the price of its 124-feature PyMuPDF extraction. The raw features are not stored -- only what the
+# incumbent concluded from them -- so this group prices the pass and tests the conclusion.
+INCUMBENT_COLUMNS = ("ocr_prob", "garbled_text_ratio")
+
 GROUPS: tuple[FeatureGroup, ...] = (
     FeatureGroup(
         "inspector_extract",
@@ -181,10 +194,17 @@ GROUPS: tuple[FeatureGroup, ...] = (
     ),
     FeatureGroup(
         "page_signals",
-        source="PyMuPDF, 8 sampled pages",
+        source="PyMuPDF, 8 sampled pages (route_features)",
         core_hours=ROUTE_FEATURES_CORE_HOURS,
         columns=FEATURE_NAMES,
         rationale="Router v1's ~70 decode-free encoding, layer, math, structure, order and script signals.",
+    ),
+    FeatureGroup(
+        "incumbent",
+        source="PyMuPDF, 8 sampled pages (FinePDFs ocr_features) plus its booster",
+        core_hours=INCUMBENT_FEATURES_CORE_HOURS,
+        columns=INCUMBENT_COLUMNS,
+        rationale="The shipped FinePDFs rule's own probability and its garbled-text override.",
     ),
 )
 

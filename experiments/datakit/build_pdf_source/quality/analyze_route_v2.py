@@ -427,11 +427,20 @@ class Arm:
         return any(group.startswith("inspector") for group in self.groups)
 
 
+# Groups pdf-inspector's extraction already produces, which the router adds nothing to run.
+FREE = ("inspector_extract", "inspector_output", "document_shape")
+
+# The paid pass is two separate extractions and they are priced apart, because the question is not
+# "keep the PyMuPDF pass or not" but "which half of it". `route_features` is 1.86 core-h/M; the
+# FinePDFs incumbent extraction behind `ocr_prob` is another 1.54. Stage 2 found `ocr_prob` ranked
+# 7th by gain and moved the frontier by 0.0019, so if that holds under the preference label the
+# paid pass halves rather than merely shrinking.
 ARMS = (
-    Arm("free (inspector output + extract + shape)", ("inspector_extract", "inspector_output", "document_shape")),
-    Arm("free + detect", ("inspector_extract", "inspector_output", "document_shape", "inspector_detect")),
-    Arm("paid page_signals only", ("page_signals",)),
-    Arm("free + page_signals", ("inspector_extract", "inspector_output", "document_shape", "page_signals")),
+    Arm("free (inspector output + extract + shape)", FREE),
+    Arm("free + detect", (*FREE, "inspector_detect")),
+    Arm("free + route_features", (*FREE, "page_signals")),
+    Arm("free + route_features + incumbent", (*FREE, "page_signals", "incumbent")),
+    Arm("route_features only (v1's feature set)", ("page_signals",)),
     Arm("everything", tuple(group.name for group in contract.GROUPS)),
 )
 
@@ -522,9 +531,8 @@ def evaluate_rule(split: Split, name: str, column: str, groups: tuple[str, ...],
     tends to tie most of the corpus at one value, and a frontier over that is a fiction.
 
     ``groups`` prices the rule rather than describing what it may read. The incumbent's probability
-    is not free -- it needs its own PyMuPDF feature pass -- so it is charged as if it were the
-    ``page_signals`` pass. That is an approximation and an upper bound on the incumbent's cost; the
-    conclusion it feeds does not turn on it, because the incumbent loses on quality at every budget.
+    is not free: it needs its own 124-feature PyMuPDF extraction, which is what the ``incumbent``
+    group costs.
     """
     arm = Arm(name, groups)
     scores = np.nan_to_num(split.test[column].cast(pl.Float64).to_numpy())
@@ -821,7 +829,7 @@ def main() -> None:
 
     split = split_by(rows, "domain", ESCALATE_COLUMN)
     arms = [
-        evaluate_rule(split, "rule: incumbent FinePDFs ocr_prob", "ocr_prob", ("page_signals",), share),
+        evaluate_rule(split, "rule: incumbent FinePDFs ocr_prob", "ocr_prob", ("incumbent",), share),
         evaluate_rule(
             split,
             "rule: inspector pages_needing_ocr fraction",
