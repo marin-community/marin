@@ -72,6 +72,8 @@ def manifest_payload(experiment_root: str, expected_sha256: str) -> tuple[dict[s
 def expected_provenance(row: dict[str, object], manifest: dict[str, object]) -> dict[str, object]:
     prefix = cast(dict[str, object], row["prefix"])
     phase_weights = cast(dict[str, dict[str, float]], row["phase_weights"])
+    prefix_hardware = launch.TpuHardware(**cast(dict[str, str], manifest["prefix_hardware"]))
+    continuation_hardware = launch.TpuHardware(**cast(dict[str, str], manifest["continuation_hardware"]))
     return {
         "experiment_name": manifest["experiment_name"],
         "run_name": row["run_name"],
@@ -94,7 +96,7 @@ def expected_provenance(row: dict[str, object], manifest: dict[str, object]) -> 
         "prefix_hardware": manifest["prefix_hardware"],
         "continuation_hardware": manifest["continuation_hardware"],
         "minimum_initial_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
-        "panel_hardware_status": launch.PANEL_HARDWARE_STATUS,
+        "panel_hardware_status": launch.panel_hardware_status(prefix_hardware, continuation_hardware),
         "terminal_checkpoint_step": TERMINAL_STEP,
     }
 

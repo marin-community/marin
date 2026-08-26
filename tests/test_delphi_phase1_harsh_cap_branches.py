@@ -251,6 +251,7 @@ def test_manifest_write_is_idempotent(tmp_path: Path) -> None:
         branch_run_id_base=973_000,
         full_design_rows=1,
         branch_rows_json=json.dumps([{"fit_budget": True, "role": "fixed_prefix_response_fit", "run_order": 0}]),
+        prefix_hardware=launch.TPU_HARDWARE,
         manifest_identity=launch.versioned("test-manifest"),
     )
 

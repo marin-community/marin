@@ -1,0 +1,35 @@
+{
+  "candidate_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+  "prefix_replay_code_commit": "2659c1bf8e7dbb0830b4476bb763a90a35d71837",
+  "prefixes": [
+    {
+      "candidate_id": "proportional_control",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_prefix_candidates_20260824/prefix_proportional_control_seed0-105401/checkpoints/step-2399",
+      "executor_info_sha256": "13ad4cfa2bec9e32ef98527e851bdedfbdc48673402ec06d9bca590a246704e9",
+      "executor_info_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_prefix_candidates_20260824/prefix_proportional_control_seed0-105401/.executor_info",
+      "provenance_sha256": "6eafa2aab7ae1e5ef84b615605c5d987af63d008921c898c9eebf1391f904161",
+      "repeat_seed": 0
+    },
+    {
+      "candidate_id": "proportional_control",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_prefix_candidates_20260824/prefix_proportional_control_seed1-4d8226/checkpoints/step-2399",
+      "executor_info_sha256": "8ce004ed27a0d56a6051646de1b628d1ce39ba6585c22a9e3e2ce69fb92491c8",
+      "executor_info_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_prefix_candidates_20260824/prefix_proportional_control_seed1-4d8226/.executor_info",
+      "provenance_sha256": "144bbff338107393d4810ba2a170ee9da7e9a68dcd91212c0afe3805548f2be4",
+      "repeat_seed": 1
+    }
+  ],
+  "selected_aliases": [
+    {
+      "canonical_candidate_id": "proportional_control",
+      "role": "fixed proportional phase-0 prefix"
+    }
+  ],
+  "source_prefix_hardware": {
+    "evidence": "successful executor records pinned in each prefix row",
+    "tensor_parallel_size": 1,
+    "tpu_region": "us-east5",
+    "tpu_type": "v5p-8",
+    "tpu_zone": "us-east5-a"
+  }
+}

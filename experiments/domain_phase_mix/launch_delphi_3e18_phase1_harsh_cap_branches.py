@@ -66,7 +66,6 @@ WEIGHT_ARTIFACT_COLUMNS = (
 RUN_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_.-]+")
 WANDB_TAG_MAX_LENGTH = 64
 WANDB_HASH_TAG_LENGTH = 12
-PANEL_HARDWARE_STATUS = "v6e_only_exact_prefix_continuation"
 
 
 @dataclass(frozen=True)
@@ -110,6 +109,7 @@ class HarshBranchTrainingConfig:
     design_manifest_sha256: str
     continuation_id: str
     code_commit: str
+    prefix_hardware: TpuHardware
     panel_identity: VersionedValue[str]
 
 
@@ -129,6 +129,7 @@ class SaveManifestConfig:
     branch_run_id_base: int
     full_design_rows: int
     branch_rows_json: str
+    prefix_hardware: TpuHardware
     manifest_identity: VersionedValue[str]
 
 
@@ -148,6 +149,12 @@ def phase_weights_sha256(phase_weights: dict[str, dict[str, float]]) -> str:
 
 def hardware_from_run_spec(run_spec: base.DelphiSwarmRunSpec) -> TpuHardware:
     return TpuHardware(tpu_type=run_spec.tpu_type, region=run_spec.tpu_region, zone=run_spec.tpu_zone)
+
+
+def panel_hardware_status(prefix: TpuHardware, continuation: TpuHardware) -> str:
+    if prefix == continuation:
+        return f"{continuation.tpu_type}_only_exact_prefix_continuation"
+    return f"cross_hardware_{prefix.tpu_type}_prefix_to_{continuation.tpu_type}_continuation"
 
 
 def observe_tpu_hardware() -> ObservedTpuHardware:
@@ -307,18 +314,23 @@ def load_design(
     manifest = json.loads(manifest_path.read_text())
     if tuple(manifest.get("selected_candidate_ids", [])) != candidate_ids:
         raise ValueError("Design and selected-prefix identities disagree")
-    if manifest.get("rows") != {
-        "controls_per_prefix": CONTROL_ROWS_PER_PREFIX,
+    rows_contract = manifest.get("rows")
+    if not isinstance(rows_contract, dict):
+        raise ValueError("Frozen branch allocation is missing")
+    controls_per_prefix = int(rows_contract.get("controls_per_prefix", -1))
+    rows_per_prefix = FIT_ROWS_PER_PREFIX + REFEREE_ROWS_PER_PREFIX + controls_per_prefix
+    if rows_contract != {
+        "controls_per_prefix": controls_per_prefix,
         "fit_per_prefix": FIT_ROWS_PER_PREFIX,
         "sealed_referees_per_prefix": REFEREE_ROWS_PER_PREFIX,
-        "total": len(candidate_ids) * ROWS_PER_PREFIX,
+        "total": len(candidate_ids) * rows_per_prefix,
     }:
         raise ValueError("Frozen branch allocation changed")
     summary = pd.read_csv(summary_path)
     weights = pd.read_csv(weights_path)
     if tuple(weights.columns) != WEIGHT_ARTIFACT_COLUMNS:
         raise ValueError(f"Branch weight columns changed: {tuple(weights.columns)}")
-    if len(summary) != len(candidate_ids) * ROWS_PER_PREFIX:
+    if len(summary) != len(candidate_ids) * rows_per_prefix:
         raise ValueError("Branch summary row count changed")
     rows: list[dict[str, object]] = []
     for summary_row in summary.itertuples(index=False):
@@ -348,13 +360,14 @@ def load_design(
     for candidate_id in candidate_ids:
         candidate_rows = [row for row in rows if row["prefix_candidate_id"] == candidate_id]
         roles = pd.Series([row["role"] for row in candidate_rows]).value_counts().to_dict()
-        if roles != {
+        expected_roles = manifest.get("role_counts_per_prefix") or {
             "fixed_prefix_response_fit": FIT_ROWS_PER_PREFIX,
             "sealed_geometry_referee": REFEREE_ROWS_PER_PREFIX,
             "prefix_state_tied_control": 4,
             "fresh_tied_control": 3,
             "common_random_tied_control": 1,
-        }:
+        }
+        if roles != expected_roles:
             raise ValueError(f"Branch roles changed for {candidate_id}: {roles}")
     return rows
 
@@ -403,7 +416,7 @@ def enrich_rows(
 def wandb_tags(config: HarshBranchTrainingConfig) -> list[str]:
     tags = [
         "issue-6611",
-        "delphi-3e18-harsh-cap-branches",
+        "delphi-3e18-phase1-branches",
         f"prefix={config.prefix_checkpoint.candidate_id}",
         f"prefix_seed={config.prefix_checkpoint.repeat_seed}",
         f"prefix_commit={config.prefix_replay_code_commit[:WANDB_HASH_TAG_LENGTH]}",
@@ -518,11 +531,11 @@ def run_phase_1_branch(config: HarshBranchTrainingConfig) -> None:
         "continuation_id": config.continuation_id,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "branch_code_commit": config.code_commit,
-        "prefix_hardware": asdict(TPU_HARDWARE),
+        "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(TPU_HARDWARE),
         "observed_continuation_hardware": asdict(observed_hardware),
         "minimum_initial_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
-        "panel_hardware_status": PANEL_HARDWARE_STATUS,
+        "panel_hardware_status": panel_hardware_status(config.prefix_hardware, TPU_HARDWARE),
         "terminal_checkpoint_uri": terminal_uri,
         "terminal_checkpoint_step": replay.EXPECTED_FULL_TRAIN_STEPS - 1,
     }
@@ -554,9 +567,9 @@ def save_manifest(config: SaveManifestConfig) -> None:
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
         "branch_run_id_base": config.branch_run_id_base,
-        "prefix_hardware": asdict(TPU_HARDWARE),
+        "prefix_hardware": asdict(config.prefix_hardware),
         "continuation_hardware": asdict(TPU_HARDWARE),
-        "panel_hardware_status": PANEL_HARDWARE_STATUS,
+        "panel_hardware_status": panel_hardware_status(config.prefix_hardware, TPU_HARDWARE),
         "prefix_completed_updates": replay.EXPECTED_PREFIX_TRAIN_STEPS,
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
         "optimizer_schedule_num_train_steps": replay.EXPECTED_FULL_TRAIN_STEPS,
@@ -686,6 +699,7 @@ def main() -> None:
         branch_run_id_base=args.branch_run_id_base,
         full_design_rows=full_design_rows,
         branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
+        prefix_hardware=TPU_HARDWARE,
         manifest_identity=versioned(manifest_identity),
     )
     if args.dry_run:
@@ -744,6 +758,7 @@ def main() -> None:
                         design_manifest_sha256=args.expected_design_manifest_sha256,
                         continuation_id=str(row["continuation_id"]),
                         code_commit=code_commit,
+                        prefix_hardware=TPU_HARDWARE,
                         panel_identity=manifest_config.manifest_identity,
                     ),
                 )

@@ -117,12 +117,9 @@ def selected_candidate_ids(payload: dict[str, object]) -> tuple[str, ...]:
     aliases = payload.get("selected_aliases")
     if not isinstance(aliases, list) or not aliases:
         raise ValueError("Selected-prefix manifest has no selected aliases")
-    ordered = sorted(aliases, key=lambda row: int(row["cap_epochs"]))
-    candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in ordered)
+    candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in aliases)
     if len(candidate_ids) != len(set(candidate_ids)):
         raise ValueError("Selected-prefix manifest repeats a canonical candidate")
-    if any(not candidate_id.startswith(("cap4_", "cap6_")) for candidate_id in candidate_ids):
-        raise ValueError(f"Unexpected selected candidate IDs: {candidate_ids}")
     return candidate_ids
 
 

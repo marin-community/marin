@@ -1,0 +1,100 @@
+{
+  "artifacts": {
+    "continuation_summary.csv": "2ccb84efd58b5be922a8b188cc915b8ecea4bd9bc18115954ea0b0f6baf0aff8",
+    "continuation_weights.csv": "b026cdea1277217cfa728cc25b3c989398b16190169e63c8563f411248592928"
+  },
+  "comparators": {
+    "claim_scope": "Wave 1 is a v5p-prefix to v6e-continuation discovery panel; any promoted frontier requires same-hardware confirmation before a canonical performance claim",
+    "primary": "exact proportional tied continuation under common random numbers",
+    "validated_frontier_continuation_id": "pred_scalar42_h2p5",
+    "validated_frontier_mean_uncheatable_bpb": 0.9798883332146539
+  },
+  "contract_version": "delphi_phase1_proportional_prefix_wave1_20260825_v2",
+  "design": {
+    "anchor_row_budget": 12,
+    "boundary_behavior": "one-sided full-rank coverage is allowed when tied has zero-weight buckets",
+    "common_random_number_data_seed": 970000,
+    "fit_anchors": [
+      "historical_uncheatable_frontier",
+      "proportional",
+      "uniform",
+      "validated_cap4_frontier"
+    ],
+    "fresh_tied_data_seeds": [
+      971000,
+      971001,
+      971002
+    ],
+    "geometry": "fixed deployment anchors followed by outcome-blind D-optimal and maximin coverage in square-root simplex coordinates",
+    "historical_frontier_is_prior_outcome_selected": true,
+    "local_hellinger_max": 0.12,
+    "local_rows": 48,
+    "mid_hellinger_max": 0.3,
+    "mid_rows": 20,
+    "noise_groups": {
+      "proportional_tied_prefix_seed0": 5,
+      "proportional_tied_prefix_seed1": 5,
+      "validated_frontier_from_proportional_prefix_seed0": 5
+    },
+    "old_prefix_model_candidate_used": false,
+    "outcome_selected_anchor_used_as_geometry_repeller": false,
+    "total_materialized_epoch_cap": 10.0,
+    "validated_frontier_blend_fractions": [
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "validated_frontier_exact_continuation_id": "fit_079",
+    "validated_frontier_repeat_data_seeds": [
+      971000,
+      971001,
+      971002,
+      971003
+    ]
+  },
+  "diagnostics": {
+    "proportional_control": {
+      "direct_feature_rank": 38,
+      "pool_rows": 73277,
+      "selected_anchor_rows": 10,
+      "selected_far_deployment_rows": 2,
+      "selected_hellinger_max": 0.6816191440181151,
+      "selected_hellinger_median": 0.11957575539096807,
+      "selected_hellinger_min": 0.015701413651089353,
+      "selected_local_rows": 52,
+      "selected_mid_rows": 26,
+      "selected_rows": 80,
+      "selected_zero_center_buckets": 0,
+      "sqrt_feature_rank": 39,
+      "validated_frontier_exact_continuation_id": "fit_079"
+    }
+  },
+  "provenance": {
+    "candidate_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "design_seed": 20260825,
+    "historical_frontier_sha256": "57a2aa39a5b0e07d40fc6f55f14aaa86327c332e9ef86738b1cca547924c4a59",
+    "historical_frontier_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_decoupled_phase_information_validation_20260712/mixtures/dphase_unch05_eff_e0p005.csv",
+    "selected_prefixes_sha256": "0a44dba2005e13ad19a88a49cae35705bfe16fd60b37edb97418560d8432a4b8",
+    "validated_frontier_contract_sha256": "898b8e5fdab2a9695808acfa31137918f5cf7e720674fb51e43bbc961b0aed27"
+  },
+  "research_question": "Can phase-1 optimization from an exact proportional phase-0 state match or beat the validated two-phase frontier?",
+  "role_counts_per_prefix": {
+    "common_random_tied_control": 1,
+    "fixed_prefix_response_fit": 80,
+    "fresh_tied_control": 4,
+    "prefix_state_tied_control": 5,
+    "sealed_geometry_referee": 8,
+    "validated_frontier_transfer_repeat": 4
+  },
+  "rows": {
+    "controls_per_prefix": 14,
+    "fit_per_prefix": 80,
+    "sealed_referees_per_prefix": 8,
+    "total": 102
+  },
+  "selected_candidate_ids": [
+    "proportional_control"
+  ],
+  "target_metric": "uncheatable_bpb"
+}

@@ -1,0 +1,71 @@
+{
+  "acquisition": {
+    "adaptive_fit_rows": 40,
+    "adaptive_policy": {
+      "exploitation_rows": 16,
+      "local_refinement_rows": 12,
+      "model_disagreement_rows": 12,
+      "rule": "Select runtime-exact, epoch-cap-feasible mixtures from a deterministic candidate pool after excluding every Wave-1 coordinate. Exploitation spans the frozen Hellinger-squared penalty grid; local refinement uses count transfers around those optima; disagreement maximizes standardized prediction spread across eligible scalar models. Ties are broken by runtime-count tuple."
+    },
+    "outcome_blind_coverage_rows": 40,
+    "outcome_blind_policy": "Before opening Wave-1 endpoints, reserve full-rank square-root-coordinate maximin coverage outside the Wave-1 coordinates. These rows do not depend on outcomes or model predictions.",
+    "total_fit_rows": 80
+  },
+  "confirmation": {
+    "candidate_count": 3,
+    "data_seeds": [
+      972000,
+      972001,
+      972002
+    ],
+    "outside_fit_budget": true,
+    "prefix_seeds": [
+      0,
+      1,
+      2
+    ],
+    "rule": "Confirm the three distinct predicted mixtures with the best spatial-crossfit-supported selection scores, paired against exact tied continuations under common random numbers. A canonical frontier claim additionally requires same-hardware confirmation."
+  },
+  "contract_version": "delphi_phase1_proportional_prefix_wave2_20260826_v1",
+  "eligibility": {
+    "forbidden_features": [
+      "semantic bucket families",
+      "sealed referee outcomes",
+      "Table-9 outcomes"
+    ],
+    "maximum_total_materialized_epoch": 10.0,
+    "runtime_mixture_block_size": 2048,
+    "target": "eval/uncheatable_eval/bpb"
+  },
+  "model_selection": {
+    "candidate_models": [
+      "direct tangent-space ridge plus nonnegative Hellinger-squared damage",
+      "square-root tangent-space ridge plus nonnegative Hellinger-squared damage"
+    ],
+    "hellinger_squared_penalty_grid": [
+      0.0,
+      0.05,
+      0.1,
+      0.25,
+      0.5,
+      1.0,
+      2.5
+    ],
+    "primary_validation": "nested spatially blocked cross-validation RMSE on scalar Uncheatable BPB",
+    "secondary_diagnostics": [
+      "spatially blocked Spearman correlation",
+      "selection regret",
+      "predicted-versus-observed gain over tied",
+      "calibration on five-repeat tied and validated-frontier noise groups"
+    ],
+    "selection_rule": "Choose the simplest candidate within one standard error of the best spatially blocked RMSE, provided it does not reverse the sign of gain on more than one outer fold. Open the eight Wave-1 sealed referees only after this choice."
+  },
+  "provenance": {
+    "selected_prefixes_sha256": "0a44dba2005e13ad19a88a49cae35705bfe16fd60b37edb97418560d8432a4b8",
+    "validated_frontier_contract_sha256": "898b8e5fdab2a9695808acfa31137918f5cf7e720674fb51e43bbc961b0aed27",
+    "wave1_continuation_summary_sha256": "2ccb84efd58b5be922a8b188cc915b8ecea4bd9bc18115954ea0b0f6baf0aff8",
+    "wave1_continuation_weights_sha256": "b026cdea1277217cfa728cc25b3c989398b16190169e63c8563f411248592928",
+    "wave1_design_manifest_sha256": "d475c2dcb68b273e53017810b0c610148e3e29035fcc2d88a6212c27d319eb2e"
+  },
+  "sealed_before_wave1_outcomes": true
+}

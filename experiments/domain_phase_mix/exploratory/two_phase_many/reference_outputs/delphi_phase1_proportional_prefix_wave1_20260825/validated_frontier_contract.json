@@ -1,0 +1,77 @@
+{
+  "candidate_id": "cap4_shared_bounded_ensemble_kl0",
+  "confirmation": {
+    "candidate_mean_uncheatable_bpb": 0.9798883332146539,
+    "crossed_cluster_bootstrap_ci95_for_candidate_minus_tied": [
+      -0.0010573863983155036,
+      -0.0005750656127929688
+    ],
+    "data_seeds": [
+      971000,
+      971001,
+      971002
+    ],
+    "fieldbook_experiment_id": "exp_01m0sdg8kpna3kjnqe3xc8r9xf",
+    "fieldbook_source_job_id": "job_01m0xfcxq3kx0ha1g18b94drw8",
+    "fieldbook_validation_id": "val_01m0xnbbg6jc6cj6awyfgrq2d1",
+    "metric_key": "eval/uncheatable_eval/bpb",
+    "paired_candidate_minus_tied_bpb": -0.0007701052559746513,
+    "paired_rows": 9,
+    "prefix_seeds": [
+      0,
+      1,
+      2
+    ],
+    "tied_mean_uncheatable_bpb": 0.9806584384706285,
+    "wins": 9
+  },
+  "continuation_id": "pred_scalar42_h2p5",
+  "contract_version": "delphi_validated_frontier_comparator_20260825_v1",
+  "runtime_counts": {
+    "dolma3_arxiv": 45,
+    "dolma3_cc/art_and_design_high": 0,
+    "dolma3_cc/art_and_design_low": 0,
+    "dolma3_cc/crime_and_law_high": 9,
+    "dolma3_cc/crime_and_law_low": 29,
+    "dolma3_cc/education_and_jobs_high": 0,
+    "dolma3_cc/education_and_jobs_low": 0,
+    "dolma3_cc/electronics_and_hardware_high": 0,
+    "dolma3_cc/electronics_and_hardware_low": 0,
+    "dolma3_cc/entertainment_high": 0,
+    "dolma3_cc/entertainment_low": 0,
+    "dolma3_cc/finance_and_business_high": 0,
+    "dolma3_cc/finance_and_business_low": 0,
+    "dolma3_cc/food_and_dining_high": 0,
+    "dolma3_cc/food_and_dining_low": 0,
+    "dolma3_cc/games_high": 0,
+    "dolma3_cc/games_low": 0,
+    "dolma3_cc/health_high": 0,
+    "dolma3_cc/health_low": 0,
+    "dolma3_cc/history_and_geography_high": 0,
+    "dolma3_cc/history_and_geography_low": 0,
+    "dolma3_cc/industrial_high": 50,
+    "dolma3_cc/industrial_low": 24,
+    "dolma3_cc/literature_high": 236,
+    "dolma3_cc/literature_low": 66,
+    "dolma3_cc/science_math_and_technology_high": 221,
+    "dolma3_cc/science_math_and_technology_low": 121,
+    "dolma3_finemath_3plus": 55,
+    "dolma3_stack_edu": 201,
+    "dolma3_wikipedia": 5,
+    "dolmino_common_crawl_hq": 0,
+    "dolmino_olmocr_pdfs_hq": 334,
+    "dolmino_stack_edu_fim": 201,
+    "dolmino_stem_heavy_crawl": 8,
+    "dolmino_synth_code": 77,
+    "dolmino_synth_instruction": 16,
+    "dolmino_synth_math": 35,
+    "dolmino_synth_qa": 283,
+    "dolmino_synth_thinking": 32
+  },
+  "source_artifacts": {
+    "confirmation_design_manifest_sha256": "6023c74734f131699c15337bfe2b903c644d7e0238a63b57632528789a4e4232",
+    "prediction_contract_sha256": "7dbda13393d2eec181a74ada0042f07e757b4b30478598799fe70044b355f7e9",
+    "source_model_sha256": "1e07cfe4c5ab6215ffa05564542610002e8c1ab1f302f76289907a44ffd44c18",
+    "source_results_sha256": "418531a84dcb6ba23642d4a7c5bb1a94aca39352e2635f3bacae560f4a62e9c3"
+  }
+}
