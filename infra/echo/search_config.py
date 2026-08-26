@@ -20,6 +20,7 @@ SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "is
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
 SEARCH_FEEDBACK_MIN_GRADE = 0
 SEARCH_FEEDBACK_MAX_GRADE = 10
+SERVER_TIMING_HEADER = "Server-Timing"
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",

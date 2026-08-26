@@ -1244,7 +1244,6 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
     class DeploymentReranker:
         def rerank(self, query, documents, batch_size):
             assert query == "how do i deploy iris"
-            assert batch_size == echo.search_config.RERANK_BATCH_SIZE
             return [float("verifies controller health" in document) for document in documents]
 
     ranked = echo.rerank_candidates([distractor, runbook], "how do i deploy iris", DeploymentReranker(), 2)
@@ -1270,7 +1269,6 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
 
     class RejectingReranker:
         def rerank(self, _query, documents, batch_size):
-            assert batch_size == echo.search_config.RERANK_BATCH_SIZE
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)

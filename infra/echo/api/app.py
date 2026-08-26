@@ -72,7 +72,6 @@ QUERY_LINE_STOP_WORDS = frozenset(
 )
 FILE_REFERENCE_LIMIT = 3
 SEARCH_EXECUTION_HEADER = search_config.SEARCH_EXECUTION_HEADER
-SERVER_TIMING_HEADER = "Server-Timing"
 SEARCH_HISTORY_PAGE_LIMIT = 500
 MILLISECONDS_PER_SECOND = 1_000
 POSTGRES_UNDEFINED_COLUMN = "42703"
@@ -1277,8 +1276,8 @@ def federated_search_endpoint(
     )
     history_ms = (time.perf_counter() - history_started_at) * MILLISECONDS_PER_SECOND
     total_ms = (time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND
-    response.headers[SERVER_TIMING_HEADER] = server_timing_header(search_run.timings, history_ms, total_ms)
-    logger.info("Federated search timing: %s", response.headers[SERVER_TIMING_HEADER])
+    response.headers[search_config.SERVER_TIMING_HEADER] = server_timing_header(search_run.timings, history_ms, total_ms)
+    logger.info("Federated search timing: %s", response.headers[search_config.SERVER_TIMING_HEADER])
     if execution is None:
         return results
     assert len(execution.search_result_ids) == len(results)

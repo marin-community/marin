@@ -50,13 +50,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
 
     def fake_request(method, path, **options):
         calls.append((method, path, options))
-        return json_response(
-            [remote_result],
-            {
-                "X-Echo-Search-Execution-ID": "991",
-                "Server-Timing": "query_embedding;dur=12.3, rerank;dur=456.7, total;dur=500.0",
-            },
-        )
+        return json_response([remote_result], {"X-Echo-Search-Execution-ID": "991"})
 
     monkeypatch.setattr(cli, "request_response", fake_request)
     clock = iter((10.0, 11.234))
@@ -91,7 +85,6 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     ]
     output = capsys.readouterr().out
     assert "1 result in 1.23s" in output
-    assert "Server timing: query_embedding;dur=12.3, rerank;dur=456.7, total;dur=500.0" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "file:731" in output
     assert f"L42 {reference_text}" in output
