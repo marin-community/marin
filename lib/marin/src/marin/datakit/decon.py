@@ -332,17 +332,16 @@ def _paragraph_overlap_matches_and_presence(
     bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, list[int], int, int, bool]:
+) -> tuple[float, list[int], int, bool]:
     """Return overlap details, feature counts, and n-gram presence."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], 0, 1, False
-        return (1.0, [h], 1, 1, False) if h in bf else (0.0, [], 1, 1, False)
+            return 0.0, [], 0, False
+        return (1.0, [h], 1, False) if h in bf else (0.0, [], 1, False)
 
     has_ngram_features = False
     feature_count = 0
-    original_feature_count = 0
     matched: list[int] = []
     short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
     features: Iterator[str]
@@ -352,7 +351,6 @@ def _paragraph_overlap_matches_and_presence(
         features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
         has_ngram_features = short_exact is None
-        original_feature_count += 1
         hash_value = _bloom_hash(feature)
         if hash_value in drop_hashes:
             continue
@@ -360,8 +358,8 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], feature_count, original_feature_count, has_ngram_features
-    return len(matched) / feature_count, matched, feature_count, original_feature_count, has_ngram_features
+        return 0.0, [], feature_count, has_ngram_features
+    return len(matched) / feature_count, matched, feature_count, has_ngram_features
 
 
 def _document_overlap_and_matches(
@@ -391,12 +389,12 @@ def _document_overlap_and_matches(
     document_ngram_hits: set[int] = set()
 
     for paragraph in paragraphs:
-        score, hits, _feature_count, original_feature_count, paragraph_has_ngrams = (
-            _paragraph_overlap_matches_and_presence(paragraph, bf, ngram, drop_hashes)
+        score, hits, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
+            paragraph, bf, ngram, drop_hashes
         )
         if ngram is not None and paragraph_has_ngrams:
             has_paragraph_ngrams = True
-            document_ngram_feature_count += original_feature_count
+            document_ngram_feature_count += feature_count
             document_ngram_hits.update(hits)
         max_score = max(max_score, score)
         if not hits:
@@ -405,7 +403,7 @@ def _document_overlap_and_matches(
             matched.update(hits)
             continue
 
-        complete_single_feature_document = single_paragraph and original_feature_count == 1 and score == 1.0
+        complete_single_feature_document = single_paragraph and feature_count == 1 and score == 1.0
         distinct_hits = len(set(hits))
         if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
             matched.update(hits)
@@ -421,12 +419,12 @@ def _document_overlap_and_matches(
             or _short_exact_feature(text, ngram.ngram_length) is not None
         )
         if use_record_fallback:
-            score, hits, _feature_count, original_feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+            score, hits, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
                 text, bf, ngram, drop_hashes
             )
             max_score = max(max_score, score)
             distinct_hits = len(set(hits))
-            complete_single_feature_document = original_feature_count == 1 and score == 1.0
+            complete_single_feature_document = feature_count == 1 and score == 1.0
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
                 matched.update(hits)
 
