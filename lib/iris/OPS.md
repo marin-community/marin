@@ -550,12 +550,15 @@ Namespaces:
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`. Worker
   daemons write their process readings directly. On Kubernetes, each
   `iris-node-agent` samples the task containers on its node from kubelet
-  `/metrics/resource` every 30 seconds. CPU is derived from consecutive
-  cumulative counter samples, so the first row after an agent start reports
-  zero CPU. Memory uses the working-set gauge and an agent-local peak; an agent
-  restart resets that peak. Kubelet resource metrics do not expose container
-  filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
-  service account requires `get` on `nodes/proxy`.
+  `/metrics/resource` every 60 seconds. The agent runs on the host network and
+  reads its own kubelet over loopback; the request does not go through the
+  apiserver, so node telemetry stays off the cluster's Konnectivity tunnel. CPU
+  is derived from consecutive cumulative counter samples, so the first row after
+  an agent start reports zero CPU. Memory uses the working-set gauge and an
+  agent-local peak; an agent restart resets that peak. Kubelet resource metrics
+  do not expose container filesystem usage, so Kubernetes rows report zero disk
+  usage. The node-agent service account requires `get` on `nodes/metrics`, which
+  is the subresource the kubelet authorizes that endpoint against.
 - `iris.task_event` — up to 30 days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:

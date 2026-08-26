@@ -11,8 +11,10 @@ network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 
 import pytest
 from iris.cluster.node_agent.kubernetes import (
+    KubeletScrapeError,
     NodeStatsScraper,
     TaskStatsCollector,
+    kubelet_resource_metrics,
     parse_dcgm,
     parse_kubelet_resource_metrics,
     parse_node_exporter,
@@ -122,11 +124,16 @@ def test_task_stats_collector_writes_cpu_memory_and_peak():
     )
     table = FakeStatsTable()
     sampled_at = iter((100.0, 110.0))
-    collector = TaskStatsCollector(k8s, "node-a", table, clock=lambda: next(sampled_at))
-    k8s.set_node_resource_metrics(
-        "node-a",
+    kubelet_text = [
         'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 10\n'
-        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824\n',
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824\n'
+    ]
+    collector = TaskStatsCollector(
+        k8s,
+        "node-a",
+        table,
+        clock=lambda: next(sampled_at),
+        read_kubelet_metrics=lambda: kubelet_text[0],
     )
 
     collector.collect_once()
@@ -137,16 +144,49 @@ def test_task_stats_collector_writes_cpu_memory_and_peak():
     assert first.memory_mb == 1024
     assert first.memory_peak_mb == 1024
 
-    k8s.set_node_resource_metrics(
-        "node-a",
+    kubelet_text[0] = (
         'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 12\n'
-        'container_memory_working_set_bytes{container="task",pod="pod-a"} 536870912\n',
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 536870912\n'
     )
     collector.collect_once()
     second = table.writes[-1][0]
     assert second.cpu_millicores == 200
     assert second.memory_mb == 512
     assert second.memory_peak_mb == 1024
+
+
+def test_kubelet_resource_metrics_converts_transport_failure(monkeypatch):
+    """A socket timeout must become KubeletScrapeError, which the collector handles."""
+
+    def timing_out(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(
+        "iris.cluster.node_agent.kubernetes.SERVICE_ACCOUNT_TOKEN_PATH",
+        _FakeTokenPath(),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", timing_out)
+
+    with pytest.raises(KubeletScrapeError, match="scrape failed"):
+        kubelet_resource_metrics()
+
+
+class _FakeTokenPath:
+    def read_text(self) -> str:
+        return "token\n"
+
+
+def test_task_stats_collector_skips_cycle_when_kubelet_scrape_fails():
+    k8s = InMemoryK8sService(namespace="iris")
+    table = FakeStatsTable()
+
+    def unavailable() -> str:
+        raise KubeletScrapeError("connection refused")
+
+    collector = TaskStatsCollector(k8s, "node-a", table, read_kubelet_metrics=unavailable)
+    collector.collect_once()
+
+    assert table.writes == []
 
 
 def test_parse_node_exporter_extracts_host_readings():

@@ -265,7 +265,6 @@ class InMemoryK8sService:
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._node_resource_metrics: dict[str, str] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -539,9 +538,6 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_node_resource_metrics(self, node_name: str, text: str) -> None:
-        self._node_resource_metrics[node_name] = text
-
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
 
@@ -795,10 +791,6 @@ class InMemoryK8sService:
             if _matches_field_selector(event, field_selector):
                 results.append(event)
         return results
-
-    def node_resource_metrics(self, node_name: str) -> str:
-        self._check_failure("node_resource_metrics")
-        return self._node_resource_metrics.get(node_name, "")
 
     def read_file(
         self,
