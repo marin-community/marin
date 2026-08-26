@@ -42,7 +42,7 @@ from levanter.utils.thread_utils import blocking_wait
 from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
-from .tree_store import TreeStore, heuristic_is_leaf
+from .tree_store import TreeStore, heuristic_is_leaf, render_tree_path
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -639,8 +639,7 @@ class _ShardedTreeCacheReader(Generic[T_co]):
 
     def jagged_array_tree(self) -> Any:
         def field_store(path, _):
-            field = "/".join(_render_path_elem(part) for part in path)
-            return _ShardedJaggedArrayStore(self._cache, field)
+            return _ShardedJaggedArrayStore(self._cache, render_tree_path(path))
 
         return jtu.tree_map_with_path(field_store, self._cache._exemplar, is_leaf=heuristic_is_leaf)
 
@@ -1567,21 +1566,8 @@ def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:
 def _field_counts_from_data_sizes(data_sizes) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for path, value in jtu.tree_leaves_with_path(data_sizes):
-        field = "/".join(_render_path_elem(part) for part in path)
-        counts[field] = int(value)
+        counts[render_tree_path(path)] = int(value)
     return counts
-
-
-def _render_path_elem(path_elem) -> str:
-    if isinstance(path_elem, jtu.DictKey):
-        return str(path_elem.key)
-    if isinstance(path_elem, jtu.GetAttrKey):
-        return str(path_elem.name)
-    if isinstance(path_elem, jtu.SequenceKey):
-        return str(path_elem.idx)
-    if isinstance(path_elem, jtu.FlattenedIndexKey):
-        return str(path_elem.key)
-    return str(path_elem)
 
 
 def _sanitize_shard_name(name: str) -> str:
