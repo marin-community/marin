@@ -24,7 +24,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{Array, Int64Array, RecordBatch};
@@ -170,16 +170,6 @@ const PHYSICAL_LAYOUT_MIGRATION_CONCURRENCY: usize = 2;
 const PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES: i64 = 32 * 1024 * 1024;
 const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Process-wide permit for physical-layout migration waves.
-///
-/// Maintenance is per namespace. Without a global permit, every namespace with
-/// a legacy backlog starts several workers at once; the production hub then ran
-/// Levanter, RPC, node-agent, and vLLM waves concurrently and exhausted its
-/// 30 GiB cgroup. One permit retains two-way streaming inside the active
-/// namespace while bounding the whole process to one wave and leaving half of
-/// the four-core hub available for queries.
-static PHYSICAL_LAYOUT_MIGRATION_SLOT: Mutex<()> = Mutex::new(());
-
 /// Process-wide permit for the layout rewrite, so only one namespace re-encodes
 /// at a time.
 ///
@@ -289,6 +279,9 @@ pub struct Namespace {
     /// Shared by every namespace in this store so historical projection builds
     /// cannot saturate the process with concurrent scans and compression.
     index_backfill_slot: Arc<Mutex<()>>,
+    /// Shared by every namespace in this store so only one two-worker physical
+    /// migration wave runs at a time.
+    physical_layout_migration_slot: Arc<Mutex<()>>,
 }
 
 /// Segments the index backfill cannot bring up to date, and the indexed set
@@ -326,6 +319,50 @@ struct BackfillCandidate {
     expected_rows: i64,
 }
 
+#[derive(Clone, Copy, Default)]
+struct PhysicalLayoutMigrationPending {
+    migration_l0: usize,
+    stale_partitions: usize,
+    misplaced_local: usize,
+}
+
+impl PhysicalLayoutMigrationPending {
+    fn any(self) -> bool {
+        self.migration_l0 > 0 || self.stale_partitions > 0 || self.misplaced_local > 0
+    }
+}
+
+fn migration_l0_needs_rebuild(segment: &LocalSegment) -> bool {
+    segment.level == 0 && (segment.min_seq < 0 || segment.partition.is_some())
+}
+
+fn partition_is_stale(
+    segment: &LocalSegment,
+    policy: &dyn crate::partition_policy::PhysicalPartitionPolicy,
+) -> bool {
+    segment.level >= 1
+        && segment
+            .partition
+            .as_ref()
+            .is_none_or(|partition| !policy.is_current_partition(partition))
+}
+
+fn current_layout_destination(
+    dir: &Path,
+    path: &str,
+    level: i32,
+    partition: Option<&SegmentPartition>,
+    policy: &dyn crate::partition_policy::PhysicalPartitionPolicy,
+) -> Option<PathBuf> {
+    let partition = partition?;
+    if level < 1 || !policy.is_current_partition(partition) {
+        return None;
+    }
+    let filename = Path::new(path).file_name()?.to_str()?;
+    let destination = segment_path(dir, filename, level, Some(partition), Some(policy));
+    (Path::new(path) != destination).then_some(destination)
+}
+
 /// A namespace's sealed local segments as one consistent observation: the files a
 /// scan may read, their known key bounds, and the lowest `seq` any of them holds.
 pub struct SegmentSnapshot {
@@ -360,6 +397,7 @@ impl Namespace {
         query_visibility: Arc<RwLock<()>>,
         index_cache: Arc<IndexCache>,
         index_backfill_slot: Arc<Mutex<()>>,
+        physical_layout_migration_slot: Arc<Mutex<()>>,
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
@@ -449,6 +487,7 @@ impl Namespace {
             current_layouts: Mutex::new(HashSet::new()),
             index_cache,
             index_backfill_slot,
+            physical_layout_migration_slot,
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -883,14 +922,7 @@ impl Namespace {
         Ok(true)
     }
 
-    /// Select independent legacy L0 rebuild jobs up to one parallel wave.
-    ///
-    /// Each worker coalesces about 32 MiB of compressed inputs. Two workers
-    /// partition in parallel while leaving half of the production hub's CPUs
-    /// available for queries, and each publishes its input span atomically.
-    /// Coalescing matters because a migration source file contains many runs:
-    /// one output set per source would replace a 12K-file backlog with hundreds
-    /// of thousands of tiny L1s.
+    /// Select up to `limit` independent legacy L0 rebuild jobs.
     fn physical_layout_migration_l0_jobs(&self, limit: usize) -> Vec<CompactionJob> {
         if physical_partition_policy_for(&self.name).is_none() {
             return Vec::new();
@@ -899,9 +931,14 @@ impl Namespace {
         let mut jobs = Vec::new();
         let mut inputs = Vec::new();
         let mut compressed_bytes: i64 = 0;
-        for segment in inner.local_segments.iter().filter(|segment| {
-            segment.level == 0 && (segment.min_seq < 0 || segment.partition.is_some())
-        }) {
+        // Coalesce compressed inputs before repartitioning. One output set per
+        // migration source would turn the existing backlog into hundreds of
+        // thousands of tiny L1s.
+        for segment in inner
+            .local_segments
+            .iter()
+            .filter(|segment| migration_l0_needs_rebuild(segment))
+        {
             if !inputs.is_empty()
                 && compressed_bytes.saturating_add(segment.size_bytes)
                     > PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES
@@ -971,13 +1008,7 @@ impl Namespace {
         Ok(completed)
     }
 
-    /// Converge one non-L0 legacy placement operation online.
-    ///
-    /// The order encodes the storage contract:
-    /// 1. migration L0 (negative synthetic seq or legacy partition stamp) is
-    ///    rewritten into sorted/partitioned L1;
-    /// 2. stale or absent L1+ partition metadata is rebuilt in place;
-    /// 3. correctly partitioned L1+ is relocated into its bounded directory.
+    /// Rebuild or relocate one legacy L1+ segment.
     fn physical_layout_migration_non_l0_step(&self) -> Result<bool, StatsError> {
         let Some(dir) = self.data_dir.as_deref() else {
             return Ok(false);
@@ -991,13 +1022,7 @@ impl Namespace {
             inner
                 .local_segments
                 .iter()
-                .find(|segment| {
-                    segment.level >= 1
-                        && segment
-                            .partition
-                            .as_ref()
-                            .is_none_or(|partition| !policy.is_current_partition(partition))
-                })
+                .find(|segment| partition_is_stale(segment, policy))
                 .map(|segment| {
                     let mut row = segment_to_row(&self.name, segment);
                     row.partition = None;
@@ -1021,14 +1046,14 @@ impl Namespace {
         let relocation = {
             let inner = self.inner.lock().unwrap();
             inner.local_segments.iter().find_map(|segment| {
-                let partition = segment.partition.as_ref()?;
-                if segment.level < 1 || !policy.is_current_partition(partition) {
-                    return None;
-                }
-                let filename = Path::new(&segment.path).file_name()?.to_str()?;
-                let destination =
-                    segment_path(dir, filename, segment.level, Some(partition), Some(policy));
-                (Path::new(&segment.path) != destination).then(|| (segment.clone(), destination))
+                current_layout_destination(
+                    dir,
+                    &segment.path,
+                    segment.level,
+                    segment.partition.as_ref(),
+                    policy,
+                )
+                .map(|destination| (segment.clone(), destination))
             })
         };
         let Some((segment, destination)) = relocation else {
@@ -1050,8 +1075,7 @@ impl Namespace {
         Ok(true)
     }
 
-    /// Converge one legacy operation. Tests use this serial form; production
-    /// runs L0 inputs through [`Self::physical_layout_migration_l0_wave`].
+    /// Advance one legacy layout operation.
     #[cfg(test)]
     fn physical_layout_migration_step(&self) -> Result<bool, StatsError> {
         if let Some(job) = self.physical_layout_migration_l0_jobs(1).pop() {
@@ -1065,56 +1089,46 @@ impl Namespace {
         self.physical_layout_migration_non_l0_step()
     }
 
-    fn physical_layout_migration_pending(&self) -> (usize, usize, usize) {
+    fn physical_layout_migration_pending(&self) -> PhysicalLayoutMigrationPending {
         let Some(dir) = self.data_dir.as_deref() else {
-            return (0, 0, 0);
+            return PhysicalLayoutMigrationPending::default();
         };
         let Some(policy) = physical_partition_policy_for(&self.name) else {
-            return (0, 0, 0);
+            return PhysicalLayoutMigrationPending::default();
         };
         let inner = self.inner.lock().unwrap();
-        let mut migration_l0 = 0;
-        let mut stale_partition = 0;
-        let mut misplaced = 0;
+        let mut pending = PhysicalLayoutMigrationPending::default();
         for segment in &inner.local_segments {
+            if migration_l0_needs_rebuild(segment) {
+                pending.migration_l0 += 1;
+                continue;
+            }
             if segment.level == 0 {
-                migration_l0 += usize::from(segment.min_seq < 0 || segment.partition.is_some());
-                continue;
-            }
-            let Some(partition) = segment.partition.as_ref() else {
-                stale_partition += 1;
                 continue;
             };
-            if !policy.is_current_partition(partition) {
-                stale_partition += 1;
+            if partition_is_stale(segment, policy) {
+                pending.stale_partitions += 1;
                 continue;
             }
-            let Some(filename) = Path::new(&segment.path)
-                .file_name()
-                .and_then(|filename| filename.to_str())
-            else {
-                misplaced += 1;
-                continue;
-            };
-            let destination =
-                segment_path(dir, filename, segment.level, Some(partition), Some(policy));
-            misplaced += usize::from(Path::new(&segment.path) != destination);
+            pending.misplaced_local += usize::from(
+                current_layout_destination(
+                    dir,
+                    &segment.path,
+                    segment.level,
+                    segment.partition.as_ref(),
+                    policy,
+                )
+                .is_some(),
+            );
         }
-        (migration_l0, stale_partition, misplaced)
+        pending
     }
 
     fn physical_layout_migration_is_pending(&self) -> bool {
-        let pending = self.physical_layout_migration_pending();
-        pending.0 > 0 || pending.1 > 0 || pending.2 > 0
+        self.physical_layout_migration_pending().any()
     }
 
-    /// Relocate one evicted segment to its current object key without routing
-    /// the bytes through this process.
-    ///
-    /// The copy is published before the catalog pointer changes. The old key is
-    /// deleted only after that atomic swap, so queries always have a durable
-    /// source. Boot reconciliation resolves a crash in either gap by retaining
-    /// the key named by the catalog and deleting the other copy.
+    /// Relocate one archived segment to its current physical path.
     async fn remote_layout_migration_step(&self) -> Result<bool, StatsError> {
         let (Some(dir), Some(remote), Some(policy)) = (
             self.data_dir.as_deref(),
@@ -1130,14 +1144,14 @@ impl Namespace {
             .into_iter()
             .filter(|row| row.location == SegmentLocation::Remote)
             .find_map(|row| {
-                let partition = row.partition.as_ref()?;
-                if !policy.is_current_partition(partition) {
-                    return None;
-                }
-                let filename = Path::new(&row.path).file_name()?.to_str()?;
-                let destination =
-                    segment_path(dir, filename, row.level, Some(partition), Some(policy));
-                (Path::new(&row.path) != destination).then_some((row, destination))
+                current_layout_destination(
+                    dir,
+                    &row.path,
+                    row.level,
+                    row.partition.as_ref(),
+                    policy,
+                )
+                .map(|destination| (row, destination))
             });
         let Some((row, destination)) = candidate else {
             return Ok(false);
@@ -1177,7 +1191,7 @@ impl Namespace {
         Ok(true)
     }
 
-    fn remote_layout_migration_pending(&self) -> Result<usize, StatsError> {
+    fn remote_layout_migration_remaining_count(&self) -> Result<usize, StatsError> {
         let (Some(dir), Some(policy)) = (
             self.data_dir.as_deref(),
             physical_partition_policy_for(&self.name),
@@ -1190,20 +1204,14 @@ impl Namespace {
             .into_iter()
             .filter(|row| row.location == SegmentLocation::Remote)
             .filter(|row| {
-                let Some(partition) = row.partition.as_ref() else {
-                    return false;
-                };
-                if !policy.is_current_partition(partition) {
-                    return false;
-                }
-                let Some(filename) = Path::new(&row.path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                else {
-                    return false;
-                };
-                Path::new(&row.path)
-                    != segment_path(dir, filename, row.level, Some(partition), Some(policy))
+                current_layout_destination(
+                    dir,
+                    &row.path,
+                    row.level,
+                    row.partition.as_ref(),
+                    policy,
+                )
+                .is_some()
             })
             .count())
     }
@@ -1845,7 +1853,15 @@ impl Namespace {
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || -> Result<(), StatsError> {
             ns.flush_once()?;
-            let migration_slot = PHYSICAL_LAYOUT_MIGRATION_SLOT.try_lock().ok();
+            let migration_slot = match ns.physical_layout_migration_slot.try_lock() {
+                Ok(slot) => Some(slot),
+                Err(TryLockError::WouldBlock) => None,
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(StatsError::Internal(
+                        "physical layout migration permit is poisoned".to_string(),
+                    ));
+                }
+            };
             let migration_started = Instant::now();
             let mut migrated = 0;
             if migration_slot.is_some() {
@@ -1866,14 +1882,13 @@ impl Namespace {
             }
             let migration_pending = ns.physical_layout_migration_is_pending();
             if migrated > 0 {
-                let (migration_l0, stale_partition, misplaced) =
-                    ns.physical_layout_migration_pending();
+                let pending = ns.physical_layout_migration_pending();
                 tracing::info!(
                     namespace = %ns.name,
                     jobs = migrated,
-                    remaining_migration_l0 = migration_l0,
-                    remaining_stale_partition = stale_partition,
-                    remaining_misplaced = misplaced,
+                    remaining_migration_l0 = pending.migration_l0,
+                    remaining_stale_partition = pending.stale_partitions,
+                    remaining_misplaced = pending.misplaced_local,
                     elapsed_ms = migration_started.elapsed().as_millis() as u64,
                     "physical layout migration advanced"
                 );
@@ -1927,7 +1942,7 @@ impl Namespace {
             tracing::info!(
                 namespace = %self.name,
                 segments = remote_migrated,
-                remaining = self.remote_layout_migration_pending()?,
+                remaining = self.remote_layout_migration_remaining_count()?,
                 elapsed_ms = remote_migration_started.elapsed().as_millis() as u64,
                 "remote physical layout migration advanced"
             );
@@ -2264,12 +2279,30 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
     let mut pending = vec![dir.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(namespace = %namespace, path = %directory.display(), %error,
+                    "could not inspect namespace for abandoned staging files");
                 continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tracing::warn!(namespace = %namespace, path = %directory.display(), %error,
+                        "could not inspect namespace directory entry");
+                    continue;
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    tracing::warn!(namespace = %namespace, path = %entry.path().display(), %error,
+                        "could not inspect namespace file type");
+                    continue;
+                }
             };
             let path = entry.path();
             if file_type.is_dir() {
@@ -2674,6 +2707,7 @@ mod tests {
             Arc::new(RwLock::new(())),
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
+            Arc::new(Mutex::new(())),
             "",
             StoragePolicy::default(),
         )
@@ -2696,6 +2730,7 @@ mod tests {
             catalog,
             Arc::new(RwLock::new(())),
             crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
             remote_log_dir,
             policy,
@@ -2937,7 +2972,7 @@ mod tests {
             Some(ns_dir.clone()),
             Arc::new(Catalog::open(Some(&dir)).unwrap()),
         );
-        assert_eq!(ns.physical_layout_migration_pending().0, 6);
+        assert_eq!(ns.physical_layout_migration_pending().migration_l0, 6);
 
         let migration_ns = Arc::clone(&ns);
         let rebuilt =
@@ -2946,7 +2981,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
         assert_eq!(rebuilt, 1);
-        assert_eq!(ns.physical_layout_migration_pending().0, 0);
+        assert_eq!(ns.physical_layout_migration_pending().migration_l0, 0);
         assert_eq!(ns.stats().row_count, 12);
 
         for path in discover_segments(&ns_dir) {
@@ -2977,7 +3012,7 @@ mod tests {
             Arc::new(Catalog::open(Some(&dir)).unwrap()),
         );
 
-        assert_eq!(ns.physical_layout_migration_pending(), (0, 0, 0));
+        assert!(!ns.physical_layout_migration_pending().any());
         let migration_ns = Arc::clone(&ns);
         assert_eq!(
             tokio::task::spawn_blocking(move || migration_ns.physical_layout_migration_l0_wave())
@@ -3040,9 +3075,9 @@ mod tests {
             .replace_segments("levanter.metrics", &[old_path], &[legacy.clone()])
             .unwrap();
 
-        assert_eq!(ns.remote_layout_migration_pending().unwrap(), 1);
+        assert_eq!(ns.remote_layout_migration_remaining_count().unwrap(), 1);
         assert!(ns.remote_layout_migration_step().await.unwrap());
-        assert_eq!(ns.remote_layout_migration_pending().unwrap(), 0);
+        assert_eq!(ns.remote_layout_migration_remaining_count().unwrap(), 0);
         assert!(!ns.remote_layout_migration_step().await.unwrap());
 
         let relocated = ns

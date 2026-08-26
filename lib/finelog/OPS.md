@@ -201,7 +201,7 @@ metadata, and moves current local L1 files into their bucket directory under the
 query-visibility lock. Evicted objects move with an in-bucket copy, atomic
 catalog swap, then old-key deletion, so the server does not download archived
 bytes. Startup reconciliation resolves a crash between those phases by keeping
-the key named by the catalog. One process-wide L0 rebuild wave runs two
+the key named by the catalog. One store-wide L0 rebuild wave runs two
 independent workers; each coalesces about 32 MiB of compressed inputs, sorts and
 partitions that bounded stream, then publishes its source span atomically. The
 global permit prevents several namespaces from multiplying that memory

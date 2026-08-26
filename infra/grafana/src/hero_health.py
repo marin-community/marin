@@ -126,10 +126,9 @@ Signals = dict[tuple[str, str], RunSignals]
 def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     """Return the newest sample and health-window reductions per run and metric.
 
-    Everything reduces over one execution: the newest attempt process zero
-    reports. A retry keeps the run ID and takes a new `execution_uid`, so
-    partitioning on the run alone would sum one attempt's skipped steps into the
-    next. Process zero because Levanter publishes tracker metrics only from it.
+    Each watched run supplies its current execution. A retry keeps the run ID
+    and takes a new `execution_uid`, so reductions must also match that identity.
+    Process zero reports the Levanter tracker metrics.
     """
     execution_predicates = [
         "("

@@ -169,6 +169,7 @@ pub struct Store {
     query_visibility: Arc<tokio::sync::RwLock<()>>,
     index_cache: Arc<IndexCache>,
     index_backfill_slot: Arc<Mutex<()>>,
+    physical_layout_migration_slot: Arc<Mutex<()>>,
     policies: PolicyRegistry,
     _store_lock: Option<File>,
 }
@@ -276,6 +277,7 @@ impl Store {
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
+            physical_layout_migration_slot: Arc::new(Mutex::new(())),
             policies: PolicyRegistry::new(telemetry_root_write_mode),
             _store_lock: store_lock,
         };
@@ -406,6 +408,7 @@ impl Store {
             Arc::clone(&self.query_visibility),
             Arc::clone(&self.index_cache),
             Arc::clone(&self.index_backfill_slot),
+            Arc::clone(&self.physical_layout_migration_slot),
             &self.remote_log_dir,
             policy,
         )?;

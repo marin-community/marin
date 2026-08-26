@@ -387,9 +387,11 @@ mod tests {
     use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::execution::FunctionRegistry;
+    use datafusion::logical_expr::{col, expr::ScalarFunction, lit};
     use datafusion::prelude::SessionContext;
 
     use super::*;
@@ -1277,9 +1279,6 @@ mod tests {
     /// rather than the rendered text, which qualifies column names inconsistently
     /// across plan stages and would make a substring check pass vacuously.
     fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
-        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-        use datafusion::logical_expr::Expr;
-
         let mut found = false;
         plan.apply(|node| {
             for e in node.expressions() {
@@ -1362,9 +1361,6 @@ mod tests {
 
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::logical_expr::{col, lit};
-        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
         let needle = "Bootstrap completed for TPU-xyz";
@@ -1413,10 +1409,7 @@ mod tests {
         // 2) Evidence of pruning: the injected access plan skips row group 0 and
         //    keeps row group 1.
         let state = ctx.state();
-        let udf = {
-            use datafusion::execution::FunctionRegistry;
-            ctx.udf("contains").unwrap()
-        };
+        let udf = ctx.udf("contains").unwrap();
         let filter =
             Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
         let probe = NamespaceProvider::build(
@@ -1432,9 +1425,6 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_segment_indexes_ignore_existing_bundle() {
-        use datafusion::execution::FunctionRegistry;
-        use datafusion::logical_expr::{col, expr::ScalarFunction, lit, Expr};
-
         let dir = tempdir("disabled_segment_indexes");
         let needle = "Bootstrap completed for TPU-xyz";
         let path = write_two_span_log_segment(
@@ -1541,9 +1531,6 @@ mod tests {
 
     #[tokio::test]
     async fn regex_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::logical_expr::{col, lit};
-        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-
         let dir = tempdir("regex_prune");
         let pattern = r"Bootstrap.*TPU-[a-z]+";
         let rg1 = vec![
@@ -1580,10 +1567,7 @@ mod tests {
             vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()]
         );
 
-        let udf = {
-            use datafusion::execution::FunctionRegistry;
-            ctx.udf("regexp_matches").unwrap()
-        };
+        let udf = ctx.udf("regexp_matches").unwrap();
         let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
             udf,
             vec![col("data"), lit(pattern)],
@@ -1660,9 +1644,6 @@ mod tests {
     async fn non_contains_query_leaves_plan_unchanged() {
         // A query with no contains() filter must not be rewritten — the hot path
         // pays nothing. The returned plan is the untouched ListingTable scan.
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion::logical_expr::{col, lit};
-
         let dir = tempdir("no_contains");
         let path =
             write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["one match here"]);

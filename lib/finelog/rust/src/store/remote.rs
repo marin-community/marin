@@ -151,9 +151,7 @@ impl RemoteStore {
         }
     }
 
-    /// Copy one object within a namespace without downloading it through the
-    /// Finelog process. Layout migration uses this to publish a new key before
-    /// atomically changing the catalog pointer to it.
+    /// Copy an object between two keys in the same namespace.
     pub async fn copy(&self, namespace: &str, from_key: &str, to_key: &str) -> bool {
         let from = self.object_path(namespace, from_key);
         let to = self.object_path(namespace, to_key);

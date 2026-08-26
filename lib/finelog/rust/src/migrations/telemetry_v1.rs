@@ -1117,25 +1117,21 @@ fn write_source_outputs(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
         )? {
-            for (destination, batch) in
-                physical_migration_batches(partition.destination.logical_namespace, partition.batch)
-            {
-                if !writers.contains_key(&destination) {
-                    let writer = create_destination_writer(
-                        &destination,
-                        writers.len(),
-                        source_offset,
-                        config,
-                    )?;
-                    writers.insert(destination.clone(), writer);
-                }
-                write_destination_batch(
-                    writers
-                        .get_mut(&destination)
-                        .expect("destination writer was just created"),
-                    &batch,
-                )?;
+            let destination = MigrationDestination {
+                namespace: partition.destination.logical_namespace,
+                partition: None,
+            };
+            if !writers.contains_key(&destination) {
+                let writer =
+                    create_destination_writer(&destination, writers.len(), source_offset, config)?;
+                writers.insert(destination.clone(), writer);
             }
+            write_destination_batch(
+                writers
+                    .get_mut(&destination)
+                    .expect("destination writer was just created"),
+                &partition.batch,
+            )?;
         }
         if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
             tracing::info!(
@@ -1336,22 +1332,6 @@ fn record_source_outputs(
     source.outputs = outputs;
     source.complete = true;
     Ok(())
-}
-
-fn physical_migration_batches(
-    namespace: String,
-    batch: RecordBatch,
-) -> Vec<(MigrationDestination, RecordBatch)> {
-    // Migration publishes ordinary flat, unpartitioned L0 segments. The live
-    // maintenance path owns the L0 -> sorted/partitioned L1 transition, exactly
-    // as it does for new ingestion.
-    vec![(
-        MigrationDestination {
-            namespace,
-            partition: None,
-        },
-        batch,
-    )]
 }
 
 fn align_migrated_batch(
