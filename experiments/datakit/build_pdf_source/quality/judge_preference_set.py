@@ -40,6 +40,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
@@ -92,6 +93,8 @@ MAX_SPEND = 140.0
 # Share of the key's remaining credit this pass is allowed to reach for. Below 1.0 so an
 # under-estimate does not exhaust a shared key.
 MAX_KEY_SHARE = 0.8
+# Verdicts between progress lines. Small enough that a stalled run is visible within a minute.
+PROGRESS_EVERY = 250
 
 ESCALATE_COLUMN = "escalate"
 CONFIDENCE_COLUMN = "escalate_confidence"
@@ -189,18 +192,20 @@ def request(fs, task: Task) -> dict:
     }
 
 
-async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Semaphore) -> dict | None:
-    """Buy one verdict, or return ``None`` if the judge never produced a usable one."""
+async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Semaphore) -> float | None:
+    """Buy one verdict, write it, and return what it cost, or ``None`` if it never came back.
+
+    The verdict is written here rather than collected and written by the caller. Twenty thousand
+    verdicts is hours of wall time, and a pass that only persists at batch boundaries loses
+    everything in flight when it is interrupted -- and shows no progress in between, which makes a
+    stalled run indistinguishable from a slow one.
+    """
     for attempt in range(JUDGE_MAX_ATTEMPTS):
         async with gate:
-            # Built inside the gate, not before it: a packet is ~1.5 MB of base64 page images, and
-            # a batch is four times the concurrency, so materializing every request up front would
-            # hold gigabytes of images that no request is using yet.
-            #
-            # Off the event loop, because the read is a blocking object fetch. Called directly it
-            # stalls every other in-flight request for the length of the fetch, and at this
-            # concurrency the loop then spends longer moving bytes than waiting on the judge --
-            # measured, that took a 512-verdict batch from ~90 seconds to over six minutes.
+            # Built inside the gate, and off the event loop. A packet is ~1.5 MB of base64 page
+            # images; read directly from the coroutine that sends the request, the blocking fetch
+            # stalls every other in-flight request for its duration, and the loop then spends
+            # longer moving bytes than waiting on the judge.
             payload = await asyncio.to_thread(request, fs, task)
             try:
                 response = await client.post("/chat/completions", json=payload, timeout=JUDGE_TIMEOUT)
@@ -211,12 +216,14 @@ async def judge_one(client: httpx.AsyncClient, fs, task: Task, gate: asyncio.Sem
                 logger.info("%s attempt %d: %s", task.packet_id, attempt + 1, error)
                 await asyncio.sleep(min(2**attempt, 30))
                 continue
-        return {
+        result = {
             "packet_id": task.packet_id,
             "model": task.model,
             "verdict": verdict,
             "cost": body.get("usage", {}).get("cost"),
         }
+        await asyncio.to_thread(write_verdict, fs, task, result)
+        return result["cost"] or 0.0
     logger.warning("%s: no verdict after %d attempts", task.packet_id, JUDGE_MAX_ATTEMPTS)
     return None
 
@@ -233,18 +240,31 @@ def write_verdict(fs, task: Task, result: dict) -> None:
 
 
 async def run_batch(client: httpx.AsyncClient, fs, tasks: list[Task]) -> float:
-    """Buy a batch of verdicts, writing each to its own object, and return what it cost."""
+    """Buy every verdict in *tasks*, bounded by the semaphore, reporting as they land.
+
+    One gather over the whole list rather than a loop over batches: the semaphore already bounds
+    what is in flight, so batching adds nothing but a barrier that idles the tail of every batch
+    while its slowest request finishes.
+    """
     gate = asyncio.Semaphore(JUDGE_CONCURRENCY)
     spent = 0.0
-    for start in range(0, len(tasks), JUDGE_CONCURRENCY * 4):
-        batch = tasks[start : start + JUDGE_CONCURRENCY * 4]
-        results = await asyncio.gather(*(judge_one(client, fs, task, gate) for task in batch))
-        bought = [(task, result) for task, result in zip(batch, results, strict=True) if result is not None]
-        spent += sum(result.get("cost") or 0.0 for _, result in bought)
-        # Threaded for the same reason the reads are: 512 sequential object writes between batches
-        # is dead time on a run that buys twenty thousand of them.
-        await asyncio.gather(*(asyncio.to_thread(write_verdict, fs, task, result) for task, result in bought))
-        logger.info("judged %d/%d, spent $%.4f", min(start + len(batch), len(tasks)), len(tasks), spent)
+    done = 0
+    started = time.monotonic()
+    pending = [asyncio.create_task(judge_one(client, fs, task, gate)) for task in tasks]
+    for completed in asyncio.as_completed(pending):
+        cost = await completed
+        done += 1
+        spent += cost or 0.0
+        if done % PROGRESS_EVERY == 0 or done == len(tasks):
+            rate = done / max(time.monotonic() - started, 1e-9)
+            logger.info(
+                "judged %d/%d, spent $%.4f, %.1f verdicts/s, eta %.0f min",
+                done,
+                len(tasks),
+                spent,
+                rate,
+                (len(tasks) - done) / max(rate, 1e-9) / 60,
+            )
     return spent
 
 
