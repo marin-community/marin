@@ -44,7 +44,7 @@ from collections import Counter, deque
 from collections.abc import Callable, Container, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain, islice
-from typing import Any
+from typing import Any, NamedTuple
 
 import dupekit
 import pyarrow as pa
@@ -82,18 +82,20 @@ logger = logging.getLogger(__name__)
 FEATURE_FILTER_VERSION = 4
 DECON_ATTRIBUTES_VERSION = 5
 BLOOM_BUILD_VERSION = 2
-# v4 uses more sample shards because a Stack v3 shard exceeded the 16 GiB worker limit.
-DROP_SET_BUILD_VERSION = 4
+# v5 keeps the v4 logical shards and bounds physical tasks by the worker count.
+DROP_SET_BUILD_VERSION = 5
 MIN_SHORT_EXACT_TOKENS = 3
 DEFAULT_PARAGRAPH_DELIMITER = "\n\n"
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
 DROP_SET_SAMPLE_SHARDS_PER_SOURCE = 512
 DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
+DROP_SET_STAGE_TASKS_PER_WORKER = 4
+DEFAULT_DROP_SET_STAGE_PARTITIONS = 4_000
 LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
 _TOKEN_PATTERN = re.compile(r"\S+")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class NGramConfig:
     """Word-ngram matching parameters.
 
@@ -116,7 +118,7 @@ class NGramConfig:
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
-    min_matched_features: int = 2
+    min_matched_features: int
     paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER
 
     def __post_init__(self) -> None:
@@ -325,49 +327,22 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
         yield from _extract_ngrams(text, ngram.ngram_length, ngram.stride)
 
 
-def _paragraph_overlap_and_matches(
-    paragraph: str,
-    bf: Container[int],
-    ngram: NGramConfig | None,
-    drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, list[int]]:
-    """Return ``(overlap_score, matched_hashes)`` for a single paragraph.
-
-    Score is 0.0 or 1.0 in exact-paragraph mode and the fraction of bloom-hit
-    ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
-    the bloom (in iteration order, with duplicates if the same ngram repeats).
-
-    *drop_hashes* are removed from *both* the numerator and denominator.
-    Corpus-common boilerplate carries no contamination signal, so an
-    all-boilerplate paragraph collapses to zero ngrams and scores 0. Remaining
-    distinctive leak ngrams stay matchable; a leak made entirely of dropped
-    ngrams is intentionally suppressed.
-
-    Alphabetic paragraphs with at least three but fewer than ``ngram_length``
-    tokens use one exact feature. Shorter and non-alphabetic paragraphs return
-    ``(0.0, [])``.
-    """
-    score, matched, _feature_count, _has_ngram_features = _paragraph_overlap_matches_and_presence(
-        paragraph, bf, ngram, drop_hashes
-    )
-    return score, matched
-
-
 def _paragraph_overlap_matches_and_presence(
     paragraph: str,
     bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, list[int], int, bool]:
+) -> tuple[float, list[int], int, int, bool]:
     """Return overlap details, feature counts, and n-gram presence."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], 0, False
-        return (1.0, [h], 1, False) if h in bf else (0.0, [], 1, False)
+            return 0.0, [], 0, 1, False
+        return (1.0, [h], 1, 1, False) if h in bf else (0.0, [], 1, 1, False)
 
     has_ngram_features = False
     feature_count = 0
+    original_feature_count = 0
     matched: list[int] = []
     short_exact = _short_exact_feature(paragraph, ngram.ngram_length)
     features: Iterator[str]
@@ -377,6 +352,7 @@ def _paragraph_overlap_matches_and_presence(
         features = _extract_ngrams(paragraph, ngram.ngram_length, ngram.stride)
     for feature in features:
         has_ngram_features = short_exact is None
+        original_feature_count += 1
         hash_value = _bloom_hash(feature)
         if hash_value in drop_hashes:
             continue
@@ -384,8 +360,8 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], feature_count, has_ngram_features
-    return len(matched) / feature_count, matched, feature_count, has_ngram_features
+        return 0.0, [], feature_count, original_feature_count, has_ngram_features
+    return len(matched) / feature_count, matched, feature_count, original_feature_count, has_ngram_features
 
 
 def _document_overlap_and_matches(
@@ -415,12 +391,12 @@ def _document_overlap_and_matches(
     document_ngram_hits: set[int] = set()
 
     for paragraph in paragraphs:
-        score, hits, feature_count, paragraph_has_ngrams = _paragraph_overlap_matches_and_presence(
-            paragraph, bf, ngram, drop_hashes
+        score, hits, _feature_count, original_feature_count, paragraph_has_ngrams = (
+            _paragraph_overlap_matches_and_presence(paragraph, bf, ngram, drop_hashes)
         )
         if ngram is not None and paragraph_has_ngrams:
             has_paragraph_ngrams = True
-            document_ngram_feature_count += feature_count
+            document_ngram_feature_count += original_feature_count
             document_ngram_hits.update(hits)
         max_score = max(max_score, score)
         if not hits:
@@ -429,7 +405,7 @@ def _document_overlap_and_matches(
             matched.update(hits)
             continue
 
-        complete_single_feature_document = single_paragraph and feature_count == 1 and score == 1.0
+        complete_single_feature_document = single_paragraph and original_feature_count == 1 and score == 1.0
         distinct_hits = len(set(hits))
         if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
             matched.update(hits)
@@ -445,12 +421,12 @@ def _document_overlap_and_matches(
             or _short_exact_feature(text, ngram.ngram_length) is not None
         )
         if use_record_fallback:
-            score, hits, feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
+            score, hits, _feature_count, original_feature_count, _has_ngrams = _paragraph_overlap_matches_and_presence(
                 text, bf, ngram, drop_hashes
             )
             max_score = max(max_score, score)
             distinct_hits = len(set(hits))
-            complete_single_feature_document = feature_count == 1 and score == 1.0
+            complete_single_feature_document = original_feature_count == 1 and score == 1.0
             if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
                 matched.update(hits)
 
@@ -721,7 +697,7 @@ def _make_marker(
     """Return a ``map_shard`` function that processes one input parquet → one output parquet.
 
     *drop_hashes* is the source's common-ngram set, excluded from every
-    paragraph's overlap (see :func:`_paragraph_overlap_and_matches`).
+    paragraph's overlap score.
 
     *flagged_sample_size* > 0 reservoir-samples that many contaminated docs per
     shard — with their text and matched hashes — into
@@ -1041,6 +1017,7 @@ def build_eval_bloom(
         if len(outcome.results) != 1:
             raise RuntimeError(f"Bloom build returned {len(outcome.results)} merge results, expected one")
         n_records = outcome.results[0]
+        StoragePath(parts_dir).rmtree()
     else:
         n_records = _merge_eval_index_parts(
             [],
@@ -1281,6 +1258,7 @@ def build_eval_bloom_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
+    min_matched_features: int,
     paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
@@ -1303,7 +1281,8 @@ def build_eval_bloom_step(
         eval_data_sources: Mix of raw paths (str) and upstream StepSpecs. Raw
             paths go into ``hash_attrs`` (so changing them invalidates the
             cache); StepSpec entries become DAG deps.
-        text_field, ngram_length, overlap_threshold, paragraph_delimiter: ngram
+        text_field, ngram_length, overlap_threshold, min_matched_features,
+            paragraph_delimiter: ngram
             config (see :class:`NGramConfig`). ``paragraph_delimiter`` MUST match
             the consuming :func:`decon_step` for the bloom to be reusable.
         estimated_doc_count, false_positive_rate: bloom sizing.
@@ -1333,7 +1312,10 @@ def build_eval_bloom_step(
 
     ngram: NGramConfig | None = (
         NGramConfig(
-            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+            ngram_length=ngram_length,
+            overlap_threshold=overlap_threshold,
+            min_matched_features=min_matched_features,
+            paragraph_delimiter=paragraph_delimiter,
         )
         if ngram_length is not None
         else None
@@ -1343,6 +1325,7 @@ def build_eval_bloom_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "min_matched_features": min_matched_features,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
         "bloom_build_version": BLOOM_BUILD_VERSION,
@@ -1541,16 +1524,54 @@ class DropSetSource:
     dependency: StepSpec | None = None
 
 
+class _SampleRange(NamedTuple):
+    path: str
+    row_start: int
+    row_end: int
+    local_row_count: int
+    row_count: int
+
+
+class _SampleShard(NamedTuple):
+    sample_shard_id: str
+    source: str
+    text_field: str
+    ranges: tuple[_SampleRange, ...]
+
+
+class _DropSetFrequency(NamedTuple):
+    source: str
+    hash: int | None
+    local_document_frequency: int
+    global_document_frequency: int
+    local_documents: int
+    global_documents: int
+
+
+class _GlobalFrequency(NamedTuple):
+    hash: int
+    document_frequency: int
+    source_frequency: int
+
+
+class _SourceDropSetReduction(NamedTuple):
+    drop: list[int]
+    global_frequencies: list[_GlobalFrequency]
+    local_documents: int
+    global_documents: int
+    threshold: int
+
+
 def _source_sample_shards(
     source: tuple[str, str],
     *,
     text_field: str,
     sample_docs: int,
     global_sample_docs: int,
-) -> list[dict[str, Any]]:
+) -> list[_SampleShard]:
     """Plan balanced row-range samples for one normalized source."""
     source_name, data_path = source
-    ranges: list[dict[str, Any]] = []
+    ranges: list[_SampleRange] = []
     rows_planned = 0
     files = sorted(str(path) for path in StoragePath(f"{data_path.rstrip('/')}/**/*.parquet").glob())
     for path in files:
@@ -1563,41 +1584,28 @@ def _source_sample_shards(
             if row_count <= 0:
                 continue
             local_row_count = min(row_count, max(0, sample_docs - rows_planned))
-            ranges.append(
-                {
-                    "path": path,
-                    "row_start": row_start,
-                    "row_end": clipped_end,
-                    "local_row_count": local_row_count,
-                    "row_count": row_count,
-                }
-            )
+            ranges.append(_SampleRange(path, row_start, clipped_end, local_row_count, row_count))
             rows_planned += row_count
         if rows_planned >= global_sample_docs:
             break
 
     num_shards = min(DROP_SET_SAMPLE_SHARDS_PER_SOURCE, len(ranges))
     if num_shards == 0:
-        return [{"sample_shard_id": f"{source_name}:0", "source": source_name, "text_field": text_field, "ranges": []}]
+        return [_SampleShard(f"{source_name}:0", source_name, text_field, ())]
 
-    buckets: list[list[dict[str, Any]]] = [[] for _ in range(num_shards)]
+    buckets: list[list[_SampleRange]] = [[] for _ in range(num_shards)]
     bucket_rows = [0] * num_shards
-    for sample_range in sorted(ranges, key=lambda item: item["row_count"], reverse=True):
+    for sample_range in sorted(ranges, key=lambda item: item.row_count, reverse=True):
         bucket_index = min(range(num_shards), key=bucket_rows.__getitem__)
         buckets[bucket_index].append(sample_range)
-        bucket_rows[bucket_index] += sample_range["row_count"]
+        bucket_rows[bucket_index] += sample_range.row_count
     return [
-        {
-            "sample_shard_id": f"{source_name}:{bucket_index}",
-            "source": source_name,
-            "text_field": text_field,
-            "ranges": bucket,
-        }
+        _SampleShard(f"{source_name}:{bucket_index}", source_name, text_field, tuple(bucket))
         for bucket_index, bucket in enumerate(buckets)
     ]
 
 
-def _materialize_sample_shard(sample_shard_id: str, items: Iterator[dict[str, Any]]) -> dict[str, Any]:
+def _materialize_sample_shard(sample_shard_id: str, items: Iterator[_SampleShard]) -> _SampleShard:
     iterator = iter(items)
     sample_shard = next(iterator)
     if next(iterator, None) is not None:
@@ -1606,30 +1614,30 @@ def _materialize_sample_shard(sample_shard_id: str, items: Iterator[dict[str, An
 
 
 def _sample_drop_set_shard(
-    sample_shards: Iterator[dict[str, Any]],
+    sample_shards: Iterator[_SampleShard],
     _shard: ShardInfo,
     *,
     bloom_path: str,
     ngram: NGramConfig | None,
-) -> Iterator[dict[str, Any]]:
+) -> Iterator[_DropSetFrequency]:
     """Count matching eval features in one group of source row ranges."""
+    sample_shards = iter(sample_shards)
+    first_sample_shard = next(sample_shards, None)
+    if first_sample_shard is None:
+        return
     bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
-    is_nonempty = False
-    for sample_shard in sample_shards:
-        if not is_nonempty:
-            counters.pipeline.update_counter("decon_drop/nonempty_sampling_shards", 1)
-            is_nonempty = True
+    for sample_shard in chain((first_sample_shard,), sample_shards):
         local_counts: Counter[int] = Counter()
         global_counts: Counter[int] = Counter()
         local_documents = 0
         global_documents = 0
-        text_field = sample_shard["text_field"]
-        for sample_range in sample_shard["ranges"]:
+        text_field = sample_shard.text_field
+        for sample_range in sample_shard.ranges:
             spec = InputFileSpec(
-                path=sample_range["path"],
+                path=sample_range.path,
                 columns=[text_field],
-                row_start=sample_range["row_start"],
-                row_end=sample_range["row_end"],
+                row_start=sample_range.row_start,
+                row_end=sample_range.row_end,
             )
             for row_index, record in enumerate(load_file(spec)):
                 text = record.get(text_field)
@@ -1638,94 +1646,99 @@ def _sample_drop_set_shard(
                 hashes = {h for feature in _extract_features(str(text), ngram) if (h := _bloom_hash(feature)) in bf}
                 global_counts.update(hashes)
                 global_documents += 1
-                if row_index < sample_range["local_row_count"]:
+                if row_index < sample_range.local_row_count:
                     local_counts.update(hashes)
                     local_documents += 1
 
         counters.pipeline.update_counter("decon_drop/sample_shards", 1)
-        yield {
-            "source": sample_shard["source"],
-            "hash": None,
-            "local_document_frequency": 0,
-            "global_document_frequency": 0,
-            "local_documents": local_documents,
-            "global_documents": global_documents,
-        }
+        yield _DropSetFrequency(sample_shard.source, None, 0, 0, local_documents, global_documents)
         for hash_value in local_counts.keys() | global_counts.keys():
-            yield {
-                "source": sample_shard["source"],
-                "hash": hash_value,
-                "local_document_frequency": local_counts[hash_value],
-                "global_document_frequency": global_counts[hash_value],
-                "local_documents": 0,
-                "global_documents": 0,
-            }
+            yield _DropSetFrequency(
+                sample_shard.source,
+                hash_value,
+                local_counts[hash_value],
+                global_counts[hash_value],
+                0,
+                0,
+            )
 
 
-def _reduce_source_drop_set(
-    source_name: str,
-    items: Iterator[dict[str, Any]],
+def _source_drop_set_reduction(
+    items: Iterator[_DropSetFrequency],
     *,
-    output_path: str,
     common_frac: float,
     common_min_abs: int,
-) -> Iterator[dict[str, int]]:
-    """Merge sample shards, write one local drop set, and emit global counts."""
+) -> _SourceDropSetReduction:
     local_counts: Counter[int] = Counter()
     global_counts: Counter[int] = Counter()
     local_documents = 0
     global_documents = 0
     for item in items:
-        local_documents += item["local_documents"]
-        global_documents += item["global_documents"]
-        hash_value = item["hash"]
+        local_documents += item.local_documents
+        global_documents += item.global_documents
+        hash_value = item.hash
         if hash_value is None:
             continue
-        local_counts[hash_value] += item["local_document_frequency"]
-        global_counts[hash_value] += item["global_document_frequency"]
+        local_counts[hash_value] += item.local_document_frequency
+        global_counts[hash_value] += item.global_document_frequency
 
     threshold = max(common_min_abs, int(common_frac * local_documents))
     drop = [hash_value for hash_value, count in local_counts.items() if count >= threshold]
+    global_frequencies = [
+        _GlobalFrequency(hash_value, document_frequency, 1) for hash_value, document_frequency in global_counts.items()
+    ]
+    return _SourceDropSetReduction(drop, global_frequencies, local_documents, global_documents, threshold)
+
+
+def _reduce_source_drop_set(
+    source_name: str,
+    items: Iterator[_DropSetFrequency],
+    *,
+    output_path: str,
+    common_frac: float,
+    common_min_abs: int,
+) -> Iterator[_GlobalFrequency]:
+    reduction = _source_drop_set_reduction(
+        items,
+        common_frac=common_frac,
+        common_min_abs=common_min_abs,
+    )
+    drop = reduction.drop
     _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
     counters.pipeline.update_counter("decon_drop/sources", 1)
     counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
-    counters.pipeline.update_counter("decon_drop/global_documents_sampled", global_documents)
-    counters.pipeline.update_counter("decon_drop/global_candidates", len(global_counts))
+    counters.pipeline.update_counter("decon_drop/global_documents_sampled", reduction.global_documents)
+    counters.pipeline.update_counter("decon_drop/global_candidates", len(reduction.global_frequencies))
     logger.info(
         "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
         source_name,
-        local_documents,
+        reduction.local_documents,
         len(drop),
-        threshold,
-        global_documents,
-        len(global_counts),
+        reduction.threshold,
+        reduction.global_documents,
+        len(reduction.global_frequencies),
     )
-    for hash_value, document_frequency in global_counts.items():
-        yield {"hash": hash_value, "document_frequency": document_frequency, "source_frequency": 1}
+    yield from reduction.global_frequencies
 
 
 def _global_drop_row(
     hash_value: int,
-    items: Iterator[dict[str, int]],
+    items: Iterator[_GlobalFrequency],
     *,
     common_min_abs: int,
     common_min_sources: int,
-) -> dict[str, int] | None:
+) -> _GlobalFrequency | None:
     document_frequency = 0
     source_frequency = 0
     for item in items:
-        document_frequency += item["document_frequency"]
-        source_frequency += item["source_frequency"]
+        document_frequency += item.document_frequency
+        source_frequency += item.source_frequency
     if document_frequency < common_min_abs or source_frequency < common_min_sources:
         return None
-    return {
-        "hash": hash_value,
-        "document_frequency": document_frequency,
-        "source_frequency": source_frequency,
-    }
+    return _GlobalFrequency(hash_value, document_frequency, source_frequency)
 
 
-def _write_global_drop_set(output_dir: str, rows: list[dict[str, int]]) -> str:
+def _write_global_drop_set(output_dir: str, rows: list[_GlobalFrequency]) -> str:
     StoragePath(output_dir).mkdirs()
     out_file = f"{output_dir.rstrip('/')}/drop.parquet"
     schema = pa.schema(
@@ -1735,7 +1748,7 @@ def _write_global_drop_set(output_dir: str, rows: list[dict[str, int]]) -> str:
             pa.field("source_frequency", pa.int64()),
         ]
     )
-    write_parquet_file(iter(rows), output_path=out_file, schema=schema)
+    write_parquet_file((row._asdict() for row in rows), output_path=out_file, schema=schema)
     return out_file
 
 
@@ -1784,6 +1797,10 @@ def build_all_source_drop_sets(
         )
 
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
+    sampling_partitions = min(
+        DROP_SET_STAGE_PARTITIONS_PER_SOURCE * len(sources),
+        max_workers * DROP_SET_STAGE_TASKS_PER_WORKER if max_workers is not None else DEFAULT_DROP_SET_STAGE_PARTITIONS,
+    )
 
     pipeline = (
         Dataset.from_list(sources)
@@ -1796,13 +1813,13 @@ def build_all_source_drop_sets(
             )
         )
         .group_by(
-            key=lambda row: row["sample_shard_id"],
+            key=lambda row: row.sample_shard_id,
             reducer=_materialize_sample_shard,
-            num_output_shards=DROP_SET_STAGE_PARTITIONS_PER_SOURCE * len(sources),
+            num_output_shards=sampling_partitions,
         )
         .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
         .group_by(
-            key=lambda row: row["source"],
+            key=lambda row: row.source,
             reducer=lambda source_name, items: _reduce_source_drop_set(
                 source_name,
                 items,
@@ -1813,7 +1830,7 @@ def build_all_source_drop_sets(
             num_output_shards=len(sources),
         )
         .group_by(
-            key=lambda row: row["hash"],
+            key=lambda row: row.hash,
             reducer=lambda hash_value, items: _global_drop_row(
                 hash_value,
                 items,
@@ -1883,7 +1900,11 @@ def all_source_drop_sets_step(
     :func:`decon_step`.
     """
     ngram: NGramConfig | None = (
-        NGramConfig(ngram_length=ngram_length, paragraph_delimiter=paragraph_delimiter)
+        NGramConfig(
+            ngram_length=ngram_length,
+            min_matched_features=1,
+            paragraph_delimiter=paragraph_delimiter,
+        )
         if ngram_length is not None
         else None
     )
@@ -1957,7 +1978,7 @@ def decon_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    min_matched_features: int = 2,
+    min_matched_features: int,
     paragraph_delimiter: str = DEFAULT_PARAGRAPH_DELIMITER,
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,

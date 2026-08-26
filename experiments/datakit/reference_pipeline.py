@@ -21,7 +21,8 @@ Run preparation first. This reuses the canonical eval v3 Bloom when it is built:
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
-        --pool-workers 60 --pool-gpu GB200
+        --pool-workers 60 --pool-gpu GB200 \
+        --pool-cpu 16 --pool-ram 128g --pool-disk 128g
 
 After it succeeds, start the marking job. Use ``--mark-sources`` to test a
 source subset while the marks keep their full-pipeline identities::
@@ -29,7 +30,9 @@ source subset while the marks keep their full-pipeline identities::
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-mark --sources all \
         --mark-sources all \
-        --pool-workers 60 --pool-gpu GB200 --max-concurrent 16
+        --pool-workers 60 --pool-gpu GB200 \
+        --pool-cpu 16 --pool-ram 128g --pool-disk 128g \
+        --max-concurrent 16
 
 Use the same source selection with ``--target decon-report`` after all marks
 succeed.
@@ -710,6 +713,7 @@ def decontamination_steps(
         eval_data_sources=[eval_root],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
+        min_matched_features=MIN_MATCHED_FEATURES,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
@@ -1167,7 +1171,6 @@ def _require_normalized_sources(sources: dict[str, StepSpec]) -> None:
 
 
 def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
-    """Select terminal steps for one decontamination stage."""
     if target == "decon-bloom":
         return [result.bloom]
     if target == "decon-drop":
@@ -1273,6 +1276,8 @@ def main() -> None:
     mark_source_names = None
     if args.mark_sources not in (None, "all"):
         mark_source_names = [name.strip() for name in args.mark_sources.split(",") if name.strip()]
+        if not mark_source_names:
+            parser.error("--mark-sources must name at least one source or use 'all'")
 
     with ZephyrContext(
         name="datakit-reference",

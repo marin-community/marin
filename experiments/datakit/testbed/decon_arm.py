@@ -120,6 +120,7 @@ def build_testbed_decon_steps(
         eval_data_sources=[f"{marin_prefix()}/datakit/decontam/evals"],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
+        min_matched_features=MIN_MATCHED_FEATURES,
         paragraph_delimiter=PARAGRAPH_DELIMITER,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
