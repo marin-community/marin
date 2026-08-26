@@ -18,6 +18,7 @@ All discovered files are merged into a single output: main records land in
 
 import logging
 import os
+import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -34,8 +35,8 @@ from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.expr import col
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file, load_file_batch
-from zephyr.writers import ThreadedBatchWriter, batchify, write_parquet_file
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.datakit.source_key import DatakitArtifactPath
@@ -133,62 +134,34 @@ def _text_from_value(value: Any) -> str:
     return str(value)
 
 
-# Rows per DataFrame batch when loading non-Parquet inputs (JSONL/Vortex).
-# Parquet uses native row-group batches via ``load_file_batch``.
-_INPUT_BATCH_ROWS = 8192
+def _make_normalize_fn(
+    text_field: str,
+    id_field: str | None,
+    bare: bool = False,
+    drop_fields: tuple[str, ...] = (),
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return the record transform used for schema-inferred inputs."""
 
+    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+        text = _text_from_value(record[text_field])
+        source_id = record.get(id_field) if id_field is not None else None
+        out: dict[str, Any] = {}
 
-def _align_dataframe_vertical_relaxed(
-    df: pl.DataFrame,
-    schema: pl.Schema,
-) -> tuple[pl.DataFrame, pl.Schema]:
-    """Reorder/cast *df* to a ``vertical_relaxed`` unify with *schema*.
+        if not bare:
+            for key, value in record.items():
+                if key == id_field or key in drop_fields:
+                    continue
+                if key == text_field and text_field != "text":
+                    continue
+                out[key] = value
 
-    Requires the same column names as *schema* (order is normalized). Returns the
-    aligned frame and the widened schema. Raises when column sets differ or when
-    dtypes have no common ``vertical_relaxed`` supertype.
-    """
-    expected = list(schema.names())
-    got = set(df.columns)
-    expected_set = set(expected)
-    if got != expected_set:
-        missing = sorted(expected_set - got)
-        extra = sorted(got - expected_set)
-        raise ValueError(f"column set mismatch: missing={missing}, extra={extra}")
-    ordered = df.select(expected)
-    widened = pl.concat([pl.DataFrame(schema=schema), ordered.clear()], how="vertical_relaxed").schema
-    return ordered.cast(dict(widened)), widened
+        out["id"] = generate_id(text)
+        out["text"] = text
+        if source_id is not None:
+            out["source_id"] = source_id
+        return out
 
-
-def _iter_input_batches(path: str) -> Iterator[pl.DataFrame]:
-    """Yield DataFrames with the first batch's columns and compatible dtypes."""
-    if path.endswith(".parquet"):
-        for batch in load_file_batch(path):
-            yield pl.DataFrame(batch)
-        return
-
-    schema: pl.Schema | None = None
-    rows_before = 0
-
-    for batch in batchify(load_file(path), n=_INPUT_BATCH_ROWS):
-        df = pl.DataFrame(batch, infer_schema_length=None)
-        if schema is None:
-            schema = df.schema
-            aligned = df
-        else:
-            try:
-                aligned, schema = _align_dataframe_vertical_relaxed(df, schema)
-            except (ValueError, pl.exceptions.ComputeError, pl.exceptions.SchemaError, pl.exceptions.ShapeError) as err:
-                raise ValueError(
-                    f"Row structure changed after {rows_before} rows in {path} "
-                    f"(batch size {_INPUT_BATCH_ROWS}). Running schema: {dict(schema)}. "
-                    f"This batch could not be unified with pl.concat(how='vertical_relaxed'): {err}. "
-                    f"If a field appears only later in the file, increase _INPUT_BATCH_ROWS so the "
-                    f"first batch includes it. If row shape genuinely varies through the file, use "
-                    f"Parquet or a homogeneous dump."
-                ) from err
-        rows_before += len(batch)
-        yield aligned
+    return normalize_record
 
 
 def _as_text_series(series: pl.Series) -> pl.Series:
@@ -354,6 +327,21 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return sum(StoragePath(path).size() for path in file_paths)
 
 
+def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Return the record transform used to compact long whitespace runs."""
+    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
+
+    def compact(record: dict[str, Any]) -> dict[str, Any]:
+        text = record["text"]
+        compacted = pattern.sub(lambda match: match.group(0)[:max_whitespace_run_chars], text)
+        if len(compacted) != len(text):
+            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
+            return {**record, "text": compacted, "id": generate_id(compacted)}
+        return record
+
+    return compact
+
+
 @dataclass
 class MainOutput:
     """Wraps a unique record destined for the main output shard."""
@@ -429,14 +417,6 @@ def _build_pipeline(
     drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
-    normalize_batch = _make_normalize_batch_fn(
-        text_field,
-        id_field,
-        max_whitespace_run_chars,
-        bare=bare,
-        drop_fields=drop_fields,
-    )
-
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
         prev_id: str | None = None
@@ -454,21 +434,46 @@ def _build_pipeline(
 
     reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
 
-    # Prefer Dataset.load_parquet(batch_mode=True) when every input is Parquet
-    # so the plan can use LoadFileOp; otherwise pack non-Parquet formats into
-    # Arrow batches via flat_map.
-    ds: Dataset
     if files and all(path.endswith(".parquet") for path in files):
-        ds = Dataset.from_list(files).load_parquet(batch_mode=True)
-    else:
-        ds = Dataset.from_list(files).flat_map(_iter_input_batches)
+        normalize_batch = _make_normalize_batch_fn(
+            text_field,
+            id_field,
+            max_whitespace_run_chars,
+            bare=bare,
+            drop_fields=drop_fields,
+        )
+        return (
+            Dataset.from_list(files)
+            .load_parquet(batch_mode=True)
+            .flat_map(normalize_batch)
+            .group_by(
+                key=col("id"),
+                reducer=reducers[dedup_mode],
+                sort_by=col("id"),
+                num_output_shards=num_shards,
+            )
+            .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
+        )
+
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
+
+    def has_text(record: dict[str, Any]) -> bool:
+        text = record.get(text_field)
+        if text is None or _text_from_value(text).strip() == "":
+            counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, 1)
+            return False
+        return True
 
     return (
-        ds.flat_map(normalize_batch)
+        Dataset.from_list(files)
+        .flat_map(load_file)
+        .filter(has_text)
+        .map(normalize_record)
+        .map(_make_whitespace_compactor(max_whitespace_run_chars))
         .group_by(
-            key=col("id"),
+            key=lambda record: record["id"],
             reducer=reducers[dedup_mode],
-            sort_by=col("id"),
+            sort_by=lambda record: record["id"],
             num_output_shards=num_shards,
         )
         .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
