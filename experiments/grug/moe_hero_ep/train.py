@@ -48,6 +48,7 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from packaging.version import Version
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -108,6 +109,11 @@ RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
 )
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
+# First release defining both flags. Older jaxlibs abort at import on an unknown XLA_FLAGS entry,
+# with a message that names the flag but not why it was set, on every rank at once. The GPU extra
+# in `lib/levanter/pyproject.toml` still pins 0.11.0, so an opt-in ragged run picks up a runtime
+# that cannot honor the flags until the build lands; fail here instead, where the reason is legible.
+RAGGED_MINIMUM_JAX_VERSION = "0.11.1"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -178,6 +184,12 @@ def _apply_hero_ep_runtime_defaults(
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if ragged:
+        if Version(jax.__version__) < Version(RAGGED_MINIMUM_JAX_VERSION):
+            raise RuntimeError(
+                f"{RAGGED_MOE_IMPLEMENTATION} needs jax>={RAGGED_MINIMUM_JAX_VERSION} for "
+                f"{', '.join(RAGGED_REQUIRED_XLA_FLAGS)}, got {jax.__version__}. Run it on the "
+                "pinned jax/XLA build."
+            )
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
         # branch no longer carries, so honoring a partial override would run a configuration

@@ -1084,6 +1084,9 @@ def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypa
     # A watch interval of 0 would otherwise select overlap 4, so the assertion below
     # separates the ragged posture from the inline-watch one rather than aliasing it.
     monkeypatch.delenv("XLA_FLAGS", raising=False)
+    # The installed jax predates the forced ragged flags, which is what the guard below this test
+    # covers. Lower the floor so this one reads the flags the posture composes, not the guard.
+    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "0.0.0")
     config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -1092,3 +1095,31 @@ def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypa
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
     assert f"{train.XLA_LATENCY_HIDING_FLAG}=false" in flags
+    for flag in train.RAGGED_REQUIRED_XLA_FLAGS:
+        assert flag in flags
+
+
+def test_the_ragged_transport_refuses_a_jax_that_cannot_honor_its_flags(monkeypatch):
+    """A runtime below the floor aborts at import on the unknown flags, on every rank at once.
+
+    The GPU extra still pins a jax below it, so this is the path an opt-in ragged run takes today.
+    """
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
+    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"), pytest.raises(RuntimeError, match="99.0.0"):
+        train.run_grug(config)
+
+
+def test_the_jax_floor_leaves_the_pooled_transport_alone(monkeypatch):
+    """The floor is a property of the forced flags, so it must not gate the default backend."""
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "99.0.0")
+    config = _runtime_env_config(watch_interval=0)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert train.RAGGED_REQUIRED_XLA_FLAGS[0] not in flags

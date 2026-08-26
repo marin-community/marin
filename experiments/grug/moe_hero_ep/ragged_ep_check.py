@@ -93,13 +93,18 @@ RING_DIAGNOSTIC_CAPACITY = 2.0
 # `_inputs` drives real clipping and the surviving set is worth checking.
 SKEWED_CAPACITY = 1.0
 
-# Gradients are compared on the MEDIAN relative difference, not the max. Both paths compute the
-# same mathematical gradient, so every observed difference is bf16 reduction-order noise: weight
-# gradients sum rows per expert and the two paths order that sum differently. Reordering leaves
-# the bulk of the entries bit-identical (median 0.0) while a handful of cancellation-heavy entries
-# lose their leading digits and show a large relative max. Gating on the max rejects a correct
-# transport; gating on the median rejects a real backward bug, which shifts the whole distribution.
-# The max is recorded as a diagnostic.
+# Gradients are gated on a median, not the max. Both paths compute the same mathematical gradient,
+# so every observed difference is bf16 reduction-order noise: weight gradients sum rows per expert
+# and the two paths order that sum differently. Reordering leaves the bulk of the entries
+# bit-identical while a handful of cancellation-heavy entries lose their leading digits and show a
+# large relative max, around 0.5 on a correct run. Gating on that rejects a correct transport.
+#
+# The median is taken per slice of the leading axis and the worst slice gates, because a
+# tensor-wide median tolerates any corruption confined to under half the entries -- which is the
+# shape of the localized faults worth catching here. One expert's grouped weight gradient is an
+# eighth of `w13`; one shard's token block is a quarter of the `x` gradient. Neither moves a
+# tensor-wide median. Both move the median of the slice they live in. The tensor-wide median and
+# the max are recorded as diagnostics.
 TOLERANCE = 5e-2
 
 # Mirrors `train.py`'s `RAGGED_REQUIRED_XLA_FLAGS`. Duplicated rather than imported so this guard
@@ -131,20 +136,29 @@ def _transport_flags(kernel: TransportKernel) -> tuple[str, ...]:
     return RAGGED_TRANSPORT_XLA_FLAGS if kernel is TransportKernel.DEVICE else ()
 
 
+# TODO(https://github.com/marin-community/marin/issues/8704): move this to `tests/cluster/` once a
+# GB200 fixture and a cost tier exist. Today nothing selects it, so the gate below runs only when
+# someone launches it by hand.
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256g", disk="128g", regions=[ANY_REGION])
+
+
+class GradDiff(BaseModel):
+    """Relative gradient deviation, summarized three ways. ``worst_slice_median`` is the gate."""
+
+    worst_entry: float
+    tensor_median: float
+    worst_slice_median: float
 
 
 class SeedRow(BaseModel):
     seed: int
     ragged_vs_dense: float
     ring_vs_dense: float
-    max_grad_vs_dense: float
-    median_grad_vs_dense: float
+    grad_vs_dense: GradDiff
     dropped_no_drop_case: int
     dropped_no_drop_case_ring: int
     ragged_vs_dense_dropped: float
-    max_grad_vs_dense_dropped: float
-    median_grad_vs_dense_dropped: float
+    grad_vs_dense_dropped: GradDiff
     dropped_skewed: int
     dropped_skewed_expected: int
 
@@ -288,9 +302,13 @@ def _maxdiff_vs_dense(out, dense) -> float:
     return float(np.max(np.abs(np.asarray(out, np.float32) - dense))) / denom
 
 
-def _graddiff(a, b) -> tuple[float, float]:
-    """Worst-case and median relative gradient difference across the gradient tuple."""
-    maxes, medians = [], []
+def _graddiff(a, b) -> GradDiff:
+    """Compare a gradient tuple against the reference, worst tensor wins each statistic.
+
+    Slices run along the leading axis: expert for the two weight gradients, token for the
+    activation gradient. See the ``TOLERANCE`` comment for why the gate reads a per-slice median.
+    """
+    maxes, medians, slice_medians = [], [], []
     for u, v in zip(a, b, strict=True):
         u = np.asarray(u, dtype=np.float32)
         v = np.asarray(v, dtype=np.float32)
@@ -298,7 +316,9 @@ def _graddiff(a, b) -> tuple[float, float]:
         absdiff = np.abs(u - v)
         maxes.append(float(np.max(absdiff)) / denom)
         medians.append(float(np.median(absdiff)) / denom)
-    return max(maxes), max(medians)
+        per_slice = np.median(absdiff.reshape(absdiff.shape[0], -1), axis=1)
+        slice_medians.append(float(np.max(per_slice)) / denom)
+    return GradDiff(worst_entry=max(maxes), tensor_median=max(medians), worst_slice_median=max(slice_medians))
 
 
 def _run() -> list[SeedRow]:
@@ -362,20 +382,18 @@ def _run() -> list[SeedRow]:
                 "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY
             )
 
-        max_g, med_g = _graddiff(g_ragged, g_dense)
-        max_gd, med_gd = _graddiff(g_drop, g_dense_dropped)
+        grad = _graddiff(g_ragged, g_dense)
+        grad_dropped = _graddiff(g_drop, g_dense_dropped)
         rows.append(
             SeedRow(
                 seed=seed,
                 ragged_vs_dense=_maxdiff_vs_dense(o_ragged, dense),
                 ring_vs_dense=_maxdiff_vs_dense(o_ring, dense),
-                max_grad_vs_dense=max_g,
-                median_grad_vs_dense=med_g,
+                grad_vs_dense=grad,
                 dropped_no_drop_case=dropped,
                 dropped_no_drop_case_ring=dropped_ring,
                 ragged_vs_dense_dropped=_maxdiff_vs_dense(o_drop, dense_dropped),
-                max_grad_vs_dense_dropped=max_gd,
-                median_grad_vs_dense_dropped=med_gd,
+                grad_vs_dense_dropped=grad_dropped,
                 dropped_skewed=dropped_skewed,
                 dropped_skewed_expected=round(float((1.0 - keep).sum())),
             )
@@ -388,7 +406,9 @@ def run_benchmark(config: RaggedEpConfig) -> None:
     rows = _run()
     payload = [r.model_dump(mode="json") for r in rows]
     ground_truth_ok = all(
-        r.ragged_vs_dense <= TOLERANCE and r.median_grad_vs_dense <= TOLERANCE and r.dropped_no_drop_case == 0
+        r.ragged_vs_dense <= TOLERANCE
+        and r.grad_vs_dense.worst_slice_median <= TOLERANCE
+        and r.dropped_no_drop_case == 0
         for r in rows
     )
     # A dropping transport is correct when it equals dense over the rows it kept AND keeps the
@@ -396,7 +416,7 @@ def run_benchmark(config: RaggedEpConfig) -> None:
     # oracle and the backend disagree about which assignments exist.
     drops_ok = all(
         r.ragged_vs_dense_dropped <= TOLERANCE
-        and r.median_grad_vs_dense_dropped <= TOLERANCE
+        and r.grad_vs_dense_dropped.worst_slice_median <= TOLERANCE
         and r.dropped_skewed == r.dropped_skewed_expected
         for r in rows
     )
