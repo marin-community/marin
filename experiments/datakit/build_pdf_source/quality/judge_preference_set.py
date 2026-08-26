@@ -70,7 +70,11 @@ JUDGE_KEY_VAR = "OR_KEY_SCALE_UP"
 REASONING_EFFORT = "medium"
 BASE_URL = "https://openrouter.ai/api/v1"
 
-JUDGE_CONCURRENCY = 128
+# In-flight requests. Latency per verdict is ~40 s and dominated by the judge's own reasoning, so
+# throughput is concurrency divided by latency and the ceiling is the key's rate limit rather than
+# anything local; this key declares none. Measured at 128 the pass runs ~1.8 hours, which is most of
+# a working session for a job whose output everything else waits on.
+JUDGE_CONCURRENCY = 256
 JUDGE_MAX_ATTEMPTS = 6
 JUDGE_TIMEOUT = 300.0
 # Reasoning tokens are charged against this ceiling, and a verdict that runs out of budget comes
