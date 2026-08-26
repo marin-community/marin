@@ -6,14 +6,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from fray.types import ResourceConfig
+import marin.datakit.download.code_alchemy as code_alchemy
+import marin.datakit.normalize as normalize_module
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
-import marin.datakit.download.code_alchemy as code_alchemy
-import marin.datakit.normalize as normalize_module
-
+from fray.types import ResourceConfig
 from marin.datakit.download.code_alchemy import (
     HF_DATASET_ID,
     HF_REVISION,
@@ -369,7 +367,7 @@ def test_hydrated_validator_rejects_wrong_file_count(tmp_path: Path, monkeypatch
     _write_metadata(tmp_path, monkeypatch=monkeypatch)
     _write_partitions(tmp_path, omit=("code-dev", "ff"))
 
-    with pytest.raises(FileNotFoundError, match="512.*found 511"):
+    with pytest.raises(FileNotFoundError, match=r"512.*found 511"):
         _validate_hydrated_code_alchemy(str(tmp_path))
 
 

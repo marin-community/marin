@@ -20,11 +20,11 @@ def test_every_source_normalizes_its_output():
 def test_code_alchemy_registry_components():
     """Code Alchemy subsets remain independent normalized mixture components."""
     expected_counts = {
-        "code-alchemy/code-dev": 269.8,
-        "code-alchemy/code-dialogue": 544.7,
-        "code-alchemy/code-enhance": 124.5,
-        "code-alchemy/code-qa": 31.3,
-        "code-alchemy/code-trace": 6.3,
+        "code-alchemy/code-dev": 251.195609089,
+        "code-alchemy/code-dialogue": 509.618631817,
+        "code-alchemy/code-enhance": 112.823840552,
+        "code-alchemy/code-qa": 34.821683237,
+        "code-alchemy/code-trace": 8.078120885,
     }
 
     sources = all_sources()

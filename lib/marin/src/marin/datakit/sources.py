@@ -256,16 +256,17 @@ def all_sources() -> dict[str, DatakitSource]:
     )
 
     # Code Alchemy: five independent training subsets from the pinned upstream
-    # release. Counts are the dataset-card estimates pending exact Marin-tokenizer
-    # measurements over the normalized artifacts.
+    # release. Exact counts measured by scanning every input_ids row in the
+    # marin-community/marin-tokenizer TokenizedAttrData artifacts:
+    # 916,537,885,580 tokens total.
     code_alchemy = _rows_flat(
         code_alchemy_normalize_steps,
         {
-            "code-alchemy/code-dev": 269.8,
-            "code-alchemy/code-dialogue": 544.7,
-            "code-alchemy/code-enhance": 124.5,
-            "code-alchemy/code-qa": 31.3,
-            "code-alchemy/code-trace": 6.3,
+            "code-alchemy/code-dev": 251.195609089,
+            "code-alchemy/code-dialogue": 509.618631817,
+            "code-alchemy/code-enhance": 112.823840552,
+            "code-alchemy/code-qa": 34.821683237,
+            "code-alchemy/code-trace": 8.078120885,
         },
     )
 

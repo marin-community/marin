@@ -17,11 +17,10 @@ import re
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-from fray.types import ResourceConfig
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
+from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.datakit.download.huggingface import download_hf_step
