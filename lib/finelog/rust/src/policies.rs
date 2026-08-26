@@ -39,6 +39,10 @@ trait SchemaPolicy: IngestionPolicy + NamespaceStoragePolicy {
         &self,
         namespace: &str,
     ) -> Option<&'static dyn PhysicalPartitionPolicy>;
+
+    fn segment_indexes_enabled(&self, _namespace: &str) -> bool {
+        true
+    }
 }
 
 // Rules are evaluated in declaration order. Each rule owns the complete policy
@@ -157,6 +161,11 @@ pub(crate) fn physical_partition_policy_for(
         .and_then(|policy| policy.physical_partition_policy(namespace))
 }
 
+pub(crate) fn segment_indexes_enabled_for(namespace: &str) -> bool {
+    matching_policy(&SCHEMA_POLICIES, namespace)
+        .is_none_or(|policy| policy.segment_indexes_enabled(namespace))
+}
+
 pub(crate) fn eager_storage_namespaces_for(namespace: &str) -> Vec<&'static str> {
     match matching_policy(&SCHEMA_POLICIES, namespace) {
         Some(policy) => policy.eager_namespaces(),
@@ -183,6 +192,11 @@ impl SchemaPolicy for LevanterMetricsPolicy {
         namespace: &str,
     ) -> Option<&'static dyn PhysicalPartitionPolicy> {
         self.physical_partition_policy(namespace)
+    }
+
+    fn segment_indexes_enabled(&self, namespace: &str) -> bool {
+        debug_assert!(matches_levanter_metrics_namespace(namespace));
+        false
     }
 }
 

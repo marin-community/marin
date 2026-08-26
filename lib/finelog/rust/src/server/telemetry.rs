@@ -378,7 +378,7 @@ impl TelemetryState {
                             "no server-owned schema is registered for {namespace:?}"
                         ))
                     })?;
-                    store.register_table(&namespace, schema, policy)
+                    store.register_managed_table(&namespace, schema, policy)
                 })
                 .await
                 {

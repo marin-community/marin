@@ -224,7 +224,9 @@ benchmark; there is no free-form plugin registry.
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
 required literal runs prune instead of full-scan. Today it is on `log.key`,
-`log.data`, and the `name` columns of `telemetry_v1` and `levanter.metrics`.
+`log.data`, and telemetry `name` columns. `levanter.metrics` deliberately
+disables all secondary indexes until its broken index policy is replaced; its
+exact hidden `run_id` partition remains active.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for

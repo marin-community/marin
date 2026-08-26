@@ -617,18 +617,34 @@ fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<
     Some((segment_identity, rows))
 }
 
-/// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
-/// a fixed level width). Returns an empty list if the dir does not exist.
+/// All `seg_L*_*.parquet` files under `dir`, sorted by path.
+///
+/// L0 lives directly in the namespace directory. Physical policies may place
+/// L1+ segments in bounded subdirectories, so discovery is recursive. Symlinked
+/// directories are not followed. Returns an empty list if `dir` does not exist.
 pub fn discover_segments(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if parse_seg_filename(name).is_some() {
-                out.push(p);
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if file_type.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| parse_seg_filename(name).is_some())
+            {
+                out.push(path);
             }
         }
     }
@@ -923,5 +939,24 @@ mod tests {
         let name = seg_filename(0, 42);
         assert_eq!(name, "seg_L0_0000000000000000042.parquet");
         assert_eq!(parse_seg_filename(&name), Some((0, 42)));
+    }
+
+    #[test]
+    fn discover_segments_includes_nested_physical_directories() {
+        let dir = tempdir();
+        let nested = dir.join("run_id/07");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.join(seg_filename(0, 1)), b"l0").unwrap();
+        std::fs::write(nested.join(seg_filename(1, 2)), b"l1").unwrap();
+        std::fs::write(nested.join("ignored.parquet.tmp"), b"tmp").unwrap();
+
+        let discovered = discover_segments(&dir);
+        assert_eq!(discovered.len(), 2);
+        assert!(discovered.iter().any(|path| path.parent() == Some(&dir)));
+        assert!(discovered
+            .iter()
+            .any(|path| path.parent() == Some(nested.as_path())));
+
+        std::fs::remove_dir_all(dir).ok();
     }
 }

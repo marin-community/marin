@@ -124,6 +124,21 @@ pub fn basename(path: &str) -> String {
         .to_string()
 }
 
+/// Object-store key for a catalog segment path relative to its namespace dir.
+pub fn segment_relative_key(namespace_dir: &std::path::Path, path: &str) -> Option<String> {
+    let relative = std::path::Path::new(path)
+        .strip_prefix(namespace_dir)
+        .ok()?;
+    let parts = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// Filename for a segment at `level` whose smallest seq is `min_seq`.
 pub fn seg_filename(level: i32, min_seq: i64) -> String {
     format!("seg_L{level}_{min_seq:019}.parquet")

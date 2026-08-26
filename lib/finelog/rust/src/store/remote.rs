@@ -7,7 +7,7 @@
 //! non-empty value -> `LocalFileSystem` rooted at that directory (tests pass a
 //! plain tmp path). An empty `remote_log_dir` disables sync (returns `None`).
 //!
-//! The on-disk layout is `{remote_log_dir}/{namespace}/{basename}`; the
+//! The on-disk layout is `{remote_log_dir}/{namespace}/{relative segment key}`; the
 //! `RemoteStore` carries an optional bucket-relative `prefix` (the `gs://`
 //! path component) and every per-namespace op composes `{prefix}/{namespace}`.
 //! object_store 0.13 moved `put`/`get`/`head`/`delete` onto the `ObjectStoreExt`
@@ -51,7 +51,7 @@ pub fn is_object_store(remote_log_dir: &str) -> bool {
 /// iris owns the addressing-style decision (path-style for R2, virtual-hosted
 /// for CoreWeave Object Storage) and this server stays endpoint-agnostic.
 /// Any other value -> a `LocalFileSystem` rooted at that (created) directory,
-/// with an empty prefix, writing into `{remote_log_dir}/{namespace}/{basename}`.
+/// with an empty prefix, writing into `{remote_log_dir}/{namespace}/{relative segment key}`.
 pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, StatsError> {
     let dir = remote_log_dir.trim_end_matches('/');
     if dir.is_empty() {
@@ -86,7 +86,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
         }));
     }
     // Local filesystem remote (tests). Root the store at the remote dir so
-    // object paths are `{namespace}/{basename}`.
+    // object paths are `{namespace}/{relative segment key}`.
     std::fs::create_dir_all(dir)
         .map_err(|e| StatsError::Internal(format!("create remote dir {dir}: {e}")))?;
     let store = LocalFileSystem::new_with_prefix(dir)
@@ -105,9 +105,13 @@ impl RemoteStore {
         self.prefix.split('/').filter(|s| !s.is_empty())
     }
 
-    /// The object path for `{prefix}/{namespace}/{basename}`.
-    fn object_path(&self, namespace: &str, basename: &str) -> OsPath {
-        let parts: Vec<&str> = self.prefix_parts().chain([namespace, basename]).collect();
+    /// The object path for `{prefix}/{namespace}/{relative segment key}`.
+    fn object_path(&self, namespace: &str, relative_key: &str) -> OsPath {
+        let parts: Vec<&str> = self
+            .prefix_parts()
+            .chain([namespace])
+            .chain(relative_key.split('/').filter(|part| !part.is_empty()))
+            .collect();
         OsPath::from_iter(parts)
     }
 
@@ -117,13 +121,15 @@ impl RemoteStore {
         OsPath::from_iter(parts)
     }
 
-    /// Upload `local_path` to `{namespace}/{basename}`. Returns `true` on
+    /// Upload `local_path` to `{namespace}/{relative_key}`. Returns `true` on
     /// success; the next sync retries on failure. The byte read + put run as
     /// async object_store calls (no spawn_blocking).
-    pub async fn upload(&self, namespace: &str, local_path: &std::path::Path) -> bool {
-        let Some(basename) = local_path.file_name().and_then(|n| n.to_str()) else {
-            return false;
-        };
+    pub async fn upload(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+        local_path: &std::path::Path,
+    ) -> bool {
         let bytes = match tokio::fs::read(local_path).await {
             Ok(b) => b,
             Err(e) => {
@@ -131,7 +137,7 @@ impl RemoteStore {
                 return false;
             }
         };
-        let remote = self.object_path(namespace, basename);
+        let remote = self.object_path(namespace, relative_key);
         match self
             .store
             .put(&remote, bytes::Bytes::from(bytes).into())
@@ -145,23 +151,43 @@ impl RemoteStore {
         }
     }
 
-    /// List the basenames of every parquet object under `{namespace}/`.
-    pub async fn list_basenames(&self, namespace: &str) -> Result<Vec<String>, StatsError> {
+    /// Copy one object within a namespace without downloading it through the
+    /// Finelog process. Layout migration uses this to publish a new key before
+    /// atomically changing the catalog pointer to it.
+    pub async fn copy(&self, namespace: &str, from_key: &str, to_key: &str) -> bool {
+        let from = self.object_path(namespace, from_key);
+        let to = self.object_path(namespace, to_key);
+        match self.store.copy(&from, &to).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(from = %from, to = %to, %error, "remote copy failed");
+                false
+            }
+        }
+    }
+
+    /// List the relative keys of every object under `{namespace}/`.
+    pub async fn list_keys(&self, namespace: &str) -> Result<Vec<String>, StatsError> {
         let prefix = self.namespace_prefix(namespace);
         let mut stream = self.store.list(Some(&prefix));
         let mut out = Vec::new();
         while let Some(item) = stream.next().await {
             let meta =
                 item.map_err(|e| StatsError::Internal(format!("remote list {namespace:?}: {e}")))?;
-            if let Some(name) = meta.location.filename() {
-                out.push(name.to_string());
-            }
+            if let Some(parts) = meta.location.prefix_match(&prefix) {
+                out.push(
+                    parts
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                );
+            };
         }
         Ok(out)
     }
 
-    /// List `(basename, byte_size)` for every parquet object under
-    /// `{namespace}/` whose basename parses as a segment filename. Used by boot
+    /// List `(relative_key, byte_size)` for every parquet object under
+    /// `{namespace}/` whose filename parses as a segment filename. Used by boot
     /// reconcile to enumerate adoption candidates.
     pub async fn list_segment_objects(
         &self,
@@ -173,23 +199,33 @@ impl RemoteStore {
         while let Some(item) = stream.next().await {
             let meta =
                 item.map_err(|e| StatsError::Internal(format!("remote list {namespace:?}: {e}")))?;
-            if let Some(name) = meta.location.filename() {
-                out.push((name.to_string(), meta.size));
+            let Some(filename) = meta.location.filename() else {
+                continue;
+            };
+            if crate::store::types::parse_seg_filename(filename).is_none() {
+                continue;
             }
+            if let Some(parts) = meta.location.prefix_match(&prefix) {
+                let key = parts
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.push((key, meta.size));
+            };
         }
         Ok(out)
     }
 
-    /// Delete `{namespace}/{basename}` from the remote store. Best-effort; logs
+    /// Delete `{namespace}/{relative_key}` from the remote store. Best-effort; logs
     /// and swallows on error (warn-and-continue).
-    pub async fn delete(&self, namespace: &str, basename: &str) {
-        let remote = self.object_path(namespace, basename);
+    pub async fn delete(&self, namespace: &str, relative_key: &str) {
+        let remote = self.object_path(namespace, relative_key);
         if let Err(e) = self.store.delete(&remote).await {
             tracing::warn!(remote = %remote, error = %e, "remote delete failed");
         }
     }
 
-    /// Async footer read of `{namespace}/{basename}`, including actual seq
+    /// Async footer read of `{namespace}/{relative_key}`, including actual seq
     /// bounds and hidden partition metadata.
     /// Returns `None` on an unreadable footer.
     ///
@@ -199,16 +235,17 @@ impl RemoteStore {
     pub async fn read_footer(
         &self,
         namespace: &str,
-        basename: &str,
+        relative_key: &str,
         file_size: u64,
         key_column: Option<&str>,
     ) -> Option<crate::store::segment::SegmentMetadata> {
         use parquet::arrow::async_reader::ParquetObjectReader;
         use parquet::file::metadata::ParquetMetaDataReader;
 
-        let (level, filename_min_seq) = crate::store::types::parse_seg_filename(basename)?;
+        let filename = std::path::Path::new(relative_key).file_name()?.to_str()?;
+        let (level, filename_min_seq) = crate::store::types::parse_seg_filename(filename)?;
 
-        let remote = self.object_path(namespace, basename);
+        let remote = self.object_path(namespace, relative_key);
         let mut reader =
             ParquetObjectReader::new(Arc::clone(&self.store), remote).with_file_size(file_size);
         let md = ParquetMetaDataReader::new()
@@ -284,23 +321,56 @@ mod tests {
 
         let local_file = local_dir.join("seg_L1_0000000000000000001.parquet");
         std::fs::write(&local_file, b"hello-parquet").unwrap();
-        assert!(store.upload("ns.a", &local_file).await);
+        assert!(
+            store
+                .upload(
+                    "ns.a",
+                    "run_id/07/seg_L1_0000000000000000001.parquet",
+                    &local_file
+                )
+                .await
+        );
 
         let on_disk = remote_dir
             .join("ns.a")
+            .join("run_id/07")
             .join(local_file.file_name().unwrap());
         assert!(on_disk.exists());
-        let names = store.list_basenames("ns.a").await.unwrap();
+
+        assert!(
+            store
+                .copy(
+                    "ns.a",
+                    "run_id/07/seg_L1_0000000000000000001.parquet",
+                    "run_id/08/seg_L1_0000000000000000001.parquet",
+                )
+                .await
+        );
+        let copied = remote_dir
+            .join("ns.a")
+            .join("run_id/08")
+            .join(local_file.file_name().unwrap());
+        assert_eq!(std::fs::read(&copied).unwrap(), b"hello-parquet");
+
+        let mut names = store.list_keys("ns.a").await.unwrap();
+        names.sort();
         assert_eq!(
             names,
-            vec!["seg_L1_0000000000000000001.parquet".to_string()]
+            vec![
+                "run_id/07/seg_L1_0000000000000000001.parquet".to_string(),
+                "run_id/08/seg_L1_0000000000000000001.parquet".to_string(),
+            ]
         );
 
         store
-            .delete("ns.a", "seg_L1_0000000000000000001.parquet")
+            .delete("ns.a", "run_id/07/seg_L1_0000000000000000001.parquet")
             .await;
         assert!(!on_disk.exists());
-        assert!(store.list_basenames("ns.a").await.unwrap().is_empty());
+        store
+            .delete("ns.a", "run_id/08/seg_L1_0000000000000000001.parquet")
+            .await;
+        assert!(!copied.exists());
+        assert!(store.list_keys("ns.a").await.unwrap().is_empty());
 
         std::fs::remove_dir_all(&remote_dir).ok();
         std::fs::remove_dir_all(&local_dir).ok();

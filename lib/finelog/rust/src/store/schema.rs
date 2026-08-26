@@ -1083,6 +1083,26 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     Ok(merged_schema)
 }
 
+/// Merge a server-owned schema while treating its derived layout as authoritative.
+///
+/// Columns still evolve additively so historical Parquets remain readable, but
+/// secondary indexes, projections, and grouped extrema are owned by the server
+/// policy rather than monotonically accumulated from older registrations. This
+/// lets a rollout disable a broken derived index without rewriting source data.
+pub fn merge_managed_schema(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
+    let mut merged = merge_schemas(registered, requested)?;
+    for column in &mut merged.columns {
+        column.index = requested
+            .column(&column.name)
+            .map(|requested_column| requested_column.index.clone())
+            .unwrap_or_default();
+    }
+    merged.projections = requested.projections.clone();
+    merged.grouped_extrema = requested.grouped_extrema.clone();
+    validate_index_policies(&merged)?;
+    Ok(merged)
+}
+
 /// Validate a forwarded schema without evolving the receiving schema.
 ///
 /// Unknown nullable columns are returned as ignored. Shared columns must retain their

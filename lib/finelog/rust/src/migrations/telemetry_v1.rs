@@ -21,8 +21,7 @@ use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
 use crate::partition_policy::{select_rows, SegmentPartition};
 use crate::policies::{
-    eager_storage_namespaces_for, physical_partition_policy_for, schema_for_namespace,
-    storage_policy_for, PolicyRegistry,
+    eager_storage_namespaces_for, schema_for_namespace, storage_policy_for, PolicyRegistry,
 };
 use crate::server::telemetry::TELEMETRY_MAX_ROW_GROUP_ROWS;
 use crate::store::catalog::{Catalog, CATALOG_DB_FILENAME};
@@ -1118,10 +1117,9 @@ fn write_source_outputs(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
         )? {
-            for (destination, batch) in physical_migration_batches(
-                partition.destination.logical_namespace,
-                partition.batch,
-            )? {
+            for (destination, batch) in
+                physical_migration_batches(partition.destination.logical_namespace, partition.batch)
+            {
                 if !writers.contains_key(&destination) {
                     let writer = create_destination_writer(
                         &destination,
@@ -1343,30 +1341,17 @@ fn record_source_outputs(
 fn physical_migration_batches(
     namespace: String,
     batch: RecordBatch,
-) -> Result<Vec<(MigrationDestination, RecordBatch)>, StatsError> {
-    let Some(policy) = physical_partition_policy_for(&namespace) else {
-        return Ok(vec![(
-            MigrationDestination {
-                namespace,
-                partition: None,
-            },
-            batch,
-        )]);
-    };
-    Ok(policy
-        .partition_batches(&[batch])?
-        .into_iter()
-        .flat_map(|output| {
-            let destination = MigrationDestination {
-                namespace: namespace.clone(),
-                partition: Some(output.partition),
-            };
-            output
-                .batches
-                .into_iter()
-                .map(move |batch| (destination.clone(), batch))
-        })
-        .collect())
+) -> Vec<(MigrationDestination, RecordBatch)> {
+    // Migration publishes ordinary flat, unpartitioned L0 segments. The live
+    // maintenance path owns the L0 -> sorted/partitioned L1 transition, exactly
+    // as it does for new ingestion.
+    vec![(
+        MigrationDestination {
+            namespace,
+            partition: None,
+        },
+        batch,
+    )]
 }
 
 fn align_migrated_batch(
@@ -2190,7 +2175,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_in_place_indexes_steps_independently_of_physical_row_order() {
+    fn prepare_in_place_indexes_steps_and_stages_unpartitioned_l0() {
         let dirs = TestDirs::new("legacy_levanter_metrics");
         let catalog = Catalog::open(Some(&dirs.store)).unwrap();
         let chronological =
@@ -2223,13 +2208,7 @@ mod tests {
             crate::levanter_metrics_policy::LEVANTER_METRICS_NAMESPACE
         );
         assert_eq!(output.rows, 1);
-        assert_eq!(
-            output
-                .partition
-                .as_ref()
-                .and_then(|partition| partition.value("run_id")),
-            Some("run/+long")
-        );
+        assert!(output.partition.is_none());
 
         let staged_path = dirs
             .store

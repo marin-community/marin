@@ -19,6 +19,7 @@ import pyarrow as pa
 from hero_runs import (
     HERO_ROOT_PATTERNS,
     LEVANTER_METRICS_TABLE,
+    PHASE_ENROLLMENT_LOOKBACK,
     PHASE_METRIC,
     TASK_STATE_FRESHNESS,
     TELEMETRY_GONE_AGE,
@@ -27,11 +28,11 @@ from hero_runs import (
     as_utc,
     hero_run_id,
     root_job_for,
-    run_id_predicate,
     sql_epoch_ms,
     sql_timestamp,
 )
 from loss_spikes import LossWindows, loss_spike_reason, windows_by_run
+from vllm_observability import sql_string
 
 # Past this the rollup no longer enrolls a run, so the rules that read it go blind.
 IRIS_STATE_STALE_AGE = timedelta(minutes=5)
@@ -96,6 +97,7 @@ class WatchedRun:
     run_id: str
     iris_running: bool
     iris_state_age: timedelta | None
+    execution_uid: str | None
 
 
 @dataclass(frozen=True)
@@ -129,7 +131,16 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     partitioning on the run alone would sum one attempt's skipped steps into the
     next. Process zero because Levanter publishes tracker metrics only from it.
     """
-    run_predicate = run_id_predicate(runs)
+    execution_predicates = [
+        "("
+        f"COALESCE(NULLIF(cluster,''),'unknown') = {sql_string(run.cluster)} "
+        f"AND run_id = {sql_string(run.run_id)} "
+        f"AND execution_uid = {sql_string(run.execution_uid)}"
+        ")"
+        for run in runs
+        if run.execution_uid is not None
+    ]
+    execution_predicate = " OR ".join(execution_predicates) or "FALSE"
     signal_since = sql_epoch_ms(now - _SIGNAL_LOOKBACK)
     liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
     health_since = sql_epoch_ms(now - HEALTH_WINDOW)
@@ -137,29 +148,15 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
-        "WITH attempts AS ("
+        "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
-        "ROW_NUMBER() OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), run_id "
-        "ORDER BY timestamp_ms DESC, seq DESC"
-        ") AS rn "
+        "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
-        f"WHERE name = '{PHASE_METRIC}' AND process_index = 0 "
-        f"AND {run_predicate} AND execution_uid IS NOT NULL "
-        f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end}"
-        "), execution AS ("
-        "SELECT origin_cluster, run_id, execution_uid FROM attempts WHERE rn = 1"
-        "), samples AS ("
-        "SELECT execution.origin_cluster, execution.run_id, execution.execution_uid, "
-        "telemetry.name, telemetry.value, telemetry.timestamp_ms, telemetry.seq "
-        f"FROM {LEVANTER_METRICS_TABLE} AS telemetry JOIN execution "
-        "ON COALESCE(NULLIF(telemetry.cluster,''),'unknown') = execution.origin_cluster "
-        "AND telemetry.run_id = execution.run_id "
-        "AND telemetry.execution_uid = execution.execution_uid "
-        f"WHERE telemetry.name IN ({metric_names}) "
-        f"AND telemetry.timestamp_ms >= {liveness_since} AND telemetry.timestamp_ms < {end} "
-        f"AND (telemetry.name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
-        f"OR telemetry.timestamp_ms >= {signal_since})"
+        f"WHERE ({execution_predicate}) AND process_index = 0 "
+        f"AND name IN ({metric_names}) "
+        f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
+        f"AND (name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
+        f"OR timestamp_ms >= {signal_since})"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, execution_uid, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
@@ -220,12 +217,14 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
         states[(str(row["cluster"]), root_job)] = (age, int(row["running"] or 0) > 0)
 
     enrolled = [key for key, (age, running) in states.items() if running and age <= TASK_STATE_FRESHNESS]
+    executions: dict[tuple[str, str], str] = {}
     for row in phase_runs.to_pylist():
         root_job = root_job_for(str(row["telemetry_job"]))
         if root_job is None:
             continue
         key = (str(row["cluster"]), root_job)
-        if key not in enrolled:
+        executions[key] = str(row["execution_uid"])
+        if key not in enrolled and now - as_utc(row["phase_at"]) <= PHASE_ENROLLMENT_LOOKBACK:
             enrolled.append(key)
 
     runs = []
@@ -241,6 +240,7 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
                 run_id=run_id,
                 iris_running=running and age is not None and age <= TASK_STATE_FRESHNESS,
                 iris_state_age=age,
+                execution_uid=executions.get((cluster, root_job)),
             )
         )
     return tuple(runs)

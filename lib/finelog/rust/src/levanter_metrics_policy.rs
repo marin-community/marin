@@ -43,6 +43,8 @@ pub(crate) const LEVANTER_RUN_PARTITION_POLICY: StringIdentityPartitionPolicy =
         spec_id: 1,
         column: RUN_ID_COLUMN,
         partition_field: RUN_ID_COLUMN,
+        directory_prefix: RUN_ID_COLUMN,
+        directory_buckets: 32,
     };
 
 #[derive(Clone, Copy, Debug)]
@@ -277,10 +279,8 @@ pub(crate) fn levanter_metrics_schema() -> Schema {
             nullable_column("node_name", ColumnType::COLUMN_TYPE_STRING),
             nullable_column("process_index", ColumnType::COLUMN_TYPE_INT64),
             nullable_column(STEP_COLUMN, ColumnType::COLUMN_TYPE_INT64),
-            nullable_column(NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING).with_trigram_index(),
-            nullable_column(KIND_COLUMN, ColumnType::COLUMN_TYPE_STRING)
-                .with_exact_values(["scalar", "summary", "histogram"])
-                .with_value_counts(),
+            nullable_column(NAME_COLUMN, ColumnType::COLUMN_TYPE_STRING),
+            nullable_column(KIND_COLUMN, ColumnType::COLUMN_TYPE_STRING),
             nullable_column(VALUE_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
             nullable_column(MIN_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),
             nullable_column(MAX_COLUMN, ColumnType::COLUMN_TYPE_FLOAT64),

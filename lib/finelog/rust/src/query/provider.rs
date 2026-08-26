@@ -54,6 +54,7 @@ pub struct NamespaceProvider {
     segment_partitions: BTreeMap<String, SegmentPartition>,
     index_cache: Arc<IndexCache>,
     exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
+    segment_indexes_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -192,6 +193,7 @@ impl NamespaceProvider {
                 segment_partitions: BTreeMap::new(),
                 index_cache,
                 exact_postings_policy: None,
+                segment_indexes_enabled: true,
             });
         }
 
@@ -206,6 +208,7 @@ impl NamespaceProvider {
             segment_partitions: BTreeMap::new(),
             index_cache,
             exact_postings_policy: None,
+            segment_indexes_enabled: true,
         })
     }
 
@@ -239,6 +242,16 @@ impl NamespaceProvider {
             values.dedup();
         }
         self.exact_postings_policy = Some(policy);
+        self
+    }
+
+    /// Enable or disable every derived segment index for this provider.
+    ///
+    /// Source Parquet remains authoritative. Disabling this ignores even an
+    /// existing `.fidx` bundle, which is required while a broken policy is
+    /// withdrawn and its artifacts await a later rebuild.
+    pub fn with_segment_indexes_enabled(mut self, enabled: bool) -> Self {
+        self.segment_indexes_enabled = enabled;
         self
     }
 }
@@ -290,6 +303,9 @@ impl TableProvider for NamespaceProvider {
                         .scan(state, projection, filters, limit)
                         .await?
                 };
+                if !self.segment_indexes_enabled {
+                    return Ok(plan);
+                }
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let mut exact = crate::query::exact_prune::values_by_column(filters);
                 if let Some(policy) = &self.exact_postings_policy {
@@ -1411,6 +1427,49 @@ mod tests {
         .unwrap();
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
         assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn disabled_segment_indexes_ignore_existing_bundle() {
+        use datafusion::execution::FunctionRegistry;
+        use datafusion::logical_expr::{col, expr::ScalarFunction, lit, Expr};
+
+        let dir = tempdir("disabled_segment_indexes");
+        let needle = "Bootstrap completed for TPU-xyz";
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["Bootstrap completed for TPU-xyz"],
+        );
+        let ctx = crate::query::make_ctx();
+        let udf = ctx.udf("contains").unwrap();
+        let filter =
+            Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_indexes_enabled(false)
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        let config = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 

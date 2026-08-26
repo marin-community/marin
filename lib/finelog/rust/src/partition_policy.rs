@@ -1,11 +1,13 @@
 //! Versioned physical partitioning inside a logical namespace.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 
 use arrow::array::{Array, StringArray, UInt32Array};
 use arrow::compute::take;
 use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 
@@ -48,6 +50,13 @@ pub trait PhysicalPartitionPolicy: std::fmt::Debug + Sync {
         &self,
         exact_values: &HashMap<String, Vec<String>>,
     ) -> Option<BTreeSet<SegmentPartition>>;
+
+    /// Relative directory for an L1+ segment carrying `partition`.
+    ///
+    /// Partition metadata remains exact even when this path uses a bounded
+    /// bucket. L0 never calls this method: it stays flat and unpartitioned until
+    /// compaction sorts and partitions it.
+    fn segment_directory(&self, partition: &SegmentPartition) -> PathBuf;
 }
 
 /// An exact hidden partition over one required UTF-8 column.
@@ -56,6 +65,8 @@ pub struct StringIdentityPartitionPolicy {
     pub spec_id: u32,
     pub column: &'static str,
     pub partition_field: &'static str,
+    pub directory_prefix: &'static str,
+    pub directory_buckets: u32,
 }
 
 impl StringIdentityPartitionPolicy {
@@ -64,6 +75,13 @@ impl StringIdentityPartitionPolicy {
             spec_id: self.spec_id,
             values: BTreeMap::from([(self.partition_field.to_string(), value.to_string())]),
         }
+    }
+
+    fn bucket(&self, value: &str) -> u32 {
+        assert!(self.directory_buckets > 0);
+        let digest = Sha256::digest(value.as_bytes());
+        u32::from_be_bytes(digest[..4].try_into().expect("sha256 prefix is four bytes"))
+            % self.directory_buckets
     }
 }
 
@@ -87,6 +105,36 @@ impl PhysicalPartitionPolicy for StringIdentityPartitionPolicy {
     ) -> Option<BTreeSet<SegmentPartition>> {
         let values = exact_values.get(self.column)?;
         Some(values.iter().map(|value| self.partition(value)).collect())
+    }
+
+    fn segment_directory(&self, partition: &SegmentPartition) -> PathBuf {
+        assert!(self.is_current_partition(partition));
+        let value = partition
+            .value(self.partition_field)
+            .expect("current identity partition carries its field");
+        Path::new(self.directory_prefix).join(format!("{:02}", self.bucket(value)))
+    }
+}
+
+/// Final path for a segment under a namespace directory.
+///
+/// L0 is deliberately flat regardless of any partition metadata. L1+ follows
+/// the active physical policy when the footer carries a current partition.
+pub fn segment_path(
+    namespace_dir: &Path,
+    filename: &str,
+    level: i32,
+    partition: Option<&SegmentPartition>,
+    policy: Option<&dyn PhysicalPartitionPolicy>,
+) -> PathBuf {
+    if level == 0 {
+        return namespace_dir.join(filename);
+    }
+    match (partition, policy) {
+        (Some(partition), Some(policy)) if policy.is_current_partition(partition) => namespace_dir
+            .join(policy.segment_directory(partition))
+            .join(filename),
+        _ => namespace_dir.join(filename),
     }
 }
 
@@ -162,6 +210,8 @@ mod tests {
         spec_id: 4,
         column: "name",
         partition_field: "name",
+        directory_prefix: "name",
+        directory_buckets: 32,
     };
 
     fn batch(names: &[&str]) -> RecordBatch {
@@ -228,6 +278,42 @@ mod tests {
                 )]))
                 .unwrap(),
             BTreeSet::from([IDENTITY_POLICY.partition("run+long")])
+        );
+    }
+
+    #[test]
+    fn physical_path_is_bounded_while_partition_metadata_stays_exact() {
+        let first = IDENTITY_POLICY.partition("run/with/slashes");
+        let second = IDENTITY_POLICY.partition("a different run");
+        let first_path = segment_path(
+            Path::new("levanter.metrics"),
+            "seg_L1_0001.parquet",
+            1,
+            Some(&first),
+            Some(&IDENTITY_POLICY),
+        );
+        assert_eq!(first.value("name"), Some("run/with/slashes"));
+        assert_eq!(first_path.components().count(), 4);
+        assert_eq!(
+            first_path
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "name"
+        );
+        assert_ne!(first, second);
+        assert_eq!(
+            segment_path(
+                Path::new("levanter.metrics"),
+                "seg_L0_0001.parquet",
+                0,
+                Some(&first),
+                Some(&IDENTITY_POLICY),
+            ),
+            Path::new("levanter.metrics/seg_L0_0001.parquet")
         );
     }
 }
