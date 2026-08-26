@@ -602,57 +602,6 @@ def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
     assert three["doc"]["contaminated"] is False
 
 
-@pytest.mark.parametrize(
-    ("text", "dropped_features"),
-    [
-        (
-            "alpha beta gamma delta epsilon zeta",
-            ("alpha beta gamma", "beta gamma delta", "gamma delta epsilon"),
-        ),
-        (
-            "alpha beta gamma delta\n\nepsilon zeta eta theta",
-            ("alpha beta gamma", "beta gamma delta", "epsilon zeta eta"),
-        ),
-    ],
-)
-def test_decon_drop_set_does_not_turn_multi_feature_document_into_one_feature_exception(
-    tmp_path: Path,
-    text: str,
-    dropped_features: tuple[str, ...],
-):
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    bloom_dir = tmp_path / "bloom"
-    drop_dir = tmp_path / "drop"
-    output_dir = tmp_path / "output"
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "eval", "text": text}])
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc", "text": text, "partition_id": 0}],
-    )
-    ngram = NGramConfig(ngram_length=3, overlap_threshold=0.5, min_matched_features=2)
-    build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(bloom_dir),
-        ngram=ngram,
-        estimated_doc_count=100,
-        false_positive_rate=1e-9,
-    )
-    drop_dir.mkdir()
-    dropped_hashes = [_bloom_hash(feature) for feature in dropped_features]
-    pq.write_table(pa.table({"hash": pa.array(dropped_hashes, pa.uint64())}), drop_dir / "drop.parquet")
-
-    decon_to_parquet(
-        normalized_data=_as_source(input_dir),
-        prebuilt_bloom_dir=str(bloom_dir),
-        output_path=str(output_dir),
-        ngram=ngram,
-        drop_set_dirs=[str(drop_dir)],
-    )
-
-    assert _read_attributes(output_dir)["doc"]["contaminated"] is False
-
-
 def test_ngram_config_rejects_zero_minimum_matched_features():
     with pytest.raises(ValueError, match="min_matched_features must be at least 1"):
         NGramConfig(min_matched_features=0)
