@@ -15,6 +15,7 @@ from finelog.deploy.config import (
     FinelogConfig,
     ForwardingConfig,
     GcpDeployment,
+    TelemetryMigrationMode,
 )
 
 
@@ -84,3 +85,18 @@ def test_bootstrap_allows_the_server_to_finish_its_bounded_shutdown() -> None:
     stop = f"docker stop --timeout {CONTAINER_STOP_TIMEOUT} finelog"
     assert stop in script
     assert script.index(stop) < script.index("docker rm -f finelog")
+
+
+def test_bootstrap_sets_the_configured_telemetry_migration_mode() -> None:
+    cfg = FinelogConfig(
+        name="finelog-marin",
+        port=10001,
+        image="ghcr.io/example/finelog:latest",
+        remote_log_dir="gs://bucket/finelog/marin",
+        deployment=Deployment(gcp=GcpDeployment(project="proj", zone="us-central1-a")),
+        telemetry_migration_mode=TelemetryMigrationMode.DUAL_WRITE,
+    )
+
+    script = render_bootstrap_for(cfg, "ghcr.io/example/finelog@sha256:abc")
+
+    assert "-e FINELOG_TELEMETRY_MIGRATION_MODE=dual-write" in script

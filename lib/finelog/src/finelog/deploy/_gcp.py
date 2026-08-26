@@ -140,6 +140,7 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
         auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
         query_metadata_cache_mb=cfg.query_metadata_cache_mb,
         query_index_cache_mb=cfg.query_index_cache_mb,
+        telemetry_migration_mode=cfg.telemetry_migration_mode.value,
     )
 
 

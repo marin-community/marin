@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::partition_policy::SegmentPartition;
+use crate::partition_policy::{select_rows, SegmentPartition};
 use crate::policies::{
     eager_storage_namespaces_for, physical_partition_policy_for, schema_for_namespace,
     storage_policy_for, PolicyRegistry,
@@ -35,7 +35,9 @@ use crate::store::types::{seg_filename, SegmentLocation, SegmentRow};
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 const MANIFEST_FILENAME: &str = ".finelog-telemetry-v1-migration.json";
-const MANIFEST_VERSION: u32 = 6;
+const MANIFEST_VERSION: u32 = 7;
+const DUAL_WRITE_FENCE_FILENAME: &str = "dual-write-fence.json";
+const DUAL_WRITE_FENCE_VERSION: u32 = 1;
 const POLICY_REVISION: &str = "typed-levanter-run-partition-v2-step-index";
 const MIGRATION_SOURCE_NAMESPACES: [&str; 1] = [TELEMETRY_NAMESPACE];
 const OUTPUT_LEVEL: i32 = 0;
@@ -96,6 +98,8 @@ pub struct MigrationManifest {
     pub phase: MigrationPhase,
     #[serde(default)]
     pub verified_at_ms: Option<i64>,
+    #[serde(default)]
+    pub legacy_max_seq: Option<i64>,
     pub input_rows: i64,
     pub output_rows: i64,
     pub suppressed_rows: i64,
@@ -104,6 +108,61 @@ pub struct MigrationManifest {
     pub published_files: Vec<String>,
     #[serde(default)]
     pub retired_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DualWriteFence {
+    pub version: u32,
+    pub policy_revision: String,
+    pub legacy_max_seq: i64,
+    pub armed_at_ms: i64,
+}
+
+/// Persist the root sequence boundary before a dual-write server accepts traffic.
+pub fn ensure_dual_write_fence(
+    store_dir: &Path,
+    legacy_max_seq: i64,
+) -> Result<DualWriteFence, StatsError> {
+    let migration_dir = store_dir.join(MIGRATION_DIRECTORY);
+    std::fs::create_dir_all(&migration_dir)
+        .map_err(internal_error("create telemetry migration directory"))?;
+    let path = migration_dir.join(DUAL_WRITE_FENCE_FILENAME);
+    if path.exists() {
+        return read_dual_write_fence(&path);
+    }
+    let fence = DualWriteFence {
+        version: DUAL_WRITE_FENCE_VERSION,
+        policy_revision: POLICY_REVISION.to_string(),
+        legacy_max_seq,
+        armed_at_ms: now_ms()?,
+    };
+    write_json_atomically(&path, &fence, "dual-write fence")?;
+    Ok(fence)
+}
+
+fn read_dual_write_fence(path: &Path) -> Result<DualWriteFence, StatsError> {
+    let raw = std::fs::read(path).map_err(internal_error("read dual-write fence"))?;
+    let fence: DualWriteFence = serde_json::from_slice(&raw).map_err(|error| {
+        validation_error(format!(
+            "decode dual-write fence {}: {error}",
+            path.display()
+        ))
+    })?;
+    if fence.version != DUAL_WRITE_FENCE_VERSION || fence.policy_revision != POLICY_REVISION {
+        return Err(validation_error(
+            "dual-write fence policy version does not match this binary",
+        ));
+    }
+    Ok(fence)
+}
+
+fn dual_write_fence(store_dir: &Path) -> Result<Option<DualWriteFence>, StatsError> {
+    let path = store_dir
+        .join(MIGRATION_DIRECTORY)
+        .join(DUAL_WRITE_FENCE_FILENAME);
+    path.exists()
+        .then(|| read_dual_write_fence(&path))
+        .transpose()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -809,6 +868,7 @@ fn assert_catalog_is_quiescent(source_dir: &Path) -> Result<(), StatsError> {
 fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsError> {
     let mut source_segments = Vec::new();
     let mut input_rows = 0_i64;
+    let legacy_max_seq = dual_write_fence(&config.final_log_dir)?.map(|fence| fence.legacy_max_seq);
 
     for namespace in migration_source_namespaces() {
         let namespace_dir = config.source_dir.join(namespace);
@@ -821,7 +881,14 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
             let footer = read_segment_footer(&path, Some("timestamp_ms")).ok_or_else(|| {
                 validation_error(format!("could not read source segment {}", path.display()))
             })?;
-            input_rows += footer.row_count;
+            let rows = match legacy_max_seq {
+                Some(fence) if footer.min_seq > fence => 0,
+                Some(fence) if footer.max_seq > fence => {
+                    count_rows_at_or_before_seq(&path, config.batch_rows, fence)?
+                }
+                _ => footer.row_count,
+            };
+            input_rows += rows;
             let relative_path = path
                 .strip_prefix(&config.source_dir)
                 .map_err(|_| validation_error("source segment escaped source_dir"))?
@@ -832,7 +899,7 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
                 relative_path,
                 byte_size: metadata.len(),
                 file_sha256: None,
-                rows: footer.row_count,
+                rows,
                 complete: false,
                 suppressed_rows: 0,
                 outputs: Vec::new(),
@@ -851,6 +918,7 @@ fn plan_migration(config: &PrepareConfig) -> Result<MigrationManifest, StatsErro
         complete: false,
         phase: MigrationPhase::Staged,
         verified_at_ms: None,
+        legacy_max_seq,
         input_rows,
         output_rows: 0,
         suppressed_rows: 0,
@@ -876,6 +944,7 @@ fn write_planned_outputs(
             source_index,
             &source_path,
             config,
+            manifest.legacy_max_seq,
             &mut manifest.source_segments[source_index],
         )?;
         manifest.output_rows = manifest
@@ -913,9 +982,14 @@ fn index_migration_state(
     for source in &manifest.source_segments {
         let source_path = config.source_dir.join(&source.relative_path);
         for batch in parquet_reader_projected(&source_path, config.batch_rows, &INDEX_COLUMNS)? {
+            let batch = batch.map_err(internal_error("read migration index batch"))?;
+            let batch = filter_legacy_rows(&batch, manifest.legacy_max_seq)?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
             policies.index_migration_batch(
                 IngestionBatchSource::Stored(source.namespace.as_str()),
-                &batch.map_err(internal_error("read migration index batch"))?,
+                &batch,
             )?;
         }
     }
@@ -928,6 +1002,7 @@ fn write_source_outputs(
     source_index: usize,
     source_path: &Path,
     config: &PrepareConfig,
+    legacy_max_seq: Option<i64>,
     source: &mut SourceSegment,
 ) -> Result<(), StatsError> {
     if verify_completed_source(config, source)? {
@@ -937,6 +1012,10 @@ fn write_source_outputs(
     let mut writers = BTreeMap::new();
     for batch in parquet_reader(source_path, config.batch_rows)? {
         let batch = batch.map_err(internal_error("read source batch"))?;
+        let batch = filter_legacy_rows(&batch, legacy_max_seq)?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
         for partition in policies.route_ingestion_batch(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
@@ -1427,6 +1506,42 @@ fn int64_column(batch: &RecordBatch, name: &str) -> Result<Int64Array, StatsErro
         .ok_or_else(|| validation_error(format!("telemetry column {name:?} is not int64")))
 }
 
+fn filter_legacy_rows(
+    batch: &RecordBatch,
+    legacy_max_seq: Option<i64>,
+) -> Result<RecordBatch, StatsError> {
+    let Some(legacy_max_seq) = legacy_max_seq else {
+        return Ok(batch.clone());
+    };
+    let seq = int64_column(batch, IMPLICIT_SEQ_COLUMN)?;
+    let mut row_indices = Vec::with_capacity(batch.num_rows());
+    for row_index in 0..batch.num_rows() {
+        if seq.is_null(row_index) {
+            return Err(validation_error("telemetry seq values must be non-null"));
+        }
+        if seq.value(row_index) <= legacy_max_seq {
+            row_indices.push(row_index as u32);
+        }
+    }
+    select_rows(batch, row_indices)
+}
+
+fn count_rows_at_or_before_seq(
+    path: &Path,
+    batch_rows: usize,
+    legacy_max_seq: i64,
+) -> Result<i64, StatsError> {
+    let mut rows = 0_i64;
+    for batch in parquet_reader_projected(path, batch_rows, &[IMPLICIT_SEQ_COLUMN])? {
+        rows += filter_legacy_rows(
+            &batch.map_err(internal_error("read migration fence batch"))?,
+            Some(legacy_max_seq),
+        )?
+        .num_rows() as i64;
+    }
+    Ok(rows)
+}
+
 fn parquet_reader(
     path: &Path,
     batch_rows: usize,
@@ -1499,6 +1614,12 @@ fn validate_manifest_config(
             "final_log_dir differs from the existing migration manifest",
         ));
     }
+    let current_fence = dual_write_fence(&config.final_log_dir)?.map(|fence| fence.legacy_max_seq);
+    if manifest.legacy_max_seq != current_fence {
+        return Err(validation_error(
+            "dual-write fence differs from the existing migration manifest",
+        ));
+    }
     Ok(())
 }
 
@@ -1513,17 +1634,27 @@ fn read_manifest(path: &Path) -> Result<MigrationManifest, StatsError> {
 }
 
 fn write_manifest(path: &Path, manifest: &MigrationManifest) -> Result<(), StatsError> {
-    let bytes = serde_json::to_vec_pretty(manifest)
-        .map_err(|error| validation_error(format!("encode migration manifest: {error}")))?;
+    write_json_atomically(path, manifest, "migration manifest")
+}
+
+fn write_json_atomically<T: Serialize>(
+    path: &Path,
+    value: &T,
+    description: &str,
+) -> Result<(), StatsError> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| validation_error(format!("encode {description}: {error}")))?;
     let temporary = temporary_path(path);
-    let mut file = File::create(&temporary).map_err(internal_error("create migration manifest"))?;
+    let mut file = File::create(&temporary)
+        .map_err(|error| StatsError::Internal(format!("create {description}: {error}")))?;
     file.write_all(&bytes)
-        .map_err(internal_error("write migration manifest"))?;
+        .map_err(|error| StatsError::Internal(format!("write {description}: {error}")))?;
     file.write_all(b"\n")
-        .map_err(internal_error("finish migration manifest"))?;
+        .map_err(|error| StatsError::Internal(format!("finish {description}: {error}")))?;
     file.sync_all()
-        .map_err(internal_error("fsync migration manifest"))?;
-    std::fs::rename(&temporary, path).map_err(internal_error("publish migration manifest"))?;
+        .map_err(|error| StatsError::Internal(format!("fsync {description}: {error}")))?;
+    std::fs::rename(&temporary, path)
+        .map_err(|error| StatsError::Internal(format!("publish {description}: {error}")))?;
     Ok(())
 }
 
@@ -1839,6 +1970,44 @@ mod tests {
             .iter()
             .flat_map(|source| source.outputs.iter())
             .all(|output| staged_dir.join(&output.relative_path).is_file()));
+    }
+
+    #[test]
+    fn migration_stops_at_the_persistent_dual_write_fence() {
+        let dirs = TestDirs::new("dual-write-fence");
+        let catalog = Catalog::open(Some(&dirs.store)).unwrap();
+        add_segment(
+            &catalog,
+            &dirs.store,
+            TELEMETRY_NAMESPACE,
+            1,
+            1,
+            &telemetry_batch(
+                &[
+                    "iris-node-agent",
+                    "iris-node-agent",
+                    "iris-node-agent",
+                    "iris-node-agent",
+                ],
+                &["cpu_1", "cpu_2", "cpu_3", "cpu_4"],
+                1,
+            ),
+        );
+        drop(catalog);
+
+        let first = ensure_dual_write_fence(&dirs.store, 2).unwrap();
+        let repeated = ensure_dual_write_fence(&dirs.store, 99).unwrap();
+        assert_eq!(first, repeated);
+        assert_eq!(first.legacy_max_seq, 2);
+
+        let manifest = prepare_in_place(&InPlaceConfig {
+            store_dir: dirs.store.clone(),
+            batch_rows: 2,
+        })
+        .unwrap();
+        assert_eq!(manifest.legacy_max_seq, Some(2));
+        assert_eq!(manifest.input_rows, 2);
+        assert_eq!(manifest.output_rows, 2);
     }
 
     #[test]

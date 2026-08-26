@@ -154,6 +154,7 @@ def render_bootstrap(
     auth_policy: str,
     query_metadata_cache_mb: int | None,
     query_index_cache_mb: int | None,
+    telemetry_migration_mode: str = "normal",
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -177,13 +178,14 @@ def render_bootstrap(
     )
     if query_index_cache_mb is not None:
         query_env += f"-e FINELOG_INDEX_CACHE_MB={query_index_cache_mb} "
+    migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
         port=port,
         remote_log_dir=remote_log_dir,
         auth_env=auth_env,
-        query_env=query_env,
+        query_env=query_env + migration_env,
         cache_dir=CACHE_DIR,
         container_name=CONTAINER_NAME,
         stop_timeout=CONTAINER_STOP_TIMEOUT,

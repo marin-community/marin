@@ -15,7 +15,9 @@ use crate::levanter_metrics_policy::{
 use crate::partition_policy::PhysicalPartitionPolicy;
 use crate::storage_policy::{NamespaceStoragePolicy, DEFAULT_NAMESPACE_STORAGE_POLICY};
 use crate::store::policy::StoragePolicy;
-use crate::telemetry_policy::{matches_telemetry_namespace, TELEMETRY_POLICY};
+use crate::telemetry_policy::{
+    matches_telemetry_namespace, TelemetryPolicy, TelemetryRootWriteMode, TELEMETRY_POLICY,
+};
 
 struct PolicyRule<P: ?Sized + 'static> {
     matches: fn(&str) -> bool,
@@ -56,18 +58,29 @@ fn matching_policy<P: ?Sized + 'static>(
         .map(|rule| rule.policy)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PolicyRegistry {
     ingestion_state: Mutex<IngestionState>,
+    telemetry_policy: TelemetryPolicy,
 }
 
 impl PolicyRegistry {
+    pub(crate) fn new(telemetry_root_write_mode: TelemetryRootWriteMode) -> Self {
+        Self {
+            ingestion_state: Mutex::new(IngestionState::default()),
+            telemetry_policy: TelemetryPolicy::with_root_write_mode(telemetry_root_write_mode),
+        }
+    }
+
     pub(crate) fn route_ingestion_batch(
         &self,
         source: IngestionBatchSource<'_>,
         batch: &RecordBatch,
     ) -> Result<Vec<RoutedIngestionBatch>, StatsError> {
         let mut state = self.ingestion_state.lock().unwrap();
+        if matches_telemetry_namespace(source.namespace()) {
+            return self.telemetry_policy.route_batch(source, batch, &mut state);
+        }
         match matching_policy(&SCHEMA_POLICIES, source.namespace()) {
             Some(policy) => policy.route_batch(source, batch, &mut state),
             None => IDENTITY_INGESTION_POLICY.route_batch(source, batch, &mut state),
@@ -80,6 +93,11 @@ impl PolicyRegistry {
         batch: &RecordBatch,
     ) -> Result<(), StatsError> {
         let mut state = self.ingestion_state.lock().unwrap();
+        if matches_telemetry_namespace(source.namespace()) {
+            return self
+                .telemetry_policy
+                .index_migration_batch(source, batch, &mut state);
+        }
         match matching_policy(&SCHEMA_POLICIES, source.namespace()) {
             Some(policy) => policy.index_migration_batch(source, batch, &mut state),
             None => IDENTITY_INGESTION_POLICY.index_migration_batch(source, batch, &mut state),
@@ -91,6 +109,12 @@ impl PolicyRegistry {
             .lock()
             .unwrap()
             .finish_migration_index();
+    }
+}
+
+impl Default for PolicyRegistry {
+    fn default() -> Self {
+        Self::new(TelemetryRootWriteMode::SemanticOnly)
     }
 }
 

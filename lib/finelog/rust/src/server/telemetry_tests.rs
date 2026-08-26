@@ -805,9 +805,8 @@ async fn namespace_field_is_rejected_instead_of_routing_client_rows() {
 
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(response.payload["error"]["code"], "invalid_request");
-    assert!(store.get_table_schema("telemetry_v1.levanter").is_ok());
     assert!(store
-        .list_segments("telemetry_v1.levanter")
+        .list_segments("telemetry_v1.bad_schema")
         .unwrap()
         .is_empty());
 }

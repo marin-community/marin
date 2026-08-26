@@ -30,7 +30,6 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::server::ingest_health::IngestHealth;
 use crate::store::group_extrema::GroupExtremaConfig;
-use crate::store::ipc::encode_ipc;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
 use crate::telemetry_policy::TELEMETRY_NAMESPACE;
@@ -352,13 +351,8 @@ struct PreparedBatch {
     batch_id: Uuid,
     batch_id_text: String,
     digest: [u8; 32],
-    shards: Vec<PreparedShard>,
+    partitions: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
     record_count: usize,
-}
-
-struct PreparedShard {
-    namespace: String,
-    ipc: Vec<u8>,
 }
 
 impl TelemetryState {
@@ -548,8 +542,10 @@ async fn complete_request(
                     format!("telemetry normalization task failed: {join}"),
                 )
             })??;
-    for shard in &prepared.shards {
-        state.ensure_namespace_registered(&shard.namespace).await?;
+    for partition in &prepared.partitions {
+        state
+            .ensure_namespace_registered(&partition.destination.logical_namespace)
+            .await?;
     }
 
     // Holding this small process-local mutex through the append makes concurrent
@@ -560,11 +556,14 @@ async fn complete_request(
         return Ok(ack);
     }
     let store = Arc::clone(&state.store);
-    let shards = prepared.shards;
+    let partitions = prepared.partitions;
+    let record_count = prepared.record_count;
     tokio::task::spawn_blocking(move || {
-        for shard in shards {
-            store.write_rows(&shard.namespace, &shard.ipc, origin_cluster.as_deref())?;
-        }
+        store.write_prepared_ingestion_batches(
+            record_count as i64,
+            partitions,
+            origin_cluster.as_deref(),
+        )?;
         Ok::<(), StatsError>(())
     })
     .await
@@ -643,32 +642,17 @@ fn prepare_batch(
     validate_batch(&batch)?;
     let records = batch.records.iter().enumerate().collect::<Vec<_>>();
     let normalized = normalize_record_batch(&batch, &records)?;
-    let shards = store
+    let partitions = store
         .route_ingestion_batch(
             IngestionBatchSource::Declared(TELEMETRY_NAMESPACE),
             &normalized,
         )
-        .map_err(telemetry_policy_error)?
-        .into_iter()
-        .map(|partition| {
-            let schema = partition.batch.schema();
-            Ok(PreparedShard {
-                namespace: partition.destination.logical_namespace,
-                ipc: encode_ipc(&schema, &[partition.batch]).map_err(|error| {
-                    ApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        ERROR_CODE_INTERNAL,
-                        format!("could not encode telemetry: {error}"),
-                    )
-                })?,
-            })
-        })
-        .collect::<Result<Vec<_>, ApiError>>()?;
+        .map_err(telemetry_policy_error)?;
     Ok(PreparedBatch {
         batch_id: body_id,
         batch_id_text: batch.batch_id,
         digest: Sha256::digest(body).into(),
-        shards,
+        partitions,
         record_count: batch.records.len(),
     })
 }

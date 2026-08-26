@@ -201,10 +201,19 @@ Hidden run partitions share the `levanter.metrics` retention budget.
 
 ### Migrate the root telemetry hot set
 
-`finelog-migrate` rewrites the `telemetry_v1` hot set inside the existing hub store. It
-uses the same full-batch schema policy as HTTP ingestion and forwarding. Deploy
-that policy to the whole Finelog fleet first: edge stores then classify new HTTP
-records before forwarding, while hubs classify any remaining root backlog.
+`finelog-migrate` rewrites the `telemetry_v1` hot set inside the existing hub
+store. It uses the same full-batch schema policy as HTTP ingestion and
+forwarding. Start with the hub in `dual-write` migration mode; do not enable the
+mode on forwarding `cw-*` stores. A forwarding store continues to send its one
+root copy, and the hub writes that batch once to the root and once to its
+semantic destination.
+
+The first dual-write startup records
+`.finelog-telemetry-v1-migration/dual-write-fence.json` before the listener
+binds. Its `legacy_max_seq` is immutable across restarts. Migration selects root
+rows at or below this fence, including when compaction puts pre- and post-fence
+rows in one Parquet. Rows above the fence already have a semantic copy and must
+not be migrated again.
 
 The migrator rejects stores with forwarding cursors, so run it on the `marin`
 or `marin-dev` hub, not a `cw-*` sender. Preparation may run while Finelog is
@@ -223,11 +232,12 @@ finelog-migrate verify-telemetry-v1 \
   --store-dir /var/cache/finelog
 ```
 
-Planning reads only the catalog and Parquet footers and writes the initial
-manifest before conversion starts. It does not decode, classify, checksum, or
-partition records. Treat planning over a local hot store as a sub-second
-operation; stop and investigate filesystem or catalog access if the plan itself
-takes longer. The conversion first builds a narrow historical-step index from
+Planning reads the catalog and Parquet footers and writes the initial manifest
+before conversion starts. If one compacted segment crosses the dual-write
+fence, planning reads only its `seq` column to obtain an exact input row count.
+It does not classify, checksum, or partition records. Treat planning over a
+local hot store as a sub-second operation; stop and investigate filesystem or
+catalog access if the plan itself takes longer. The conversion first builds a narrow historical-step index from
 the immutable source snapshot, then gives complete record batches to the schema
 policy. This is necessary because compacted telemetry is sorted by metric name,
 not by event time. The policy resolves the latest preceding step by execution,
@@ -260,8 +270,9 @@ timeout 2m finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
 Publish hard-links the staged Parquets into their semantic namespace directories
 and replaces a catalog derived from the latest live catalog. It leaves the
 root namespace queryable. Old root-only queries and new semantic-only queries
-therefore each see one copy of the rows; a root-plus-semantic union would count
-them twice. Deploy the semantic-only Grafana and Iris queries after publish.
+therefore each see one complete copy: migrated rows cover `seq <= legacy_max_seq`,
+and dual writes cover later rows. A root-plus-semantic union would count them
+twice. Deploy the semantic-only Grafana and Iris queries after publish.
 Publish trusts the completed pre-cutover verification: while Finelog is stopped,
 it only hard-links the staged files, builds and swaps the catalog, and checks the
 new catalog rows before recording the phase. It does not reread Parquet contents
@@ -286,16 +297,24 @@ lock rejects either command if it is.
 
 The rollout order is:
 
-1. Deploy the row-aware Finelog policy to the hubs and every forwarding edge.
-2. Start the Levanter client rollout. Old gauge records and new typed records
-   converge on `levanter.metrics`, so this may overlap the remaining steps.
-3. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on each hub while it is serving.
-4. Stop the hub, run `publish-telemetry-v1`, and restart it.
-5. Deploy the semantic-only Grafana and Iris queries and verify their panels.
-6. Stop the hub, run `retire-telemetry-v1`, and restart it.
-7. Keep watching root row count after retirement. Any reappearance means a hub
-   is still running the old policy. Remove legacy Levanter inference only after
-   the direct typed-client rollout is complete.
+1. Set only the hub's `telemetry_migration_mode: dual-write`, deploy it, and
+   confirm the startup log reports the durable fence. Leave forwarding stores
+   unchanged.
+2. Write a canary through the ordinary telemetry API and confirm it appears
+   exactly once in both root and its semantic namespace.
+3. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on the serving hub under
+   explicit timeouts. Continue canary writes during both commands.
+4. Validate staged row accounting and representative root-versus-semantic
+   queries. Stop the hub, run `publish-telemetry-v1`, and restart the same
+   dual-write revision.
+5. Deploy the semantic-only Grafana and Iris queries and verify the training,
+   capacity, RPC, and vLLM panels.
+6. Set the hub back to `telemetry_migration_mode: normal` and deploy it. A
+   canary must now advance only its semantic namespace; the root must remain
+   unchanged.
+7. After an observation period, stop the hub, run `retire-telemetry-v1`, and
+   restart it. Remove legacy Levanter inference only after direct typed clients
+   are fully deployed.
 
 `GET /api/segments?namespace=levanter.metrics&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete

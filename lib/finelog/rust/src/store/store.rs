@@ -39,6 +39,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
+use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
@@ -219,6 +220,22 @@ impl Store {
         index_cache_mb: usize,
         mode: ServeMode,
     ) -> Result<Store, StatsError> {
+        Self::new_with_telemetry_root_write_mode(
+            data_dir,
+            remote_log_dir,
+            index_cache_mb,
+            mode,
+            TelemetryRootWriteMode::SemanticOnly,
+        )
+    }
+
+    pub fn new_with_telemetry_root_write_mode(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+        mode: ServeMode,
+        telemetry_root_write_mode: TelemetryRootWriteMode,
+    ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
@@ -253,7 +270,7 @@ impl Store {
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
-            policies: PolicyRegistry::default(),
+            policies: PolicyRegistry::new(telemetry_root_write_mode),
             _store_lock: store_lock,
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
@@ -280,6 +297,17 @@ impl Store {
             "finelog store startup complete"
         );
         Ok(store)
+    }
+
+    /// Return the root telemetry sequence fence before this process accepts writes.
+    pub fn telemetry_root_max_seq(&self) -> Result<i64, StatsError> {
+        match self.engines.lock().unwrap().get(TELEMETRY_NAMESPACE) {
+            Some(engine) => Ok(engine.stats().max_seq),
+            None => Ok(self
+                .catalog
+                .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
+                .max_seq),
+        }
     }
 
     /// Start each namespace's maintenance task. Called once after `new`, before
@@ -568,6 +596,25 @@ impl Store {
         alignment: BatchAlignment,
     ) -> Result<ForwardedWrite, StatsError> {
         let routed = self.policies.route_ingestion_batch(source, &batch)?;
+        self.append_routed_batches(batch.num_rows() as i64, routed, origin_cluster, alignment)
+    }
+
+    pub(crate) fn write_prepared_ingestion_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        self.append_routed_batches(rows_written, routed, origin_cluster, BatchAlignment::Strict)
+    }
+
+    fn append_routed_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
         let mut prepared_partitions = Vec::with_capacity(routed.len());
         let mut ignored_columns = BTreeSet::new();
         for partition in routed {
@@ -588,7 +635,7 @@ impl Store {
             })
             .collect();
         Ok(ForwardedWrite {
-            rows_written: batch.num_rows() as i64,
+            rows_written,
             persisted_targets,
             ignored_columns: ignored_columns.into_iter().collect(),
         })

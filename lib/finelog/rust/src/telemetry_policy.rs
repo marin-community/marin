@@ -33,9 +33,19 @@ pub(crate) const VLLM_NAMESPACE: &str = "telemetry_v1.vllm";
 pub(crate) const ZEPHYR_NAMESPACE: &str = "telemetry_v1.zephyr";
 const LEGACY_STEP_METRIC_NAMES: [&str; 2] = ["step", "global_step"];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TelemetryRootWriteMode {
+    /// Route root telemetry only to its semantic destination.
+    #[default]
+    SemanticOnly,
+    /// Preserve a root copy while also routing to semantic destinations.
+    MirrorRoot,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TelemetryPolicy {
     logical_inference_rules: &'static [LogicalInferenceRule],
+    root_write_mode: TelemetryRootWriteMode,
 }
 
 #[derive(Debug)]
@@ -80,6 +90,7 @@ const LOGICAL_INFERENCE_RULES: [LogicalInferenceRule; 6] = [
 
 pub(crate) const TELEMETRY_POLICY: TelemetryPolicy = TelemetryPolicy {
     logical_inference_rules: &LOGICAL_INFERENCE_RULES,
+    root_write_mode: TelemetryRootWriteMode::SemanticOnly,
 };
 
 impl IngestionPolicy for TelemetryPolicy {
@@ -130,6 +141,14 @@ impl IngestionPolicy for TelemetryPolicy {
                 batch,
             });
         }
+        if self.root_write_mode == TelemetryRootWriteMode::MirrorRoot {
+            routed.push(RoutedIngestionBatch {
+                destination: IngestionDestination {
+                    logical_namespace: TELEMETRY_NAMESPACE.to_string(),
+                },
+                batch: batch.clone(),
+            });
+        }
         Ok(routed)
     }
 
@@ -160,6 +179,13 @@ impl IngestionPolicy for TelemetryPolicy {
 }
 
 impl TelemetryPolicy {
+    pub(crate) const fn with_root_write_mode(root_write_mode: TelemetryRootWriteMode) -> Self {
+        Self {
+            logical_inference_rules: &LOGICAL_INFERENCE_RULES,
+            root_write_mode,
+        }
+    }
+
     /// Infer the semantic namespace for an old writer using the complete row.
     fn infer_logical_namespace(&self, record: &TelemetryRecord<'_>) -> Result<String, StatsError> {
         let service = record.required_string("service")?;
@@ -838,6 +864,7 @@ fn is_semantic_namespace(namespace: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use arrow::array::{new_null_array, Float64Array, Int32Array, Int64Array};
@@ -970,6 +997,28 @@ mod tests {
             destinations(IngestionBatchSource::Declared(TELEMETRY_NAMESPACE), &batch),
             vec![("telemetry_v1.service_123_custom_service".to_string(), 1)]
         );
+    }
+
+    #[test]
+    fn dual_write_routes_one_root_copy_and_one_semantic_copy() {
+        let batch = telemetry_batch(&["iris-node-agent"], &["gauge"], &["node_cpu"]);
+        let routed = TelemetryPolicy::with_root_write_mode(TelemetryRootWriteMode::MirrorRoot)
+            .route_batch(
+                IngestionBatchSource::Stored(TELEMETRY_NAMESPACE),
+                &batch,
+                &mut IngestionState::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            routed
+                .iter()
+                .map(|partition| partition.destination.logical_namespace.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([NODE_AGENT_NAMESPACE, TELEMETRY_NAMESPACE])
+        );
+        assert!(routed
+            .iter()
+            .all(|partition| partition.batch.num_rows() == 1));
     }
 
     #[test]
