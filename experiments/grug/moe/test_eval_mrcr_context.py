@@ -13,6 +13,7 @@ from experiments.grug.moe.eval_mrcr_context import (
     MrcrEvaluationKey,
     aggregate_262k_evaluation_cells,
     build_default_steps,
+    default_checkpoint_paths,
     expected_evaluations_for_stage,
     matrix_cell_count,
     primary_evaluation_cells,
@@ -131,6 +132,7 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     probe_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-128-cp4")
     extension_steps = build_default_steps("aggregate_262k_extension", tpu_variant="v4-64-cp8-ep4")
     deployable_steps = build_default_steps("aggregate_262k_deployable_final", tpu_variant="v4-64-cp8-ep4")
+    final_steps = build_default_steps("aggregate_262k_final_pair", tpu_variant="v4-64-cp8-ep4")
     fallback_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp2")
     proven_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-64-cp8-ep4")
     fsdp_steps = build_default_steps("aggregate_262k_probe", tpu_variant="v4-32-cp4-fsdp")
@@ -159,6 +161,10 @@ def test_aggregate_262k_builder_uses_matched_qk_trajectory_and_context_paralleli
     assert len(deployable_steps) == 1
     assert deployable_steps[0].config.evaluation.qk_mult == 1.75
     assert deployable_steps[0].config.evaluation.run_id.startswith("mrcr-67b-step157000-qk175-")
+    assert [step.config.evaluation.qk_mult for step in final_steps] == [1.57, 1.75]
+    paths = default_checkpoint_paths()
+    assert paths["qk157-step157000"].name.endswith("qk157-0997fb/checkpoints/step-157000")
+    assert paths["qk175-step157000"].name.endswith("ctxext_step156k-711f8e/checkpoints/step-157000")
     assert fallback_steps[0].config.resources.value.device.variant == "v4-64"
     assert fallback_steps[0].config.evaluation.runtime.value.eval_batch_size == 16
     assert fallback_steps[0].config.evaluation.runtime.value.data_axis_size == 16

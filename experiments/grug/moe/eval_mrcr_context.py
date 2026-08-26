@@ -144,6 +144,12 @@ SOURCE_CHECKPOINT = InputName.hardcoded(
 PRE_EXTENSION_CHECKPOINT = InputName.hardcoded(
     "grug/moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T-9fcc1f/checkpoints/step-141000"
 )
+QK157_FINAL_CHECKPOINT = InputName.hardcoded(
+    "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk157-0997fb/checkpoints/step-157000"
+)
+QK175_FINAL_CHECKPOINT = InputName.hardcoded(
+    "grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k-711f8e/checkpoints/step-157000"
+)
 
 
 @dataclass(frozen=True)
@@ -212,6 +218,11 @@ def evaluation_cells(selection: str) -> tuple[MrcrEvaluationCell, ...]:
     if selection == "aggregate_262k_deployable_final":
         package = PACKAGE_BY_NAME["qk175-step157000"]
         return (MrcrEvaluationCell(package, AGGREGATE_CONTEXT_CAP, MrcrPromptVariant.TWO_SHOT),)
+    if selection == "aggregate_262k_final_pair":
+        packages = (PACKAGE_BY_NAME["qk157-step157000"], PACKAGE_BY_NAME["qk175-step157000"])
+        return tuple(
+            MrcrEvaluationCell(package, AGGREGATE_CONTEXT_CAP, MrcrPromptVariant.TWO_SHOT) for package in packages
+        )
     if selection == "primary":
         return primary_evaluation_cells()
     if selection == "sensitivity":
@@ -331,6 +342,12 @@ def default_checkpoint_paths() -> dict[str, InputName]:
     for package in PRIMARY_CHECKPOINT_PACKAGES:
         if package.training_offset == 0:
             continue
+        if package.name == "qk157-step157000":
+            paths[package.name] = QK157_FINAL_CHECKPOINT
+            continue
+        if package.name == "qk175-step157000":
+            paths[package.name] = QK175_FINAL_CHECKPOINT
+            continue
         training_step = QK157_TRAINING_STEP if package.qk_mult == 1.57 else QK175_TRAINING_STEP
         paths[package.name] = training_step.cd(f"checkpoints/step-{package.checkpoint_step}").nonblocking()
     return paths
@@ -430,6 +447,7 @@ def build_default_steps(
         "aggregate_262k_probe",
         "aggregate_262k_extension",
         "aggregate_262k_deployable_final",
+        "aggregate_262k_final_pair",
     )
     if selection in bounded_262k_selections and tpu_variant not in CONTEXT_PARALLEL_TPU_SHAPES:
         raise ValueError(f"{selection} requires a context-parallel TPU shape")
@@ -840,7 +858,7 @@ if __name__ == "__main__":
     if selection is None:
         raise ValueError(
             "Set MRCR_MATRIX_SELECTION explicitly to smoke, aggregate_262k_probe, aggregate_262k_extension, "
-            "aggregate_262k_deployable_final, aggregate_262k, primary, "
+            "aggregate_262k_deployable_final, aggregate_262k_final_pair, aggregate_262k, primary, "
             "sensitivity, or complete; "
             "the launcher does not default to an expensive matrix"
         )
