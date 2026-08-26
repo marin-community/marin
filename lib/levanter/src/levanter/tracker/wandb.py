@@ -33,7 +33,7 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
+WandbRun = "wandb.sdk.wandb_run.Run"
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128
