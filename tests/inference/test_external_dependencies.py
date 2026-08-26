@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
-from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE, VLLM_TPU_RELEASE
 from rigging.config_discovery import find_project_root
 
 
@@ -63,6 +63,15 @@ def test_gpu_release_pin_matches_its_descriptor():
     generated = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in VLLM_GPU_RELEASE.wheels}
     pinned = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in descriptor.wheels}
     assert generated == pinned
+
+
+def test_tpu_release_pin_matches_its_descriptor():
+    update_external = _update_external()
+    descriptor = update_external.load_vllm_tpu_release(update_external.VLLM_TPU_RELEASE_CONFIG)
+
+    assert VLLM_TPU_RELEASE.release_tag == descriptor.release_tag
+    assert VLLM_TPU_RELEASE.exclude_newer == descriptor.exclude_newer
+    assert VLLM_TPU_RELEASE.requirement == descriptor.requirement
 
 
 def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_path):
