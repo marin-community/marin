@@ -11,7 +11,7 @@ from typing import Literal
 
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-INFERENCE_THREADS = 1
+INFERENCE_THREADS = 4
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
 SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"

@@ -101,7 +101,7 @@ def environment_config() -> EchoConfig:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     instance, database, user = os.environ["CLOUDSQL_CONNECTION"], os.environ["PGDATABASE"], os.environ["PGUSER"]
-    with Connector() as connector:
+    with Connector(refresh_strategy="lazy") as connector:
         app.state.config = environment_config()
         app.state.engine = sqlalchemy.create_engine(
             "postgresql+pg8000://",

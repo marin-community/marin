@@ -60,6 +60,7 @@ def main() -> None:
             # The reconciler lists object storage between requests, so CPU must stay allocated
             # while idle. The service boots from PostgreSQL and remains single-instance.
             cpu_always_allocated=True,
+            startup_cpu_boost=True,
             cpu="1",
             env={
                 "RECORDS_PREFIXES": RECORDS_PREFIXES,
