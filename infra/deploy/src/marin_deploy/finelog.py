@@ -7,6 +7,7 @@ import json
 import subprocess
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 import click
@@ -22,15 +23,6 @@ from marin_deploy.gce import GceVmTarget, StartupScriptPersistence, activate_sta
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
 GCE_ACTIVATION_TIMEOUT = 900
 GCE_INSPECT_TIMEOUT = 60
-STATE_FIELDS = (
-    "current_digest",
-    "previous_digest",
-    "attempted_digest",
-    "rollout_started_at",
-    "rollout_succeeded_at",
-    "rolled_back_from",
-    "rolled_back_at",
-)
 
 
 @dataclass(frozen=True)
@@ -42,6 +34,28 @@ class _FinelogRolloutState:
     rollout_succeeded_at: str | None = None
     rolled_back_from: str | None = None
     rolled_back_at: str | None = None
+
+
+class _CargoProfile(StrEnum):
+    RELEASE = "release"
+    FAST = "fast"
+
+
+class _MatchingDigestAction(StrEnum):
+    SKIP = "skip"
+    REDEPLOY = "redeploy"
+
+
+class _FailedCandidateAction(StrEnum):
+    RESTORE_PREVIOUS = "restore_previous"
+    LEAVE_FAILED = "leave_failed"
+
+
+@dataclass(frozen=True)
+class _GceRolloutOptions:
+    build_profile: _CargoProfile | None
+    matching_digest: _MatchingDigestAction
+    failed_candidate: _FailedCandidateAction
 
 
 def _state_path(config: FinelogConfig) -> Path:
@@ -102,6 +116,7 @@ def _running_repo_digest(config: FinelogConfig) -> str | None:
 
 
 def _bootstrap_with_image(config: FinelogConfig, image: str) -> bool:
+    """Return whether the bootstrap ran and became the VM's persisted startup script."""
     try:
         activate_startup_script(
             _gce_target(config),
@@ -131,28 +146,22 @@ def _pinned_image(image: str) -> str:
 
 def _gce_rollout(
     config: FinelogConfig,
-    *,
-    auto_rollback: bool,
-    force: bool,
-    build: bool,
-    fast: bool,
+    options: _GceRolloutOptions,
 ) -> None:
     click.echo(f"== rollout: {config.name} ==")
-    if build:
-        cargo_profile = "fast" if fast else "release"
-        click.echo(f"building & pushing {config.image} (cargo profile: {cargo_profile})...")
-        build_finelog_image(image=config.image, cargo_profile=cargo_profile)
+    if options.build_profile is not None:
+        click.echo(f"building & pushing {config.image} (cargo profile: {options.build_profile})...")
+        build_finelog_image(image=config.image, cargo_profile=options.build_profile)
 
     previous_digest = _running_repo_digest(config)
     if previous_digest is None:
         click.echo("warning: no running container or digest unavailable; auto-rollback disabled.", err=True)
-        auto_rollback = False
     else:
         click.echo(f"captured running digest: {previous_digest}")
 
     candidate_digest = _pinned_image(config.image)
     click.echo(f"new pinned digest:       {candidate_digest}")
-    if previous_digest == candidate_digest and not force:
+    if previous_digest == candidate_digest and options.matching_digest is _MatchingDigestAction.SKIP:
         click.echo("new digest matches running digest; nothing to do (pass --force to redeploy).")
         return
     if previous_digest == candidate_digest:
@@ -182,7 +191,7 @@ def _gce_rollout(
         return
 
     click.echo("FAIL — Finelog did not become healthy on the new image.", err=True)
-    if not auto_rollback or previous_digest is None:
+    if options.failed_candidate is _FailedCandidateAction.LEAVE_FAILED or previous_digest is None:
         raise click.ClickException(
             "Health check failed. Run `marin-deploy finelog rollback <name>` with optional `--to` to recover."
         )
@@ -243,25 +252,12 @@ def _gce_status(config: FinelogConfig) -> None:
     click.echo(f"state file: {_state_path(config)}")
     values = asdict(state)
     if any(values.values()):
-        for key in STATE_FIELDS:
-            if values[key] is not None:
-                click.echo(f"  {key}: {values[key]}")
+        for key, value in values.items():
+            if value is not None:
+                click.echo(f"  {key}: {value}")
     else:
         click.echo("  (no recorded state)")
     click.echo(f"running digest: {_running_repo_digest(config) or '<unavailable>'}")
-
-
-def _unsupported_k8s_rollout_options(*, auto_rollback: bool, force: bool, build: bool, fast: bool) -> list[str]:
-    options: list[str] = []
-    if not auto_rollback:
-        options.append("--no-auto-rollback")
-    if force:
-        options.append("--force")
-    if not build:
-        options.append("--no-build")
-    if fast:
-        options.append("--fast")
-    return options
 
 
 @click.group()
@@ -280,19 +276,31 @@ def rollout_cmd(name: str, yes: bool, auto_rollback: bool, force: bool, build: b
     """Deploy and verify one Finelog server."""
     config = load_finelog_config(name)
     if config.deployment.k8s is not None:
-        unsupported = _unsupported_k8s_rollout_options(
-            auto_rollback=auto_rollback,
-            force=force,
-            build=build,
-            fast=fast,
-        )
+        unsupported: list[str] = []
+        if not auto_rollback:
+            unsupported.append("--no-auto-rollback")
+        if force:
+            unsupported.append("--force")
+        if not build:
+            unsupported.append("--no-build")
+        if fast:
+            unsupported.append("--fast")
         if unsupported:
             raise click.ClickException(f"Kubernetes Finelog rollout does not support {', '.join(unsupported)}")
         _k8s.k8s_pulumi_rollout(config, stack=name, yes=yes)
         return
     if yes:
         raise click.ClickException("--yes applies only to Kubernetes Finelog rollouts")
-    _gce_rollout(config, auto_rollback=auto_rollback, force=force, build=build, fast=fast)
+    if fast and not build:
+        raise click.ClickException("--fast requires --build")
+    options = _GceRolloutOptions(
+        build_profile=_CargoProfile.FAST if fast else _CargoProfile.RELEASE if build else None,
+        matching_digest=_MatchingDigestAction.REDEPLOY if force else _MatchingDigestAction.SKIP,
+        failed_candidate=(
+            _FailedCandidateAction.RESTORE_PREVIOUS if auto_rollback else _FailedCandidateAction.LEAVE_FAILED
+        ),
+    )
+    _gce_rollout(config, options)
 
 
 @finelog.command("rollback")

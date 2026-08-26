@@ -380,9 +380,9 @@ class GcpWorkerProvider:
             _vm_id=construct_worker_id(vm_name, 0),
             _internal_address=internal_address,
             _port=self._worker_port,
-            _gce_vm_name=vm_name,
-            _zone=zone,
-            _project_id=self._project_id,
+            gce_vm_name=vm_name,
+            zone=zone,
+            project_id=self._project_id,
             _gcp_service=self._gcp,
             _remote_exec=GceRemoteExec(
                 project_id=self._project_id,

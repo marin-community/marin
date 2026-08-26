@@ -110,3 +110,13 @@ def test_gce_rollout_stops_before_mutation_when_running_digest_inspection_fails(
     assert commands
     assert all(arguments[:3] == ["gcloud", "compute", "ssh"] for arguments in commands)
     assert all(arguments[-1] != "bash -s" for arguments in commands)
+
+
+def test_gce_rollout_rejects_fast_profile_without_build(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["finelog", "rollout", str(_gce_config(tmp_path)), "--no-build", "--fast"],
+    )
+
+    assert result.exit_code == 1
+    assert "--fast requires --build" in result.output

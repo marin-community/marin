@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GCE deployment backend for finelog.
-
-Takes a `FinelogConfig` and drives all subprocess-to-gcloud plumbing:
-image-digest pinning, instance create, SSH-based bootstrap re-run, /health
-poll, status, and logs.
-"""
+"""GCE instance lifecycle, bootstrap rendering, health polling, status, and logs for Finelog."""
 
 import json
 import subprocess
