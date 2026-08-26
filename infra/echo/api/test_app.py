@@ -795,7 +795,7 @@ def test_federated_search_classifies_github_comment_domain(client_with):
         ["pr"],
         (echo.search_config.LEGACY_REPOSITORY_TARGET,),
         10,
-    )
+    ).results
     assert [result.model_dump(mode="json") for result in results] == [
         {
             "key": None,
@@ -860,6 +860,20 @@ def test_federated_file_result_names_exact_indexed_head(client_with):
 
     assert response.status_code == 200
     assert response.headers[echo.SEARCH_EXECUTION_HEADER] == "991"
+    server_timings = {
+        name: float(duration.removeprefix("dur="))
+        for metric in response.headers["server-timing"].split(", ")
+        for name, duration in [metric.split(";", 1)]
+    }
+    assert set(server_timings) == {
+        "query_embedding",
+        "database_setup",
+        "file_retrieval",
+        "rerank",
+        "history",
+        "total",
+    }
+    assert all(duration >= 0 for duration in server_timings.values())
     assert response.json() == [
         {
             "key": "file:1001",
@@ -1230,7 +1244,7 @@ def test_reranker_uses_full_candidate_text_without_erasing_hybrid_rank():
     class DeploymentReranker:
         def rerank(self, query, documents, batch_size):
             assert query == "how do i deploy iris"
-            assert batch_size == 4
+            assert batch_size == echo.search_config.RERANK_BATCH_SIZE
             return [float("verifies controller health" in document) for document in documents]
 
     ranked = echo.rerank_candidates([distractor, runbook], "how do i deploy iris", DeploymentReranker(), 2)
@@ -1256,7 +1270,7 @@ def test_reranker_suppresses_all_candidates_below_the_quality_floor(monkeypatch)
 
     class RejectingReranker:
         def rerank(self, _query, documents, batch_size):
-            assert batch_size == 4
+            assert batch_size == echo.search_config.RERANK_BATCH_SIZE
             return [-3.0 for _ in documents]
 
     monkeypatch.setattr(echo.search_config, "RERANK_MAX_CANDIDATES", 2)
