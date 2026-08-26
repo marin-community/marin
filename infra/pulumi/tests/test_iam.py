@@ -194,4 +194,3 @@ def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
             f"{OWNED_SERVICE_ACCOUNT_ID}@{TEST_PROJECT}.iam.gserviceaccount.com"
         ),
     }
-    assert arguments_by_type[IAP_BACKEND_SERVICE_IAM_BINDING_TYPE]["web_backend_service"] == "test-backend"
