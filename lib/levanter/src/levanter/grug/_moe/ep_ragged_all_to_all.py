@@ -176,10 +176,11 @@ def _moe_mlp_ep_ragged_a2a_local(
                 shard_id,
                 local_expert_size=local_experts,
             )
-            # Serialize chunks: without this barrier the scheduler may issue every chunk's
-            # dispatch up front, which resurrects the simultaneous-buffer peak chunking
-            # exists to remove. (A one-transport-deep pipeline variant fit in memory but
-            # measured a null: transport and MLP contend for SMs.)
+            # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
+            # of every chunk at the same time. This causes the high memory use that the chunks
+            # prevent. A variant that overlaps one transport with the MLP stays within memory,
+            # but it does not increase the speed, because the transport and the MLP compete for
+            # the same SMs.
             chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
             dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
