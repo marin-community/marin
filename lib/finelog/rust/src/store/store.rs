@@ -10,15 +10,20 @@
 //! - re-register with an EMPTY policy KEEPS the existing policy.
 //! - `log` is privileged and undroppable.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
+use crate::ingestion_policy::IngestionBatchSource;
+use crate::policies::{physical_partition_policy_for, PolicyRegistry};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -34,11 +39,13 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
+use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
 /// Its on-disk subdirectory.
 pub const LOG_NAMESPACE_DIR: &str = "log";
+const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
 
 /// Bounded budget for stopping + joining a namespace's background tasks during a
 /// live lifecycle transition (re-register replacement, drop). Runs inside the
@@ -47,17 +54,32 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy)]
-enum WriteSchemaPolicy {
-    Strict,
-    IgnoreUnknownNullable,
-}
-
 /// Result of appending one schema-compatible federated batch.
 pub struct ForwardedWrite {
     pub rows_written: i64,
-    pub last_seq: i64,
+    pub persisted_targets: Vec<(String, i64)>,
     pub ignored_columns: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum BatchAlignment {
+    Strict,
+    ForwardCompatible,
+}
+
+impl BatchAlignment {
+    fn align(
+        self,
+        batch: &RecordBatch,
+        schema: &Schema,
+    ) -> Result<(AlignedBatch, Vec<String>), StatsError> {
+        match self {
+            Self::Strict => {
+                validate_and_align_batch(batch, schema).map(|aligned| (aligned, Vec::new()))
+            }
+            Self::ForwardCompatible => validate_and_align_forwarded_batch(batch, schema),
+        }
+    }
 }
 
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
@@ -94,6 +116,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
     pub index_cache: Arc<IndexCache>,
 }
@@ -140,6 +163,48 @@ pub struct Store {
     query_visibility: Arc<tokio::sync::RwLock<()>>,
     index_cache: Arc<IndexCache>,
     index_backfill_slot: Arc<Mutex<()>>,
+    policies: PolicyRegistry,
+    _store_lock: Option<File>,
+}
+
+pub(crate) fn acquire_exclusive_store_lock(data_dir: &Path) -> Result<File, StatsError> {
+    let path = data_dir.join(STORE_LOCK_FILENAME);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| {
+            StatsError::Internal(format!("open store lock {}: {error}", path.display()))
+        })?;
+    // SAFETY: `file` owns this valid descriptor for the duration of the call and
+    // retains it until the returned lock guard is dropped.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        return Err(StatsError::Internal(format!(
+            "Finelog store is open in another process: {}",
+            data_dir.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn decode_bounded_write_batch(arrow_ipc: &[u8]) -> Result<RecordBatch, StatsError> {
+    if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
+            arrow_ipc.len()
+        )));
+    }
+    let batch = decode_one_record_batch(arrow_ipc)?;
+    if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
+            batch.num_rows()
+        )));
+    }
+    Ok(batch)
 }
 
 impl Store {
@@ -155,12 +220,32 @@ impl Store {
         index_cache_mb: usize,
         mode: ServeMode,
     ) -> Result<Store, StatsError> {
+        Self::new_with_telemetry_root_write_mode(
+            data_dir,
+            remote_log_dir,
+            index_cache_mb,
+            mode,
+            TelemetryRootWriteMode::SemanticOnly,
+        )
+    }
+
+    pub fn new_with_telemetry_root_write_mode(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+        mode: ServeMode,
+        telemetry_root_write_mode: TelemetryRootWriteMode,
+    ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
                 StatsError::Internal(format!("create data_dir {}: {e}", dir.display()))
             })?;
         }
+        let store_lock = data_dir
+            .as_deref()
+            .map(acquire_exclusive_store_lock)
+            .transpose()?;
         let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
@@ -185,6 +270,8 @@ impl Store {
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
+            policies: PolicyRegistry::new(telemetry_root_write_mode),
+            _store_lock: store_lock,
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
         // rehydrate builds the engines, so the log engine is opened exactly once
@@ -210,6 +297,17 @@ impl Store {
             "finelog store startup complete"
         );
         Ok(store)
+    }
+
+    /// Return the root telemetry sequence fence before this process accepts writes.
+    pub fn telemetry_root_max_seq(&self) -> Result<i64, StatsError> {
+        match self.engines.lock().unwrap().get(TELEMETRY_NAMESPACE) {
+            Some(engine) => Ok(engine.stats().max_seq),
+            None => Ok(self
+                .catalog
+                .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
+                .max_seq),
+        }
     }
 
     /// Start each namespace's maintenance task. Called once after `new`, before
@@ -439,29 +537,37 @@ impl Store {
         Ok(effective_schema)
     }
 
-    /// Decode + validate + append a WriteRows batch, returning
-    /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
-    /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
-    /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    /// Append a WriteRows batch. `origin_cluster` is the authenticated origin the
-    /// rows are attributed to (`Some` for a forwarding JWT; `None` for a
-    /// trusted-network writer, which names its own origin — empty for a local
-    /// write). When set, it overwrites the implicit `cluster` column after
-    /// alignment so origin does not depend on the sender having stamped it.
+    /// Append a routed batch and return its row count and durability target.
     pub fn write_rows(
         &self,
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        let outcome = self.write_rows_with_policy(
-            name,
-            arrow_ipc,
-            origin_cluster,
-            WriteSchemaPolicy::Strict,
-        )?;
+        let outcome = self.write_physical_rows(name, arrow_ipc, origin_cluster)?;
         debug_assert!(outcome.ignored_columns.is_empty());
-        Ok((outcome.rows_written, outcome.last_seq))
+        let last_seq = outcome
+            .persisted_targets
+            .first()
+            .map(|(_, seq)| *seq)
+            .unwrap_or(-1);
+        Ok((outcome.rows_written, last_seq))
+    }
+
+    /// Route and append a declared ingestion batch using strict schemas.
+    pub fn write_ingestion_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        self.write_routed_batch(
+            IngestionBatchSource::Declared(name),
+            batch,
+            origin_cluster,
+            BatchAlignment::Strict,
+        )
     }
 
     /// Append telemetry forwarded by another Finelog while preserving the hub's
@@ -473,44 +579,85 @@ impl Store {
         arrow_ipc: &[u8],
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
-        self.write_rows_with_policy(
-            name,
-            arrow_ipc,
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        self.write_routed_batch(
+            IngestionBatchSource::Stored(name),
+            batch,
             Some(origin_cluster),
-            WriteSchemaPolicy::IgnoreUnknownNullable,
+            BatchAlignment::ForwardCompatible,
         )
     }
 
-    fn write_rows_with_policy(
+    fn write_routed_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: RecordBatch,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let routed = self.policies.route_ingestion_batch(source, &batch)?;
+        self.append_routed_batches(batch.num_rows() as i64, routed, origin_cluster, alignment)
+    }
+
+    pub(crate) fn write_prepared_ingestion_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        self.append_routed_batches(rows_written, routed, origin_cluster, BatchAlignment::Strict)
+    }
+
+    fn append_routed_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let mut prepared_partitions = Vec::with_capacity(routed.len());
+        let mut ignored_columns = BTreeSet::new();
+        for partition in routed {
+            let destination = partition.destination.logical_namespace;
+            let engine = self.require_engine(&destination)?;
+            let (mut aligned, ignored) = alignment.align(&partition.batch, engine.schema())?;
+            if let Some(origin) = origin_cluster {
+                stamp_cluster_column(&mut aligned, origin);
+            }
+            ignored_columns.extend(ignored);
+            prepared_partitions.push((destination, engine, aligned));
+        }
+        let persisted_targets = prepared_partitions
+            .into_iter()
+            .map(|(destination, engine, aligned)| {
+                let last_seq = engine.append_aligned_batch(&aligned);
+                (destination, last_seq)
+            })
+            .collect();
+        Ok(ForwardedWrite {
+            rows_written,
+            persisted_targets,
+            ignored_columns: ignored_columns.into_iter().collect(),
+        })
+    }
+
+    pub(crate) fn route_ingestion_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: &RecordBatch,
+    ) -> Result<Vec<crate::ingestion_policy::RoutedIngestionBatch>, StatsError> {
+        self.policies.route_ingestion_batch(source, batch)
+    }
+
+    fn write_physical_rows(
         &self,
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
-        schema_policy: WriteSchemaPolicy,
     ) -> Result<ForwardedWrite, StatsError> {
-        if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
-                arrow_ipc.len()
-            )));
-        }
-        let batch = decode_one_record_batch(arrow_ipc)?;
-        if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
-                batch.num_rows()
-            )));
-        }
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
         let engine = self.require_engine(name)?;
-        let (mut aligned, ignored_columns): (AlignedBatch, Vec<String>) = match schema_policy {
-            WriteSchemaPolicy::Strict => (
-                validate_and_align_batch(&batch, engine.schema())?,
-                Vec::new(),
-            ),
-            WriteSchemaPolicy::IgnoreUnknownNullable => {
-                validate_and_align_forwarded_batch(&batch, engine.schema())?
-            }
-        };
+        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
@@ -518,8 +665,8 @@ impl Store {
         let last_seq = engine.append_aligned_batch(&aligned);
         Ok(ForwardedWrite {
             rows_written: n,
-            last_seq,
-            ignored_columns,
+            persisted_targets: vec![(name.to_string(), last_seq)],
+            ignored_columns: Vec::new(),
         })
     }
 
@@ -589,7 +736,8 @@ impl Store {
             )
             .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
             .with_exact_postings_policy(exact_postings_policy)
-            .with_segment_key_bounds(key_column, segments.key_bounds);
+            .with_segment_key_bounds(key_column, segments.key_bounds)
+            .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -611,6 +759,7 @@ impl Store {
             key_column: engine.key_column().to_string(),
             paths: segments.paths,
             key_bounds: segments.key_bounds,
+            partitions: segments.partitions,
             min_seq: segments.min_seq,
             index_cache: Arc::clone(&self.index_cache),
         })

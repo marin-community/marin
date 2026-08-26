@@ -166,7 +166,10 @@ def test_configure_separates_reused_numeric_attempts(telemetry_receiver: Telemet
 def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/serve/0"), worker_id="w-1", attempt_id=0)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("vllm", attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value})
+        telemetry.configure(
+            "vllm",
+            attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value},
+        )
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]

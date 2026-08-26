@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::partition_policy::SegmentPartition;
+
 /// Where a segment's bytes currently live. Wire/catalog strings: LOCAL/REMOTE/BOTH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentLocation {
@@ -48,6 +50,7 @@ pub struct SegmentRow {
     pub created_at_ms: i64,
     pub min_key_value: Option<String>,
     pub max_key_value: Option<String>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 
@@ -69,6 +72,7 @@ pub struct LocalSegment {
     pub created_at_ms: i64,
     pub min_key_value: Option<i64>,
     pub max_key_value: Option<i64>,
+    pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
 }
 
@@ -128,7 +132,7 @@ pub fn seg_filename(level: i32, min_seq: i64) -> String {
 fn seg_filename_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^seg_L(?P<level>\d+)_(?P<seq>\d+)\.parquet$")
+        Regex::new(r"^seg_L(?P<level>\d+)_(?P<seq>-?\d+)\.parquet$")
             .expect("seg filename regex compiles")
     })
 }
@@ -162,6 +166,8 @@ mod tests {
         let name = seg_filename(0, 42);
         assert_eq!(name, "seg_L0_0000000000000000042.parquet");
         assert_eq!(parse_seg_filename(&name), Some((0, 42)));
+        let migrated = seg_filename(0, -42);
+        assert_eq!(parse_seg_filename(&migrated), Some((0, -42)));
         assert_eq!(parse_seg_filename("not_a_segment.parquet"), None);
     }
 }

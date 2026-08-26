@@ -1108,7 +1108,7 @@ def _configure_vllm_telemetry(
         ),
     )
     metrics_collector.start()
-    logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
+    logger.info("Forwarding vLLM metrics from %s to Finelog telemetry", metrics_url)
     nccl_probe = nccl.start() if _starts_nccl_ras_probe(launcher) else None
     return dataclasses.replace(
         handle,

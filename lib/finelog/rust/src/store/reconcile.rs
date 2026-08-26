@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use futures::StreamExt;
 
 use crate::errors::StatsError;
+use crate::partition_policy::SegmentPartition;
 use crate::store::catalog::Catalog;
 use crate::store::remote::RemoteStore;
 use crate::store::types::{basename, parse_seg_filename, SegmentLocation, SegmentRow};
@@ -77,15 +78,12 @@ pub async fn reconcile_remote_segments(
         byte_size: i64,
         min_key: Option<i64>,
         max_key: Option<i64>,
+        partition: Option<SegmentPartition>,
     }
-    // The unknown remote parquet to footer-fetch (basename, size, level,
-    // min_seq), skipping catalog-known files and unparseable names.
-    let pending: Vec<(String, u64, i32, i64)> = objects
+    let pending: Vec<(String, u64)> = objects
         .iter()
         .filter(|(name, _)| !catalog_by_basename.contains_key(name))
-        .filter_map(|(name, size)| {
-            parse_seg_filename(name).map(|(level, min_seq)| (name.clone(), *size, level, min_seq))
-        })
+        .filter_map(|(name, size)| parse_seg_filename(name).map(|_| (name.clone(), *size)))
         .collect();
     // Fetch footers CONCURRENTLY: these are latency-bound cross-region round
     // trips, so a sequential await would cost O(N) RTTs. `buffer_unordered`
@@ -93,25 +91,26 @@ pub async fn reconcile_remote_segments(
     // already known, no `head`).
     let footer_started = std::time::Instant::now();
     let footers: Vec<Footer> = futures::stream::iter(pending)
-        .map(|(name, size, level, min_seq)| async move {
+        .map(|(name, size)| async move {
             let footer = remote.read_footer(namespace, &name, size, key_column).await;
-            (name, size, level, min_seq, footer)
+            (name, size, footer)
         })
         .buffer_unordered(RECONCILE_FOOTER_CONCURRENCY)
-        .filter_map(|(name, size, level, min_seq, footer)| async move {
-            let Some((row_count, min_key, max_key)) = footer else {
+        .filter_map(|(name, size, footer)| async move {
+            let Some(metadata) = footer else {
                 tracing::warn!(namespace, %name, "failed reading remote parquet footer");
                 return None;
             };
             Some(Footer {
                 basename: name,
-                level,
-                min_seq,
-                max_seq: min_seq + (row_count - 1).max(0),
-                row_count,
+                level: metadata.level,
+                min_seq: metadata.min_seq,
+                max_seq: metadata.max_seq,
+                row_count: metadata.row_count,
                 byte_size: size as i64,
-                min_key,
-                max_key,
+                min_key: metadata.min_key_value,
+                max_key: metadata.max_key_value,
+                partition: metadata.partition,
             })
         })
         .collect()
@@ -121,30 +120,35 @@ pub async fn reconcile_remote_segments(
     // Union catalog + remote-only seq ranges; mark any segment fully spanned by
     // a strictly-higher level as redundant (transitivity makes a single pass
     // sufficient — Z covers Y, Y covers X => Z covers X).
-    let mut all_known: HashMap<String, (i32, i64, i64)> = HashMap::new();
+    let mut all_known: HashMap<String, (i32, i64, i64, Option<SegmentPartition>)> = HashMap::new();
     for (name, row) in &catalog_by_basename {
-        all_known.insert(name.clone(), (row.level, row.min_seq, row.max_seq));
+        all_known.insert(
+            name.clone(),
+            (row.level, row.min_seq, row.max_seq, row.partition.clone()),
+        );
     }
     for f in &footers {
-        all_known.insert(f.basename.clone(), (f.level, f.min_seq, f.max_seq));
+        all_known.insert(
+            f.basename.clone(),
+            (f.level, f.min_seq, f.max_seq, f.partition.clone()),
+        );
     }
-    let mut by_level: HashMap<i32, Vec<(i64, i64)>> = HashMap::new();
-    for (level, min_seq, max_seq) in all_known.values() {
+    let mut by_level: HashMap<i32, Vec<(i64, i64, Option<SegmentPartition>)>> = HashMap::new();
+    for (level, min_seq, max_seq, partition) in all_known.values() {
         by_level
             .entry(*level)
             .or_default()
-            .push((*min_seq, *max_seq));
+            .push((*min_seq, *max_seq, partition.clone()));
     }
     let mut redundant: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (name, (level, min_seq, max_seq)) in &all_known {
+    for (name, (level, min_seq, max_seq, partition)) in &all_known {
         for (higher_level, ranges) in &by_level {
             if *higher_level <= *level {
                 continue;
             }
-            if ranges
-                .iter()
-                .any(|(h_min, h_max)| *h_min <= *min_seq && *h_max >= *max_seq)
-            {
+            if ranges.iter().any(|(h_min, h_max, higher_partition)| {
+                higher_partition == partition && *h_min <= *min_seq && *h_max >= *max_seq
+            }) {
                 redundant.insert(name.clone());
                 break;
             }
@@ -189,6 +193,7 @@ pub async fn reconcile_remote_segments(
             created_at_ms: now,
             min_key_value: f.min_key.map(|v| v.to_string()),
             max_key_value: f.max_key.map(|v| v.to_string()),
+            partition: f.partition.clone(),
             location: SegmentLocation::Remote,
         });
     }
