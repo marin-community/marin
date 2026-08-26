@@ -16,13 +16,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
-from rigging.timing import Duration, ExponentialBackoff, Timestamp
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
@@ -68,7 +67,7 @@ from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.rpc.proto_display import signal_name
 from iris.runtime.health_probe import probe_http_health
-from iris.time_proto import timestamp_to_proto
+from iris.time_proto import duration_from_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -118,18 +117,6 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
 
 _DISK_CHECK_INTERVAL_SECONDS = 60.0
 _HEALTH_LIVE_MARKER = ".iris_health_live"
-
-
-def _container_started_monotonic(started_at: str) -> float:
-    """Map a Docker wall-clock start time onto the local monotonic clock."""
-    try:
-        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=UTC)
-    age = max(0.0, (datetime.now(UTC) - started).total_seconds())
-    return max(0.0, time.monotonic() - age)
 
 
 class TaskCancelled(Exception):
@@ -345,7 +332,7 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self._output_stop = threading.Event()
-        self._health_started_at_monotonic: float | None = None
+        self._health_startup_deadline: Deadline | None = None
 
     @classmethod
     def adopt(
@@ -404,7 +391,12 @@ class TaskAttempt:
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
         instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
-        instance._health_started_at_monotonic = _container_started_monotonic(discovered.started_at)
+        if request.HasField("health_check"):
+            started_at = discovered.started_at or Timestamp.from_ms(0)
+            instance._health_startup_deadline = Deadline.after(
+                started_at,
+                duration_from_proto(request.health_check.startup_timeout),
+            )
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
@@ -892,7 +884,10 @@ class TaskAttempt:
         assert self._container_handle is not None
 
         self._container_handle.run()
-        self._health_started_at_monotonic = time.monotonic()
+        if self.request.HasField("health_check"):
+            self._health_startup_deadline = Deadline.from_now(
+                duration_from_proto(self.request.health_check.startup_timeout)
+            )
         logger.info(
             "Container started for task %s (container_id=%s, ports=%s)",
             self.task_id,
@@ -925,10 +920,9 @@ class TaskAttempt:
     ) -> _TaskOutcome:
         last_disk_check = 0.0
         health = self.request.health_check if self.request.HasField("health_check") else None
-        next_health_probe = time.monotonic()
+        next_health_probe = Deadline.from_ms(0)
         health_failures = 0
         health_live = bool(self.workdir and (self.workdir / _HEALTH_LIVE_MARKER).exists())
-        health_started = self._health_started_at_monotonic or 0.0
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -1018,10 +1012,8 @@ class TaskAttempt:
                             exit_code=status.exit_code or -1,
                         )
 
-            now = time.monotonic()
-            if health is not None and status.phase == ContainerPhase.RUNNING and now >= next_health_probe:
-                probe_started = time.monotonic()
-                next_health_probe = probe_started + health.period.milliseconds / 1000
+            if health is not None and status.phase == ContainerPhase.RUNNING and next_health_probe.expired():
+                next_health_probe = Deadline.from_now(duration_from_proto(health.period))
                 port = self.ports.get(HEALTH_PORT_NAME)
                 if port is None:
                     health_error = f"Task health port {HEALTH_PORT_NAME!r} was not allocated"
@@ -1035,8 +1027,8 @@ class TaskAttempt:
                             assert self.workdir is not None
                             (self.workdir / _HEALTH_LIVE_MARKER).touch()
                     elif not health_live:
-                        startup_deadline = health_started + health.startup_timeout.milliseconds / 1000
-                        if probe_started >= startup_deadline:
+                        assert self._health_startup_deadline is not None
+                        if self._health_startup_deadline.expired():
                             health_error = f"Task health did not start before its deadline: {result.detail}"
                     else:
                         health_failures += 1

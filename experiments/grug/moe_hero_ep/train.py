@@ -1151,7 +1151,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
-        health_check=HERO_EP_TASK_HEALTH,
+        health_check=HERO_EP_TASK_HEALTH if trainer.progress_watchdog.is_enabled else None,
     )
 
 

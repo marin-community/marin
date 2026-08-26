@@ -91,12 +91,19 @@ class _HealthReport:
     timeout: float | None
 
     @classmethod
-    def capture(cls, snapshot: _TrainingSnapshot, watchdog: ProgressWatchdog | None) -> _HealthReport:
+    def capture(
+        cls,
+        *,
+        run_id: str,
+        job_id: str,
+        task_id: str,
+        watchdog: ProgressWatchdog | None,
+    ) -> _HealthReport:
         health = watchdog.health() if watchdog is not None else None
         return cls(
-            run_id=snapshot.run_id,
-            job_id=snapshot.job_id,
-            task_id=snapshot.task_id,
+            run_id=run_id,
+            job_id=job_id,
+            task_id=task_id,
             monitored=health is not None,
             state=str(health.state) if health is not None else None,
             event=str(health.event) if health is not None and health.event is not None else None,
@@ -148,9 +155,57 @@ def _render_page(snapshot: _TrainingSnapshot, action_token: str, health: _Health
 """
 
 
-class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
+class _HealthRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def __init__(
+        self,
+        *args,
+        run_id: str,
+        job_id: str,
+        task_id: str,
+        watchdog: ProgressWatchdog | None,
+        **kwargs,
+    ):
+        self._run_id = run_id
+        self._job_id = job_id
+        self._task_id = task_id
+        self._watchdog = watchdog
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self) -> None:
+        if urlsplit(self.path).path != HEALTH_PATH:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        report = self._health_report()
+        self._send(json.dumps(asdict(report)).encode(), "application/json", report.status, _JSON_CSP)
+
+    def do_POST(self) -> None:
+        self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _health_report(self) -> _HealthReport:
+        return _HealthReport.capture(
+            run_id=self._run_id,
+            job_id=self._job_id,
+            task_id=self._task_id,
+            watchdog=self._watchdog,
+        )
+
+    def _send(self, body: bytes, content_type: str, status: HTTPStatus, csp: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", csp)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args) -> None:
+        logger.debug("Task health HTTP request: " + format, *args)
+
+
+class _TrainingDashboardRequestHandler(_HealthRequestHandler):
     def __init__(
         self,
         *args,
@@ -162,27 +217,22 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
     ):
         self._snapshot = snapshot
         self._request_checkpoint = request_checkpoint
-        self._watchdog = watchdog
         self._action_token = action_token
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            *args,
+            run_id=snapshot.run_id,
+            job_id=snapshot.job_id,
+            task_id=snapshot.task_id,
+            watchdog=watchdog,
+            **kwargs,
+        )
 
     def do_GET(self) -> None:
-        report = _HealthReport.capture(self._snapshot, self._watchdog)
         if urlsplit(self.path).path == HEALTH_PATH:
-            self._send(json.dumps(asdict(report)).encode(), "application/json", report.status, _JSON_CSP)
+            super().do_GET()
             return
-        body = _render_page(self._snapshot, self._action_token, report).encode()
+        body = _render_page(self._snapshot, self._action_token, self._health_report()).encode()
         self._send(body, "text/html; charset=utf-8", HTTPStatus.OK, _PAGE_CSP)
-
-    def _send(self, body: bytes, content_type: str, status: HTTPStatus, csp: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", csp)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
 
     def do_POST(self) -> None:
         if self._request_checkpoint is None:
@@ -218,6 +268,24 @@ class _TrainingDashboardRequestHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
+def _serve_http(
+    handler: Callable[..., BaseHTTPRequestHandler],
+    *,
+    bind_host: str,
+    bind_port: int,
+    thread_name: str,
+) -> Iterator[int]:
+    with ThreadingHTTPServer((bind_host, bind_port), handler) as server:
+        thread = Thread(target=server.serve_forever, name=f"{thread_name}-{server.server_address[1]}", daemon=True)
+        thread.start()
+        try:
+            yield int(server.server_address[1])
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@contextmanager
 def _serve_status_page(
     snapshot: _TrainingSnapshot,
     request_checkpoint: Callable[[], None] | None,
@@ -233,16 +301,28 @@ def _serve_status_page(
         watchdog=watchdog,
         action_token=action_token,
     )
-    with ThreadingHTTPServer(("0.0.0.0", bind_port), handler) as server:
-        thread = Thread(
-            target=server.serve_forever, name=f"training-dashboard-{server.server_address[1]}", daemon=True
-        )
-        thread.start()
-        try:
-            yield int(server.server_address[1])
-        finally:
-            server.shutdown()
-            thread.join()
+    with _serve_http(handler, bind_host="0.0.0.0", bind_port=bind_port, thread_name="training-dashboard") as port:
+        yield port
+
+
+@contextmanager
+def _serve_task_health(
+    *,
+    run_id: str,
+    job_id: str,
+    task_id: str,
+    watchdog: ProgressWatchdog,
+    bind_port: int,
+) -> Iterator[int]:
+    handler = partial(
+        _HealthRequestHandler,
+        run_id=run_id,
+        job_id=job_id,
+        task_id=task_id,
+        watchdog=watchdog,
+    )
+    with _serve_http(handler, bind_host="127.0.0.1", bind_port=bind_port, thread_name="training-health") as port:
+        yield port
 
 
 class TrainingDashboard(Generic[ConfigT]):
@@ -284,25 +364,35 @@ class TrainingDashboard(Generic[ConfigT]):
             if task_health_enabled():
                 raise RuntimeError("Iris task health requires task metadata")
             return
-        snapshot = _TrainingSnapshot.capture(
-            self._config,
-            run_id=self._run_id,
-            job_id=str(job_info.job_id),
-            task_id=str(job_info.task_id),
-        )
         health_enabled = task_health_enabled()
         local_process_index = int(os.environ.get(IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV, "0"))
         serves_health = health_enabled and local_process_index == 0
+        serves_dashboard = jax.process_index() == 0
         server_stack = ExitStack()
         try:
-            port = server_stack.enter_context(
-                _serve_status_page(
+            if serves_dashboard:
+                snapshot = _TrainingSnapshot.capture(
+                    self._config,
+                    run_id=self._run_id,
+                    job_id=str(job_info.job_id),
+                    task_id=str(job_info.task_id),
+                )
+                server = _serve_status_page(
                     snapshot,
-                    self._request_checkpoint if jax.process_index() == 0 else None,
+                    self._request_checkpoint,
                     self._watchdog,
                     bind_port=task_health_port() if serves_health else 0,
                 )
-            )
+            else:
+                assert self._watchdog is not None
+                server = _serve_task_health(
+                    run_id=self._run_id,
+                    job_id=str(job_info.job_id),
+                    task_id=str(job_info.task_id),
+                    watchdog=self._watchdog,
+                    bind_port=task_health_port(),
+                )
+            port = server_stack.enter_context(server)
             if serves_health:
                 publish_task_health(port)
         except Exception:
@@ -310,7 +400,7 @@ class TrainingDashboard(Generic[ConfigT]):
             raise
 
         self._server_stack = server_stack
-        if jax.process_index() != 0:
+        if not serves_dashboard:
             return
 
         context = get_iris_ctx()

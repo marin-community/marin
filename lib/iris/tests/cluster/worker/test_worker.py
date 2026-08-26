@@ -49,7 +49,7 @@ from iris.testing.worker import (
     create_run_task_request,
 )
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Duration
+from rigging.timing import Duration, Timestamp
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -1262,6 +1262,7 @@ def _make_discovered_container(
     workdir_host_path: str = "/tmp/workdirs/test",
     ports: dict[str, int] | None = None,
     health_check_json: str = "",
+    started_at: Timestamp | None = None,
 ) -> DiscoveredContainer:
     return DiscoveredContainer(
         container_id="abc123def456",
@@ -1273,7 +1274,7 @@ def _make_discovered_container(
         phase=phase,
         running=running,
         exit_code=None if running else 0,
-        started_at="2025-01-01T00:00:00Z",
+        started_at=started_at or Timestamp.from_seconds(1_735_689_600),
         workdir_host_path=workdir_host_path,
         ports=ports or {},
         health_check_json=health_check_json,
@@ -1309,6 +1310,42 @@ def test_adopt_restores_the_task_health_contract(mock_worker, mock_runtime):
     assert task is not None
     assert task.request.health_check == health
     assert task.ports == {"healthz": 50042}
+
+
+def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker, mock_runtime, monkeypatch):
+    started_at = Timestamp.from_seconds(1_735_689_600)
+    now = started_at.add(Duration.from_seconds(20))
+    monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: now))
+    health = job_pb2.TaskHealthCheck(failure_threshold=1)
+    health.startup_timeout.milliseconds = 30_000
+    health.period.milliseconds = 5_000
+    health.request_timeout.milliseconds = 1_000
+    container = _make_discovered_container(
+        ports={"healthz": 50042},
+        health_check_json=json_format.MessageToJson(health, preserving_proto_field_name=True),
+        started_at=started_at,
+    )
+    probe_finished = threading.Event()
+
+    def unhealthy_probe(port, timeout):
+        probe_finished.set()
+        return ProbeResult(False, "still starting")
+
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_http_health", unhealthy_probe)
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_runtime.adopt_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000,
+        )
+    )
+
+    assert mock_worker.adopt_running_containers() == 1
+    assert probe_finished.wait(timeout=1)
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.status == job_pb2.TASK_STATE_RUNNING
+
+    mock_worker.stop()
 
 
 def test_adopt_skips_build_phase_containers(mock_worker, mock_runtime):

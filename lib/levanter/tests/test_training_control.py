@@ -298,5 +298,8 @@ def test_task_local_leader_serves_health_without_registering_a_public_endpoint(m
         status, payload = _get_health(f"http://127.0.0.1:{port}")
         assert status == 200
         assert payload["task_id"] == "/alice/train/1"
+        with pytest.raises(HTTPError) as error:
+            urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        assert error.value.code == 404
 
     watchdog.stop()

@@ -22,6 +22,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
@@ -285,7 +287,7 @@ class DiscoveredContainer:
     phase: ExecutionStage
     running: bool
     exit_code: int | None
-    started_at: str  # ISO 8601 timestamp from Docker
+    started_at: Timestamp | None
     workdir_host_path: str  # host path of the /app mount
     ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
     health_check_json: str = ""
