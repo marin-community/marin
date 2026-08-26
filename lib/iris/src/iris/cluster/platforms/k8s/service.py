@@ -58,6 +58,24 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+
+@contextmanager
+def _k8s_call(operation: str) -> Iterator[None]:
+    """Time one kubernetes API call and convert its transport failures.
+
+    ``operation`` names the call in both the slow-call warning and the raised
+    error. Callers add their own ``except ApiException`` where a status code
+    selects different handling; everything reaching here is a transport failure
+    the client raises as a urllib3 error, which callers expect as
+    ``KubectlError``.
+    """
+    with slow_log(logger, operation, threshold_ms=_SLOW_THRESHOLD_MS):
+        try:
+            yield
+        except TransportError as error:
+            raise KubectlError(f"{operation} failed: {error}") from error
+
+
 # Items requested per LIST page. An unpaginated list of a large collection
 # streams one chunked response body that no timeout bounds — the client arms a
 # per-recv socket timeout, which every arriving chunk resets — so a slow list
@@ -301,7 +319,7 @@ class CloudK8sService:
         ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
 
         logger.info("k8s: apply %s/%s", kind, name)
-        with slow_log(logger, f"apply {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"apply {kind}/{name}"):
             try:
                 if res is K8sResource.PODS:
                     self._apply_pod(res, ns, manifest)
@@ -319,8 +337,6 @@ class CloudK8sService:
                 raise KubectlError(
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
-            except TransportError as e:
-                raise KubectlError(f"apply {kind}/{name} failed: {e}") from e
 
     def _apply_pod(self, res: K8sResource, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
@@ -338,23 +354,22 @@ class CloudK8sService:
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
         timeout_kw = self._request_timeout_kwargs()
-        try:
-            api.create(body=manifest, **timeout_kw, **ns_kw)
-        except ApiException as e:
-            if e.status == 409:
-                # Pod already present (or a prior generation still terminating);
-                # leave it. A later reconcile re-applies once any deletion lands.
-                return
-            raise
-        except TransportError as e:
-            raise KubectlError(f"create {res.plural} failed: {e}") from e
+        with _k8s_call(f"create {res.plural}"):
+            try:
+                api.create(body=manifest, **timeout_kw, **ns_kw)
+            except ApiException as e:
+                if e.status == 409:
+                    # Pod already present (or a prior generation still terminating);
+                    # leave it. A later reconcile re-applies once any deletion lands.
+                    return
+                raise
 
     # -- get -----------------------------------------------------------------
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None:
         """Get a Kubernetes resource as a parsed dict. Returns None if not found."""
         logger.info("k8s: GET %s/%s", resource.plural, name)
-        with slow_log(logger, f"get {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"get {resource.plural}/{name}"):
             try:
                 result = self._resource_api(resource).get(
                     name=name,
@@ -366,8 +381,6 @@ class CloudK8sService:
                 return None
             except ApiException as e:
                 raise KubectlError(f"get {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"get {resource.plural}/{name} failed: {e}") from e
 
     # -- list ----------------------------------------------------------------
 
@@ -399,7 +412,7 @@ class CloudK8sService:
         kwargs.update(self._request_timeout_kwargs())
         api = self._resource_api(resource)
         continue_token = ""
-        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"list {resource.plural}"):
             while True:
                 page_kwargs = dict(kwargs, limit=_LIST_PAGE_LIMIT)
                 if continue_token:
@@ -408,8 +421,6 @@ class CloudK8sService:
                     result = api.get(**page_kwargs)
                 except ApiException as e:
                     raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
-                except TransportError as e:
-                    raise KubectlError(f"list {resource.plural} failed: {e}") from e
                 for item in result.items:
                     yield item.to_dict()
                 meta = result.metadata
@@ -439,15 +450,13 @@ class CloudK8sService:
             body["gracePeriodSeconds"] = 0
         if not wait:
             body["propagationPolicy"] = "Background"
-        with slow_log(logger, f"delete {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"delete {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).delete(name=name, body=body, **kwargs)
             except NotFoundError:
                 return
             except ApiException as e:
                 raise KubectlError(f"delete {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"delete {resource.plural}/{name} failed: {e}") from e
 
     def delete_many(self, resource: K8sResource, names: list[str], *, force: bool = False, wait: bool = False) -> None:
         """Delete multiple resources by name."""
@@ -491,7 +500,7 @@ class CloudK8sService:
     def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
         """Delete a pod in an explicit namespace, ignoring NotFound."""
         logger.info("k8s: DELETE pod %s/%s", namespace, name)
-        with slow_log(logger, f"delete pod {namespace}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"delete pod {namespace}/{name}"):
             try:
                 self._resource_api(K8sResource.PODS).delete(
                     name=name,
@@ -503,8 +512,6 @@ class CloudK8sService:
                 return
             except ApiException as e:
                 raise KubectlError(f"delete pod {namespace}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"delete pod {namespace}/{name} failed: {e}") from e
 
     # -- remove_finalizer ----------------------------------------------------
 
@@ -524,7 +531,7 @@ class CloudK8sService:
             return
         remaining = [f for f in finalizers if f != finalizer]
         logger.info("k8s: PATCH remove finalizer %s from %s/%s", finalizer, resource.plural, name)
-        with slow_log(logger, f"remove_finalizer {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"remove_finalizer {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body={"metadata": {"finalizers": remaining}},
@@ -537,8 +544,6 @@ class CloudK8sService:
                 return
             except ApiException as e:
                 raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"remove_finalizer {resource.plural}/{name} failed: {e}") from e
 
     # -- set_image -----------------------------------------------------------
 
@@ -554,7 +559,7 @@ class CloudK8sService:
             }
         }
         logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource.plural, name, container, image)
-        with slow_log(logger, f"set_image {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"set_image {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body=patch_body,
@@ -565,8 +570,6 @@ class CloudK8sService:
                 )
             except ApiException as e:
                 raise KubectlError(f"set_image {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"set_image {resource.plural}/{name} failed: {e}") from e
 
     # -- rollout_restart -----------------------------------------------------
 
@@ -585,7 +588,7 @@ class CloudK8sService:
             }
         }
         logger.info("k8s: PATCH rollout_restart %s/%s", resource.plural, name)
-        with slow_log(logger, f"rollout_restart {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"rollout_restart {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body=patch_body,
@@ -596,8 +599,6 @@ class CloudK8sService:
                 )
             except ApiException as e:
                 raise KubectlError(f"rollout_restart {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-            except TransportError as e:
-                raise KubectlError(f"rollout_restart {resource.plural}/{name} failed: {e}") from e
 
     # -- rollout_status ------------------------------------------------------
 
@@ -635,7 +636,7 @@ class CloudK8sService:
     def get_events(self, field_selector: str | None = None) -> list[dict]:
         """Get Kubernetes events, optionally filtered by field selector."""
         logger.info("k8s: list events field_selector=%s", field_selector)
-        with slow_log(logger, "get_events", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call("get_events"):
             try:
                 kwargs: dict = {"namespace": self.namespace, "_request_timeout": self.timeout}
                 if field_selector:
@@ -646,15 +647,13 @@ class CloudK8sService:
                 if e.status == 404:
                     return []
                 raise
-            except TransportError as e:
-                raise KubectlError(f"list events failed: {e}") from e
 
     # -- logs ----------------------------------------------------------------
 
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         """Fetch logs from a Pod container."""
         logger.info("k8s: logs %s container=%s tail=%d previous=%s", pod_name, container, tail, previous)
-        with slow_log(logger, f"logs {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"logs {pod_name}"):
             try:
                 kwargs: dict = {
                     "name": pod_name,
@@ -670,8 +669,6 @@ class CloudK8sService:
                 if e.status == 404:
                     return ""
                 raise
-            except TransportError as e:
-                raise KubectlError(f"logs {pod_name} failed: {e}") from e
 
     # -- stream_logs ---------------------------------------------------------
 
@@ -690,7 +687,7 @@ class CloudK8sService:
         before parsing.
         """
         logger.info("k8s: stream_logs %s since=%s limit_bytes=%s", pod_name, since_time, limit_bytes)
-        with slow_log(logger, f"stream_logs {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"stream_logs {pod_name}"):
             try:
                 kwargs: dict = {
                     "name": pod_name,
@@ -712,8 +709,6 @@ class CloudK8sService:
                 if e.status == 404:
                     return KubectlLogResult(lines=[], last_timestamp=since_time)
                 raise
-            except TransportError as e:
-                raise KubectlError(f"stream_logs {pod_name} failed: {e}") from e
 
         # When limit_bytes is active the response may be truncated mid-line.
         # Drop the trailing partial line by trimming to the last newline.
