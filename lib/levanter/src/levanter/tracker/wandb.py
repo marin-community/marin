@@ -27,13 +27,9 @@ from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker, TrackerConfig
 from levanter.utils import jax_utils
 
-if typing.TYPE_CHECKING:
-    import wandb.sdk.lib.disabled
-
-
 logger = logging.getLogger(__name__)
 
-WandbRun = Union["wandb.sdk.wandb_run.Run", "wandb.sdk.lib.disabled.RunDisabled"]
+WandbRun: typing.TypeAlias = wandb.sdk.wandb_run.Run
 
 
 _WANDB_ARTIFACT_NAME_MAX_LENGTH = 128

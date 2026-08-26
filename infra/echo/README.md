@@ -101,8 +101,8 @@ evidence helps without allowing a large file to dominate. Paraphrases can enter 
 BGE semantic retrieval.
 
 The API retrieves at least 20 candidates from each selected domain, takes the best 24
-after first-stage fusion, and reranks their complete indexed chunks with the INT8 ONNX
-build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
+after first-stage fusion, and reranks their complete indexed chunks one at a time with
+the INT8 ONNX build of `ms-marco-MiniLM-L-6-v2`. Final rank is reciprocal-rank fusion of the
 first-stage rank (weight 0.2) and cross-encoder rank (weight 0.8). Wiki candidates need
 a raw cross-encoder score of at least -1; other domains retain the -2 floor. These are
 empirical relevance floors, not calibrated probabilities. The wiki cutoff retains 93%
@@ -111,6 +111,11 @@ execution-linked wiki grades available on 2026-08-18. Raw reranker scores are re
 with new result snapshots so other domain cutoffs can use stable data. A search can
 return fewer than the requested limit and returns at most 24 results. `grep` remains a
 case-insensitive literal substring scan over activity, newest first.
+
+The API runs four ONNX inference threads on each 4-vCPU Cloud Run instance. Request-based
+billing retains one warm instance, admits one request per instance, and scales concurrent
+searches out to at most four instances. Startup CPU boost reduces model initialization time
+for burst instances without allocating CPU to idle instances continuously.
 
 CLI search prints one result block with an execution-specific grading key, title,
 source ID, and one primary source excerpt of at most 240 characters. File results use
@@ -128,9 +133,11 @@ Wiki summaries use the `use_when` hint; files and activity use the matching sour
 excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
 latency and an additional prompt-injection path.
 
-`search` reports the number of results and elapsed wall-clock time before its table. The
-measurement covers token acquisition, the network request, server retrieval and
-reranking, and response decoding: the time the caller waited for Echo.
+`search` reports the number of results, elapsed wall-clock time, and the API's
+`Server-Timing` stages before its table. The wall-clock measurement covers token
+acquisition, the network request, server retrieval and reranking, history persistence,
+and response decoding. The server stages separate query embedding, database setup,
+selected-domain retrieval, reranking, history persistence, and total application time.
 
 ### Record and inspect search feedback
 

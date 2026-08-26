@@ -44,7 +44,7 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
 K8S_API_TIMEOUT = 2.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")

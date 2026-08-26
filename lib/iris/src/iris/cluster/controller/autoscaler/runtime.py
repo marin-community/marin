@@ -18,8 +18,6 @@ The run_once() flow splits into two phases:
 """
 
 import logging
-import urllib.error
-import urllib.request
 from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -70,6 +68,7 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceHandle,
     SliceStatus,
+    probe_worker_health,
 )
 from iris.cluster.stats.tables import IrisProvisioning, ProvisioningOutcome
 from iris.cluster.types import WorkerStatusMap
@@ -89,10 +88,6 @@ DEFAULT_CREATE_RATE_LIMIT = 60
 
 # How long the autoscaler waits for a worker /health response per probe.
 _HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
-
-# Bypass any HTTP_PROXY env var: worker addresses are private cluster IPs,
-# never reachable via an upstream proxy.
-_HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
 # timeouts would blow past evaluation_interval (10 s default).
@@ -131,21 +126,6 @@ def _run_io_batch(
     workers = min(max_workers, len(items))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=thread_name_prefix) as pool:
         return list(pool.map(issue, items))
-
-
-def _probe_worker_health(worker_url: str) -> bool:
-    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
-
-    Returns True iff the response is 2xx.
-    """
-    try:
-        resp = _HEALTH_PROBE_OPENER.open(
-            f"{worker_url}/health",
-            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
-        )
-        return 200 <= resp.status < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-        return False
 
 
 def _safe_describe(slice_id: str, handle: SliceHandle) -> SliceStatus | None:
@@ -776,7 +756,7 @@ class Autoscaler:
         if probes:
             results = _run_io_batch(
                 probes,
-                lambda p: _probe_worker_health(p[3]),
+                lambda p: probe_worker_health(p[3], timeout=_HEALTH_PROBE_TIMEOUT_SECONDS),
                 max_workers=_HEALTH_PROBE_MAX_WORKERS,
                 thread_name_prefix="health-probe",
             )

@@ -10,8 +10,9 @@ from enum import StrEnum
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 VLLM_MAX_POINTS = 720
 VLLM_MAX_RESULT_ROWS = 10_000
-VLLM_MIN_BUCKET_MS = 15_000
-VLLM_SCRAPE_INTERVAL_MS = 15_000
+VLLM_MIN_BUCKET_MS = 60_000
+VLLM_SCRAPE_INTERVAL_MS = 60_000
+VLLM_HISTOGRAM_COHERENCE_MS = 15_000
 VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_MAX_FRESHNESS_DETAILS = 128
@@ -166,7 +167,7 @@ WITH base AS (
            attributes_json,
            timestamp_ms,
            seq
-    FROM "telemetry_v1"
+    FROM "telemetry_v1.vllm"
     WHERE service = 'vllm'
       AND {identity_field.value} = {identity_literal}
       AND name IN ({metric_names})
@@ -284,7 +285,7 @@ WITH base AS (
            resource_attributes_json,
            attributes_json,
            timestamp_ms,
-           timestamp_ms - timestamp_ms % {VLLM_SCRAPE_INTERVAL_MS} AS sample_t,
+           timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
            name,
            {histogram_source_family} AS source_family,
            {histogram_family} AS family,

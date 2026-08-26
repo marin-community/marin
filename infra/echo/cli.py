@@ -276,6 +276,9 @@ def cmd_search(args: argparse.Namespace) -> None:
     elapsed = time.perf_counter() - started_at
     noun = "result" if len(results) == 1 else "results"
     print(f"{len(results)} {noun} in {elapsed:.2f}s")
+    server_timing = response.headers.get(search_config.SERVER_TIMING_HEADER)
+    if server_timing:
+        print(f"Server timing: {server_timing}")
     print_search_results(results)
     execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
     execution_flag = f"--execution-id {execution_id} " if execution_id else ""

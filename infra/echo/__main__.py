@@ -146,14 +146,14 @@ def main() -> None:
                 "PGDATABASE": DATABASE,
                 "PGUSER": API_DB_USER,
             },
-            # Keep one instance warm. Four concurrent embedding/reranking requests peak
-            # around 2.7 GiB; bound concurrency and leave headroom for the DB pool.
+            # Keep one instance warm and give each CPU-bound search all four inference threads.
+            # Concurrent searches scale out instead of sharing one instance's CPU.
             min_instances=1,
-            max_instances=1,
-            cpu_always_allocated=True,
-            cpu="1",
+            max_instances=4,
+            startup_cpu_boost=True,
+            cpu="4",
             memory="4Gi",
-            max_instance_request_concurrency=4,
+            max_instance_request_concurrency=1,
             cloudsql_instances=(CONNECTION_NAME,),
         ),
         gcp_provider=gcp_provider,

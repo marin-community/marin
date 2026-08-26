@@ -6,9 +6,9 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``metadata.msgpack``) records ``files -> [path, ...]``, a global
-``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
-(``shard_bytes``) used by reducers to size the external-sort decision.
+(``metadata.msgpack``) records ``files -> [path, ...]`` and exact
+per-target-shard payload bytes (``shard_bytes``) used by reducers to size the
+external-sort decision.
 
 On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
@@ -254,13 +254,11 @@ class _Sidecar:
 
     path: str
     files: list[str]
-    avg_item_bytes: float
     shard_bytes: dict[int, int]
 
     _encoder: ClassVar[msgspec.msgpack.Encoder] = msgspec.msgpack.Encoder()
     _decoder: ClassVar[msgspec.msgpack.Decoder] = msgspec.msgpack.Decoder()
     _files_field: ClassVar[str] = "files"
-    _avg_item_bytes_field: ClassVar[str] = "avg_item_bytes"
     _shard_bytes_field: ClassVar[str] = "shard_bytes"
 
     @staticmethod
@@ -276,7 +274,6 @@ class _Sidecar:
         payload = self._encoder.encode(
             {
                 self._files_field: self.files,
-                self._avg_item_bytes_field: self.avg_item_bytes,
                 self._shard_bytes_field: {str(k): v for k, v in self.shard_bytes.items()},
             }
         )
@@ -296,7 +293,6 @@ class _Sidecar:
         return cls(
             path=data_path,
             files=[str(f) for f in files],
-            avg_item_bytes=float(data.get(cls._avg_item_bytes_field, 0)),
             shard_bytes={int(k): int(v) for k, v in raw_shard_bytes.items()},
         )
 
@@ -357,12 +353,10 @@ class ScatterReader:
         self,
         chunk_paths: list[str],
         target_shard: int,
-        avg_item_bytes: float,
         shard_payload_bytes: float = 0.0,
     ) -> None:
         self._chunk_paths = chunk_paths
         self._target_shard = target_shard
-        self.avg_item_bytes = avg_item_bytes
         self.shard_payload_bytes = shard_payload_bytes
 
     @classmethod
@@ -375,7 +369,6 @@ class ScatterReader:
         thousands of mappers.
         """
         chunk_paths: list[str] = []
-        weighted_bytes = 0.0
         shard_payload_bytes = 0.0
 
         with log_time(
@@ -385,24 +378,18 @@ class ScatterReader:
             sidecars = _Sidecar.read_all(scatter_paths)
             for sidecar in sidecars:
                 chunk_paths.extend(sidecar.files)
-                weighted_bytes += sidecar.avg_item_bytes * len(sidecar.files)
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
 
-        avg_item_bytes = weighted_bytes / len(chunk_paths) if chunk_paths else 0.0
-
         logger.info(
-            "ScatterReader for shard %d: %d source shards, %d total chunks, "
-            "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
+            "ScatterReader for shard %d: %d source shards, %d total chunks, shard_payload_bytes=%.0f",
             target_shard,
             len(sidecars),
             len(chunk_paths),
-            avg_item_bytes,
             shard_payload_bytes,
         )
         return cls(
             chunk_paths=chunk_paths,
             target_shard=target_shard,
-            avg_item_bytes=avg_item_bytes,
             shard_payload_bytes=shard_payload_bytes,
         )
 
@@ -547,9 +534,6 @@ class ScatterWriter:
         # reducers know their shard's exact data size for the external-sort
         # decision without opening any chunk files.
         self._shard_bytes: defaultdict[int, int] = defaultdict(int)
-        self._avg_item_bytes: float = 0.0
-        self._total_bytes_written: int = 0
-        self._total_rows_written: int = 0
         self._n_chunks_written = 0
         # Throttles the per-flush progress log so high-fanout workloads don't log too often
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
@@ -585,8 +569,6 @@ class ScatterWriter:
         del buffer
 
         flushed_bytes = int(buffer_sorted.estimated_size())
-        self._total_bytes_written += flushed_bytes
-        self._total_rows_written += len(buffer_sorted)
         shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
         for shard_val, nbytes in shard_sizes.iter_rows():
             self._shard_bytes[shard_val] += int(nbytes)
@@ -653,24 +635,18 @@ class ScatterWriter:
         with log_time(f"Flushing remaining buffer for {self._data_path}"):
             self._flush()
 
-        self._avg_item_bytes = (
-            self._total_bytes_written / self._total_rows_written if self._total_rows_written > 0 else 0.0
-        )
-
         logger.info(
-            "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total; avg_item_bytes=%.0f B",
+            "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total",
             self._source_shard,
             pre_close_flushes,
             self._n_chunks_written - pre_close_flushes,
             self._n_chunks_written,
-            self._avg_item_bytes,
         )
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _Sidecar(
                 path=self._data_path,
                 files=list(self._chunk_paths),
-                avg_item_bytes=round(self._avg_item_bytes, 1),
                 shard_bytes=dict(self._shard_bytes),
             ).write()
 

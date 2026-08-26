@@ -32,12 +32,15 @@ use arrow::datatypes::SchemaRef;
 use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
+use crate::partition_policy::SegmentPartition;
+use crate::policies::physical_partition_policy_for;
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
-    read_segment_projected, run_job, CompactionLayout, PlannedSwap,
+    read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
+    PlannedSwap,
 };
 use crate::store::compaction::planner::plan;
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
@@ -306,6 +309,7 @@ struct BackfillCandidate {
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
 }
 
@@ -539,6 +543,11 @@ impl Namespace {
                 .map(|s| s.path.clone())
                 .collect(),
             key_bounds,
+            partitions: inner
+                .local_segments
+                .iter()
+                .filter_map(|segment| Some((segment.path.clone(), segment.partition.clone()?)))
+                .collect(),
             min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
         }
     }
@@ -784,6 +793,7 @@ impl Namespace {
             created_at_ms: now_ms(),
             min_key_value: min_key,
             max_key_value: max_key,
+            partition: None,
             location: SegmentLocation::Local,
         };
         let row = segment_to_row(&self.name, &seg);
@@ -900,16 +910,20 @@ impl Namespace {
             input_rows = job.inputs.iter().map(|s| s.row_count).sum::<i64>(),
             "compaction job starting"
         );
-        let swap = run_job(
+        let swap = run_job_with_partition_policy(
             job,
             dir,
             &self.arrow_schema,
-            CompactionLayout {
-                sort_columns: &self.sort_columns,
-                max_row_group_rows: self.max_row_group_rows,
+            CompactionExecution {
+                layout: CompactionLayout {
+                    sort_columns: &self.sort_columns,
+                    key_column: &self.key_column,
+                    max_row_group_rows: self.max_row_group_rows,
+                },
+                index_config: &index_config,
+                partition_policy: physical_partition_policy_for(&self.name),
+                max_merge_arrow_bytes: self.compaction_config.max_merge_arrow_bytes,
             },
-            &index_config,
-            self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
         let merged_inputs = swap.removed.len();
@@ -920,7 +934,7 @@ impl Namespace {
         // durable archive; a LOCAL-only row is removed) and tolerates the already
         // absent file. This unwedges compaction without deleting a segment that
         // still has a remote copy.
-        let Some(added) = swap.added.clone() else {
+        if swap.added.is_empty() {
             for path in &swap.removed {
                 self.evict_segment(path);
             }
@@ -931,10 +945,11 @@ impl Namespace {
                 "dropped stale segment reference with no local file; compaction resumed"
             );
             return Ok(());
-        };
-        let output_path = added.path.clone();
-        let output_bytes = added.size_bytes;
-        let output_rows = added.row_count;
+        }
+        let output_paths: Vec<String> = swap.added.iter().map(|added| added.path.clone()).collect();
+        let output_bytes: i64 = swap.added.iter().map(|added| added.size_bytes).sum();
+        let output_rows: i64 = swap.added.iter().map(|added| added.row_count).sum();
+        let output_segments = swap.added.len();
         // A bump is a rename; a merge decodes its inputs into RAM. The
         // distinction is the whole memory story, so name it — along with the
         // decoded size the ceiling actually bounds, and how much of the planned
@@ -949,7 +964,8 @@ impl Namespace {
             namespace = %self.name,
             kind,
             output_level = job.output_level,
-            output_path = %output_path,
+            ?output_paths,
+            output_segments,
             output_bytes,
             output_rows,
             merged_inputs,
@@ -1095,33 +1111,27 @@ impl Namespace {
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
-        // A drop (missing head input) never reaches `commit_swap` — `run_one_job`
-        // routes it through `evict_segment`. Every committed swap therefore
-        // replaces its inputs with a real output segment.
-        let added = swap
+        assert!(
+            !swap.added.is_empty(),
+            "commit_swap requires output segments; drops are handled by run_one_job"
+        );
+        let added_rows: Vec<SegmentRow> = swap
             .added
-            .as_ref()
-            .expect("commit_swap requires an output segment; drops are handled by run_one_job");
-        let added_row = segment_to_row(&self.name, added);
+            .iter()
+            .map(|segment| segment_to_row(&self.name, segment))
+            .collect();
         {
             let mut inner = self.inner.lock().unwrap();
-            let mut new_segments: VecDeque<LocalSegment> =
-                VecDeque::with_capacity(inner.local_segments.len());
-            let mut inserted = false;
-            for s in inner.local_segments.drain(..) {
-                if removed_set.contains(s.path.as_str()) {
-                    if !inserted {
-                        new_segments.push_back(added.clone());
-                        inserted = true;
-                    }
-                } else {
-                    new_segments.push_back(s);
-                }
-            }
-            if !inserted {
-                new_segments.push_back(added.clone());
-            }
-            inner.local_segments = new_segments;
+            inner
+                .local_segments
+                .retain(|segment| !removed_set.contains(segment.path.as_str()));
+            inner.local_segments.extend(swap.added.iter().cloned());
+            inner
+                .local_segments
+                .make_contiguous()
+                .sort_by(|left, right| {
+                    (left.min_seq, &left.path).cmp(&(right.min_seq, &right.path))
+                });
             debug_assert_unique_paths(&inner.local_segments);
             // Atomic catalog splice. Propagate on failure: the
             // deque now points at paths that exist on disk (the renamed bump
@@ -1130,7 +1140,7 @@ impl Namespace {
             // next boot adoption — never a mid-scan-unlink hazard — and the merge
             // inputs below are left intact because we return before unlinking.
             self.catalog
-                .replace_segments(&self.name, &swap.removed, &[added_row])?;
+                .replace_segments(&self.name, &swap.removed, &added_rows)?;
         }
         // 2) Unlink merged inputs after the swap (level bumps already renamed).
         if swap.unlink_removed {
@@ -1814,6 +1824,7 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
         created_at_ms: seg.created_at_ms,
         min_key_value: seg.min_key_value.map(|v| v.to_string()),
         max_key_value: seg.max_key_value.map(|v| v.to_string()),
+        partition: seg.partition.clone(),
         location: seg.location,
     }
 }
@@ -1938,6 +1949,7 @@ fn adopt_local_segments(
             created_at_ms: row.created_at_ms,
             min_key_value: meta.min_key_value,
             max_key_value: meta.max_key_value,
+            partition: meta.partition,
             location,
         });
     }
@@ -1987,6 +1999,7 @@ fn adopt_local_segments(
             created_at_ms,
             min_key_value: meta.min_key_value,
             max_key_value: meta.max_key_value,
+            partition: meta.partition,
             location: SegmentLocation::Local,
         });
     }
@@ -2376,6 +2389,7 @@ mod tests {
             created_at_ms: 1,
             min_key_value: None,
             max_key_value: None,
+            partition: None,
             location: SegmentLocation::Local,
         }
     }

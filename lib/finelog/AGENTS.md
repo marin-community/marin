@@ -63,8 +63,8 @@ of a table with a `cluster` column are stamped with the origin and skipped if th
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 
-`telemetry_v1` is server-owned at both ends of federation. A JWT sender's
-`RegisterTable` cannot evolve an existing hub telemetry schema or its physical layout.
+`telemetry_v1.*` and `levanter.metrics` are server-owned at both ends of federation. A JWT sender's
+`RegisterTable` cannot evolve an existing hub telemetry or metric schema or its physical layout.
 If the sender is ahead by an optional column, the hub reports the ignored column once,
 drops that column from forwarded batches, and appends the compatible fields. Required
 unknown columns and shared-column type changes remain errors. Other namespaces retain
@@ -190,7 +190,7 @@ Pulumi stack's post-rollout `finelog deploy verify`. A binary that cannot regist
 
 ## Changing a server-owned schema
 
-`log` and `telemetry_v1` are registered by the server itself, and every boot
+`log`, the semantic `telemetry_v1.*` tables, and `levanter.metrics` are registered by the server itself, and every boot
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
 deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
@@ -224,7 +224,7 @@ benchmark; there is no free-form plugin registry.
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)`, `col LIKE '%…%'`, and regexes with
 required literal runs prune instead of full-scan. Today it is on `log.key`,
-`log.data`, and `telemetry_v1.name`.
+`log.data`, and the `name` columns of `telemetry_v1` and `levanter.metrics`.
 
 Sorting by a column does not cover substring search of it. A log key is
 `/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
@@ -260,8 +260,9 @@ remains.
 predicate and an explicit included-column list. The planner substitutes one
 only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
-source Parquet. The initial `training-status` projection covers three metric
-names and seven columns.
+source Parquet. The legacy root `telemetry_v1` table retains its training
+projections during migration. Typed training queries use `levanter.metrics`,
+whose exact hidden `run_id` partitions provide their primary pruning boundary.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already

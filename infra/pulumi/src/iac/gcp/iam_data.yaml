@@ -1639,6 +1639,7 @@ service_accounts:
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/harbor
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/tpu-inference
     - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/vllm
+    - principalSet://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/attribute.repository/marin-community/xla
 - email: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: projects/hai-gcp-models/roles/marinServiceAccountIamManager

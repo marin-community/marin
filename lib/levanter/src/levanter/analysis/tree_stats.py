@@ -13,6 +13,20 @@ from haliax.jax_utils import is_jax_array_like
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils import jax_utils
 
+_SplitScanContainer = (haliax.nn.Stacked, haliax.nn.ArrayStacked)
+
+
+def _array_stacked_layer_in_axes(stacked: Any, num_layers: int) -> Any:
+    """`jax.vmap` in_axes tree that maps over the leading layer axis of layer-batched leaves.
+
+    ``ArrayStacked`` stores per-layer arrays with a leading ``num_layers`` axis and shares any
+    other leaf across layers, so mapped leaves get axis 0 and shared leaves get ``None``.
+    """
+    return jax.tree.map(
+        lambda x: 0 if (is_jax_array_like(x) and getattr(x, "ndim", 0) > 0 and x.shape[0] == num_layers) else None,
+        stacked,
+    )
+
 
 def summary_statistics_for_tree(
     prefix: str,
@@ -43,7 +57,7 @@ def summary_statistics_for_tree(
 
     """
     if split_scan_layers:
-        is_leaf = lambda n: isinstance(n, haliax.nn.Stacked) or is_named_array(n)  # noqa: E731
+        is_leaf = lambda n: isinstance(n, _SplitScanContainer) or is_named_array(n)  # noqa: E731
     else:
         is_leaf = is_named_array
 
@@ -64,6 +78,21 @@ def summary_statistics_for_tree(
 
                 for k, v in vmapped_hists.items():
                     for i in range(g.Block.size):
+                        hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
+
+            elif split_scan_layers and isinstance(g, haliax.nn.ArrayStacked):
+                num_layers = g.num_layers
+                in_axes = _array_stacked_layer_in_axes(g.stacked, num_layers)
+                vmapped_norms, vmapped_hists = jax.vmap(_rec_log_magnitudes, in_axes=(None, None, None, in_axes))(
+                    {}, {}, "", g.stacked
+                )
+
+                for k, v in vmapped_norms.items():
+                    for i in range(num_layers):
+                        norms[f"{key_path}.{i}.{k}"] = v[i]
+
+                for k, v in vmapped_hists.items():
+                    for i in range(num_layers):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
 
             elif isinstance(g, NamedArray):

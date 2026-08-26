@@ -11,7 +11,7 @@ from typing import Literal
 
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-INFERENCE_THREADS = 1
+INFERENCE_THREADS = 4
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
 SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
@@ -20,6 +20,7 @@ SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "is
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
 SEARCH_FEEDBACK_MIN_GRADE = 0
 SEARCH_FEEDBACK_MAX_GRADE = 10
+SERVER_TIMING_HEADER = "Server-Timing"
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",
@@ -47,7 +48,7 @@ RERANK_MODEL_SOURCE = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANK_MODEL_FILE = "onnx/model_int8.onnx"
 RERANK_MIN_RESULTS_PER_DOMAIN = 20
 RERANK_MAX_CANDIDATES = 24
-RERANK_BATCH_SIZE = 4
+RERANK_BATCH_SIZE = 1
 RERANK_BASE_WEIGHT = 0.2
 RERANK_MODEL_WEIGHT = 0.8
 MIN_RERANK_SCORE_BY_DOMAIN: Mapping[SearchDomain, float] = MappingProxyType(
