@@ -13,7 +13,6 @@ from experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch import (
     select_d512_points,
 )
 
-
 _ISSUE_7856_BASE_PEAK_LR = {
     30: 0.0285752557500679,
     60: 0.0217352363934089,
@@ -27,10 +26,7 @@ def test_d512_constant_lr_matrix_matches_issue_7856_cells():
     assert len(D512_CONSTANT_LR_POINTS) == 25
     assert len({point.experiment_id for point in D512_CONSTANT_LR_POINTS}) == 25
     assert len({point.run_id for point in D512_CONSTANT_LR_POINTS}) == 25
-    assert {
-        (point.token_multiple, point.lr_multiplier, point.num_train_steps)
-        for point in D512_CONSTANT_LR_POINTS
-    } == {
+    assert {(point.token_multiple, point.lr_multiplier, point.num_train_steps) for point in D512_CONSTANT_LR_POINTS} == {
         (token_multiple, lr_multiplier, D512_STEPS[token_multiple])
         for token_multiple in D512_TOKEN_MULTIPLES
         for lr_multiplier in D512_LR_MULTIPLIERS

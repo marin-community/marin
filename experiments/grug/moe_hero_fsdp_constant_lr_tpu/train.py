@@ -49,6 +49,7 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""

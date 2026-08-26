@@ -26,13 +26,13 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.namespacing import user_namespaced_name
 from marin.execution.step_runner import StepRunner
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch_datakit_moe_mix import (
-    ENABLE_SIMULATED_EPOCHING,
     _VALIDATION,
+    ENABLE_SIMULATED_EPOCHING,
     _datakit_data_config,
     _val_component,
 )

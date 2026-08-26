@@ -43,6 +43,14 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### moe-hero-fsdp-constant-lr-tpu
+- Path: `experiments/grug/moe_hero_fsdp_constant_lr_tpu/`
+- Origin: `moe_hero_fsdp`
+- Introduced: c14bd6b09
+- Status: active
+- Purpose: reproduce the 25 d512 cells from issue #7856 on TPU with constant post-warmup learning rates.
+- Issue: https://github.com/marin-community/marin/issues/7856
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

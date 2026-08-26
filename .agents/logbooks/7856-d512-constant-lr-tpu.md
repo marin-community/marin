@@ -101,6 +101,44 @@ changes d512 token-budget scaling relative to issue #7856?
   backend must also be checked for zero routing loss before treating the loss
   comparison as matched.
 
+### External Prior Art
+
+- *Understanding Warmup-Stable-Decay Learning Rates* predicts that a stable
+  high-LR phase can keep observed loss elevated through parameter oscillation
+  while still making underlying progress, and that decay reveals that progress
+  by reducing the oscillation. This supports measuring the no-decay terminal
+  loss directly rather than assuming the historical scaling exponent transfers.
+  Source: https://arxiv.org/abs/2410.05192.
+- *Scaling Law with Learning Rate Annealing* models loss with both cumulative
+  LR and a separate annealing contribution. It predicts a schedule-dependent
+  terminal-loss offset and motivates fitting the constant-LR curve independently.
+  Source: https://arxiv.org/abs/2408.11029.
+- *A Multi-Power Law for Loss Curve Prediction Across Learning Rate Schedules*
+  reports a shared power-law component plus an additional loss-reduction term
+  from LR decay across constant, cosine, and step schedules. This is direct
+  evidence that the desired comparison needs multiple token horizons and cannot
+  be inferred from one constant-LR cell. Source: https://arxiv.org/abs/2503.12811.
+
+### Evidence Map
+
+#### Claim: constant LR may preserve optimization progress while worsening observed terminal loss
+
+- Support:
+  - WSD river-valley paper: stable high LR drives motion along the valley but
+    sustains transverse oscillation; decay suppresses the visible loss penalty.
+  - Annealing scaling-law papers: decay contributes additional terminal loss
+    reduction beyond accumulated LR.
+- Contradictions:
+  - WSD shows the stable branch can continue making useful progress for long
+    horizons, so a shallower observed-loss curve need not mean optimization has
+    stopped; a later cooldown could recover latent gains.
+- Directness to Marin: moderate. The cited work uses dense Adam-like language
+  models, while this study uses d512 MoE with MuonH and evaluates an uncooled
+  endpoint.
+- Confidence: exploratory until the 25 matched Marin cells complete.
+- Action: report both terminal constant-LR scaling and the limitation that this
+  does not measure a cooldown branched from the same checkpoints.
+
 ### Negative / Failed Leads
 
 - The issue summary's d512 batch 32 and 2,115 / 4,230 / ... step table was not
@@ -145,6 +183,9 @@ changes d512 token-budget scaling relative to issue #7856?
 | d512 `-v2` runs | W&B | `marin-community/marin_moe` | Exact model, data, steps, LR, schedule, metrics, and hardware | High | Direct completed-run configs. |
 | Aug hero branch | Marin code | `53488bff8` | Historical model/optimizer implementation | High | Fixed source snapshot. |
 | Datakit MoE launcher | Marin code | `experiments/grug/moe/launch_datakit_moe_mix.py` | Exact mixture and data-local TPU placement | High | Reused rather than copied. |
+| WSD river-valley paper | paper | https://arxiv.org/abs/2410.05192 | Stable-LR loss elevation and decay interpretation | Medium | Dense models; no MuonH/MoE result. |
+| LR annealing scaling law | paper | https://arxiv.org/abs/2408.11029 | Separate cumulative-LR and annealing effects | Medium | Motivates an independent schedule fit. |
+| Multi-power LR-schedule law | paper | https://arxiv.org/abs/2503.12811 | Constant/cosine/step schedule-specific loss terms | Medium | Direct schedule comparison, different regime. |
 
 ## Decision Log
 
@@ -165,7 +206,7 @@ changes d512 token-budget scaling relative to issue #7856?
 
 - Hypothesis: a config-only linear-to-constant schedule change can be isolated
   while all 25 d512 cells remain otherwise matched to the completed sweep.
-- Commit Hash: pending first research snapshot.
+- Commit Hash: `c14bd6b09`.
 - Command: read issue #7856; queried W&B configs matching
   `^aug-hero-d512-.*-v2$`; inspected branch `53488bff8`.
 - Config: d512, batch 64, sequence length 8192, 128 routed experts top-4 plus
@@ -176,3 +217,25 @@ changes d512 token-budget scaling relative to issue #7856?
   code provide a reproducible 25-cell comparison.
 - Next action: finish focused tests and materialization, snapshot the branch,
   check duplicates, then submit `AUG-LRC-TPU-003`.
+
+### 2026-08-26 00:06 PDT - TPU matrix validates locally
+
+- Hypothesis: every historical d512 cell can materialize with the same peak LR
+  and a flat post-warmup schedule before any accelerator is allocated.
+- Commit Hash: `c14bd6b09`.
+- Commands:
+  - `uv run pytest -q tests/test_d512_constant_lr_tpu.py`
+  - `uv run pytest -q tests/test_grug_variant_contracts.py -k 'moe_hero_fsdp_constant_lr_tpu'`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run python` materialization probe for `AUG-LRC-TPU-003`.
+- Config: stable artifact version `2026.08.26`; v4-8 in
+  `us-central2-b`; max matrix concurrency 5.
+- Result: eight focused tests and two copied-variant contracts pass; lint,
+  formatting, Pyrefly, AST, and repository hygiene checks pass. The
+  representative cell materializes with 1,058 steps, `lr_schedule=constant`,
+  and a `v4-8` child resource in `us-central2-b`.
+- Interpretation: the launcher is ready for duplicate/auth checks and the
+  representative submission. The TPU kernel compile remains the first live
+  risk.
+- Next action: push the research snapshot, query Iris and W&B for
+  `AUG-LRC-TPU-003`, and submit only that cell if no duplicate exists.
