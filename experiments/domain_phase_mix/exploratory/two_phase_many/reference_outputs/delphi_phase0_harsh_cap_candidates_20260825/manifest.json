@@ -1,0 +1,39 @@
+{
+  "alias_count": 12,
+  "caps": [
+    4,
+    6
+  ],
+  "kl_penalties": [
+    0.0,
+    0.05,
+    0.2,
+    0.5
+  ],
+  "mixture_block_size": 2048,
+  "output_sha256": {
+    "alias_summary.csv": "af05c8d7e9c2c2975a98fb774800dca77cfcbd1f266d141668dbd88285352614",
+    "alias_weights.csv": "8e5048415cb8b7878ba7f4a89e1569bc5ddb2c78cceb91943b529d38ca288d00",
+    "candidate_aliases.csv": "a518d943eb1784524e96353010811d3951e077848e907f908c754d788727e299",
+    "training_candidate_weights.csv": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1"
+  },
+  "selection_rule": "Within each cap, select the eligible KL candidate with the lowest three-seed mean boundary Uncheatable BPB; break an exact tie by the lower KL penalty. Controls are diagnostic only.",
+  "selection_target": "mean exact-boundary Uncheatable BPB over paired seeds 0, 1, and 2",
+  "source_artifacts": [
+    {
+      "cap_epochs": 4,
+      "manifest_path": "/Users/calvinxu/Projects/Work/Marin/marin-delphi-prefix-harsh-caps-20260825/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_phase0_prefix_candidates_cap4_20260825/manifest.json",
+      "manifest_sha256": "1e375f03d6ec6d5462343bf47b39e856955b1b9969509c94c8d4285ed33619d0",
+      "summary_sha256": "c1d701ecfc9f29334615e66cdcee8cab2ece0aa8701535999e424904078e354d",
+      "weights_sha256": "a1e4dc872ff2792e6fad38b842d38532181dae3523cbc843508748ca7f42d07c"
+    },
+    {
+      "cap_epochs": 6,
+      "manifest_path": "/Users/calvinxu/Projects/Work/Marin/marin-delphi-prefix-harsh-caps-20260825/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_phase0_prefix_candidates_cap6_20260825/manifest.json",
+      "manifest_sha256": "dc62c58024a53c637263db422e9421b8cd50affdc700f1e045253efe8273e8a3",
+      "summary_sha256": "334218b3f440c3d0f94b947862eae332b5b636298e7fe033812c03942f6679c8",
+      "weights_sha256": "b477cd7e19067122b253bdf1cb81d7b00ad2bac8bc8d5015e4fb1a0d1ef605a9"
+    }
+  ],
+  "unique_training_candidate_count": 10
+}

@@ -1,0 +1,46 @@
+{
+  "candidate_ids": [
+    "shared_bounded_ensemble_kl0",
+    "shared_bounded_ensemble_kl0p05",
+    "shared_bounded_ensemble_kl0p2",
+    "shared_bounded_ensemble_kl0p5",
+    "observed_cap4_best",
+    "proportional_control"
+  ],
+  "candidate_model_ensemble": "shared_bounded_ensemble",
+  "candidate_variants": [
+    "shared_shape",
+    "bounded_shape"
+  ],
+  "diagnostic_component": "exact-boundary github_cpp_bpb; included in uncheatable_bpb",
+  "full_fit_partition_seeds": [
+    97,
+    98,
+    99
+  ],
+  "independent_transfer_guardrail": "historical one-phase Uncheatable panels",
+  "kl_direction": "KL(candidate || runtime-materialized observed incumbent)",
+  "kl_penalties": [
+    0.0,
+    0.05,
+    0.2,
+    0.5
+  ],
+  "minimum_runtime_bucket_support_rows": 273,
+  "mixture_block_size": 2048,
+  "model_path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_phase0_prefix_surrogates_20260824/full_models.json",
+  "model_sha256": "a1f723d08548189c9ce29702f461320077cc008577414771352d052f82a82b3c",
+  "observed_incumbent_materialization_tv": 0.002066434305060358,
+  "observed_incumbent_run_order": 1,
+  "output_sha256": {
+    "candidate_summary.csv": "c1d701ecfc9f29334615e66cdcee8cab2ece0aa8701535999e424904078e354d",
+    "candidate_weights.csv": "a1e4dc872ff2792e6fad38b842d38532181dae3523cbc843508748ca7f42d07c",
+    "optimization_audit.csv": "dac5232e16e4fb97fffafc14f017f42bd2454523f83bd3a1ca17b49895a163cb",
+    "partition_stability.csv": "2ef6cad403adb1a3492bcf2e8a8ecc9600ab04318b926a0889e6089e08737c40"
+  },
+  "panel_path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_3e18_phase0_prefix_replay_20260820/materialized_boundary_metrics/prefix_boundary_fit_matrix.csv",
+  "panel_sha256": "43032db14ae6ab0ee83eaeee24cf8ecab58740db0eae3d938534ff9088b1a646",
+  "phase_0_epoch_cap": 4.0,
+  "required_runtime_bucket_support_rows": 252,
+  "selection_target": "uncheatable_bpb"
+}

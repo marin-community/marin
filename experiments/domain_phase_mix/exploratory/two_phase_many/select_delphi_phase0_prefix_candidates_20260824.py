@@ -8,13 +8,13 @@
 """Select runtime-exact KL paths of Delphi phase-0 prefixes.
 
 An equal ensemble of shared-shape and bounded-shape DSPs is optimized under a
-hard ten-epoch cap and a forward-KL penalty away from the best observed
-cap-admissible prefix. The ensemble preserves measured model uncertainty:
+hard epoch cap and a forward-KL penalty away from the best observed
+cap-admissible prefix. The cap and regularization ladder are explicit inputs.
+The ensemble preserves measured model uncertainty:
 bounded-shape is stronger on the exact Delphi boundary panel, while
 shared-shape transfers better in several historical one-phase cells. Three
-spaced regularization levels avoid spending validation or branch rows on
-near-duplicate head-specific optima. Runtime-materialized incumbent and
-proportional controls are emitted beside the path.
+partition fits reduce dependence on one panel split. Runtime-materialized
+incumbent and proportional controls are emitted beside the path.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from scipy.optimize import minimize  # noqa: E402
 DEFAULT_MODEL_PATH = benchmark.DEFAULT_OUTPUT_DIR / "full_models.json"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase0_prefix_candidates_20260824"
 MIXTURE_BLOCK_SIZE = 2_048
-CAP_EPOCHS = benchmark.CAP_EPOCHS
+DEFAULT_CAP_EPOCHS = benchmark.CAP_EPOCHS
 LOCAL_EXCHANGE_TOLERANCE = 1e-12
 DEFAULT_CANDIDATE_VARIANTS = ("shared_shape", "bounded_shape")
 DEFAULT_KL_PENALTIES = (0.05, 0.2, 0.5)
@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--candidate-variants", default=",".join(DEFAULT_CANDIDATE_VARIANTS))
     parser.add_argument("--kl-penalties", default=",".join(str(value) for value in DEFAULT_KL_PENALTIES))
+    parser.add_argument("--cap-epochs", type=float, default=DEFAULT_CAP_EPOCHS)
     return parser.parse_args()
 
 
@@ -142,8 +143,9 @@ def continuous_optimum(
     starts: np.ndarray,
     reference: np.ndarray,
     kl_penalty: float,
+    cap_epochs: float,
 ) -> tuple[np.ndarray, float]:
-    upper = np.minimum(1.0, CAP_EPOCHS / scales)
+    upper = np.minimum(1.0, cap_epochs / scales)
     bounds = [(0.0, float(limit)) for limit in upper]
     constraint = {"type": "eq", "fun": lambda value: float(value.sum() - 1.0)}
     best_weights = starts[0]
@@ -215,8 +217,9 @@ def model_candidate(
     maximum_counts: np.ndarray,
     reference: np.ndarray,
     kl_penalty: float,
+    cap_epochs: float,
 ) -> tuple[np.ndarray, float, float]:
-    continuous, continuous_value = continuous_optimum(fits, scales, starts, reference, kl_penalty)
+    continuous, continuous_value = continuous_optimum(fits, scales, starts, reference, kl_penalty, cap_epochs)
     counts = constrained_counts(continuous, maximum_counts)
     counts = exchange_refine(fits, scales, counts, maximum_counts, reference, kl_penalty)
     weights = counts / MIXTURE_BLOCK_SIZE
@@ -270,10 +273,14 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     frame, buckets, weights, exposure = benchmark.load_panel()
     scales = epoch_scales(weights, exposure)
-    maximum_counts = np.floor((CAP_EPOCHS / scales) * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
+    if not np.isfinite(args.cap_epochs) or args.cap_epochs <= 0.0:
+        raise ValueError("--cap-epochs must be finite and positive")
+    maximum_counts = np.floor((args.cap_epochs / scales) * MIXTURE_BLOCK_SIZE + 1e-12).astype(np.int64)
     if int(maximum_counts.sum()) < MIXTURE_BLOCK_SIZE:
-        raise ValueError("The ten-epoch cap leaves no feasible runtime mixture")
-    admissible = frame[benchmark.CAP_COLUMN].to_numpy(dtype=bool)
+        raise ValueError(f"The {args.cap_epochs:g}-epoch cap leaves no feasible runtime mixture")
+    admissible = exposure.max(axis=1) <= args.cap_epochs + 1e-12
+    if not np.any(admissible):
+        raise ValueError(f"The panel has no rows admissible under the {args.cap_epochs:g}-epoch cap")
     panel_runtime_counts = np.vstack([runtime_counts(row) for row in weights])
     runtime_support_counts = (panel_runtime_counts > 0).sum(axis=0)
     minimum_support = int(np.ceil(MIN_RUNTIME_SUPPORT_FRACTION * len(frame)))
@@ -287,8 +294,12 @@ def main() -> None:
     if unknown_variants:
         raise ValueError(f"Unknown candidate variants: {sorted(unknown_variants)}")
     kl_penalties = tuple(float(item) for item in args.kl_penalties.split(",") if item.strip())
-    if not kl_penalties or any(value <= 0.0 for value in kl_penalties):
-        raise ValueError("KL penalties must be a nonempty list of positive values")
+    if (
+        not kl_penalties
+        or len(kl_penalties) != len(set(kl_penalties))
+        or any(not np.isfinite(value) or value < 0.0 for value in kl_penalties)
+    ):
+        raise ValueError("KL penalties must be a nonempty list of unique finite nonnegative values")
 
     primary_response = frame[benchmark.PRIMARY_TARGET].to_numpy(dtype=float)
     best_row = np.flatnonzero(admissible)[np.argmin(primary_response[admissible])]
@@ -330,6 +341,7 @@ def main() -> None:
             maximum_counts,
             incumbent,
             kl_penalty,
+            args.cap_epochs,
         )
         penalty_label = f"{kl_penalty:g}".replace(".", "p")
         candidate_id = f"{ENSEMBLE_LABEL}_kl{penalty_label}"
@@ -364,6 +376,7 @@ def main() -> None:
                     maximum_counts,
                     incumbent,
                     kl_penalty,
+                    args.cap_epochs,
                 )
                 stability_rows.append(
                     {
@@ -379,7 +392,8 @@ def main() -> None:
                     }
                 )
 
-    candidates["observed_cap10_best"] = (
+    cap_label = f"{args.cap_epochs:g}".replace(".", "p")
+    candidates[f"observed_cap{cap_label}_best"] = (
         f"runtime materialization of raw panel run_order={int(frame.iloc[best_row]['run_order'])}",
         incumbent,
         None,
@@ -442,7 +456,7 @@ def main() -> None:
         "selection_target": benchmark.PRIMARY_TARGET,
         "diagnostic_component": "exact-boundary github_cpp_bpb; included in uncheatable_bpb",
         "independent_transfer_guardrail": "historical one-phase Uncheatable panels",
-        "phase_0_epoch_cap": CAP_EPOCHS,
+        "phase_0_epoch_cap": args.cap_epochs,
         "mixture_block_size": MIXTURE_BLOCK_SIZE,
         "candidate_variants": list(candidate_variants),
         "candidate_model_ensemble": ENSEMBLE_LABEL,

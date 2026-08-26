@@ -1,0 +1,2 @@
+cap_epochs,candidate_id,alias_id,canonical_candidate_id,selection_eligible,uncheatable_mean,uncheatable_sd,github_cpp_mean,github_cpp_sd,uncheatable_sem,kl_penalty
+4,shared_bounded_ensemble_kl0,cap4_shared_bounded_ensemble_kl0,cap4_shared_bounded_ensemble_kl0,True,1.075417121251424,0.0032049037747116796,0.8549269636472067,0.004329764989195037,0.001850352057056636,0.0
