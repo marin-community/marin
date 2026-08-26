@@ -81,18 +81,41 @@ def _fits_served_context(doc: dict) -> bool:
     return prompt_tokens + max_gen_toks <= max_length
 
 
+def _potential_bins() -> tuple[int, ...]:
+    served_context = _served_context()
+    if served_context is None:
+        return MRCR_BIN_UPPER_BOUNDS
+    max_length, max_gen_toks, _ = served_context
+    lower = 4_096
+    potential: list[int] = []
+    for upper in MRCR_BIN_UPPER_BOUNDS:
+        if lower + max_gen_toks <= max_length:
+            potential.append(upper)
+        lower = upper + 1
+    return tuple(potential)
+
+
 def _ordered_docs(dataset: datasets.Dataset, *, one_per_cell: bool) -> datasets.Dataset:
     cells: dict[tuple[int, int], list[int]] = defaultdict(list)
     bins_by_index: dict[int, int] = {}
+    potential_bins = _potential_bins()
+    target_cell_count = len(potential_bins) * len(MRCR_NEEDLE_COUNTS)
     for index, doc in enumerate(dataset):
         needles = int(doc["n_needles"])
-        if needles not in MRCR_NEEDLE_COUNTS or not _fits_served_context(doc):
+        if needles not in MRCR_NEEDLE_COUNTS:
             continue
         upper = mrcr_bin(official_token_count(doc))
-        if upper is None:
+        if upper not in potential_bins:
             continue
-        cells[(upper, needles)].append(index)
+        cell = (upper, needles)
+        if one_per_cell and cells[cell]:
+            continue
+        if not _fits_served_context(doc):
+            continue
+        cells[cell].append(index)
         bins_by_index[index] = upper
+        if one_per_cell and len(cells) == target_cell_count:
+            break
 
     ordered_indices: list[int] = []
     cell_order = [(upper, needles) for upper in MRCR_BIN_UPPER_BOUNDS for needles in MRCR_NEEDLE_COUNTS]
