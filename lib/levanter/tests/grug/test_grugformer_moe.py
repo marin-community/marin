@@ -64,6 +64,12 @@ def _make_dense_mesh() -> Mesh:
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:
+    """An expert-parallel mesh, or None when the runtime has too few devices to build one.
+
+    Callers skip on None. Under CI's single CPU device that silences every test below that runs a
+    backend end to end, so those tests assert nothing on a green run. The repository has no marker
+    or fixture for declaring a device requirement; #8704 tracks adding one.
+    """
     devices = jax.devices()
     if len(devices) < 2 or len(devices) % 2 != 0:
         return None
