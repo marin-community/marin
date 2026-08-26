@@ -244,6 +244,15 @@ pdf = [
     # any of it implicitly. Measured as well as read -- `probe_pdf_inspector` reports outbound
     # connections and model-cache writes alongside its timings for exactly this reason.
     "pdf-inspector==1.17.0",
+    # Rust PDF toolkit (tiny-skia rasteriser, no MuPDF, no PDFium) under evaluation for two roles:
+    # the router's PyMuPDF feature pass and the VLM feed's render path
+    # (experiments/datakit/build_pdf_source/quality/probe_pdf_oxide.py). Pinned exactly for the same
+    # reason as pdf-inspector: a timing or failure-rate measurement against a native extension is
+    # only meaningful against a known build. Ships abi3 wheels on manylinux_2_28 for x86_64 and
+    # aarch64, so it resolves on both the Emerald Rapids and Grace pools; note that 2_28 is a newer
+    # glibc baseline than pdf-inspector's 2_17. MIT OR Apache-2.0, which is the licensing argument
+    # for it over AGPL PyMuPDF.
+    "pdf-oxide==0.3.77",
 ]
 
 math = ["pylatexenc", "sympy"]
