@@ -34,8 +34,11 @@ class ConstantPredictor:
 
 
 class ConstantObjective:
-    def observations(self, swarm: Swarm) -> ObjectiveObservations:
-        return ObjectiveObservations(np.zeros(len(swarm.data.weights)), np.full(len(swarm.data.weights), 0.01))
+    def observations(self, _swarm: Swarm) -> ObjectiveObservations:
+        return ObjectiveObservations(
+            np.zeros(len(_swarm.data.weights)),
+            np.full(len(_swarm.data.weights), 0.01),
+        )
 
 
 def test_custom_stages_persist_selected_candidate_and_bundle_manifest(

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import re
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -74,7 +75,7 @@ def _download_reference(
     destination: Path,
 ) -> None:
     relative = destination.relative_to(campaign_directory).as_posix()
-    _download(filesystem, f"{campaign_root_uri}/{relative}", destination)
+    _download(filesystem, posixpath.join(campaign_root_uri, relative), destination)
     if sha256(destination) != reference["sha256"]:
         raise ValueError(f"Downloaded artifact hash mismatch: {destination}")
 

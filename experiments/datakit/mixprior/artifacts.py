@@ -12,12 +12,13 @@ from typing import NamedTuple, TypedDict, cast
 import numpy as np
 
 from experiments.datakit.mixprior.campaign import Campaign
-from experiments.datakit.mixprior.data import read_record, record_sha256, sha256, write_record
+from experiments.datakit.mixprior.data import canonical_mixture_rows, read_record, record_sha256, sha256, write_record
+from experiments.datakit.mixprior.diagnostics import CandidateDiagnostics
 from experiments.datakit.mixprior.search import (
     MIXTURE_DENOMINATOR,
     CandidateSelection,
     PoolProvenance,
-    quantize_mixtures,
+    exclude_observed,
     validate_candidate_pool,
 )
 from experiments.datakit.mixprior.surrogate import ModelMetadata
@@ -32,7 +33,7 @@ class CandidateDecision(NamedTuple):
     model_metadata: ModelMetadata
     pool: np.ndarray
     selection: CandidateSelection
-    diagnostics: dict[str, object]
+    diagnostics: CandidateDiagnostics
     proposal: PoolProvenance
     pool_seeds: tuple[int, ...]
 
@@ -86,7 +87,7 @@ class CandidateArtifact(TypedDict):
     constraints: CandidateConstraintsArtifact
     mixture_components: list[str]
     phase_weights: list[dict[str, float]]
-    diagnostics: dict[str, object]
+    diagnostics: CandidateDiagnostics
 
 
 class BundleGenerationArtifact(TypedDict):
@@ -109,8 +110,7 @@ class BundleManifest(TypedDict):
 
 
 def candidate_id(weights: np.ndarray) -> str:
-    rounded = np.round(weights, decimals=12)
-    return hashlib.sha256(rounded.tobytes()).hexdigest()[:16]
+    return hashlib.sha256(canonical_mixture_rows(weights[None]).tobytes()).hexdigest()[:16]
 
 
 def pool_sha256(weights: np.ndarray) -> str:
@@ -184,7 +184,7 @@ def write_candidate_bundle(
                 for index in order
             ],
             "proposal": decision.proposal,
-            "observed_target_mixtures_excluded": _excludes_observed(pool, campaign.target.data.weights),
+            "observed_target_mixtures_excluded": len(exclude_observed(pool, campaign.target.data.weights)) == len(pool),
         },
         "constraints": {
             "simplex_count": len(campaign.target.phase_budgets),
@@ -238,9 +238,3 @@ def write_bundle_manifest(output_dir: Path, campaign_uri: str) -> Path:
     manifest_path = output_dir / BUNDLE_MANIFEST_ARTIFACT
     write_record(manifest_path, bundle_manifest)
     return manifest_path
-
-
-def _excludes_observed(pool: np.ndarray, observed: np.ndarray) -> bool:
-    observed = quantize_mixtures(observed)
-    observed_rows = {row.tobytes() for row in np.round(observed.reshape(len(observed), -1), decimals=12)}
-    return all(row.tobytes() not in observed_rows for row in np.round(pool.reshape(len(pool), -1), decimals=12))

@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 PHASE_COUNT = 2
+MIXTURE_IDENTITY_DECIMALS = 12
 
 
 class ArtifactReference(TypedDict):
@@ -128,11 +129,16 @@ class Swarm:
 
 
 def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def canonical_mixture_rows(weights: np.ndarray) -> np.ndarray:
+    """Flatten mixtures into the rounded rows used for identity comparisons."""
+    weights = np.asarray(weights, dtype=np.float64)
+    if weights.ndim != 3:
+        raise ValueError("Mixture weights must have observation, phase, and component axes")
+    return np.round(weights.reshape(len(weights), -1), decimals=MIXTURE_IDENTITY_DECIMALS)
 
 
 def read_record(path: Path) -> dict[str, Any]:
@@ -200,7 +206,7 @@ def load_observations(parquet_path: Path, components_path: Path, swarm_id: str) 
     if np.any(available_tokens <= 0) or not np.isfinite(available_tokens).all():
         raise ValueError("Every mixture component must have a positive token count")
 
-    weights = np.empty((len(frame), 2, len(component_names)), dtype=np.float64)
+    weights = np.empty((len(frame), PHASE_COUNT, len(component_names)), dtype=np.float64)
     for row_index, row in enumerate(frame.itertuples(index=False)):
         phase0 = _weight_map(row.phase0_weights, component_names, row.observation_id, 0)
         phase1 = _weight_map(row.phase1_weights, component_names, row.observation_id, 1)

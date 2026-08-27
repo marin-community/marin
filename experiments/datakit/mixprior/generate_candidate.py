@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 
-from experiments.datakit.mixprior.artifacts import CandidateDecision, write_candidate_bundle
+from experiments.datakit.mixprior.artifacts import CandidateArtifact, CandidateDecision, write_candidate_bundle
 from experiments.datakit.mixprior.campaign import Campaign, load_campaign
 from experiments.datakit.mixprior.diagnostics import candidate_diagnostics
 from experiments.datakit.mixprior.quadratic_exposure import fit_quadratic_exposure_model
@@ -53,7 +53,7 @@ def generate_candidate(
     pool_size_per_seed: int,
     pool_seeds: tuple[int, ...],
     device: torch.device,
-) -> dict:
+) -> CandidateArtifact:
     """Load a campaign, fit the quadratic GP, and persist its decision."""
     campaign = load_campaign(campaign_manifest)
     decision = search_candidate(

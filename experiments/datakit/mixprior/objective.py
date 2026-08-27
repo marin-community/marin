@@ -16,11 +16,11 @@ the negative loss because acquisition functions maximize.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import NamedTuple, Protocol
+from typing import NamedTuple, NotRequired, Protocol, TypedDict
 
 import numpy as np
 
-from experiments.datakit.mixprior.data import Swarm, SwarmObservations
+from experiments.datakit.mixprior.data import Swarm, SwarmObservations, canonical_mixture_rows
 
 REFERENCE_GIST_URL = "https://gist.github.com/Helw150/9a563b9ab7b95438b8d4d689777f6f7f"
 REFERENCE_GIST_REVISION = "557601ae46fce69549a06801fc882b29f1245d70"
@@ -61,6 +61,29 @@ class ObjectiveObservations(NamedTuple):
     variances: np.ndarray
 
 
+class ObjectiveLossComponents(NamedTuple):
+    uncapped_target: np.ndarray
+    hinge: np.ndarray
+    total: np.ndarray
+
+
+class ObjectiveMetadata(TypedDict):
+    kind: str
+    reference_gist_url: NotRequired[str]
+    reference_gist_revision: NotRequired[str]
+    labels: NotRequired[list[str]]
+    epsilon: NotRequired[float]
+    objective_metrics: NotRequired[list[str]]
+    uncapped_target_tasks: NotRequired[list[str]]
+    hinge_tasks: NotRequired[list[str]]
+    reference_count: NotRequired[int]
+    reference_mean: NotRequired[list[float]]
+    reference_sample_std: NotRequired[list[float]]
+    observation_sd: NotRequired[list[float]]
+    objective_task_correlation: NotRequired[list[list[float]]]
+    aggregate_policy: NotRequired[str]
+
+
 class ScalarObjective(Protocol):
     def observations(self, swarm: Swarm) -> ObjectiveObservations: ...
 
@@ -72,7 +95,7 @@ def _indices(labels: list[str], tasks: tuple[str, ...]) -> np.ndarray:
     return np.asarray([labels.index(task) for task in tasks], dtype=int)
 
 
-def _constituents(labels: list[str], prefix: str) -> np.ndarray:
+def _constituent_indices(labels: list[str], prefix: str) -> np.ndarray:
     result = [index for index, label in enumerate(labels) if label.startswith(prefix) and label != f"{prefix}mean"]
     return np.asarray(result, dtype=int)
 
@@ -86,15 +109,15 @@ def _loss_standardized(
     values: np.ndarray,
     epsilon: float,
     uncapped_tasks: tuple[str, ...],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> ObjectiveLossComponents:
     uncapped_target = values[..., _uncapped_target_columns(labels, uncapped_tasks)].sum(axis=-1)
     hinge = np.maximum(values, -epsilon).sum(axis=-1)
-    return uncapped_target, hinge, uncapped_target + hinge
+    return ObjectiveLossComponents(uncapped_target, hinge, uncapped_target + hinge)
 
 
 def pooled_replicate_sd(data: SwarmObservations) -> np.ndarray:
     """Estimate observation-noise SD from repeated-seed evaluations."""
-    flat = np.round(data.weights.reshape(len(data.weights), -1), decimals=12)
+    flat = canonical_mixture_rows(data.weights)
     _, groups = np.unique(flat, axis=0, return_inverse=True)
     squared_error = np.zeros(len(data.labels), dtype=np.float64)
     degrees_of_freedom = 0
@@ -181,7 +204,7 @@ class VarianceNormalizedObjective:
             ("include_mean", "include_"),
             ("belebele_mean", "belebele_"),
         ):
-            indices = _constituents(labels, prefix)
+            indices = _constituent_indices(labels, prefix)
             if len(indices):
                 values[..., labels.index(label)] = values[..., indices].mean(axis=-1)
         return values
@@ -190,7 +213,7 @@ class VarianceNormalizedObjective:
     def hinge_indices(self) -> np.ndarray:
         return _indices(self.labels, self.hinge_tasks)
 
-    def components(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def components(self, values: np.ndarray) -> ObjectiveLossComponents:
         values = self._exact_aggregates(self.labels, values)
         z = (values - self.reference_mean) / self.reference_std
         selected = z[..., self.hinge_indices]
@@ -218,7 +241,7 @@ class VarianceNormalizedObjective:
         std = self.reference_std[reference_indices]
         standardized = (values - mean) / std
         uncapped_target_indices = _uncapped_target_columns(labels, self.uncapped_tasks)
-        _, _, loss = _loss_standardized(labels, standardized, self.epsilon, self.uncapped_tasks)
+        loss = _loss_standardized(labels, standardized, self.epsilon, self.uncapped_tasks).total
 
         coefficients = np.ones_like(values) / std
         coefficients[standardized <= -self.epsilon] = 0.0
@@ -254,7 +277,7 @@ def fit_harrier_hinge_objective(
     )
 
 
-def objective_metadata(objective: VarianceNormalizedObjective) -> dict[str, object]:
+def objective_metadata(objective: VarianceNormalizedObjective) -> ObjectiveMetadata:
     return {
         "kind": OBJECTIVE_KIND,
         "reference_gist_url": REFERENCE_GIST_URL,

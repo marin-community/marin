@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import argparse
@@ -8,13 +11,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import fsspec
 import numpy as np
 import torch
+from rigging.filesystem.storage_path import StoragePath
 from scipy.stats import spearmanr
 
 from experiments.datakit.mixprior.campaign import Campaign, load_campaign
-from experiments.datakit.mixprior.data import Swarm, SwarmObservations
+from experiments.datakit.mixprior.data import Swarm, SwarmObservations, canonical_mixture_rows
 from experiments.datakit.mixprior.huggingface import download_campaign
 from experiments.datakit.mixprior.objective import ObjectiveObservations, ScalarObjective
 from experiments.datakit.mixprior.quadratic_exposure import fit_quadratic_exposure_model
@@ -34,6 +37,10 @@ CAMPAIGN_SHA256 = "5ed5fb024590dd4707b802caf8fe728be1b8d73375c100139f884b0728f0c
 RANK_PREFIXES = (2, 3, 5, 10, 20, 40)
 REGRET_HORIZON = 20
 REGRET_BATCH_SIZE = 5
+SHORTLIST_SIZE = 5
+VALIDATION_REPLAY = "validation"
+CALIBRATION_REPLAY = "calibration"
+REPLAY_TRANSITIONS = (VALIDATION_REPLAY, CALIBRATION_REPLAY)
 logger = logging.getLogger(__name__)
 
 
@@ -51,6 +58,7 @@ class AggregatedObjective:
             np.asarray([row[0] for row in rows]),
             np.asarray([row[1] for row in rows]),
         )
+
 
 def subset_swarm(swarm: Swarm, indices: list[int]) -> Swarm:
     data = swarm.data
@@ -75,9 +83,9 @@ def transition(campaign: Campaign, name: str) -> tuple[Swarm, tuple[Swarm, ...]]
     legacy = swarms["legacy-swarm-d512"]
     first_store = swarms["harrier-store-b262968b-d768"]
     second_store = swarms["harrier-store-0381a974-d768"]
-    if name == "validation":
+    if name == VALIDATION_REPLAY:
         return second_store, (legacy, first_store)
-    if name == "calibration":
+    if name == CALIBRATION_REPLAY:
         return first_store, (legacy,)
     raise ValueError(name)
 
@@ -85,8 +93,8 @@ def transition(campaign: Campaign, name: str) -> tuple[Swarm, tuple[Swarm, ...]]
 def aggregate_replicates(campaign: Campaign, target: Swarm) -> tuple[Swarm, AggregatedObjective]:
     observations = campaign.objective.observations(target)
     groups: dict[bytes, list[int]] = {}
-    for index, weights in enumerate(target.data.weights):
-        groups.setdefault(np.round(weights, 12).tobytes(), []).append(index)
+    for index, key in enumerate(canonical_mixture_rows(target.data.weights)):
+        groups.setdefault(key.tobytes(), []).append(index)
 
     representatives = []
     aggregate_by_id = {}
@@ -120,7 +128,8 @@ def rank_replay(
         predicted = fitted.predict(target, target.data.weights[prefix:]).mean
         held_out = actual[prefix:]
         winner = int(np.argmax(predicted))
-        shortlist = np.argpartition(predicted, -min(5, len(predicted)))[-5:]
+        shortlist_size = min(SHORTLIST_SIZE, len(predicted))
+        shortlist = np.argpartition(predicted, -shortlist_size)[-shortlist_size:]
         row = {
             "prefix": prefix,
             "spearman": float(spearmanr(predicted, held_out).statistic),
@@ -135,7 +144,7 @@ def rank_replay(
 def anchor_indices(target: Swarm) -> list[int]:
     return sorted(
         range(len(target.data.weights)),
-        key=lambda index: hashlib.sha256(np.round(target.data.weights[index], 12).tobytes()).digest(),
+        key=lambda index: hashlib.sha256(canonical_mixture_rows(target.data.weights[index : index + 1])).digest(),
     )
 
 
@@ -200,7 +209,7 @@ def regret_replay(
 
 
 def run_rank(campaign: Campaign) -> dict[str, object]:
-    results = {name: rank_replay(campaign, name, torch.device("cuda")) for name in ("validation", "calibration")}
+    results = {name: rank_replay(campaign, name, torch.device("cuda")) for name in REPLAY_TRANSITIONS}
     return {
         "results": results,
         "mean_spearman": {name: float(np.mean([row["spearman"] for row in rows])) for name, rows in results.items()},
@@ -209,7 +218,7 @@ def run_rank(campaign: Campaign) -> dict[str, object]:
 
 def run_regret(campaign: Campaign, block: int) -> dict[str, object]:
     results = {}
-    for name in ("validation", "calibration"):
+    for name in REPLAY_TRANSITIONS:
         target, sources = transition(campaign, name)
         target, objective = aggregate_replicates(campaign, target)
         replay_campaign = replace(campaign, target=target, sources=sources, objective=objective)
@@ -240,9 +249,7 @@ def main() -> None:
             payload = run_regret(campaign, args.block)
 
     if args.output:
-        with fsspec.open(args.output, "w") as output:
-            json.dump(payload, output, indent=2)
-            output.write("\n")
+        StoragePath(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("RESULT " + json.dumps(payload), flush=True)
 
 

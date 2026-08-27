@@ -16,7 +16,7 @@ from botorch.acquisition.logei import qLogNoisyExpectedImprovement
 from botorch.sampling.normal import SobolQMCNormalSampler
 
 from experiments.datakit.mixprior.campaign import Campaign
-from experiments.datakit.mixprior.data import Swarm
+from experiments.datakit.mixprior.data import Swarm, canonical_mixture_rows
 from experiments.datakit.mixprior.surrogate import (
     BotorchMixturePredictor,
     MixturePredictor,
@@ -219,8 +219,8 @@ def sample_standard_candidate_pool(
 
 
 def exclude_observed(pool: np.ndarray, observed_weights: np.ndarray) -> np.ndarray:
-    observed = {row.tobytes() for row in np.round(observed_weights.reshape(len(observed_weights), -1), decimals=12)}
-    keep = [row.tobytes() not in observed for row in np.round(pool.reshape(len(pool), -1), decimals=12)]
+    observed = {row.tobytes() for row in canonical_mixture_rows(observed_weights)}
+    keep = [row.tobytes() not in observed for row in canonical_mixture_rows(pool)]
     return pool[np.asarray(keep)]
 
 
@@ -258,7 +258,7 @@ def validate_candidate_pool(weights: np.ndarray, expected_shape: tuple[int, int]
 
 
 def unique_mixtures(weights: np.ndarray) -> np.ndarray:
-    flat = np.round(weights.reshape(len(weights), -1), decimals=12)
+    flat = canonical_mixture_rows(weights)
     _, indices = np.unique(flat, axis=0, return_index=True)
     return weights[np.sort(indices)]
 

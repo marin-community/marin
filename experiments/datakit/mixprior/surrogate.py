@@ -147,7 +147,7 @@ class SameSwarmKernel(Kernel):
         x2: torch.Tensor,
         diag: bool = False,
         last_dim_is_batch: bool = False,
-        **params: object,
+        **_params: object,
     ) -> torch.Tensor:
         if last_dim_is_batch:
             raise ValueError("Same-swarm covariance does not batch over input dimensions")

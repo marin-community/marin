@@ -6,11 +6,43 @@
 from __future__ import annotations
 
 from itertools import pairwise
+from typing import TypedDict
 
 import numpy as np
 
 from experiments.datakit.mixprior.data import MixtureComponentMetadata, Swarm
 from experiments.datakit.mixprior.search import CandidatePosterior
+
+
+class NearestObservation(TypedDict):
+    observation: str
+    overall_content_squared_hellinger: float
+
+
+class DomainWeightIncrease(TypedDict):
+    domain: str
+    weight: float
+    proportional_weight: float
+    delta: float
+
+
+class ComponentWeightIncrease(DomainWeightIncrease):
+    component: str
+    quality: int
+
+
+class PhaseDiagnostics(TypedDict):
+    quality_weights: dict[str, float]
+    largest_domain_weight_increases: list[DomainWeightIncrease]
+    largest_component_weight_increases: list[ComponentWeightIncrease]
+
+
+class CandidateDiagnostics(TypedDict):
+    posterior: CandidatePosterior
+    nearest_observation: NearestObservation
+    max_cumulative_epochs: float
+    adjacent_phase_total_variation: list[float]
+    phases: list[PhaseDiagnostics]
 
 
 def overall_content_features(
@@ -54,7 +86,7 @@ def candidate_diagnostics(
     target: Swarm,
     weights: np.ndarray,
     posterior: CandidatePosterior,
-) -> dict[str, object]:
+) -> CandidateDiagnostics:
     metadata = target.data.component_metadata
     proportional = target.data.available_tokens / target.data.available_tokens.sum()
     phase_token_fractions = target.phase_budgets / target.phase_budgets.sum()
@@ -82,7 +114,7 @@ def _phase_diagnostics(
     weights: np.ndarray,
     proportional: np.ndarray,
     metadata: list[MixtureComponentMetadata],
-) -> dict[str, object]:
+) -> PhaseDiagnostics:
     quality_weights: dict[str, float] = {}
     domain_weights: dict[str, float] = {}
     proportional_domain_weights: dict[str, float] = {}

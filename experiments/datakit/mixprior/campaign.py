@@ -28,6 +28,7 @@ from experiments.datakit.mixprior.data import (
     sha256,
 )
 from experiments.datakit.mixprior.objective import (
+    ObjectiveMetadata,
     ScalarObjective,
     fit_harrier_hinge_objective,
     objective_metadata,
@@ -90,7 +91,7 @@ class Campaign:
     target: Swarm
     sources: tuple[Swarm, ...]
     objective: ScalarObjective
-    objective_metadata: dict[str, object]
+    objective_metadata: ObjectiveMetadata
 
 
 class CampaignInputs(NamedTuple):
@@ -182,7 +183,7 @@ def build_variance_normalized_campaign(inputs: CampaignInputs) -> Campaign:
 def build_campaign(
     inputs: CampaignInputs,
     objective: ScalarObjective,
-    objective_metadata: dict[str, object],
+    objective_metadata: ObjectiveMetadata,
 ) -> Campaign:
     return Campaign(
         target=inputs.target,

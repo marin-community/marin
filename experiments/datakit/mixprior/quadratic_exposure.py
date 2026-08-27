@@ -36,6 +36,7 @@ from experiments.datakit.mixprior.surrogate import (
 MATERN_NU = 2.5
 LENGTHSCALE_PRIOR_LOG_SD = 1.0
 HARM_CURVATURE_INITIAL = (0.01, 0.015)
+RESIDUAL_OUTPUTSCALE_INITIAL = 0.25
 
 
 def keep_initialization(_model: SingleTaskGP, _seed: int) -> None:
@@ -232,9 +233,9 @@ def quadratic_exposure_covariance(
     same_swarm = SameSwarmKernel(active_dims=(layout.feature_count,)).to(dtype=like.dtype, device=like.device)
     residual = ScaleKernel(
         residual_response * same_swarm,
-        outputscale_prior=lognormal_prior_with_mode(0.25, 1.0, like),
+        outputscale_prior=lognormal_prior_with_mode(RESIDUAL_OUTPUTSCALE_INITIAL, 1.0, like),
     )
-    residual.outputscale = 0.25
+    residual.outputscale = RESIDUAL_OUTPUTSCALE_INITIAL
     return (shared + residual).to(dtype=like.dtype, device=like.device)
 
 

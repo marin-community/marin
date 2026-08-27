@@ -21,19 +21,19 @@ from experiments.datakit.mixprior.surrogate import PredictiveMoments, prepare_tr
 
 
 class LinearPredictor:
-    def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
+    def predict(self, _swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
         return PredictiveMoments(mean=weights[:, 0, 0], latent_variance=np.full(len(weights), 0.1))
 
 
 class TensorPredictor:
     botorch_model = object()
 
-    def candidate_tensor(self, swarm: Swarm, weights: np.ndarray) -> torch.Tensor:
+    def candidate_tensor(self, _swarm: Swarm, weights: np.ndarray) -> torch.Tensor:
         return torch.as_tensor(weights.reshape(len(weights), -1), dtype=torch.double)
 
 
 def test_transfer_data_uses_caller_feature_map(tiny_campaign: Campaign) -> None:
-    def flatten_weights(swarm: Swarm, weights: np.ndarray) -> np.ndarray:
+    def flatten_weights(_swarm: Swarm, weights: np.ndarray) -> np.ndarray:
         return weights.reshape(len(weights), -1)
 
     training = prepare_training_data(tiny_campaign, flatten_weights)
