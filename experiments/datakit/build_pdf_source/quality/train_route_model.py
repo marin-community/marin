@@ -80,8 +80,13 @@ class Split:
 
 
 def split_by(frame: pl.DataFrame, key: str, seed: int = SPLIT_SEED) -> Split:
-    """Split so that no value of *key* appears on both sides."""
-    values = frame[key].unique().to_list()
+    """Split so that no value of *key* appears on both sides.
+
+    The key values are sorted before they are permuted: ``unique`` returns them in hash order, so
+    without the sort the same frame and the same seed produce a different held-out set on every
+    run, and two models evaluated in one process are scored on different documents.
+    """
+    values = sorted(frame[key].unique().to_list())
     rng = np.random.default_rng(seed)
     held_out = set(rng.permutation(values)[: int(len(values) * TEST_FRACTION)].tolist())
     mask = frame[key].is_in(list(held_out))

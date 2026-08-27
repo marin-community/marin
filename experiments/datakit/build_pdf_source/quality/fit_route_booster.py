@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # the corpus nearly every additional document sent to the VLM is one Docling would have botched,
 # and past ~50% the marginal document costs more than two VLM runs per document actually rescued.
 # The frontier's knee -- maximum distance from the endpoint chord over the study table -- sits at
-# 45.5% (experiments/datakit/build_pdf_source/pdf-extraction-routing.md).
+# 48.5% (experiments/datakit/build_pdf_source/pdf-extraction-routing.md).
 TARGET_VLM_FRACTION = 0.50
 
 # The study table :mod:`~experiments.datakit.build_pdf_source.quality.build_route_study` writes.

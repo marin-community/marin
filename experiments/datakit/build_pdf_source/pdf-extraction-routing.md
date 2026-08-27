@@ -53,19 +53,35 @@ Domain-disjoint held-out documents, at matched VLM budget. Splitting by register
 than by row matters: the crawl holds ~9.8% exact-duplicate PDFs and many more near-duplicates from
 the same publisher.
 
-| Router | At the shipped 29% budget | At the new 50% budget |
+| Router | At the shipped 37% budget | At the new 50% budget |
 |---|---|---|
-| Shipped FinePDFs rule | 0.3034 | 0.2681 |
-| Same features, retrained on the routing label | 0.2866 | 0.1713 |
-| **New route features** | **0.2534** | **0.1230** |
-| Both | 0.2536 | 0.1211 |
+| Shipped FinePDFs rule | 0.2638 | 0.2408 |
+| Same features, retrained on the routing label | 0.2379 | 0.1882 |
+| **New route features** | **0.1769** | **0.1120** |
+| Both | 0.1779 | 0.1101 |
 
-Asking the right question buys 6% at the old budget. The new features buy 16%, and the gap widens
-with budget — at 50% they buy 54% against 36% for retraining alone, because the incumbent's score
-runs out of ability to rank documents long before half the corpus is selected. Adding the
+Asking the right question buys 10% at the shipped budget. The new features buy 33%, and the gap
+widens with budget — at 50% they buy 54% against 22% for retraining alone, because the incumbent's
+score runs out of ability to rank documents long before half the corpus is selected. Adding the
 incumbent's probability on top of the new features buys nothing: `ocr_prob` ranks 7th by gain when
-the model may use everything, behind `mean_latin_ratio`, `mean_left_edge_concentration`,
-`mean_char_count`, `page_count`, `mean_alphanum_ratio` and `pages_sampled`.
+the model may use everything, behind `mean_left_edge_concentration`, `mean_latin_ratio`,
+`pages_sampled`, `mean_alphanum_ratio`, `mean_char_count` and `page_count`.
+
+The budget column is the incumbent's own routing rate on the held-out domains, which is higher than
+its 31.4% rate over the whole corpus because the held-out domains are not a uniform sample of it.
+The retrained-incumbent arm refits on the FinePDFs signals the study table carries — `ocr_prob`,
+`garbled_text_ratio`, `is_form` and `is_scanner_produced` — since that router's own inputs are not
+in the table.
+
+An earlier version of this table read 0.3034 → 0.2534 at a 29% budget. Those figures came from a
+nondeterministic split: `split_by` permuted the output of `unique()`, which polars returns in hash
+order, so the same frame and seed drew a different held-out set on every call and arms scored in one
+process were not compared on the same documents. The numbers above come from the fixed,
+seed-stable split. The draw turns out to matter more than the distances between the better arms:
+across ten seeds the incumbent's held-out budget ranges 28.3% to 38.1% and each arm's quality loss
+moves by 0.05 to 0.07. The ordering is stable and the headline result survives — the new features
+cut the incumbent's silent quality loss by about a third at matched cost — but the 0.001 to 0.002
+gap between the last two rows sits far inside that noise and carries no signal.
 
 ## The cost/quality frontier, and where it bends
 
@@ -75,23 +91,24 @@ you buy per document actually rescued.
 
 | VLM budget | Quality loss | Catches bad | Marginal precision | VLM docs per rescue |
 |---|---|---|---|---|
-| 20% | 0.333 | 37% | 0.97 | 1.0 |
-| 25% | 0.289 | — | 0.90 | 1.1 |
-| 30% | 0.244 | 54% | 0.86 | 1.2 |
-| 35% | 0.207 | — | 0.73 | 1.4 |
-| 40% | 0.170 | 68% | 0.66 | 1.5 |
-| **50%** | **0.114** | **79%** | **0.50** | **2.0** |
-| 60% | 0.070 | 87% | 0.35 | 2.9 |
-| 70% | 0.040 | 92% | 0.25 | 4.0 |
-| 80% | 0.018 | 97% | 0.16 | 6.3 |
+| 20% | 0.308 | 39% | 0.89 | 1.1 |
+| 25% | 0.266 | — | 0.81 | 1.2 |
+| 30% | 0.227 | 55% | 0.74 | 1.3 |
+| 35% | 0.192 | — | 0.66 | 1.5 |
+| 40% | 0.161 | 68% | 0.59 | 1.7 |
+| **50%** | **0.110** | **78%** | **0.45** | **2.2** |
+| 60% | 0.072 | 86% | 0.31 | 3.2 |
+| 70% | 0.044 | 91% | 0.25 | 4.0 |
+| 80% | 0.022 | 96% | 0.18 | 5.4 |
 
-Three regimes. Below ~34% almost every additional VLM document is a real rescue, so stopping there
-leaves cheap quality unbought — and the old 31.4% operating point sits inside that region. From 34%
-to 50% the price rises gently. Past 50% it degrades fast: marginal precision falls below 0.33 at 60%
-and below 0.25 at 74%, so the last stretch toward a clean corpus costs 4–6 VLM runs per document
-rescued.
+Three regimes. Below ~26% almost every additional VLM document is a real rescue, so stopping there
+leaves cheap quality unbought. From 26% to 50% the price rises gently, and the old 31.4% operating
+point sits at the bottom of that stretch rather than beyond it. Past 50% it degrades fast: marginal
+precision falls below 0.33 at 60% and below 0.25 at 69%, so the last stretch toward a clean corpus
+costs 4–5 VLM runs per document rescued.
 
-The frontier's knee, by maximum distance from the endpoint chord, is **45.5%**.
+The frontier's knee, by maximum distance from the endpoint chord, is **48.5%**. This table is drawn
+from the same fixed split as the one above, and moves with the draw the same way.
 
 For contrast the incumbent's own curve is not merely worse but locally degenerate: around 20% its
 marginal precision is ~0.00, so a whole band of the documents it adds are pure waste. That is the
@@ -101,9 +118,10 @@ probability distribution, which leaves the rule unable to rank inside that band 
 ## What shipped
 
 `classify.py` now routes on `docling_confidence < 0.542031`, which sends **50% of documents to the
-VLM**. On held-out documents from unseen domains that point catches 79% of the documents Docling
-reads badly and leaves 10.8% of the corpus mis-routed, against 30.3% for the FinePDFs rule at its
-own 29% budget — and against 26.8% for that rule rethresholded to spend the same 50%.
+VLM**. On held-out documents from unseen domains that point catches 78% of the documents Docling
+reads badly and leaves 11.0% of the corpus mis-routed, against 26.4% for the FinePDFs rule at its
+own 37% budget on the same split — and against 24.1% for that rule rethresholded to spend the
+same 50%.
 
 Weights are pinned by SHA-256 (`pdf_route_classifier_00757366`) and are reproducible: the fit reads
 the published study table, trains on every usable row for the round count the domain-disjoint

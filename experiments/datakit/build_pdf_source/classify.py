@@ -84,11 +84,11 @@ ROUTE_MODEL_FILENAME = "route_classifier.ubj"
 # recall against VLM text), so only its rank carries meaning and the threshold is a quantile.
 # Recalibrating for a different budget on a new corpus is therefore a quantile, not a retrain.
 #
-# 50% of documents to the VLM sits just past the frontier's knee (45.5%, by maximum distance from
+# 50% of documents to the VLM sits just past the frontier's knee (48.5%, by maximum distance from
 # the endpoint chord over the study table; experiments/datakit/build_pdf_source/pdf-extraction-routing.md). Held out on
-# documents from domains the model never saw, this point catches 79% of the documents Docling reads
-# badly and leaves 10.8% of the corpus mis-routed to Docling, against 30.3% for the FinePDFs rule
-# at its own 29% budget on the same held-out split and 26.8% for that rule rethresholded to spend
+# documents from domains the model never saw, this point catches 78% of the documents Docling reads
+# badly and leaves 11.0% of the corpus mis-routed to Docling, against 26.4% for the FinePDFs rule
+# at its own 37% budget on the same held-out split and 24.1% for that rule rethresholded to spend
 # the same 50%. (The 28.7% quoted in the module docstring is the same FinePDFs mis-routing measured
 # over the full 100k sample rather than the held-out split.)
 #
