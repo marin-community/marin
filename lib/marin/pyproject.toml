@@ -253,6 +253,14 @@ pdf = [
     # glibc baseline than pdf-inspector's 2_17. MIT OR Apache-2.0, which is the licensing argument
     # for it over AGPL PyMuPDF.
     "pdf-oxide==0.3.77",
+    # PDFium through its Python bindings, evaluated as a permissively licensed replacement for the
+    # VLM feed's MuPDF rasteriser and *not* adopted -- see pdfium-evaluation.md. Retained, like
+    # pdf-oxide above, so that `quality/probe_pdfium.py` and `quality/build_render_study.py` stay
+    # runnable if the question is reopened. Pinned exactly for the same reason: a timing or
+    # failure-rate measurement against a native extension is only meaningful against a known build,
+    # and the vendored PDFium version moves independently of the binding's. Apache-2.0 OR
+    # BSD-3-Clause, py3-none manylinux_2_17 wheels for x86_64 and aarch64.
+    "pypdfium2==5.13.0",
 ]
 
 math = ["pylatexenc", "sympy"]
