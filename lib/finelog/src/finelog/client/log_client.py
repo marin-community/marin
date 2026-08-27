@@ -89,8 +89,17 @@ _OVERFLOW_LOG_INTERVAL = 5.0
 
 
 class FlushResult(StrEnum):
+    """Whether the rows a flush waited on reached the server.
+
+    Only ``SUCCEEDED`` means they were recorded. ``DROPPED`` means the server
+    refused a batch or the client buffer overflowed, and those rows are gone.
+    ``TIMEOUT`` leaves it open: the queue had not drained yet and the flush
+    thread may still deliver them.
+    """
+
     SUCCEEDED = "succeeded"
     TIMEOUT = "timeout"
+    DROPPED = "dropped"
 
 
 @dataclass(frozen=True)
@@ -275,6 +284,8 @@ class Table:
 
         self._pushed_seq = 0
         self._processed_seq = 0
+        # Rows discarded without reaching the server since the last flush.
+        self._dropped_since_flush = 0
 
         self._overflow_dropped_pending = 0
         self._overflow_log_limiter = RateLimiter(interval_seconds=_OVERFLOW_LOG_INTERVAL)
@@ -335,16 +346,21 @@ class Table:
         return result
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Block until rows enqueued before this call have been processed."""
+        """Block until rows enqueued before this call have been handled.
+
+        Reports ``DROPPED`` when any row written since the previous flush was
+        discarded instead of sent, and clears that state so the next flush
+        answers for its own rows.
+        """
         with self._cond:
             target = self._pushed_seq
             if target == 0 or self._processed_seq >= target:
-                return FlushResult.SUCCEEDED
+                return self._settle_locked()
             self._cond.notify_all()
             deadline = (time.monotonic() + timeout) if timeout is not None else None
             while self._processed_seq < target:
                 if self._closed:
-                    return FlushResult.SUCCEEDED if self._processed_seq >= target else FlushResult.TIMEOUT
+                    return self._settle_locked() if self._processed_seq >= target else FlushResult.TIMEOUT
                 if deadline is None:
                     self._cond.wait(timeout=1.0)
                 else:
@@ -352,7 +368,14 @@ class Table:
                     if remaining <= 0:
                         return FlushResult.TIMEOUT
                     self._cond.wait(timeout=remaining)
+            return self._settle_locked()
+
+    def _settle_locked(self) -> FlushResult:
+        """The verdict for a drained queue, consuming the drop count."""
+        if self._dropped_since_flush == 0:
             return FlushResult.SUCCEEDED
+        self._dropped_since_flush = 0
+        return FlushResult.DROPPED
 
     def close(self) -> None:
         """Stop the flush thread after one best-effort drain."""
@@ -384,6 +407,7 @@ class Table:
                 max_dropped_seq = item.seq
             dropped += 1
         if dropped:
+            self._dropped_since_flush += dropped
             self._overflow_dropped_pending += dropped
             if self._overflow_log_limiter.should_run():
                 logger.warning(
@@ -421,8 +445,9 @@ class Table:
                     return
                 items = self._take_queue_locked()
 
-            sent_max_seq, unsent = self._send(items)
+            sent_max_seq, unsent, dropped = self._send(items)
             with self._cond:
+                self._dropped_since_flush += dropped
                 if sent_max_seq > self._processed_seq:
                     self._processed_seq = sent_max_seq
                     self._cond.notify_all()
@@ -445,15 +470,15 @@ class Table:
                         break
                     self._cond.wait(timeout=remaining)
 
-    def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem]]:
-        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent)``.
+    def _send(self, items: list[_PendingItem]) -> tuple[int, list[_PendingItem], int]:
+        """Send ``items`` via the flusher. Returns ``(max_sent_seq, unsent, dropped)``.
 
         Builds the entire batch's RecordBatch in one pass on the bg thread,
         amortizing Arrow construction across the whole queue rather than
         per-row at write time.
         """
         if not items:
-            return 0, []
+            return 0, [], 0
         rows = [item.payload for item in items]
         try:
             self._ensure_registered()
@@ -472,9 +497,9 @@ class Table:
             if not retryable:
                 # Non-retryable failures drop the batch; rebuffering would
                 # back up the queue indefinitely.
-                return items[-1].seq, []
-            return 0, items
-        return items[-1].seq, []
+                return items[-1].seq, [], len(items)
+            return 0, items, 0
+        return items[-1].seq, [], 0
 
     def _ensure_registered(self) -> None:
         """Register the namespace on first send, adopting its effective schema.
@@ -644,7 +669,8 @@ class LogClient:
         return schema_from_proto(response.schema)
 
     def flush(self, timeout: float | None = None) -> FlushResult:
-        """Flush the ``log`` namespace's Table, if any."""
+        """Flush the ``log`` namespace's Table, if any. Tables from
+        :meth:`get_table` are flushed through their own handles."""
         table = self._tables.get(LOG_NAMESPACE)
         if table is None:
             return FlushResult.SUCCEEDED

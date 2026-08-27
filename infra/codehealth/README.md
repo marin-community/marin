@@ -73,10 +73,9 @@ which IAP registers as a programmatic client; that identity must hold
 
 ## Verifying a write landed
 
-`Table.flush` reports that the client queue drained. The server can still reject
-the batch: a schema mismatch or a non-retryable send is logged by the flush
-thread and the rows are dropped. Append through `review_tables.append_rows`,
-which compares the namespace row count across the write and raises.
+`Table.flush` returns `FlushResult.SUCCEEDED` only when the rows reached the
+server; `DROPPED` means the server refused the batch or the client buffer
+overflowed. `review_tables.append_rows` raises on anything but `SUCCEEDED`.
 
 Every row type must declare a `key_column`. With none declared the server looks
 for a column named `timestamp_ms`; none of these have one, so registration

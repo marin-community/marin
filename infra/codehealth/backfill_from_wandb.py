@@ -244,8 +244,8 @@ def main(
             if not rows:
                 continue
             namespace, row_type, _convert = TABLES[key]
-            total_rows = append_rows(client, namespace, row_type, rows, flush_timeout=FLUSH_TIMEOUT)
-            logger.info("Wrote %d rows to %s (%d total)", len(rows), namespace, total_rows)
+            append_rows(client, namespace, row_type, rows, flush_timeout=FLUSH_TIMEOUT)
+            logger.info("Wrote %d rows to %s", len(rows), namespace)
     logger.info("Backfill complete: %d rows.", total)
 
 

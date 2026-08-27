@@ -185,33 +185,20 @@ def append_rows(
     *,
     flush_timeout: float = DEFAULT_FLUSH_TIMEOUT,
 ) -> int:
-    """Append ``rows`` and confirm the server stored them.
-
-    ``Table.flush`` reports only that the client queue drained, so this
-    compares the namespace row count across the write. Concurrent writers can
-    only inflate the delta, making the check a floor.
+    """Append ``rows``, raising unless the server recorded them.
 
     Returns:
-        The namespace row count after the write.
+        The number of rows written.
 
     Raises:
-        RuntimeError: the flush timed out, the namespace was never registered,
-            or fewer rows landed than were written.
+        RuntimeError: the rows were dropped or the flush did not drain in time.
     """
     if not rows:
-        return row_count(client, namespace) or 0
-
-    before = row_count(client, namespace) or 0
+        return 0
     table = client.get_table(namespace, row_type, storage_policy=STORAGE_POLICY)
     for start in range(0, len(rows), WRITE_CHUNK):
         table.write(rows[start : start + WRITE_CHUNK])
         result = table.flush(timeout=flush_timeout)
         if result is not FlushResult.SUCCEEDED:
-            raise RuntimeError(f"{namespace}: flush did not complete within {flush_timeout:.0f}s: {result}")
-
-    after = row_count(client, namespace)
-    if after is None:
-        raise RuntimeError(f"{namespace}: not registered after writing {len(rows)} rows; the server rejected the schema")
-    if after - before < len(rows):
-        raise RuntimeError(f"{namespace}: wrote {len(rows)} rows but only {after - before} landed ({before} -> {after})")
-    return after
+            raise RuntimeError(f"{namespace}: {len(rows)} rows were not recorded ({result})")
+    return len(rows)
