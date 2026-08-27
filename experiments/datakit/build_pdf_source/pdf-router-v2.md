@@ -41,7 +41,8 @@ reading.
 transcription of those same pages, blinded and order-randomized per document. A judge sees
 "Extraction A" and "Extraction B" against the page image and says which reproduces it better.
 `quality/judge_preference_set.py` buys the verdicts and writes one column: `escalate`, true where the
-judge preferred the VLM.
+judge preferred the VLM. Both are campaign-only and live on `mark/pdf_processing`; see
+[Reproducing](#reproducing).
 
 Three properties of the draw and one of the verdict are worth stating.
 
@@ -333,6 +334,17 @@ the PDF router.
 
 ## Reproducing
 
+**The four modules below are not in this tree.** They produced the shipped booster and then stayed
+with the campaign, on `mark/pdf_processing` under `experiments/datakit/build_pdf_source/quality/`,
+along with `fit_route_v2.py` which the last of them calls. What ships instead is the booster and its
+JSON sidecar, which record the threshold, the feature contract and the operating point -- everything
+the pipeline needs to route, and everything a reader needs to check what it was calibrated against.
+Refitting is a campaign activity, not a pipeline step, so check that branch out to run any of this:
+
+```bash
+git checkout mark/pdf_processing
+```
+
 ```bash
 # Package the blinded two-route packets over the 100k oracle sample.
 uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \
@@ -362,4 +374,6 @@ uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \
 
 `quality/route_v2_features.py` holds the feature contract and the cost model; every group's price is
 declared there, so replacing the PyMuPDF pass with a cheaper producer is an edit to one table rather
-than to the router.
+than to the router. It is the one module of this chain that does ship, because `classify.py` reads
+the contract from it at runtime to check the booster it loaded was fit on the columns being fed to
+it.
