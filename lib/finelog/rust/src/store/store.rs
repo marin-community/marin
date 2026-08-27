@@ -23,7 +23,10 @@ use clap::ValueEnum;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for, PolicyRegistry};
+use crate::policies::{
+    physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
+    storage_policy_for, PolicyRegistry,
+};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -150,6 +153,9 @@ pub struct Store {
     mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
+    /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
+    /// Concurrent first registrations must not build and displace separate engines.
+    namespace_registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
     /// side across the full DataFusion scan, because `query_providers` snapshots
     /// segment PATHS and DataFusion opens those parquet files LAZILY during
@@ -274,6 +280,7 @@ impl Store {
             mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
+            namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
@@ -534,6 +541,15 @@ impl Store {
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
         let stored = stored_form(schema);
+        let registration_lock = {
+            let mut locks = self.namespace_registration_locks.lock().unwrap();
+            Arc::clone(
+                locks
+                    .entry(name.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _registration_guard = registration_lock.lock().unwrap();
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -623,9 +639,27 @@ impl Store {
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        self.write_routed_batch(
-            IngestionBatchSource::Stored(name),
-            batch,
+        let routed = self
+            .policies
+            .route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
+        for partition in &routed {
+            let namespace = &partition.destination.logical_namespace;
+            match self.require_engine(namespace) {
+                Ok(_) => {}
+                Err(StatsError::NamespaceNotFound(_)) => {
+                    let schema = schema_for_namespace(namespace).ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "no server-owned schema is registered for {namespace:?}"
+                        ))
+                    })?;
+                    self.register_managed_table(namespace, schema, storage_policy_for(namespace)?)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.append_routed_batches(
+            batch.num_rows() as i64,
+            routed,
             Some(origin_cluster),
             BatchAlignment::ForwardCompatible,
         )
