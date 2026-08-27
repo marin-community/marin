@@ -42,3 +42,16 @@ def test_lower_lr_optimizer_scales_the_matched_july_peak():
     assert optimizer.learning_rate == pytest.approx(0.0115098911435345 * 0.32, rel=1e-12)
     assert optimizer.lr_schedule == "constant"
     assert optimizer.warmup == 0.01
+
+
+def test_lower_lr_sweep_selects_exact_experiment_ids():
+    experiment_ids = ("AUG-LRC-LOW-006", "AUG-LRC-LOW-007", "AUG-LRC-LOW-021")
+
+    selected = select_d512_lower_lr_points(experiment_ids=experiment_ids)
+
+    assert tuple(point.experiment_id for point in selected) == experiment_ids
+
+
+def test_lower_lr_sweep_rejects_unknown_experiment_ids():
+    with pytest.raises(ValueError, match="unknown d512 low-LR experiment ids"):
+        select_d512_lower_lr_points(experiment_ids=("AUG-LRC-LOW-999",))

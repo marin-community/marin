@@ -47,14 +47,21 @@ D512_NEW_LOW_LR_POINTS = tuple(
 
 def select_d512_lower_lr_points(
     *,
+    experiment_ids: Sequence[str] = (),
     token_multiples: Sequence[int] = (),
     lr_multipliers: Sequence[float] = (),
 ) -> tuple[D512ConstantLrPoint, ...]:
     """Select an exact subset of the new low-LR cells."""
+    known_experiment_ids = {point.experiment_id for point in D512_NEW_LOW_LR_POINTS}
+    unknown_experiment_ids = set(experiment_ids) - known_experiment_ids
+    if unknown_experiment_ids:
+        raise ValueError(f"unknown d512 low-LR experiment ids: {sorted(unknown_experiment_ids)}")
+
     selected = tuple(
         point
         for point in D512_NEW_LOW_LR_POINTS
-        if (not token_multiples or point.token_multiple in token_multiples)
+        if (not experiment_ids or point.experiment_id in experiment_ids)
+        and (not token_multiples or point.token_multiple in token_multiples)
         and (not lr_multipliers or point.lr_multiplier in lr_multipliers)
     )
     if not selected:
@@ -77,6 +84,13 @@ def build_d512_lower_lr_run(
 
 
 @click.command()
+@click.option(
+    "--experiment-id",
+    "experiment_ids",
+    multiple=True,
+    type=click.Choice([point.experiment_id for point in D512_NEW_LOW_LR_POINTS]),
+    help="Select exact cells by experiment ID. Omit to select by budget and LR filters.",
+)
 @click.option(
     "--token-multiple",
     "token_multiples",
@@ -105,6 +119,7 @@ def build_d512_lower_lr_run(
     help="Maximum TPU cells materialized concurrently by this parent.",
 )
 def main(
+    experiment_ids: tuple[str, ...],
     token_multiples: tuple[str, ...],
     lr_multipliers: tuple[str, ...],
     version: str,
@@ -112,6 +127,7 @@ def main(
 ) -> None:
     """Materialize the 21 new cells needed to bracket the constant-LR optimum."""
     points = select_d512_lower_lr_points(
+        experiment_ids=experiment_ids,
         token_multiples=tuple(int(value) for value in token_multiples),
         lr_multipliers=tuple(float(value) for value in lr_multipliers),
     )
