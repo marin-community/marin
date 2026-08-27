@@ -7,7 +7,7 @@ import functools
 import logging
 import math
 from collections.abc import Callable
-from typing import TypeAlias
+from typing import Protocol
 
 import jax
 import jax.numpy as jnp
@@ -41,13 +41,25 @@ RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
 )
 
-# An expert MLP takes both views of the receiver buffer's group sizes: the physical sizes,
-# which charge trailing padding to the last expert, and the active sizes, which count only
-# received rows. Which one a kernel needs depends on whether it covers the buffer or reads
-# segment boundaries.
-_ExpertMlp: TypeAlias = Callable[
-    [jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
-]
+
+class _ExpertMlp(Protocol):
+    """Runs the expert MLP over a receiver buffer laid out expert-major.
+
+    Implementations take both views of the buffer's group sizes: the physical sizes, which charge
+    trailing padding to the last expert, and the active sizes, which count only received rows.
+    Which one a kernel reads depends on whether it covers the whole buffer or works from segment
+    boundaries, so both are always passed and a kernel discards the one it does not use.
+    """
+
+    def __call__(
+        self,
+        x_dispatch: jax.Array,
+        moe_w13_local: jax.Array,
+        moe_w2_local: jax.Array,
+        physical_group_sizes: jax.Array,
+        active_group_sizes: jax.Array,
+        activation_fn: Callable[[jax.Array], jax.Array],
+    ) -> jax.Array: ...
 
 
 def _ragged_dot_expert_mlp(
