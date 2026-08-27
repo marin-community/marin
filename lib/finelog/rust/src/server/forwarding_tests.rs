@@ -29,6 +29,8 @@ use crate::proto::finelog::logging::LogServiceClient;
 
 const SOURCE_CLUSTER: &str = "cw-test";
 const TELEMETRY_ROW_BYTES: usize = 450;
+const UNSEEN_TELEMETRY_SERVICE: &str = "marinskyrl";
+const UNSEEN_TELEMETRY_NAMESPACE: &str = "telemetry_v1.marinskyrl";
 
 fn jwt_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
@@ -228,19 +230,8 @@ async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
         .unwrap();
 }
 
-async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
-    let register_store = Arc::clone(store);
-    tokio::task::spawn_blocking(move || {
-        register_store.register_table(
-            TELEMETRY_NAMESPACE,
-            telemetry_schema(),
-            StoragePolicy::default(),
-        )
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    let batch = RecordBatch::try_new(
+fn root_telemetry_batch(batch_id: &str, service: &str, name: &str) -> RecordBatch {
+    RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![
             Field::new("schema_version", DataType::Int32, false),
             Field::new("timestamp_ms", DataType::Int64, false),
@@ -257,14 +248,29 @@ async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
             Arc::new(arrow::array::Int64Array::from(vec![1])),
             Arc::new(StringArray::from(vec![batch_id])),
             Arc::new(arrow::array::Int64Array::from(vec![0])),
-            Arc::new(StringArray::from(vec!["marinskyrl"])),
+            Arc::new(StringArray::from(vec![service])),
             Arc::new(StringArray::from(vec!["gauge"])),
             Arc::new(StringArray::from(vec![name])),
             Arc::new(StringArray::from(vec!["{}"])),
             Arc::new(StringArray::from(vec!["{}"])),
         ],
     )
+    .unwrap()
+}
+
+async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
+    let register_store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        register_store.register_table(
+            TELEMETRY_NAMESPACE,
+            telemetry_schema(),
+            StoragePolicy::default(),
+        )
+    })
+    .await
+    .unwrap()
     .unwrap();
+    let batch = root_telemetry_batch(batch_id, UNSEEN_TELEMETRY_SERVICE, name);
     let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
     let (_, last_seq) = store.write_rows(TELEMETRY_NAMESPACE, &ipc, None).unwrap();
     store
@@ -688,33 +694,17 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
     .await
     .unwrap()
     .unwrap();
-    let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![
-            Field::new("schema_version", DataType::Int32, false),
-            Field::new("timestamp_ms", DataType::Int64, false),
-            Field::new("batch_id", DataType::Utf8, false),
-            Field::new("record_index", DataType::Int64, false),
-            Field::new("service", DataType::Utf8, false),
-            Field::new("kind", DataType::Utf8, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("resource_attributes_json", DataType::Utf8, false),
-            Field::new("attributes_json", DataType::Utf8, false),
-            Field::new("candidate", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1])),
-            Arc::new(arrow::array::Int64Array::from(vec![1])),
-            Arc::new(StringArray::from(vec!["batch"])),
-            Arc::new(arrow::array::Int64Array::from(vec![0])),
-            Arc::new(StringArray::from(vec!["service"])),
-            Arc::new(StringArray::from(vec!["gauge"])),
-            Arc::new(StringArray::from(vec!["accepted"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-            Arc::new(StringArray::from(vec![Some("ignored")])),
-        ],
-    )
-    .unwrap();
+    let batch = root_telemetry_batch("batch", "service", "accepted");
+    let mut fields: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    fields.push(Field::new("candidate", DataType::Utf8, true));
+    let mut columns = batch.columns().to_vec();
+    columns.push(Arc::new(StringArray::from(vec![Some("ignored")])));
+    let batch = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
     let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
     let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
     fx.source
@@ -743,7 +733,7 @@ async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
     fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
 
     assert_eq!(
-        hub_column(fx.target_store(), "telemetry_v1.marinskyrl", "name").await,
+        hub_column(fx.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await,
         vec![Some("queue_depth".to_string())]
     );
     assert_eq!(
@@ -781,7 +771,7 @@ async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
         fx_b.drain(PRIV_A, TELEMETRY_NAMESPACE)
     );
 
-    let mut names = hub_column(fx_a.target_store(), "telemetry_v1.marinskyrl", "name").await;
+    let mut names = hub_column(fx_a.target_store(), UNSEEN_TELEMETRY_NAMESPACE, "name").await;
     names.sort();
     assert_eq!(
         names,
