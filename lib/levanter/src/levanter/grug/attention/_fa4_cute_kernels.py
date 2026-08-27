@@ -1110,7 +1110,22 @@ def segmented_flash_attention_backward_launcher(
         *,
         softmax_scale: cutlass.Float32,
     ):
-        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+        preprocess(
+            out,
+            dout,
+            dpsum,
+            lse,
+            lse_log2,
+            dq_accum,
+            None,
+            None,
+            None,
+            None,
+            None,
+            softmax_scale,
+            None,
+            stream,
+        )
         if cutlass.const_expr(qhead_per_kvhead == 1):
             backward(
                 q,
@@ -1414,8 +1429,25 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
         dpsum: cute.Tensor,
         lse_log2: cute.Tensor,
         dq_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
     ):
-        preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+        preprocess(
+            out,
+            dout,
+            dpsum,
+            lse,
+            lse_log2,
+            dq_accum,
+            None,
+            None,
+            None,
+            None,
+            None,
+            softmax_scale,
+            None,
+            stream,
+        )
 
     return _launch_flash_attention_backward_sm90_preprocess
 
