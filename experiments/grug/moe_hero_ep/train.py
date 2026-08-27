@@ -144,7 +144,7 @@ def restore_template_from(state):
 
 
 def _apply_hero_ep_runtime_defaults(
-    *, inline_watch_enabled: bool, processes_per_task: int = 1, moe_implementation: str = ""
+    *, inline_watch_enabled: bool, moe_implementation: MoeImplementation | None, processes_per_task: int = 1
 ) -> None:
     env_defaults = dict(HERO_EP_RUNTIME_ENV)
     if processes_per_task > 1:
