@@ -210,7 +210,6 @@ def read_wandb_table(entity: str, project: str, run_id: str, key: str) -> list[d
 @click.command(help=__doc__)
 @click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to write to.")
 @click.option("--finelog-url", default=None, help="Connect directly to this Finelog URL instead of a deployment.")
-@click.option("--iap-audience", default=None, help="IAP client id for unattended auth.")
 @click.option("--entity", default=WANDB_ENTITY, show_default=True)
 @click.option("--project", default=WANDB_PROJECT, show_default=True)
 @click.option("--run-id", default=WANDB_RUN_ID, show_default=True)
@@ -218,7 +217,6 @@ def read_wandb_table(entity: str, project: str, run_id: str, key: str) -> list[d
 def main(
     deployment: str,
     finelog_url: str | None,
-    iap_audience: str | None,
     entity: str,
     project: str,
     run_id: str,
@@ -243,7 +241,7 @@ def main(
         logger.info("Dry run: %d rows converted, nothing written.", total)
         return
 
-    with open_tables_client(deployment, finelog_url, iap_audience) as client:
+    with open_tables_client(deployment, finelog_url) as client:
         for key, rows in converted.items():
             if not rows:
                 continue

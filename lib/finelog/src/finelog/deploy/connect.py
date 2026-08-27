@@ -8,20 +8,19 @@ Iris IAP proxy when the config sets ``client_url``, otherwise an SSH or
 Kubernetes tunnel to the server's port. Callers name a deployment
 (``marin``, ``cw-us-east-08a``) rather than assembling a URL.
 
-Two IAP identities are supported. A ``client_url`` carrying an ``audience``
-query parameter self-provisions the token from service-account credentials,
-which is the unattended path used by CI. Without one, the token comes from
-the desktop OAuth refresh token cached by ``iris --cluster <name> login``.
+Both IAP identities work without configuration: the desktop OAuth refresh
+token cached by ``iris --cluster <name> login``, and, when no login is cached,
+an ID token minted from ambient service-account credentials -- the unattended
+path used by CI. :func:`rigging.credentials.iap_provider_for` picks between
+them.
 """
 
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from rigging.auth import IapLoginRequired
-from rigging.connect import Auth, IapAuth, NoAuth, connect, disconnect
-from rigging.credentials import iap_edge_provider
+from rigging.connect import IapAuth, connect, disconnect
+from rigging.credentials import iap_provider_for
 from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
@@ -36,27 +35,6 @@ DEFAULT_REQUEST_TIMEOUT = 15.0
 DEFAULT_TUNNEL_TIMEOUT = 60.0
 
 
-def _with_audience(client_url: str, audience: str | None) -> str:
-    """Attach ``audience`` to an IAP transport URL that does not already carry one.
-
-    An ``audience`` switches the scheme from "the caller supplies a desktop
-    token" to "mint a service-account token for this IAP client id".
-    """
-    if not audience:
-        return client_url
-    parts = urlsplit(client_url)
-    query = dict(parse_qsl(parts.query))
-    if "audience" in query:
-        return client_url
-    query["audience"] = audience
-    return urlunsplit(parts._replace(query=urlencode(query)))
-
-
-def _has_audience(client_url: str) -> bool:
-    """True when the transport URL self-provisions its own IAP token."""
-    return "audience" in dict(parse_qsl(urlsplit(client_url).query))
-
-
 @contextmanager
 def open_client(
     cfg: FinelogConfig,
@@ -64,18 +42,8 @@ def open_client(
     *,
     tunnel_timeout: float = DEFAULT_TUNNEL_TIMEOUT,
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
-    iap_audience: str | None = None,
 ) -> Generator[LogClient, None, None]:
-    """Yield a LogClient for ``cfg``, closing it and its transport on exit.
-
-    ``iap_audience`` names the IAP client id to mint a service-account token
-    for, which is how an unattended caller (CI, a cron) authenticates without
-    the desktop OAuth refresh token.
-
-    Raises:
-        IapLoginRequired: the deployment is IAP-fronted, expects a desktop
-            token, and no cached credentials exist for ``name``.
-    """
+    """Yield a LogClient for ``cfg``, closing it and its transport on exit."""
     timeout_ms = int(request_timeout * 1000)
     if not cfg.client_url:
         target = tunnel_target_for(cfg)
@@ -88,19 +56,12 @@ def open_client(
                 client.close()
         return
 
-    # An audience makes the scheme mint its own service-account token; the
-    # desktop path has to supply the cached refresh token as edge auth.
-    client_url = _with_audience(cfg.client_url, iap_audience)
-    auth: Auth = NoAuth()
-    if not _has_audience(client_url):
-        provider = iap_edge_provider(name)
-        if provider is None:
-            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
-        auth = IapAuth(provider)
+    # `client_url` carries no audience, so the scheme leaves edge auth to us and
+    # the credential store decides between the human and machine identities.
     client = connect(
-        client_url,
+        cfg.client_url,
         lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors, timeout_ms=timeout_ms),
-        auth=auth,
+        auth=IapAuth(iap_provider_for(name)),
         connect_timeout=tunnel_timeout,
     )
     try:
@@ -116,7 +77,6 @@ def open_named_client(
     *,
     tunnel_timeout: float = DEFAULT_TUNNEL_TIMEOUT,
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
-    iap_audience: str | None = None,
 ) -> Generator[LogClient, None, None]:
     """Load the config for deployment ``name`` and yield a client for it."""
     with open_client(
@@ -124,6 +84,5 @@ def open_named_client(
         name,
         tunnel_timeout=tunnel_timeout,
         request_timeout=request_timeout,
-        iap_audience=iap_audience,
     ) as client:
         yield client

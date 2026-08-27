@@ -24,7 +24,6 @@ declared timestamp.
 """
 
 import datetime as dt
-import os
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -150,30 +149,18 @@ class PrReviewOutcome:
     overlap_count: int | None
 
 
-# CI and cron callers have no desktop OAuth token; they name the IAP client id
-# here so the transport mints a service-account token instead.
-IAP_AUDIENCE_ENV = "MARIN_FINELOG_IAP_AUDIENCE"
-
-
 @contextmanager
-def open_tables_client(
-    deployment: str,
-    finelog_url: str | None = None,
-    iap_audience: str | None = None,
-) -> Iterator[LogClient]:
+def open_tables_client(deployment: str, finelog_url: str | None = None) -> Iterator[LogClient]:
     """Yield a client for these tables.
 
     ``finelog_url`` bypasses deployment resolution and connects to an address
-    directly, which is how tests reach an embedded server. ``iap_audience``
-    defaults to ``$MARIN_FINELOG_IAP_AUDIENCE`` so an unattended caller only
-    has to set the environment.
+    directly, which is how tests reach an embedded server.
     """
     if finelog_url:
         with closing(LogClient.connect(finelog_url)) as client:
             yield client
         return
-    audience = iap_audience or os.environ.get(IAP_AUDIENCE_ENV) or None
-    with open_named_client(deployment, iap_audience=audience) as client:
+    with open_named_client(deployment) as client:
         yield client
 
 

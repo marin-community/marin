@@ -50,7 +50,6 @@ from finelog.client import LogClient
 from review_tables import (
     DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
-    IAP_AUDIENCE_ENV,
     INVOCATIONS_NAMESPACE,
     Finding,
     Invocation,
@@ -180,18 +179,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT, help="Finelog deployment to write to.")
     parser.add_argument("--finelog-url", default=None, help="Connect to this address instead of a deployment.")
-    parser.add_argument(
-        "--iap-audience",
-        default=None,
-        help=f"IAP client id for unattended auth (default: ${IAP_AUDIENCE_ENV}).",
-    )
     args = parser.parse_args(argv)
 
     if os.environ.get("MARIN_REVIEW_STATS", "1") == "0":
         return 0
 
     event = fill_defaults(json.load(sys.stdin))
-    with open_tables_client(args.deployment, args.finelog_url, args.iap_audience) as client:
+    with open_tables_client(args.deployment, args.finelog_url) as client:
         written = write_event(client, event)
     print(f"recorded {written} row(s) for invocation {event['invocation_id']}", file=sys.stderr)
     return 0

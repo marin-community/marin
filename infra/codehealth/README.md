@@ -64,10 +64,12 @@ logged-in `claude` CLI for the classifier.
 
 ## Access
 
-Finelog sits behind Iris IAP. Interactively, `uv run iris --cluster marin login`
-caches the token these tools use. Unattended callers (CI, cron) have no desktop
-token and instead set `MARIN_FINELOG_IAP_AUDIENCE` to the IAP client id, which
-mints a service-account token from ambient Google credentials.
+Finelog sits behind Iris IAP, and `rigging.credentials.iap_provider_for` resolves
+the token with no configuration on either path. Interactively, `uv run iris
+--cluster marin login` caches a desktop OAuth token. With no cached login the
+token is minted from ambient Google credentials for the Marin desktop client id,
+which IAP registers as a programmatic client; that identity must hold
+`roles/iap.httpsResourceAccessor` on the Iris backend service.
 
 ## Verifying a write landed
 

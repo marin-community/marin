@@ -20,16 +20,21 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finelog.client.log_client import NamespaceInfo
+from finelog.deploy import connect as deploy_connect
 from finelog.deploy.cli import (
     _list_namespace_dirs,
     _list_namespace_segments,
     _register_namespace_views,
     cli,
 )
+from finelog.deploy.config import load_finelog_config
 from finelog.errors import SchemaValidationError
 from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.schema import Column, Schema
+from rigging import credentials as rigging_credentials
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapServiceAccountTokenProvider
+from rigging.connect import IapAuth
 
 
 def _write_segment(path: Path, level: int, seq: int, rows: list[dict[str, object]]) -> Path:
@@ -73,6 +78,9 @@ class _FakeLogClient:
     def get_table_schema(self, namespace: str) -> Schema:
         assert namespace == "iris.task"
         return self.list_namespaces()[0].schema
+
+    def close(self) -> None:
+        pass
 
 
 @contextmanager
@@ -236,3 +244,29 @@ def test_register_namespace_views_empty_filter_skips_view(tmp_path: Path) -> Non
         )
     with pytest.raises(duckdb.CatalogException):
         conn.execute("SELECT * FROM log").fetchall()
+
+
+def test_iap_client_authenticates_without_a_cached_login(monkeypatch) -> None:
+    """An IAP-fronted deployment attaches an edge token with no cached desktop
+    login and no configured audience — the unattended CI path. This used to
+    raise IapLoginRequired unless the caller named an IAP audience itself."""
+    monkeypatch.setattr(rigging_credentials, "load_credentials", lambda cluster: None)
+    captured: dict[str, object] = {}
+
+    def _fake_connect(url, factory, *, auth, connect_timeout):
+        captured["url"] = url
+        captured["auth"] = auth
+        return _FakeLogClient()
+
+    monkeypatch.setattr(deploy_connect, "connect", _fake_connect)
+    monkeypatch.setattr(deploy_connect, "disconnect", lambda client: None)
+
+    cfg = load_finelog_config("marin")
+    with deploy_connect.open_client(cfg, "marin"):
+        pass
+
+    assert captured["url"] == cfg.client_url
+    auth = captured["auth"]
+    assert isinstance(auth, IapAuth)
+    assert isinstance(auth._provider, IapServiceAccountTokenProvider)
+    assert auth._provider._audience == MARIN_DESKTOP_OAUTH_CLIENT.client_id
