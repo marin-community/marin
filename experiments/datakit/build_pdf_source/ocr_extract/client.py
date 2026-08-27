@@ -9,6 +9,7 @@ for is not under-driving the fleet -- every default in this path that bounds con
 raised, because each one silently caps throughput rather than failing.
 """
 
+import base64
 import logging
 from dataclasses import dataclass
 from functools import cache
@@ -155,7 +156,9 @@ def ocr_page(endpoint: OcrEndpoint, connections: int, page: RenderedPage) -> Pag
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {"url": page.data_uri},
+                        # The page arrives as PNG bytes -- it crossed a pipe from the rasteriser's
+                        # child process -- and this is the one place that wants it base64'd.
+                        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(page.png).decode()}"},
                         # Restate the budget the page was rendered at so the server's own
                         # smart_resize cannot re-size it: the model's ``preprocessor_config``
                         # defaults are unrelated to our budget, and a lower server-side cap would

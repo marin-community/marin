@@ -19,7 +19,11 @@ page rectangles alone, because the router both scores on it and uses it to choos
 This module is where the rasteriser lives, and it is deliberately the only place it lives: the
 router reads its geometry through :func:`render_geometry` and the OCR route reads its pixels through
 :func:`iter_rendered_pages`, so the engine behind both moved at once and nothing else in the
-pipeline changed.
+pipeline changed. Neither route calls into it from its map task. Both run it in a child process they
+are willing to lose -- the geometry pass through
+:mod:`~experiments.datakit.build_pdf_source.extract_inspector`'s worker, the feed through
+:mod:`~experiments.datakit.build_pdf_source.ocr_extract.render_worker` -- because a native abort is a
+signal no ``except`` catches and Zephyr answers a dead task by restarting its shard from row zero.
 
 That engine is PDFium, through ``pypdfium2``, and the reason is licensing: PyMuPDF is AGPL and this
 was its last runtime role once the router pass and the Docling route were removed. PDFium is
@@ -44,7 +48,6 @@ module-scope import here would kill the driver before it submitted anything. Eve
 functions is arithmetic and is always importable.
 """
 
-import base64
 import io
 import logging
 import math
@@ -122,9 +125,16 @@ class RenderOptions:
 
 @dataclass(frozen=True)
 class RenderedPage:
-    """One page, rendered and encoded for the model."""
+    """One page, rendered and encoded for the model.
 
-    data_uri: str
+    The PNG is carried as bytes rather than as the base64 data URI the endpoint wants, because the
+    page crosses a pipe between :mod:`~...ocr_extract.render_worker`'s child and the sender task on
+    its way there. Base64 is a third larger and cannot travel inside a JSON header without an escape
+    scan at each end, so it is applied once, in :func:`~...ocr_extract.client.ocr_page`, which is the
+    only place the wire format asks for it.
+    """
+
+    png: bytes
     page_index: int
     pixels: int
     dpi: float
@@ -303,12 +313,17 @@ def encode_png(samples: "np.ndarray") -> bytes:  # noqa: F821
 
 
 def iter_rendered_pages(document: "pdfium.PdfDocument", options: RenderOptions) -> Iterator[RenderedPage]:  # noqa: F821
-    """Render a document's pages one at a time, encoded as PNG data URIs.
+    """Render a document's pages one at a time, encoded as PNG.
 
-    Lazy by design. A document is not bounded in length and an encoded page is well over a megabyte,
-    so rendering a whole document up front would put a multi-gigabyte payload in memory for the tail
-    of the page distribution. Yielding pages lets the caller hold only what is in flight, and each
-    page is closed as soon as it is encoded so a thousand-page document does not accumulate them.
+    Lazy by design, and the laziness serves two things at once. A document is not bounded in length
+    and an encoded page is well over a megabyte, so rendering a whole document up front would put a
+    multi-gigabyte payload in memory for the tail of the page distribution. And the OCR route
+    submits each page to the GPU fleet as it is rendered, so the render of page N+1 overlaps the
+    inference on page N; a batched render would idle the fleet for the length of every document.
+    Both survive the move out of process only because
+    :mod:`~experiments.datakit.build_pdf_source.ocr_extract.render_worker` streams this generator
+    down its pipe a page at a time rather than collecting it. Each page is closed as soon as it is
+    encoded, so a thousand-page document does not accumulate them.
 
     Each page is rendered once, straight to its final resolution (see :func:`rasterise_page`). A
     page that PDFium cannot render is skipped -- crawl PDFs fail arbitrarily deep inside any
@@ -332,7 +347,7 @@ def iter_rendered_pages(document: "pdfium.PdfDocument", options: RenderOptions) 
                 page.close()
         pixels = height * width
         yield RenderedPage(
-            data_uri=f"data:image/png;base64,{base64.b64encode(png).decode()}",
+            png=png,
             page_index=page_index,
             pixels=pixels,
             dpi=effective_dpi(pixels, page_width, page_height),

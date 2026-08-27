@@ -21,6 +21,16 @@ share one cgroup-throttled CPU on the Grace-heavy worker fleet -- so a fleet is 
 one-CPU sender tasks per GPU (see the sizing block below for why the naive per-core render rate
 overstates this ~17x).
 
+**Nothing opens a PDF in the map task.** The rasteriser runs in a child process the task is willing
+to lose (:mod:`~experiments.datakit.build_pdf_source.ocr_extract.render_worker`), streaming pages
+back one at a time so the render/inference overlap and the in-flight bound both survive the move. A
+native abort is a signal no ``except`` catches, and Zephyr restarts a dead task's shard from row
+zero three times with no poison-pill detection, so in process one such document fails the stage
+permanently. PDFium has recorded none in 3,577,944 renders, so this is insurance against a bound
+rather than against an observation -- and it is cheap insurance: streaming a 458 KiB page across
+the pipe costs 0.055 ms of CPU on the Grace fleet and 0.147 on x86, against a page that costs the
+feed ~50 ms.
+
 What the senders *must* get right is keeping the fleet full. Each task overlaps rendering with
 waiting rather than alternating between them, and :func:`sender_fleet_size` provisions enough
 tasks that their combined offered rate meets the engines' throughput with the fleet's in-flight
@@ -76,11 +86,11 @@ from experiments.datakit.build_pdf_source.ocr_extract.client import (
     ocr_page,
 )
 from experiments.datakit.build_pdf_source.ocr_extract.fleet import MODEL, build_inference_config
-from experiments.datakit.build_pdf_source.ocr_extract.render import (
-    RAISED_MAX_VISUAL_TOKENS,
-    RenderOptions,
-    iter_rendered_pages,
-    open_pdf,
+from experiments.datakit.build_pdf_source.ocr_extract.render import RAISED_MAX_VISUAL_TOKENS, RenderOptions
+from experiments.datakit.build_pdf_source.ocr_extract.render_worker import (
+    PAGE_DEADLINE,
+    RenderFailure,
+    RenderWorker,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,10 +112,11 @@ _COUNTER_PREFIX = "focus_crawl_pdf_ocr"
 class OcrStatus(StrEnum):
     """Whether a document was OCR'd whole.
 
-    ``PARTIAL`` covers every way a page can come back short: MuPDF declining to render it, the page
-    budget truncating a very long document, the request failing after its retries, the model hitting
-    its token cap part-way down the page, or the model falling into a repetition loop whose output
-    was cut back to the transcription in front of it. The per-page counts in the record say which.
+    ``PARTIAL`` covers every way a page can come back short: PDFium declining to render it, the
+    rasteriser's child dying or going silent part-way down the document, the page budget truncating
+    a very long document, the request failing after its retries, the model hitting its token cap
+    part-way down the page, or the model falling into a repetition loop whose output was cut back to
+    the transcription in front of it. The per-page counts in the record say which.
 
     The last two are the ones worth watching, because they are the only ones that yield text that
     looks complete. A page dropped for any other reason is empty and obvious; a page cut off at
@@ -146,18 +157,27 @@ OUTPUT_SCHEMA = pa.schema([*PDF_DOCUMENT_FIELDS, *OCR_FIELDS])
 
 # Sender sizing, from the measured economics of a task rather than from either intuition that
 # preceded them. A task delivers about one page per second -- not the 13.2 a lone unthrottled
-# render thread manages -- because the render loop, the ~2 MB JSON/base64 encode per request, and
+# render thread manages -- because the rasteriser, the ~2 MB JSON/base64 encode per request, and
 # every waking request thread all contend for one cgroup-throttled CPU. Threads make that worse,
 # not better (128 threads measured 0.7 pages/s against 64's 1.5 on x86), so throughput scales by
-# adding TASKS -- each its own process; MuPDF holds the GIL through a render, so threads cannot
-# scale rendering at all. 32 threads is ample cover for the ~17 requests a task actually keeps in
-# flight (its rate times the ~21s page latency), and it keeps the whole sender fleet's *maximum*
-# offered in-flight under the proxy's pending cap -- a rate-sized fleet at 64 threads could
-# collectively exceed it when queueing inflates latency, and past the cap the proxy sheds load as
-# 429s that consume page-request retries.
+# adding TASKS, each with a CPU allocation of its own.
+#
+# The GIL is not what forces that. pypdfium2 reaches PDFium through ctypes, which releases the GIL
+# around every native call, where MuPDF held it through a render -- but the render loop runs in a
+# child process now, so this interpreter is not in it either way, and PDFium carries no internal
+# locking for threads to share a document through. What does not scale is the CPU: the child, the
+# encode and the request threads are all inside the task's one core, and threads only divide it
+# more finely.
+#
+# 32 threads is ample cover for the ~17 requests a task actually keeps in flight (its rate times
+# the ~21s page latency), and it keeps the whole sender fleet's *maximum* offered in-flight under
+# the proxy's pending cap -- a rate-sized fleet at 64 threads could collectively exceed it when
+# queueing inflates latency, and past the cap the proxy sheds load as 429s that consume page-request
+# retries.
 _REQUEST_THREADS = 32
 # How many rendered pages a task may hold. Twice the thread count keeps every thread fed while
-# bounding encoded-page memory to roughly 90 MB per task.
+# bounding encoded-page memory to roughly 90 MB per task. It is also the only bound the child needs:
+# it blocks writing a page nothing has read, so it runs at most one page ahead of this queue.
 _PAGES_IN_FLIGHT = 2 * _REQUEST_THREADS
 
 # The two rates that set the task:instance ratio. Engine-side throughput at the operating point is
@@ -229,6 +249,18 @@ def _request_pool(threads: int) -> ThreadPoolExecutor:
     endpoint's keep-alive connections along with it.
     """
     return ThreadPoolExecutor(max_workers=threads, thread_name_prefix="ocr-page")
+
+
+@cache
+def render_worker(deadline: float) -> RenderWorker:
+    """One rasteriser child per sender process, shared by every shard the process runs.
+
+    Never shut down: it lives as long as the process. Starting one costs an interpreter and
+    PDFium's load, which is why it is not per document against a page that costs tens of
+    milliseconds. It replaces itself when a document kills it, so a long-lived handle stays valid,
+    and a child orphaned by a dying parent reads EOF on its stdin and exits on its own.
+    """
+    return RenderWorker(deadline)
 
 
 @dataclass
@@ -371,6 +403,17 @@ class _Document:
         return "; ".join(parts) or None
 
 
+def _count_render_failure(reason: str) -> None:
+    """One document lost to the rasteriser, and why.
+
+    A run that loses documents has to say how in its counters: a PDF PDFium refuses, a child that
+    died on it and a child that stopped answering are three different problems, and on a run whose
+    logs cannot be retrieved the counters are the only diagnosis.
+    """
+    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/render_failed", 1)
+    counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/render_failed/{reason}", 1)
+
+
 def ocr_batch(
     batch: pa.RecordBatch,
     keys: frozenset[tuple[str, int]] | None,
@@ -383,12 +426,13 @@ def ocr_batch(
 ) -> Iterator[dict]:
     """OCR the OCR-routed documents in one Parquet row group.
 
-    Rendering and waiting are overlapped rather than alternated. A page is submitted the moment it
-    is rendered, and the next document starts rendering while the previous one is still in flight,
-    so the endpoint stays fed by a task that is mostly idle. The only thing that blocks is the
-    in-flight bound: at :data:`_PAGES_IN_FLIGHT` outstanding pages the task waits for the oldest one
-    before submitting another, which is what keeps encoded pages -- over a megabyte each -- from
-    accumulating without limit on a long document.
+    Rendering and waiting are overlapped rather than alternated. A page is submitted the moment the
+    rasteriser's child streams it back, and the next document starts rendering while the previous
+    one is still in flight, so the endpoint stays fed by a task that is mostly idle. The only thing
+    that blocks is the in-flight bound: at :data:`_PAGES_IN_FLIGHT` outstanding pages the task waits
+    for the oldest one before submitting another, which is what keeps encoded pages -- over a
+    megabyte each -- from accumulating without limit on a long document, and what stops the child
+    running ahead of the fleet.
 
     Documents are emitted in the order they were read, which they reach naturally: pages resolve in
     submission order, so a document becomes complete only once every document before it has.
@@ -405,6 +449,7 @@ def ocr_batch(
     """
     raised_endpoint = replace(endpoint, max_visual_tokens=raised_render_options.max_visual_tokens)
     pool = _request_pool(_REQUEST_THREADS)
+    worker = render_worker(PAGE_DEADLINE)
     inflight: deque[tuple[_Document, Future[PageOcr]]] = deque()
     documents: deque[_Document] = deque()
 
@@ -431,11 +476,11 @@ def ocr_batch(
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/raised_render_budget", 1)
 
         try:
-            with open_pdf(row["pdf"]) as pdf:
-                document = _Document(row=row, declared_pages=len(pdf))
+            with worker.render(row["pdf"], options) as stream:
+                document = _Document(row=row, declared_pages=stream.declared_pages)
                 documents.append(document)
                 try:
-                    for page in iter_rendered_pages(pdf, options):
+                    for page in stream:
                         inflight.append((document, pool.submit(ocr_page, page_endpoint, _REQUEST_THREADS, page)))
                         document.submitted += 1
                         document.dpis.append(page.dpi)
@@ -446,11 +491,15 @@ def ocr_batch(
                     # Whatever went wrong mid-render, the document has to be closed or it would sit
                     # in the queue forever and take every document behind it with it.
                     document.closed = True
+        except RenderFailure as error:
+            # A PDF library fails arbitrarily deep on adversarial input, and out of process it can
+            # fail by dying or by going silent as well as by raising. All three are data, not a
+            # pipeline failure: the child has already been replaced, the pages it did stream are
+            # kept, and the reason is counted under the name the failure carries.
+            _count_render_failure(error.reason)
+            logger.warning("Could not render %s (%s): %s", row["url"], error.reason, error)
         except Exception as error:
-            # MuPDF fails arbitrarily deep on adversarial input. A PDF we cannot open is data, not
-            # a pipeline failure; pages already rendered from it are kept.
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/render_failed", 1)
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/render_failed/{type(error).__name__}", 1)
+            _count_render_failure(type(error).__name__)
             logger.warning("Could not render %s: %s", row["url"], error)
         yield from emit_ready()
 

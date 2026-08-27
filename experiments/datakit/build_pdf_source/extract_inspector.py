@@ -86,6 +86,7 @@ from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
+from experiments.datakit.build_pdf_source.child_framing import READ_CHUNK, read_frame, write_frame
 from experiments.datakit.build_pdf_source.common import FOCUS_CRAWL, PdfSourceData
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
 from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS, SOURCE_COLUMNS, keep_all
@@ -122,7 +123,6 @@ OP_GEOMETRY = "geometry"
 # library that claims single-digit milliseconds per page: a document still running after this long
 # is a hang for any practical purpose.
 CALL_DEADLINE = 30.0
-_READ_CHUNK = 1 << 16
 
 RENDER_OPTIONS = RenderOptions()
 
@@ -338,17 +338,6 @@ def _extract_signals(result) -> dict:
     }
 
 
-def read_exactly(stream, size: int) -> bytes:
-    """Read exactly ``size`` bytes, or raise. Pipe reads are short whenever the writer is."""
-    buffer = bytearray()
-    while len(buffer) < size:
-        chunk = stream.read(min(_READ_CHUNK, size - len(buffer)))
-        if not chunk:
-            raise EOFError(f"stream closed after {len(buffer)} of {size} bytes")
-        buffer.extend(chunk)
-    return bytes(buffer)
-
-
 def _extract_reply(payload: bytes) -> dict:
     """Both pdf-inspector calls against one document, each allowed to fail on its own.
 
@@ -401,13 +390,11 @@ def worker_main() -> None:
     handlers = {OP_EXTRACT: _extract_reply, OP_GEOMETRY: _geometry_reply}
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     while True:
-        header = stdin.readline()
-        if not header:
+        frame = read_frame(stdin)
+        if frame is None:
             return
-        request = json.loads(header)
-        payload = read_exactly(stdin, request["size"])
-        stdout.write(json.dumps(handlers[request["op"]](payload)).encode() + b"\n")
-        stdout.flush()
+        request, payload = frame
+        write_frame(stdout, handlers[request["op"]](payload))
 
 
 class InspectorWorker:
@@ -464,7 +451,7 @@ class InspectorWorker:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not self._selector.select(remaining):
                 return None
-            chunk = os.read(self._process.stdout.fileno(), _READ_CHUNK)
+            chunk = os.read(self._process.stdout.fileno(), READ_CHUNK)
             if not chunk:
                 return None
             buffer.extend(chunk)
@@ -480,9 +467,7 @@ class InspectorWorker:
         """
         deadline = time.monotonic() + self._deadline
         try:
-            self._process.stdin.write(json.dumps({"op": op, "size": len(pdf)}).encode() + b"\n")
-            self._process.stdin.write(pdf)
-            self._process.stdin.flush()
+            write_frame(self._process.stdin, {"op": op, "size": len(pdf)}, pdf)
             line = self._read_reply(deadline)
         except (BrokenPipeError, OSError) as error:
             line, failure = None, f"{type(error).__name__}: {error}"
