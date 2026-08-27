@@ -731,6 +731,8 @@ def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Pat
             return b'{"returnedEventsSize":1000000}', "application/json"
         if tool == "overview_page":
             return '{"cols":[],"rows":[]}', "application/json"
+        if tool == "memory_profile":
+            return b"", "application/json"
         return b'{"cols":[],"rows":[]}', "application/json"
 
     raw_to_tool_data_module.__dict__["xspace_to_tool_data"] = xspace_to_tool_data
@@ -745,6 +747,8 @@ def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Pat
     assert export.trace_event_count == 1_000_000
     assert export.table_sizes["overview_page"] == len('{"cols":[],"rows":[]}')
     assert (export.output_dir / "overview_page.json").read_text(encoding="utf-8") == '{"cols":[],"rows":[]}'
+    assert "memory_profile" not in export.table_sizes
+    assert not (export.output_dir / "memory_profile.json").exists()
     assert set(XPROF_TABLE_TOOLS).issubset(seen_tools)
     assert "trace_viewer@" in seen_tools
 
