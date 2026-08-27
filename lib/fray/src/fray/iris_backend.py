@@ -286,7 +286,7 @@ class IrisJobHandle:
         self._job.cancel()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str, max_concurrency: int) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
@@ -321,7 +321,7 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     finally:
         _reset_current_actor(token)
 
-    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
+    server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"), max_concurrency=max_concurrency)
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
@@ -721,7 +721,7 @@ class FrayIrisClient:
         finally:
             _reset_current_actor(token)
 
-        server = ActorServer(host="0.0.0.0", port=0)
+        server = ActorServer(host="0.0.0.0", port=0, max_concurrency=actor_config.max_concurrency)
         server.register(actor_name, instance)
         actual_port = server.serve_background()
 
@@ -778,7 +778,14 @@ class FrayIrisClient:
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
-        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        entrypoint = IrisEntrypoint.from_callable(
+            _host_actor,
+            actor_class,
+            args,
+            kwargs,
+            name,
+            actor_config.max_concurrency,
+        )
 
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
