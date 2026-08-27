@@ -62,6 +62,19 @@ class SkyRLRolePlan:
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
 
+    def __post_init__(self) -> None:
+        if self.n_samples_per_prompt < 2:
+            raise ValueError(
+                f"n_samples_per_prompt must be at least 2 so each rollout group has "
+                f"within-group variance for the GRPO advantage; got {self.n_samples_per_prompt}"
+            )
+        if self.train_batch_size % self.n_samples_per_prompt != 0:
+            raise ValueError(
+                f"train_batch_size ({self.train_batch_size}) must be divisible by "
+                f"n_samples_per_prompt ({self.n_samples_per_prompt}) so rollout groups "
+                f"are not split across batch boundaries"
+            )
+
 
 @dataclass(frozen=True)
 class SkyRLTopology:
