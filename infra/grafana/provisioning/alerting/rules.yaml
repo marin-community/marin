@@ -437,7 +437,6 @@ groups:
                         SELECT metric, zone, storage_class, value_bytes
                         FROM ranked
                         WHERE row_num = 1
-                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
                       ), usage AS (
                         SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
                         FROM latest

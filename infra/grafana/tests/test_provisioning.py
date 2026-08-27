@@ -72,6 +72,26 @@ def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
     database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
 
 
+def _storage_usage_database() -> duckdb.DuckDBPyConnection:
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE "storage.usage"(
+            provider VARCHAR,
+            metric VARCHAR,
+            zone VARCHAR,
+            bucket VARCHAR,
+            storage_class VARCHAR,
+            value_bytes DOUBLE,
+            observed_at TIMESTAMPTZ,
+            collected_at TIMESTAMPTZ,
+            seq BIGINT
+        )
+        """
+    )
+    return database
+
+
 def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
 
@@ -161,15 +181,6 @@ class _FakeFinelog:
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         if '"storage.usage"' in sql:
-            if "AS detail" in sql:
-                return pa.table(
-                    {
-                        "region": ["US-EAST-02A"],
-                        "metric": ["quota_bytes"],
-                        "detail": ["STANDARD"],
-                        "value": [0],
-                    }
-                )
             return pa.table(
                 {
                     "region": ["US-EAST-02A"],
@@ -256,14 +267,6 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "critical"}
     assert source["datasourceUid"] == "finelog-marin"
-    assert 'FROM "storage.usage"' in sql
-    assert "metric IN ('used_bytes', 'quota_bytes')" in sql
-    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
-    assert "ORDER BY collected_at DESC, seq DESC" in sql
-    assert "collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'" in sql
-    assert "SUM(value_bytes) AS usage_bytes" in sql
-    assert "MAX(value_bytes) AS quota_bytes" in sql
-    assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
     assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {
         "type": "gt",
@@ -276,6 +279,58 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert route["receiver"] == "ops-critical"
     assert "mute_time_intervals" not in route
 
+    database = _storage_usage_database()
+    database.executemany(
+        'INSERT INTO "storage.usage" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            (
+                "coreweave",
+                "used_bytes",
+                "US-EAST-02A",
+                "bucket",
+                "STANDARD",
+                120.0,
+                "2026-08-27 11:00:00+00",
+                "2026-08-26 10:00:00+00",
+                1,
+            ),
+            (
+                "coreweave",
+                "quota_bytes",
+                "US-EAST-02A",
+                None,
+                "STANDARD",
+                100.0,
+                "2026-08-27 11:00:00+00",
+                "2026-08-26 10:00:00+00",
+                2,
+            ),
+            (
+                "coreweave",
+                "used_bytes",
+                "US-EAST-02A",
+                "bucket",
+                "STANDARD",
+                80.0,
+                "2026-08-26 09:00:00+00",
+                "2026-08-27 11:00:00+00",
+                3,
+            ),
+            (
+                "coreweave",
+                "quota_bytes",
+                "US-EAST-02A",
+                None,
+                "STANDARD",
+                100.0,
+                "2026-08-26 09:00:00+00",
+                "2026-08-27 11:00:00+00",
+                4,
+            ),
+        ],
+    )
+    assert database.execute(sql).fetchall() == [("US-EAST-02A", 0.8)]
+
 
 def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_24_hours():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
@@ -285,11 +340,20 @@ def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_2
     assert rule["for"] == "5m"
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "warning", "notification": "slack"}
-    assert 'FROM "storage.usage"' in sql
-    assert "MAX(collected_at) AS latest_collected_at" in sql
-    assert "latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '24 hours'" in sql
     assert {column["selector"] for column in source["model"]["columns"]} == {"value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [0]}
+
+    sql = sql.replace("CURRENT_TIMESTAMP", "TIMESTAMP '2026-08-27 12:00:00+00:00'")
+    for collected_at, expected in [
+        ("2026-08-26 13:00:00+00", []),
+        ("2026-08-26 11:00:00+00", [(1,)]),
+    ]:
+        database = _storage_usage_database()
+        database.execute(
+            'INSERT INTO "storage.usage" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ("coreweave", "used_bytes", "US-EAST-02A", "bucket", "STANDARD", 80.0, collected_at, collected_at, 1),
+        )
+        assert database.execute(sql).fetchall() == expected
 
 
 def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
