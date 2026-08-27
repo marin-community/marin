@@ -83,8 +83,11 @@ DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # The ragged transport wants the opposite scheduling posture from the fixed and pooled ones. Its
 # dispatch and combine form one long dependent chain, so admitting several concurrent collectives
-# only contends for the SMs the transport itself needs, and the latency-hiding scheduler reorders
-# around the ragged collectives without shortening them.
+# only contends for the SMs the transport itself needs. The latency-hiding scheduler stays off for
+# a memory reason, not a scheduling one: its longer buffer live ranges push the step past the HBM
+# budget and NCCL's first-step allocations fail. With the layer activations offloaded to pinned
+# host the freed ~36 GiB fits those live ranges and the scheduler measures ~0.9 MFU faster
+# (#8317); a follow-up lands that offload and turns the scheduler on.
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
