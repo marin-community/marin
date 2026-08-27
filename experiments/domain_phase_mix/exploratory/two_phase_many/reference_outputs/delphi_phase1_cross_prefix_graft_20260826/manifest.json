@@ -1,0 +1,64 @@
+{
+  "actions": [
+    "prefix_tied",
+    "validated_cap4_frontier_fit_079",
+    "best_untrained_proportional_model_candidate"
+  ],
+  "analysis": {
+    "pairing": "Each prefix seed and fresh data seed block contains tied, fit_079, and novel actions.",
+    "primary_estimand": "prefix-by-action difference-in-differences relative to the matched tied continuation",
+    "secondary_estimands": [
+      "raw endpoint BPB",
+      "within-prefix candidate-minus-tied BPB"
+    ]
+  },
+  "artifacts": {
+    "cap4_candidate_weights.csv": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
+    "cap4_selected_prefixes.json": "5baf0fe8e5a4c605f79474c6633c6cb4dc4284c42a847ef020c8e687e112d1d8",
+    "cap4_shared_bounded_ensemble_kl0/continuation_summary.csv": "bb9f52f4eba7634e26e5b29c40e39ff1c3f09c459818982a1d5063e545325b56",
+    "cap4_shared_bounded_ensemble_kl0/continuation_weights.csv": "15b5590e5e6812a19209b3a400904e532d39f6539865609fbbdc52ed44a593e2",
+    "cap4_shared_bounded_ensemble_kl0/manifest.json": "ca508b313e2d13fd6b345337a4f34f2b94311510654383e805dfcedf6f12bdc4",
+    "proportional_candidate_weights.csv": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "proportional_control/continuation_summary.csv": "78384e90188315451f9f11a9ae29c4c709e4ec9334eb87963274a6fca6cdb654",
+    "proportional_control/continuation_weights.csv": "e75598febae4431cafce33015a848fd09f07b3b880667080deb3317a9029ca8a",
+    "proportional_control/manifest.json": "09469d4fd0f75f00ecc1a7aa1960b9a402d42493b63144c509e2cdebe3c89e12",
+    "proportional_selected_prefixes.json": "c5f7a6aead2b4209f00c7beacc4aeaced064ab4cf10b3bf26c699e7039f7cece"
+  },
+  "contract_version": "delphi_phase1_cross_prefix_graft_20260826_v1",
+  "data_seeds": [
+    973000,
+    973001,
+    973002
+  ],
+  "inputs": {
+    "candidate_predictions_sha256": "4a78e0c3b9958493ef0a8d45018426cdf8f23602577da1e52c7a1fb67444607c",
+    "cap4_candidate_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
+    "cap4_prefixes_sha256": "5baf0fe8e5a4c605f79474c6633c6cb4dc4284c42a847ef020c8e687e112d1d8",
+    "combined_summary_sha256": "dd2bccdcb3b8e2b4b22bd1d6d3cf687d351302ce51402941aa4383fad9176c91",
+    "combined_weights_sha256": "68fa307a16da803245cd24a73e8ce5c9c8e8c432242790b40f5963c2f4df0df2",
+    "frontier_contract_sha256": "898b8e5fdab2a9695808acfa31137918f5cf7e720674fb51e43bbc961b0aed27",
+    "proportional_candidate_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "proportional_prefixes_sha256": "c5f7a6aead2b4209f00c7beacc4aeaced064ab4cf10b3bf26c699e7039f7cece"
+  },
+  "novel_candidate": {
+    "candidate_rank": 8,
+    "fold_fraction_predicting_improvement": 1.0,
+    "hellinger_to_proportional_tied": 0.2666633510394128,
+    "predicted_expected_endpoint_bpb": 1.009141867126543,
+    "source": "dirichlet:50:1",
+    "stability_score_bpb": -0.0250061213936687
+  },
+  "outcome_informed": true,
+  "prefix_ids": [
+    "proportional_control",
+    "cap4_shared_bounded_ensemble_kl0"
+  ],
+  "prefix_seeds": [
+    0,
+    1,
+    2
+  ],
+  "research_question": "Does a frontier-relevant phase-1 action retain its gain after grafting across prefix states?",
+  "rows_per_prefix": 27,
+  "total_rows": 54
+}

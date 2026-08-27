@@ -185,6 +185,7 @@ def selected_prefixes(
     expected_sha256: str,
     expected_candidate_weights_sha256: str,
     expected_prefix_replay_code_commit: str,
+    expected_repeat_seeds: tuple[int, ...] = (0, 1),
 ) -> tuple[list[PrefixCheckpoint], dict[str, object]]:
     payload_bytes = read_uri_bytes(uri)
     actual_sha256 = hashlib.sha256(payload_bytes).hexdigest()
@@ -210,11 +211,11 @@ def selected_prefixes(
         )
         for row in payload.get("prefixes", [])
     ]
-    if len(rows) != 2 * len(candidate_ids):
-        raise ValueError("Selected prefixes must include primary and stability checkpoints")
+    if len(rows) != len(expected_repeat_seeds) * len(candidate_ids):
+        raise ValueError(f"Selected prefixes must include repeat seeds {expected_repeat_seeds}")
     for candidate_id in candidate_ids:
         seeds = {row.repeat_seed for row in rows if row.candidate_id == candidate_id}
-        if seeds != {0, 1}:
+        if seeds != set(expected_repeat_seeds):
             raise ValueError(f"Prefix {candidate_id} has checkpoint seeds {sorted(seeds)}")
     return rows, payload
 
@@ -597,6 +598,7 @@ def save_manifest(config: SaveManifestConfig) -> None:
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--experiment-name")
     parser.add_argument("--candidate-weights", type=Path, default=DEFAULT_CANDIDATE_WEIGHTS)
     parser.add_argument("--expected-candidate-sha256", required=True)
     parser.add_argument("--expected-candidate-aliases-sha256", required=True)
@@ -611,6 +613,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--prefix-replay-code-commit", required=True)
     parser.add_argument("--analysis-output-path", default=base.DEFAULT_ANALYSIS_OUTPUT_PATH)
     parser.add_argument("--branch-run-id-base", type=int, required=True)
+    parser.add_argument("--expected-prefix-seed", action="append", type=int, dest="expected_prefix_seeds")
+    parser.add_argument("--expected-fit-rows-per-prefix", type=int, default=FIT_ROWS_PER_PREFIX)
+    parser.add_argument("--expected-referee-rows-per-prefix", type=int, default=REFEREE_ROWS_PER_PREFIX)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--code-commit", required=True)
     parser.add_argument("--run-order", action="append", type=int, dest="run_orders")
@@ -637,13 +642,14 @@ def main() -> None:
         args.expected_selected_prefixes_sha256,
         args.expected_candidate_sha256,
         args.prefix_replay_code_commit,
+        tuple(sorted(set(args.expected_prefix_seeds or (0, 1)))),
     )
     selected_aliases = selected_payload.get("selected_aliases")
     if not isinstance(selected_aliases, list) or not all(isinstance(row, dict) for row in selected_aliases):
         raise ValueError("Selected-prefix aliases are malformed")
     candidate_ids = tuple(str(row["canonical_candidate_id"]) for row in selected_aliases)
     panel_label = "_".join(candidate_ids)
-    experiment_name = f"{EXPERIMENT_PREFIX}_{panel_label}"
+    experiment_name = args.experiment_name or f"{EXPERIMENT_PREFIX}_{panel_label}"
     specs = source_prefix_specs(args.candidate_weights, args.expected_candidate_sha256, args.analysis_output_path)
     validate_selected_prefixes(
         prefixes,
@@ -660,6 +666,8 @@ def main() -> None:
         args.design_manifest,
         args.expected_design_manifest_sha256,
         candidate_ids,
+        expected_fit_rows_per_prefix=args.expected_fit_rows_per_prefix,
+        expected_referee_rows_per_prefix=args.expected_referee_rows_per_prefix,
     )
     all_rows = enrich_rows(design, prefixes, specs, args.branch_run_id_base)
     full_design_rows = len(all_rows)
@@ -683,6 +691,10 @@ def main() -> None:
                 "prefix_replay_code_commit": args.prefix_replay_code_commit,
                 "branch_code_commit": code_commit,
                 "branch_run_id_base": args.branch_run_id_base,
+                "expected_prefix_seeds": tuple(sorted(set(args.expected_prefix_seeds or (0, 1)))),
+                "expected_fit_rows_per_prefix": args.expected_fit_rows_per_prefix,
+                "expected_referee_rows_per_prefix": args.expected_referee_rows_per_prefix,
+                "experiment_name": experiment_name,
             },
             sort_keys=True,
         ).encode()

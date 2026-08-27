@@ -1,0 +1,31 @@
+{
+  "candidate_aliases_sha256": "a518d943eb1784524e96353010811d3951e077848e907f908c754d788727e299",
+  "candidate_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
+  "prefix_replay_code_commit": "62ecbfec3c2e59a647b103f4eb9953667cbeffb0",
+  "prefixes": [
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825/prefix_cap4_shared_bounded_ensemble_kl0_seed0-856708/checkpoints/step-2399",
+      "provenance_sha256": "c946e9d1d6eab50cc1bf43c67eeeaff0fad6fd4390ca4d76978aee3e21e8e18e",
+      "repeat_seed": 0
+    },
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825/prefix_cap4_shared_bounded_ensemble_kl0_seed1-32684b/checkpoints/step-2399",
+      "provenance_sha256": "91c89caa41f857586ec4f222e4105e2549b33a3f57364b3e8357a2a2111d345b",
+      "repeat_seed": 1
+    },
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_3e18_phase0_harsh_cap_candidates_v6e_r2_20260825/prefix_cap4_shared_bounded_ensemble_kl0_seed2-992a85/checkpoints/step-2399",
+      "provenance_sha256": "2ebd3261031d6d73df3eaa57f5870e4d0f18d4e1b2d62c738f49a768b0f088ce",
+      "repeat_seed": 2
+    }
+  ],
+  "selected_aliases": [
+    {
+      "canonical_candidate_id": "cap4_shared_bounded_ensemble_kl0"
+    }
+  ],
+  "selection_basis": "The cap-4 KL0 prefix was selected by three-seed mean exact-boundary Uncheatable BPB. Confirmation reuses all three independently trained prefix checkpoints."
+}
