@@ -28,9 +28,17 @@ class ObjectStoreRegistry(Protocol):
     def register_object_store(self, scheme: str, store: Any, host: str | None = None) -> None: ...
 
 
-def datafusion_context(*, memory_limit_bytes: int | None = None) -> SessionContext:
+def datafusion_context(
+    *,
+    memory_limit_bytes: int | None = None,
+    target_partitions: int | None = None,
+) -> SessionContext:
     """Create a memory-bounded DataFusion context with native disk spill disabled."""
-    config = SessionConfig().with_batch_size(_DATAFUSION_BATCH_SIZE).with_target_partitions(max(1, pa.cpu_count()))
+    if target_partitions is None:
+        target_partitions = max(1, pa.cpu_count())
+    if target_partitions <= 0:
+        raise ValueError(f"target_partitions must be positive, got {target_partitions}")
+    config = SessionConfig().with_batch_size(_DATAFUSION_BATCH_SIZE).with_target_partitions(target_partitions)
     runtime = RuntimeEnvBuilder().with_disk_manager_disabled()
     if memory_limit_bytes is not None:
         sort_spill_reservation_bytes = min(

@@ -43,7 +43,6 @@ import click
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
-from zephyr import memory_budget
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.shard_keys import deterministic_hash
@@ -272,18 +271,6 @@ def main(
             "map_task_ram": map_resources.ram,
             "reduce_task_cpu": reduce_resources.cpu,
             "reduce_task_ram": reduce_resources.ram,
-            "r_write": memory_budget.R_WRITE,
-            "r_read_max": memory_budget.R_READ_MAX,
-            "r_read_payload": memory_budget.R_READ_PAYLOAD,
-            "read_row_overhead_bytes": memory_budget.READ_ROW_OVERHEAD_BYTES,
-            "r_read_buffered_input_payload": memory_budget.R_READ_BUFFERED_INPUT_PAYLOAD,
-            "r_read_thread_shard": memory_budget.R_READ_THREAD_SHARD,
-            "r_read_spill_payload": memory_budget.R_READ_SPILL_PAYLOAD,
-            "fixed_overhead_write_bytes": memory_budget.FIXED_OVERHEAD_WRITE_BYTES,
-            "fixed_overhead_read_bytes": memory_budget.FIXED_OVERHEAD_READ_BYTES,
-            "safety_fraction_write": memory_budget.SAFETY_FRACTION_WRITE,
-            "safety_fraction_read": memory_budget.SAFETY_FRACTION_READ,
-            "streaming_chunk_size_rows": memory_budget.STREAMING_CHUNK_SIZE_ROWS,
             "counters": result.counters,
         }
         print("RESULT:", json.dumps(summary))

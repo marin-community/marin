@@ -7,11 +7,8 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-import itertools
 import os
 import tempfile
-from collections.abc import Iterator
-from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlparse
 
@@ -20,12 +17,10 @@ import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-import zephyr.external_sort as external_sort_module
 from datafusion import col
 from datafusion.object_store import LocalFileSystem as DataFusionLocalFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
-from zephyr.external_sort import external_sort_merge
 from zephyr.parquet_scan import datafusion_context, register_object_stores
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -36,7 +31,9 @@ from zephyr.shuffle import (
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
+    _ChunkFile,
     _items_to_table,
+    _merge_sorted_frames,
     _Sidecar,
     _table_to_items,
     _write_scatter,
@@ -164,6 +161,11 @@ def test_datafusion_context_disables_native_disk_spill(tmp_path, monkeypatch):
 
     assert error is not None
     assert list(tmp_path.iterdir()) == []
+
+
+def test_datafusion_context_rejects_nonpositive_target_partitions():
+    with pytest.raises(ValueError, match="target_partitions must be positive"):
+        datafusion_context(target_partitions=0)
 
 
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
@@ -310,41 +312,39 @@ def test_scatter_with_combiner(tmp_path):
 
 def test_merge_sorted_chunks_external_runs_use_gcs_urls(tmp_path, monkeypatch):
     items = [{"k": i, "v": i} for i in range(10)]
-    data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    scatter_paths = []
     for i in range(10):
+        data_path = str(tmp_path / f"shard-{i:04d}/scatter/")
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=i)
         writer.write(_items_to_table([items[i]], _key, None, 1))
-    scatter_paths = list(writer.close())
+        scatter_paths.extend(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
 
     remote_root = tmp_path / "gcs"
-    opened_urls: list[str] = []
 
-    class FakeGcsFileSystem:
-        def makedirs(self, path: str, exist_ok: bool) -> None:
-            (remote_root / path).mkdir(parents=True, exist_ok=exist_ok)
-
-        def rm(self, paths: list[str]) -> None:
-            for path in paths:
-                (remote_root / path).unlink()
-
-    def remote_path(url: str) -> Path:
+    def remote_path(url: str):
         parsed = urlparse(url)
         assert (parsed.scheme, parsed.netloc) == ("gs", "bucket")
         return remote_root / parsed.path.lstrip("/")
 
-    def fake_url_to_fs(url: str) -> tuple[FakeGcsFileSystem, str]:
-        return FakeGcsFileSystem(), str(remote_path(url).relative_to(remote_root))
+    class FakeStoragePath:
+        def __init__(self, url: str):
+            self.url = url
 
-    def fake_open_url(url: str, mode: str):
-        opened_urls.append(url)
-        path = remote_path(url)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path.open(mode)
+        def __truediv__(self, name: str):
+            return FakeStoragePath(f"{self.url.rstrip('/')}/{name}")
 
-    monkeypatch.setattr(external_sort_module, "url_to_fs", fake_url_to_fs, raising=False)
-    monkeypatch.setattr(external_sort_module, "open_url", fake_open_url, raising=False)
+        def __str__(self) -> str:
+            return self.url
+
+        def mkdirs(self) -> None:
+            remote_path(self.url).mkdir(parents=True, exist_ok=True)
+
+        def rm(self) -> None:
+            remote_path(self.url).unlink()
+
+    monkeypatch.setattr("zephyr.shuffle.StoragePath", FakeStoragePath)
     monkeypatch.setattr(
         "zephyr.parquet_scan.GoogleCloud",
         lambda bucket_name: DataFusionLocalFileSystem(prefix=str(remote_root)),
@@ -360,8 +360,6 @@ def test_merge_sorted_chunks_external_runs_use_gcs_urls(tmp_path, monkeypatch):
         active_runs = [path for path in remote_root.rglob("*") if path.is_file()]
         remaining = list(merged)
 
-    assert opened_urls
-    assert all(url.startswith("gs://bucket/external-sort/") for url in opened_urls)
     assert active_runs
     assert [item["k"] for item in [first, *remaining]] == list(range(10))
     assert [path for path in remote_root.rglob("*") if path.is_file()] == []
@@ -473,15 +471,20 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(chunk_paths=[f"{data_path}c0000.parquet"], target_shard=513, avg_item_bytes=1)
+    reader = ScatterReader(
+        chunk_files=[_ChunkFile(path=f"{data_path}c0000.parquet", schema=table.schema)],
+        target_shard=513,
+        avg_item_bytes=1,
+        shard_payload_bytes=len(cloudpickle.dumps({"k": 513})),
+    )
     assert _read_shard(reader) == [{"k": 513}]
 
 
 def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
     """A multiplexed shard flushes against its task budget, not the worker pod limit."""
-    items = [{"k": 0, "v": i} for i in range(100)]
+    items = [{"k": 0, "v": i} for i in range(10_000)]
     table = _items_to_table(items, _key, None, 1)
-    task_memory_bytes = int(table.nbytes) * 3
+    task_memory_bytes = 128 * 1024**2
     ctx = _InProcessWorkerContext(
         chunk_prefix="test",
         execution_id="test",
@@ -490,7 +493,10 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
     )
     token = _worker_ctx_var.set(ctx)
     try:
-        with patch("zephyr.shuffle.TaskResources.from_environment") as environment_resources:
+        with (
+            patch("zephyr.shuffle.TaskResources.from_environment") as environment_resources,
+            patch("zephyr.shuffle._SCATTER_FLUSH_MEMORY_FRACTION", 0.001),
+        ):
             environment_resources.return_value = TaskResources(
                 memory_bytes=1024**3,
                 cpu_cores=1,
@@ -506,11 +512,11 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert shard.total_chunks == 2
-    assert sorted(row["v"] for row in _read_shard(shard)) == sorted([*range(100), *range(100)])
+    assert sorted(row["v"] for row in _read_shard(shard)) == sorted([*range(10_000), *range(10_000)])
 
 
 # ---------------------------------------------------------------------------
-# external_sort_merge
+# bounded sorted merge
 # ---------------------------------------------------------------------------
 
 
@@ -528,36 +534,34 @@ def _make_sorted_frame(context, values: list[int]):
     return context.from_arrow(table)
 
 
-def _external_sort_items(
+def _merge_sorted_items(
     context,
-    batches: Iterator,
+    frames,
     *,
     sort_key: str,
     external_sort_dir: str,
     fan_in: int,
-    max_merge_fan_in: int = 32,
     shard: int,
 ) -> list:
-    merged = external_sort_merge(
-        context,
-        list(batches),
+    merged = _merge_sorted_frames(
+        context=context,
+        frames=list(frames),
         sort_key=sort_key,
         external_sort_dir=external_sort_dir,
         fan_in=fan_in,
-        max_merge_fan_in=max_merge_fan_in,
         shard=shard,
     )
-    return list(itertools.chain.from_iterable(map(_table_to_items, merged)))
+    return [row for batch in merged for row in _table_to_items(batch)]
 
 
-def test_external_sort_merge_streaming(tmp_path):
+def test_merge_sorted_frames_streaming(tmp_path):
     context = datafusion_context()
     frames = [
         _make_sorted_frame(context, [1, 4, 7]),
         _make_sorted_frame(context, [2, 5, 8]),
         _make_sorted_frame(context, [3, 6, 9]),
     ]
-    rows = _external_sort_items(
+    rows = _merge_sorted_items(
         context,
         frames,
         sort_key=_SORT_KEY_COL,
@@ -569,10 +573,10 @@ def test_external_sort_merge_streaming(tmp_path):
     assert result == list(range(1, 10))
 
 
-def test_external_sort_merge_single_batch(tmp_path):
+def test_merge_sorted_frames_single_batch(tmp_path):
     context = datafusion_context()
     frames = [_make_sorted_frame(context, [i]) for i in range(10)]
-    rows = _external_sort_items(
+    rows = _merge_sorted_items(
         context,
         frames,
         sort_key=_SORT_KEY_COL,
@@ -584,34 +588,32 @@ def test_external_sort_merge_single_batch(tmp_path):
     assert result == list(range(10))
 
 
-def test_external_sort_merge_cleans_up(tmp_path):
+def test_merge_sorted_frames_cleans_up(tmp_path):
     fan_in = 4
     context = datafusion_context()
     frames = [_make_sorted_frame(context, [i]) for i in range(fan_in + 1)]
     list(
-        external_sort_merge(
-            context,
-            frames,
+        _merge_sorted_frames(
+            context=context,
+            frames=frames,
             sort_key=_SORT_KEY_COL,
             external_sort_dir=str(tmp_path),
             fan_in=fan_in,
-            max_merge_fan_in=32,
             shard=0,
         )
     )
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
-def test_external_sort_merge_limits_later_pass_fan_in(tmp_path):
+def test_merge_sorted_frames_multi_pass_preserves_order(tmp_path):
     context = datafusion_context()
     frames = [_make_sorted_frame(context, [value]) for value in range(20)]
-    rows = _external_sort_items(
+    rows = _merge_sorted_items(
         context,
         frames,
         sort_key=_SORT_KEY_COL,
         external_sort_dir=str(tmp_path),
         fan_in=2,
-        max_merge_fan_in=2,
         shard=0,
     )
 
@@ -633,8 +635,7 @@ def test_scatter_removes_partial_dir_on_write_failure(tmp_path):
     assert not os.path.exists(data_path), "failed shard left a partial scatter directory"
 
 
-def test_external_sort_merge_across_source_shards(tmp_path):
-    """external_sort_merge correctly merges interleaved keys from multiple source shards."""
+def test_merge_sorted_frames_across_source_shards(tmp_path):
     # Shard 0 writes keys [1, 3], shard 1 writes key [2].  The merge must produce [1, 2, 3].
     paths = []
     for shard_idx, items in [(0, [{"k": 3, "v": "a"}, {"k": 1, "v": "b"}]), (1, [{"k": 2, "v": "c"}])]:
@@ -651,7 +652,7 @@ def test_external_sort_merge_across_source_shards(tmp_path):
     external_dir.mkdir()
 
     context = datafusion_context()
-    rows = _external_sort_items(
+    rows = _merge_sorted_items(
         context,
         shard.get_frames(context),
         sort_key=_SORT_KEY_COL,

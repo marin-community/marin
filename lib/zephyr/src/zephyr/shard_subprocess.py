@@ -89,7 +89,7 @@ def _periodic_status_logger(
         )
 
 
-def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_dir: str) -> None:
+def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
@@ -145,7 +145,6 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
                     task,
                     chunk_prefix,
                     execution_id,
-                    external_sort_dir=external_sort_dir,
                 )
             finally:
                 stop_event.set()
@@ -170,9 +169,9 @@ def _execute_shard_subprocess(task_file: str, result_file: str, external_sort_di
 
 
 def _subprocess_main() -> None:
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 3:
         print(
-            "Usage: python -m zephyr.shard_subprocess <task_file> <result_file> <external_sort_dir>",
+            "Usage: python -m zephyr.shard_subprocess <task_file> <result_file>",
             file=sys.stderr,
         )
         os._exit(1)
@@ -183,7 +182,7 @@ def _subprocess_main() -> None:
     # one-shot child needs ``atexit`` / ``__del__`` to run.
     exit_code = 0
     try:
-        _execute_shard_subprocess(sys.argv[1], sys.argv[2], sys.argv[3])
+        _execute_shard_subprocess(sys.argv[1], sys.argv[2])
     except BaseException:
         traceback.print_exc()
         exit_code = 1
