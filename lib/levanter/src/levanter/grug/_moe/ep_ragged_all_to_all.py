@@ -1,7 +1,22 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ragged all-to-all expert-parallel Grug MoE backend."""
+"""Ragged all-to-all expert-parallel Grug MoE backend.
+
+Axis names used in the shape annotations:
+
+    Tlocal  tokens on this shard
+    K       routed experts per token
+    TK      routed assignments on this shard, Tlocal * K
+    H       hidden size
+    I       expert intermediate size
+    I2      gate and up projections fused, 2 * I
+    E       experts in the model
+    Elocal  experts held by this shard
+    Echunk  experts in one sequential chunk, Elocal / chunks
+    C       rows in one chunk's receiver buffer, the per-chunk capacity
+    S       shards on the expert axis
+"""
 
 import functools
 import logging
@@ -51,23 +66,23 @@ class _ExpertMlp(Protocol):
 
     def __call__(
         self,
-        x_dispatch: jax.Array,
-        moe_w13_local: jax.Array,
-        moe_w2_local: jax.Array,
-        physical_group_sizes: jax.Array,
-        active_group_sizes: jax.Array,
+        x_dispatch: Float[Array, "C H"],
+        moe_w13_local: Float[Array, "Echunk H I2"],
+        moe_w2_local: Float[Array, "Echunk I H"],
+        physical_group_sizes: Int[Array, "Echunk"],
+        active_group_sizes: Int[Array, "Echunk"],
         activation_fn: Callable[[jax.Array], jax.Array],
-    ) -> jax.Array: ...
+    ) -> Float[Array, "C H"]: ...
 
 
 def _ragged_dot_expert_mlp(
-    x_dispatch: jax.Array,
-    moe_w13_local: jax.Array,
-    moe_w2_local: jax.Array,
-    physical_group_sizes: jax.Array,
-    active_group_sizes: jax.Array,
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
-) -> jax.Array:
+) -> Float[Array, "C H"]:
     """Portable expert MLP over XLA's `ragged_dot`, which covers the whole receiver buffer."""
     del active_group_sizes
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
@@ -77,13 +92,13 @@ def _ragged_dot_expert_mlp(
 
 
 def _cute_expert_mlp(
-    x_dispatch: jax.Array,
-    moe_w13_local: jax.Array,
-    moe_w2_local: jax.Array,
-    physical_group_sizes: jax.Array,
-    active_group_sizes: jax.Array,
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
-) -> jax.Array:
+) -> Float[Array, "C H"]:
     """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
 
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
@@ -161,7 +176,9 @@ def _unpermute_from_global_expert(
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
-def _gather_dispatch_rows(x_local, sorted_indices, topk):
+def _gather_dispatch_rows(
+    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
+) -> Float[Array, "TK H"]:
     """Build the expert-sorted dispatch buffer with one gather.
 
     Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
@@ -171,11 +188,15 @@ def _gather_dispatch_rows(x_local, sorted_indices, topk):
     return x_local[sorted_indices // topk]
 
 
-def _gather_dispatch_rows_fwd(x_local, sorted_indices, topk):
+def _gather_dispatch_rows_fwd(
+    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
+) -> tuple[Float[Array, "TK H"], Int[Array, "TK"]]:
     return _gather_dispatch_rows(x_local, sorted_indices, topk), sorted_indices
 
 
-def _gather_dispatch_rows_bwd(topk, sorted_indices, cotangent):
+def _gather_dispatch_rows_bwd(
+    topk: int, sorted_indices: Int[Array, "TK"], cotangent: Float[Array, "TK H"]
+) -> tuple[Float[Array, "Tlocal H"], None]:
     tokens_per_shard = sorted_indices.shape[0] // topk
     positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
     if sonic_gather_sum_available():
@@ -225,19 +246,19 @@ def _moe_mlp_ep_ragged_a2a_local(
     hidden_dim = x_local.shape[1]
 
     with jax.named_scope("dispatch"):
-        flat_selected = selected_experts_local.reshape(-1)
-        sorted_indices = jnp.argsort(flat_selected)
-        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
-        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)
-        all_group_sizes = jax.lax.all_gather(group_sizes, "expert")
+        flat_selected = selected_experts_local.reshape(-1)  # [TK]
+        sorted_indices = jnp.argsort(flat_selected)  # [TK]
+        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
+        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
+        all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
 
     expert_mlp = _select_expert_mlp(activation_fn)
-    chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts
-    returned = jnp.zeros((assignments_per_shard, hidden_dim), dtype=x_local.dtype)
+    chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
+    returned = jnp.zeros((assignments_per_shard, hidden_dim), dtype=x_local.dtype)  # [TK, H]
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)
+            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)  # [S, E]
             clipped_group_sizes = _clip_receiver_group_sizes(
                 chunk_all_group_sizes,
                 local_expert_size=local_experts,
@@ -257,21 +278,25 @@ def _moe_mlp_ep_ragged_a2a_local(
             # But it does not increase the speed. The transport and the MLP compete for the
             # same SMs.
             chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
-            dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)
+            dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)  # [C, H]
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
             # directly: no sender compaction and no receiver-side permute.
-            x_dispatch = jax.lax.ragged_all_to_all(
+            x_dispatch = jax.lax.ragged_all_to_all(  # [C, H]
                 chunk_source,
                 dispatch_out_shape,
                 *dispatch_params,
                 axis_name="expert",
             )
-            active_all = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0)
-            active_group_sizes = active_all[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts]
+            active_all = jnp.sum(  # [Elocal]
+                clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
+            )
+            active_group_sizes = active_all[
+                chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts
+            ]  # [Echunk]
             total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)
-            out_dispatch = expert_mlp(
+            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
+            out_dispatch = expert_mlp(  # [C, H]
                 x_dispatch,
                 moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
                 moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
