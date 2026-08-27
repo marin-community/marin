@@ -69,7 +69,7 @@ IAP is the only access gate; there is no application auth.
 ## API
 
 ```
-GET  /healthz               liveness
+GET  /health                liveness
 GET  /api/runs?model=&eval=&user=&status=&group=&limit=   filtered run rows
 GET  /api/groups?model=&user=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
 GET  /api/runs/{run_id}     the full record.json for one run (404 if absent)

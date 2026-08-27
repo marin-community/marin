@@ -135,6 +135,13 @@ def client_with():
     echo.app.dependency_overrides.clear()
 
 
+def test_health_reports_database_availability(client_with):
+    response = client_with([]).client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_grep_escapes_like_wildcards():
     assert echo.escape_like("ragged_all_to_all") == "ragged\\_all\\_to\\_all"
     assert echo.escape_like("50%") == "50\\%"
