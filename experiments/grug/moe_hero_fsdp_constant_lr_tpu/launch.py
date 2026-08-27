@@ -66,7 +66,7 @@ D512_STEPS = {
 
 MAX_CONCURRENT_RUNS = 5
 CHECKPOINT_INTERVAL = timedelta(minutes=30)
-TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8", zone="us-central2-b")
+TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8", regions=("us-central2",), zone="us-central2-b")
 
 
 @dataclass(frozen=True)
@@ -172,6 +172,8 @@ def build_d512_constant_lr_run(
     point: D512ConstantLrPoint,
     *,
     version: str = EXPERIMENT_VERSION,
+    wandb_group: str = WANDB_GROUP,
+    wandb_sweep_tag: str = EXPERIMENT_PREFIX,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one TPU checkpoint cell from the d512 constant-LR matrix."""
     model = d512_model_config()
@@ -207,12 +209,12 @@ def build_d512_constant_lr_run(
                     "grug",
                     "moe",
                     "issue-7856",
-                    EXPERIMENT_PREFIX,
+                    wandb_sweep_tag,
                     "d512",
                     "constant-lr",
                     "tpu-v4-8",
                 ],
-                group=WANDB_GROUP,
+                group=wandb_group,
                 name=point.run_id,
                 replicate_path=ctx.output_path,
             ),

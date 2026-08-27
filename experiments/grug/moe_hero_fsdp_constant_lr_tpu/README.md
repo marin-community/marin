@@ -48,3 +48,27 @@ uv run iris --cluster=marin job run \
 
 W&B project: `marin-community/marin_moe`; group:
 `issue-7856-d512-constant-lr-tpu`.
+
+## Bracketed low-LR follow-up
+
+The completed 30x through 300x cells all selected the original `0.7x` lower
+grid boundary. A fixed-budget log-quadratic fit across those 20 terminal Paloma
+measurements predicts a shared optimum at `0.323x`; leave-one-budget-out fits
+range from `0.304x` to `0.363x`. The follow-up grid is therefore
+`0.10x / 0.20x / 0.32x / 0.45x / 0.70x`.
+
+The launcher submits only 21 new cells: four new multipliers for 30x through
+300x, reusing their completed `0.7x` measurements, and all five multipliers for
+600x because its original cells were stopped before terminal evaluation.
+
+```bash
+uv run iris --cluster=marin job run \
+  --no-wait \
+  --cpu=1 \
+  --memory=2G \
+  --extra=cpu \
+  -e WANDB_API_KEY "${WANDB_API_KEY}" \
+  -- python -m experiments.grug.moe_hero_fsdp_constant_lr_tpu.launch_lower_lr
+```
+
+Follow-up W&B group: `issue-7856-d512-constant-lr-low-tpu`.
