@@ -47,7 +47,11 @@ from experiments.datakit.build_pdf_source.fetch import fetch_step
 from experiments.datakit.build_pdf_source.fuzzy_dedup import fuzzy_steps
 from experiments.datakit.build_pdf_source.language_label import glotlid_model_step, language_label_step
 from experiments.datakit.build_pdf_source.plan import plan_step
-from experiments.datakit.build_pdf_source.quality_label import quality_label_step, quality_output_schema, scorer_model_step
+from experiments.datakit.build_pdf_source.quality_label import (
+    quality_label_step,
+    quality_output_schema,
+    scorer_model_step,
+)
 
 MARIN_PREFIX_ENV = "MARIN_PREFIX"
 

@@ -94,7 +94,11 @@ UV_PACKAGE: dict[str, str] = {
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
-    "marin": ["cpu", "dedup"],
+    # `pdf` carries the PDF pipeline's parsing/OCR toolchain (pymupdf, docling, openvino,
+    # xgboost-cpu). tests/datakit/test_{ocr_extract,pdf_classify,route_features}.py import it at
+    # collection time, so the marin leg cannot collect without it. It adds no torch -- `cpu`
+    # already installs it -- so the marginal cost is the docling/openvino wheels.
+    "marin": ["cpu", "dedup", "pdf"],
     "iac": ["deploy"],
 }
 

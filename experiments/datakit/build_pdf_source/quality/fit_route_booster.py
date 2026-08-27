@@ -93,8 +93,8 @@ def read_study() -> pl.DataFrame:
 
     import pyarrow as pa  # noqa: PLC0415
     import pyarrow.parquet as pq  # noqa: PLC0415
-    from rigging.filesystem.storage_path import StoragePath  # noqa: PLC0415
     from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415
+    from rigging.filesystem.storage_path import StoragePath  # noqa: PLC0415
 
     configure_coreweave_s3()
     shards = sorted(StoragePath(f"{STUDY_PREFIX}/*.parquet").glob(), key=str)

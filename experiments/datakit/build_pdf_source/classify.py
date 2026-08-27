@@ -59,8 +59,8 @@ from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
-from zephyr.dataset import Dataset
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.common import (
@@ -207,7 +207,10 @@ def _classify_row(row: dict) -> tuple[dict, "DocumentSignals | None"]:  # noqa: 
     """
     import pymupdf  # noqa: PLC0415
 
-    from experiments.datakit.build_pdf_source.quality.route_features import CorruptPdf, signals_for_routing  # noqa: PLC0415
+    from experiments.datakit.build_pdf_source.quality.route_features import (  # noqa: PLC0415
+        CorruptPdf,
+        signals_for_routing,
+    )
 
     _silence_mupdf()
     output = {

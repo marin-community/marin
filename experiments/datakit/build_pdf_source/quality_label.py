@@ -46,8 +46,8 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
-from zephyr.dataset import Dataset
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.runners import InlineRunner
 from zephyr.writers import write_parquet_file
 
