@@ -47,5 +47,5 @@ author: held
 - Status: the coordinator remains running, but all 256 training tasks are pending.
 - Evidence: the scheduler reports that the largest `tpu-name` group has 254 workers. The slice has 255 registered workers; TPU host `t1v-n-25bf471b-w-74` is registering as `worker-0` with empty TPU metadata, colliding with the real `worker-0`.
 - Interpretation: this is a worker-identity collision caused by missing TPU worker-index metadata, not an ordinary capacity wait. No training step has started.
-- Decision: keep the job unchanged while recovery authorization is pending.
-- Next action: replace the degraded v4-2048 slice, then verify that all 256 workers share one TPU name before training starts.
+- Decision: keep the job unchanged while recovery authorization is pending. Six unrelated CPU tasks are bin-packed onto healthy hosts in the slice and must be drained before replacement.
+- Next action: drain the six CPU co-tenants, replace the degraded v4-2048 slice, then verify that all 256 workers share one TPU name before training starts.

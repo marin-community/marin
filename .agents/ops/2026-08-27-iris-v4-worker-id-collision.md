@@ -33,6 +33,8 @@ The user reported: "one host of the 256 is unhealthy Iris says" for `/held/iris-
 
 6. Source inspection found the identity fallback at `lib/iris/src/iris/cluster/worker/worker.py:229-231`: when a slice ID exists but `hardware.tpu_worker_id` is empty, Iris silently chooses worker index zero.
 
+7. A final active-task join found six unrelated CPU tasks bin-packed onto healthy workers in the degraded TPU slice. Replacing the slice without draining those tasks would interrupt jobs owned by `dlwh`, `marin`, `michaelryan`, and `runner`.
+
 ## Root cause
 
 One TPU host lacked the TPU worker-index metadata used to derive its Iris identity. Iris treated the missing index as zero and registered host `w-74` as `worker-0`. That collided with the real `worker-0`, leaving `worker-74` absent and only 254 registered workers sharing the correct TPU name. The scheduler correctly refused to start a 256-way coscheduled job on that topology.
@@ -41,7 +43,7 @@ The code-level amplifier was `lib/iris/src/iris/cluster/worker/worker.py:229-231
 
 ## Fix
 
-No recovery or code change had been applied. Immediate recovery requires deleting and recreating the degraded v4-2048 slice. Stopping and resubmitting only the pending job would retain the same degraded slice.
+No recovery or code change had been applied. Immediate recovery requires draining the six CPU co-tenants, then deleting and recreating the degraded v4-2048 slice. Stopping and resubmitting only the pending job would retain the same degraded slice.
 
 A follow-up code fix should reject missing TPU worker-index metadata when `config.slice_id` identifies a multi-host slice. The worker must not default such failures to index zero.
 
