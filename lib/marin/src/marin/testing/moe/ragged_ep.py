@@ -3,24 +3,19 @@
 
 """4-GPU correctness check for the ragged all-to-all expert-parallel MoE transport.
 
-A hero arm costs a production rack, so any change to the transport's offset arithmetic or expert
+A hero arm costs a production rack, so a change to the transport's offset arithmetic or expert
 kernels earns one only after this passes. It runs as a remote job, so it lives here rather than in
 a test module: the callable is pickled by reference and the worker imports whatever defines it.
 `tests/cluster/grug/test_ragged_ep_check.py` submits it.
 
-A. Ground truth. At a capacity factor high enough that nothing is dropped, every token reaches
-   every expert it selected, so the transport computes exactly the dense MoE. The gate compares
-   forward and gradients against an exact fp32 dense reference. The EP ``ring`` implementation is
-   recorded as a diagnostic only: measured 2026-08-21, it deviates from dense by 0.8-4.5x relative
-   at this shape (its gradients contain NaN), so it cannot serve as a reference.
+Each seed is checked twice against an exact fp32 dense MoE. Without drops, at a capacity that
+cannot clip, the transport must equal dense outright. Under drops, at a capacity that clips, it
+must equal dense restricted to the rows it kept -- and must keep exactly the rows a NumPy model of
+the capacity gate says it should, since matching values while dropping a different set would mean
+the two disagree about which assignments exist.
 
-B. Drop regime. The hero trains with assignments being clipped, so the no-drop case above leaves
-   the interesting half of the transport unchecked: which rows survive, and whether the survivors
-   land where the combine expects them. Accepted rows are the prefix of each expert group under a
-   greedy first-sender-wins gate, so the surviving set is a pure function of the routing and the
-   capacity. This section computes it in NumPy, feeds it back as a mask on the combine weights,
-   and compares against the same exact fp32 dense reference -- a dropping transport is correct
-   exactly when it equals dense restricted to the rows it kept.
+The second case is the one worth having. The hero trains with assignments being clipped, so a
+check that only ever runs dropless leaves the surviving-set arithmetic untested.
 """
 
 import dataclasses
@@ -61,20 +56,19 @@ INTERMEDIATE_DIM = 96
 NUM_EXPERTS = 8
 TOPK = 2
 SEEDS = (0, 1, 2, 3)
-# The expert axis this harness builds; `_make_ep_mesh` fixes it at 2 whatever the device count.
+# The expert axis `_make_ep_mesh` builds, whatever the device count.
 EP_SIZE = 2
 
 
 def _no_drop_capacity() -> float:
-    """Capacity factor at which the ragged transport provably cannot clip an assignment.
+    """Return the capacity factor at which the transport cannot clip an assignment.
 
-    A receiver's worst case is every assignment on the expert axis landing on a single one of its
-    chunks: ``EP_SIZE * assignments_per_shard`` rows arriving against a chunk buffer holding
-    ``capacity_factor * assignments_per_shard / chunks``. The structural bound is therefore
-    ``EP_SIZE * chunks``. Unchunked it is just ``EP_SIZE`` -- which is why the pre-chunking value
-    of 2.0 no longer guarantees anything here: at four local experts the backend runs two chunks,
-    so 2.0 leaves each chunk holding only half the rows that can arrive, and droplessness becomes
-    a property of how evenly the seed happens to route rather than of the capacity.
+    A receiver's worst case is every assignment on the expert axis arriving at one of its chunks:
+    ``EP_SIZE * assignments_per_shard`` rows against a chunk buffer holding
+    ``capacity_factor * assignments_per_shard / chunks``. Size the buffer for that and nothing
+    drops, so the factor is ``EP_SIZE * chunks``. It must be computed: a factor that ignores the
+    chunk count leaves each chunk holding a fraction of what can arrive, and droplessness becomes
+    a property of how a seed happens to route rather than of the capacity.
     """
     local_experts = NUM_EXPERTS // EP_SIZE
     chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
@@ -83,37 +77,34 @@ def _no_drop_capacity() -> float:
 
 NO_DROP_CAPACITY = _no_drop_capacity()
 # `ring` keeps the pre-chunking value: it does not chunk, and larger factors make its top_k
-# selection ask for more rows than exist and fail. It is a diagnostic (see the module docstring),
-# so it does not need the structural bound the graded ragged run does.
+# selection ask for more rows than exist and fail. It is a diagnostic, so it does not need the
+# structural bound the graded ragged run does.
 RING_DIAGNOSTIC_CAPACITY = 2.0
-# Section B's capacity: at or below the mean assignment count per expert, so the skewed router in
-# `_inputs` drives real clipping and the surviving set is worth checking.
+# At or below the mean assignment count per expert, so the skewed router in `_inputs` drives
+# real clipping and the surviving set is worth checking.
 SKEWED_CAPACITY = 1.0
 
-# Gradients are gated on a median, not the max. Both paths compute the same mathematical gradient,
-# so every observed difference is bf16 reduction-order noise: weight gradients sum rows per expert
-# and the two paths order that sum differently. Reordering leaves the bulk of the entries
-# bit-identical while a handful of cancellation-heavy entries lose their leading digits and show a
-# large relative max, around 0.5 on a correct run. Gating on that rejects a correct transport.
+# The maximum allowed relative deviation between the ragged and dense kernels.
 #
-# The median is taken per slice of the leading axis and the worst slice gates, because a
-# tensor-wide median tolerates any corruption confined to under half the entries -- which is the
-# shape of the localized faults worth catching here. One expert's grouped weight gradient is an
-# eighth of `w13`; one shard's token block is a quarter of the `x` gradient. Neither moves a
-# tensor-wide median. Both move the median of the slice they live in. The tensor-wide median and
-# the max are recorded as diagnostics.
+# Gradients are gated on a median rather than the max. Both paths compute the same mathematical
+# gradient, so every difference is bf16 reduction-order noise: the two orders leave most entries
+# bit-identical, while a few cancellation-heavy entries lose their leading digits and push the
+# relative max to around 0.5 on a correct run. Gate on the max and a correct transport fails.
+#
+# Take the median per slice of the leading axis and gate the worst slice. A tensor-wide median
+# tolerates corruption confined to under half the entries, which is the shape of the faults worth
+# catching: one expert's weight gradient is an eighth of `w13`, one shard's token block a quarter
+# of the `x` gradient. Neither moves a tensor-wide median; both move their own slice's.
 TOLERANCE = 5e-2
 
 
 class TransportKernel(StrEnum):
     """Which ragged all-to-all kernel the run exercises.
 
-    ``DEVICE`` matches the hero and is the default, but jaxlib vintages that predate the two flags
-    abort at import on unknown ``XLA_FLAGS`` entries, so it needs the pinned jax/XLA build.
-    ``STOCK`` drops the flags and takes whatever the runtime defaults to -- the host-launched
-    kernel -- which lets the expert-MLP kernels and the offset arithmetic be validated on a stock
-    image while that build is pending. The choice is recorded in the results either way, so a
-    ``STOCK`` run is never mistaken for coverage of the transport the hero uses.
+    ``DEVICE`` matches the hero and is the default. It needs a jaxlib that defines the two flags;
+    older ones abort at import on an unknown ``XLA_FLAGS`` entry. ``STOCK`` clears them and takes
+    the runtime default, the host-launched kernel, which still covers the expert-MLP kernels and
+    the offset arithmetic. The verdict records which one ran.
     """
 
     DEVICE = "device-kernel"
@@ -349,33 +340,45 @@ def _run() -> list[SeedRow]:
             jax.sharding.reshard(w2, expert_sharding),
         )
 
+    def compare_without_drops(seed: int):
+        """Balanced routing at a capacity that cannot clip, so the transport must equal dense.
+
+        `ring` runs on the same inputs and is recorded as a diagnostic, never as a reference.
+        """
+        raw = _inputs(jax.random.key(1000 + seed), tokens, skew=False)
+        dense, g_dense = _dense_reference(*raw)
+        xb, selb, cwb, w13b, w2b = reshard(*raw)
+        o_ragged, g_ragged, dropped = loss_and_grad(
+            "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
+        )
+        o_ring, _g_ring, dropped_ring = loss_and_grad(
+            "ring", xb, selb, cwb, w13b, w2b, capacity_factor=RING_DIAGNOSTIC_CAPACITY
+        )
+        return dense, g_dense, o_ragged, g_ragged, dropped, o_ring, dropped_ring
+
+    def compare_under_drops(seed: int):
+        """Skewed routing at a capacity that clips, against dense restricted to surviving rows.
+
+        The NumPy oracle decides which assignments survive; masking the combine weights with it
+        gives a dense reference that computes only those.
+        """
+        raw_skew = _inputs(jax.random.key(seed), tokens, skew=True)
+        xs_raw, sel_raw, cw_raw, w13_raw, w2_raw = raw_skew
+        keep = _keep_mask(np.asarray(sel_raw), TOKENS_PER_DEVICE, SKEWED_CAPACITY)
+        dense_dropped, g_dense_dropped = _dense_reference(
+            xs_raw, sel_raw, jnp.asarray(cw_raw, jnp.float32) * keep, w13_raw, w2_raw
+        )
+        xs, sels, cws, w13s, w2s = reshard(*raw_skew)
+        o_drop, g_drop, dropped_skewed = loss_and_grad(
+            "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY
+        )
+        return keep, dense_dropped, g_dense_dropped, o_drop, g_drop, dropped_skewed
+
     rows: list[SeedRow] = []
     for seed in SEEDS:
         with jax.set_mesh(mesh):
-            # A. ground truth: balanced routing, no drops -- ragged must match the exact fp32
-            # dense MoE; ring runs alongside as a diagnostic only (see module docstring).
-            raw = _inputs(jax.random.key(1000 + seed), tokens, skew=False)
-            dense, g_dense = _dense_reference(*raw)
-            xb, selb, cwb, w13b, w2b = reshard(*raw)
-            o_ragged, g_ragged, dropped = loss_and_grad(
-                "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
-            )
-            o_ring, _g_ring, dropped_ring = loss_and_grad(
-                "ring", xb, selb, cwb, w13b, w2b, capacity_factor=RING_DIAGNOSTIC_CAPACITY
-            )
-
-            # B. drop regime: skewed routing at a capacity that clips, checked against the dense
-            # reference restricted to the assignments the NumPy oracle says survive.
-            raw_skew = _inputs(jax.random.key(seed), tokens, skew=True)
-            xs_raw, sel_raw, cw_raw, w13_raw, w2_raw = raw_skew
-            keep = _keep_mask(np.asarray(sel_raw), TOKENS_PER_DEVICE, SKEWED_CAPACITY)
-            dense_dropped, g_dense_dropped = _dense_reference(
-                xs_raw, sel_raw, jnp.asarray(cw_raw, jnp.float32) * keep, w13_raw, w2_raw
-            )
-            xs, sels, cws, w13s, w2s = reshard(*raw_skew)
-            o_drop, g_drop, dropped_skewed = loss_and_grad(
-                "ragged_all_to_all", xs, sels, cws, w13s, w2s, capacity_factor=SKEWED_CAPACITY
-            )
+            dense, g_dense, o_ragged, g_ragged, dropped, o_ring, dropped_ring = compare_without_drops(seed)
+            keep, dense_dropped, g_dense_dropped, o_drop, g_drop, dropped_skewed = compare_under_drops(seed)
 
         grad = _graddiff(g_ragged, g_dense)
         grad_dropped = _graddiff(g_drop, g_dense_dropped)
