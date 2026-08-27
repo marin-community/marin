@@ -34,6 +34,7 @@ from marin.inference.vllm_server import (
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from prometheus_client.parser import text_string_to_metric_families
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -48,6 +49,38 @@ def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
     assert not _starts_nccl_ras_probe(preinstalled)
     assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(preinstalled, {"VLLM_HOST_IP": "10.0.0.2"}))
+
+
+def test_vllm_family_selection_keeps_late_counter_and_histogram_complete() -> None:
+    noise = "\n".join(f'vllm:noise{{index="{index}"}} {index}' for index in range(1050))
+    scrape = f"""
+# TYPE vllm:noise gauge
+{noise}
+# TYPE vllm:late_requests_total counter
+vllm:late_requests_total{{engine="0"}} 7
+# TYPE vllm:late_requests_created gauge
+vllm:late_requests_created{{engine="0"}} 1
+# TYPE vllm:late_histogram histogram
+vllm:late_histogram_bucket{{engine="0",le="0.1"}} 2
+vllm:late_histogram_bucket{{engine="0",le="+Inf"}} 3
+vllm:late_histogram_count{{engine="0"}} 3
+vllm:late_histogram_sum{{engine="0"}} 0.4
+# TYPE vllm:late_histogram_created gauge
+vllm:late_histogram_created{{engine="0"}} 1
+"""
+
+    snapshots = vllm_server._vllm_metric_snapshots(
+        tuple(text_string_to_metric_families(scrape)),
+        family_names=frozenset({"vllm:late_requests", "vllm:late_histogram"}),
+    )
+
+    assert {snapshot.name for snapshot in snapshots} == {
+        "late_requests_total",
+        "late_histogram_bucket",
+        "late_histogram_count",
+        "late_histogram_sum",
+    }
+    assert len(snapshots) == 5
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

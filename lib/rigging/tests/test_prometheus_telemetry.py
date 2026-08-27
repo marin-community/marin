@@ -155,45 +155,6 @@ def test_metric_snapshot_publisher_caps_processor_output(monkeypatch: pytest.Mon
     assert indices == ["0", "1"]
 
 
-def test_family_selection_keeps_late_counter_and_histogram_complete(monkeypatch: pytest.MonkeyPatch) -> None:
-    noise = "\n".join(f'vllm:noise{{index="{index}"}} {index}' for index in range(1050))
-    scrape = f"""
-# TYPE vllm:noise gauge
-{noise}
-# TYPE vllm:late_requests_total counter
-vllm:late_requests_total{{engine="0"}} 7
-# TYPE vllm:late_requests_created gauge
-vllm:late_requests_created{{engine="0"}} 1
-# TYPE vllm:late_histogram histogram
-vllm:late_histogram_bucket{{engine="0",le="0.1"}} 2
-vllm:late_histogram_bucket{{engine="0",le="+Inf"}} 3
-vllm:late_histogram_count{{engine="0"}} 3
-vllm:late_histogram_sum{{engine="0"}} 0.4
-# TYPE vllm:late_histogram_created gauge
-vllm:late_histogram_created{{engine="0"}} 1
-"""
-    monkeypatch.setattr(
-        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(scrape)
-    )
-
-    families = PrometheusScraper("http://vllm/metrics").scrape()
-    snapshots = prefixed_metric_snapshots(
-        families,
-        metric_prefix="vllm:",
-        family_names=frozenset({"vllm:late_requests", "vllm:late_histogram"}),
-    )
-
-    assert {snapshot.name for snapshot in snapshots} == {
-        "late_requests_total",
-        "late_requests_created",
-        "late_histogram_bucket",
-        "late_histogram_count",
-        "late_histogram_sum",
-        "late_histogram_created",
-    }
-    assert len(snapshots) == 7
-
-
 def test_oversized_batch_is_rejected_whole_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
     scrapes = iter(
@@ -210,11 +171,7 @@ def test_oversized_batch_is_rejected_whole_and_recovers(monkeypatch: pytest.Monk
     collector = PrometheusCollector(
         metric_source="vllm",
         scraper=PrometheusScraper("http://vllm/metrics"),
-        processor=lambda families: prefixed_metric_snapshots(
-            families,
-            metric_prefix="vllm:",
-            family_names=frozenset({"vllm:selected"}),
-        ),
+        processor=lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:"),
         publisher=metrics.RejectOversizedMetricSnapshotPublisher(
             max_records=2,
             attributes={"metric_source": "vllm"},

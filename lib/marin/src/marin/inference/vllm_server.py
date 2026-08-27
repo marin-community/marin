@@ -22,9 +22,10 @@ from urllib.parse import urlparse
 
 import requests
 from iris.runtime import telemetry as runtime_telemetry
+from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.telemetry.metrics import RejectOversizedMetricSnapshotPublisher
+from rigging.telemetry.metrics import MetricSnapshot, RejectOversizedMetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
@@ -102,7 +103,7 @@ _LINUX_PROC_ROOT = "/proc"
 _HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
-# The complete standard contract is 1,128 samples at the observed ordinary eight-engine
+# The complete standard contract is 1,024 samples at the observed ordinary eight-engine
 # cardinality. Keep optional additions bounded by the same post-selection envelope.
 _VLLM_METRIC_SAMPLE_LIMIT = 2048
 
@@ -1092,6 +1093,15 @@ def _start_vllm_native_process(
         raise
 
 
+def _vllm_metric_snapshots(
+    families: tuple[PrometheusMetric, ...],
+    *,
+    family_names: frozenset[str],
+) -> tuple[MetricSnapshot, ...]:
+    selected_families = tuple(family for family in families if family.name in family_names)
+    return prefixed_metric_snapshots(selected_families, metric_prefix=VLLM_METRIC_PREFIX)
+
+
 def _configure_vllm_telemetry(
     handle: VllmServerHandle,
     *,
@@ -1113,8 +1123,7 @@ def _configure_vllm_telemetry(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),
         processor=functools.partial(
-            prefixed_metric_snapshots,
-            metric_prefix=VLLM_METRIC_PREFIX,
+            _vllm_metric_snapshots,
             family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
         ),
         publisher=RejectOversizedMetricSnapshotPublisher(
