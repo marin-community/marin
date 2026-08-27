@@ -4,6 +4,7 @@
 """Ragged all-to-all expert-parallel Grug MoE backend."""
 
 import functools
+import logging
 import math
 from collections.abc import Callable
 from typing import TypeAlias
@@ -21,6 +22,8 @@ from levanter.grug._moe.ep_common import (
     _unpermute_from_global_expert,
 )
 from levanter.grug.sharding import _batch_axes
+
+logger = logging.getLogger(__name__)
 
 # QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
@@ -99,14 +102,14 @@ def _quack_grouped_gemm_available() -> bool:
         import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
         from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
 
-        # `sonic_cute` importing proves nothing about cuDNN: the frontend modules the weight
-        # gradient needs are resolved lazily inside `_cudnn_modules`. Resolve them here, or an
-        # environment carrying quack and cutlass but not the pinned `nvidia-cudnn-frontend`
-        # passes this probe and dies during backward tracing, past the point where returning
-        # the `ragged_dot` path is still an option. `AttributeError` catches a frontend old
-        # enough to import but too old to carry the kernel symbols.
         _cudnn_modules()
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "SM100 GPU present but the QuACK/cuDNN grouped-GEMM kernels did not import (%s). "
+            "The ragged expert MLP falls back to ragged_dot, which computes the same function "
+            "more slowly. Install levanter's `gpu` extra to use them.",
+            exc,
+        )
         return False
     return True
 
