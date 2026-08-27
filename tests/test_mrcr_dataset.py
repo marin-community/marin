@@ -208,6 +208,14 @@ def _row(
         {"role": "assistant", "content": filler},
         {"role": "user", "content": "write the target"},
         {"role": "assistant", "content": target},
+        *[
+            message
+            for occurrence in range(2, needles)
+            for message in (
+                {"role": "user", "content": "write the target"},
+                {"role": "assistant", "content": f"later target response {occurrence + 1}"},
+            )
+        ],
         {"role": "user", "content": "another unrelated request"},
         {"role": "assistant", "content": "trailing distractor"},
         {
@@ -284,7 +292,7 @@ def test_transform_mrcr_uses_complete_bpe_offsets_when_generation_boundary_merge
     expected_distance = target_tokens[0] - response_tokens[-1] - 1
     records = _records(output)
 
-    assert len(records) == 6
+    assert len(records) == 12
     assert {record["evidence_distance_tokens"] for record in records} == {expected_distance}
     assert {record["messages"][1]["content"] for record in records} == {target}
     for record in records:
@@ -312,7 +320,7 @@ def test_transform_mrcr_builds_paired_variants_with_identical_scored_bodies(
     )
 
     records = _records(output)
-    assert len(records) == 6
+    assert len(records) == 12
     by_variant_condition = {(record["prompt_variant"], record["condition"]): record for record in records}
     target_bodies = {record["messages"][1]["content"] for record in records}
     assert target_bodies == {"selected response body"}
@@ -322,6 +330,8 @@ def test_transform_mrcr_builds_paired_variants_with_identical_scored_bodies(
 
     two_shot_full = by_variant_condition[("two_shot", "full_context")]["messages"][0]["content"]
     two_shot_query = by_variant_condition[("two_shot", "query_only")]["messages"][0]["content"]
+    two_shot_needle = by_variant_condition[("two_shot", "needle_only")]["messages"][0]["content"]
+    two_shot_distractor = by_variant_condition[("two_shot", "distractor_only")]["messages"][0]["content"]
     one_shot_full = by_variant_condition[("one_shot", "full_context")]["messages"][0]["content"]
     no_prefix_full = by_variant_condition[("two_shot_no_prefix", "full_context")]["messages"][0]["content"]
     no_prefix_query = by_variant_condition[("two_shot_no_prefix", "query_only")]["messages"][0]["content"]
@@ -330,6 +340,13 @@ def test_transform_mrcr_builds_paired_variants_with_identical_scored_bodies(
     assert "second demonstration" not in one_shot_full
     assert "selected response body" in two_shot_full
     assert "selected response body" not in two_shot_query
+    assert "selected response body" in two_shot_needle
+    assert "first target response" in two_shot_needle
+    assert "trailing distractor" not in two_shot_needle
+    assert "selected response body" not in two_shot_distractor
+    assert "User: write the target\nAssistant: selected response body" not in two_shot_distractor
+    assert "first target response" not in two_shot_distractor
+    assert "trailing distractor" in two_shot_distractor
     assert two_shot_query.startswith(f"User: {_preamble()}")
     assert two_shot_full.endswith("Assistant: Ab3dE5gH7j")
     assert no_prefix_full.endswith("Assistant: ")
@@ -397,7 +414,7 @@ def test_transform_mrcr_canonical_bins_do_not_slice_pairs_or_prompt_variants(
         grouped.setdefault(record["source_id"], []).append(record)
     assert len(grouped) == len(accepted_lengths)
     for source_records in grouped.values():
-        assert len(source_records) == 6
+        assert len(source_records) == 12
         canonical_length = source_records[0]["canonical_full_length_tokens"]
         expected_cap = next(cap for cap in caps if canonical_length <= cap)
         assert {record["context_cap"] for record in source_records} == {expected_cap}

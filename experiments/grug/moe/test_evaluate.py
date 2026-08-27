@@ -68,9 +68,15 @@ def _example(
     scored_tokens: int,
     full_loss_sum: float,
     query_loss_sum: float,
+    needle_loss_sum: float | None = None,
+    distractor_loss_sum: float | None = None,
     n_needles: int = 2,
     distance_band: str = "distance_le_32768",
 ) -> MrcrExampleLoss:
+    if needle_loss_sum is None:
+        needle_loss_sum = full_loss_sum
+    if distractor_loss_sum is None:
+        distractor_loss_sum = query_loss_sum
     return MrcrExampleLoss(
         source_id=source_id,
         prompt_variant="two_shot",
@@ -81,8 +87,12 @@ def _example(
         scored_tokens=scored_tokens,
         full_context_loss_sum=full_loss_sum,
         query_only_loss_sum=query_loss_sum,
+        needle_only_loss_sum=needle_loss_sum,
+        distractor_only_loss_sum=distractor_loss_sum,
         full_context_scored_bytes=scored_tokens * 2,
         query_only_scored_bytes=scored_tokens * 2,
+        needle_only_scored_bytes=scored_tokens * 2,
+        distractor_only_scored_bytes=scored_tokens * 2,
     )
 
 
@@ -90,7 +100,9 @@ def _config(tmp_path, *, component_names: tuple[str, ...] | None = None) -> Grug
     model = _canonical_67b_model()
     cell = "two_shot/cap_65536/2needle/distance_le_32768"
     if component_names is None:
-        component_names = (f"{cell}/full_context", f"{cell}/query_only")
+        component_names = tuple(
+            f"{cell}/{condition}" for condition in ("full_context", "query_only", "needle_only", "distractor_only")
+        )
     data = LmDataConfig(
         tokenizer="passthrough",
         vocab_size=model.vocab_size,
@@ -131,23 +143,48 @@ def test_pair_mrcr_condition_losses_requires_complete_equal_pairs():
     )
     full = MrcrConditionLoss(condition="full_context", loss_sum=3.0, **common)
     query = MrcrConditionLoss(condition="query_only", loss_sum=6.0, **common)
-    paired = pair_mrcr_condition_losses((query, full))
+    needle = MrcrConditionLoss(condition="needle_only", loss_sum=2.0, **common)
+    distractor = MrcrConditionLoss(condition="distractor_only", loss_sum=5.0, **common)
+    paired = pair_mrcr_condition_losses((query, distractor, full, needle))
     assert paired[0].source_id == "a"
     assert paired[0].context_gain_nll == 1.0
+    assert paired[0].isolated_needle_gain_nll == pytest.approx(4.0 / 3.0)
+    assert paired[0].distracted_needle_gain_nll == pytest.approx(2.0 / 3.0)
 
-    with pytest.raises(ValueError, match="missing pair"):
+    with pytest.raises(ValueError, match="incomplete condition set"):
         pair_mrcr_condition_losses((full,))
     with pytest.raises(ValueError, match="unequal scored-token"):
-        pair_mrcr_condition_losses((full, dataclasses.replace(query, scored_tokens=2)))
+        pair_mrcr_condition_losses((full, dataclasses.replace(query, scored_tokens=2), needle, distractor))
     with pytest.raises(ValueError, match="duplicate condition"):
-        pair_mrcr_condition_losses((full, full, query))
+        pair_mrcr_condition_losses((full, full, query, needle, distractor))
 
 
 def test_derive_mrcr_metrics_computes_micro_macro_and_reproducible_paired_intervals():
     rows = (
-        _example("a", scored_tokens=1, full_loss_sum=1.0, query_loss_sum=3.0),
-        _example("b", scored_tokens=3, full_loss_sum=3.0, query_loss_sum=3.0),
-        _example("c", scored_tokens=2, full_loss_sum=4.0, query_loss_sum=2.0),
+        _example(
+            "a",
+            scored_tokens=1,
+            full_loss_sum=1.0,
+            query_loss_sum=3.0,
+            needle_loss_sum=0.0,
+            distractor_loss_sum=4.0,
+        ),
+        _example(
+            "b",
+            scored_tokens=3,
+            full_loss_sum=3.0,
+            query_loss_sum=3.0,
+            needle_loss_sum=0.0,
+            distractor_loss_sum=6.0,
+        ),
+        _example(
+            "c",
+            scored_tokens=2,
+            full_loss_sum=4.0,
+            query_loss_sum=2.0,
+            needle_loss_sum=0.0,
+            distractor_loss_sum=6.0,
+        ),
     )
     first = derive_mrcr_metrics(rows, bootstrap_samples=2_000, bootstrap_seed=17)
     second = derive_mrcr_metrics(rows, bootstrap_samples=2_000, bootstrap_seed=17)
@@ -161,6 +198,38 @@ def test_derive_mrcr_metrics_computes_micro_macro_and_reproducible_paired_interv
     assert first[f"{prefix}/micro_context_gain_nll_ci95_high"] >= 0
     assert first[f"{prefix}/macro_context_gain_nll_ci95_low"] <= 1.0 / 3.0
     assert first[f"{prefix}/macro_context_gain_nll_ci95_high"] >= 1.0 / 3.0
+    assert first[f"{prefix}/micro_needle_recovery_ratio"] == pytest.approx(1.0)
+
+
+def test_derive_mrcr_metrics_uses_ratio_of_aggregates_and_gates_weak_oracles():
+    rows = (
+        _example(
+            "a",
+            scored_tokens=1,
+            full_loss_sum=0.0,
+            query_loss_sum=1.0,
+            needle_loss_sum=0.0,
+            distractor_loss_sum=1.0,
+        ),
+        _example(
+            "b",
+            scored_tokens=9,
+            full_loss_sum=0.0,
+            query_loss_sum=9.0,
+            needle_loss_sum=0.0,
+            distractor_loss_sum=0.0,
+        ),
+    )
+    metrics = derive_mrcr_metrics(rows, bootstrap_samples=1_000, bootstrap_seed=4)
+    prefix = "eval/mrcr/two_shot/cap_65536/2needle/distance_le_32768"
+
+    assert metrics[f"{prefix}/micro_needle_recovery_ratio"] == pytest.approx(0.1)
+    assert metrics[f"{prefix}/macro_needle_recovery_ratio"] == pytest.approx(0.5)
+
+    weak = (_example("weak", scored_tokens=2, full_loss_sum=2.0, query_loss_sum=2.0),)
+    weak_metrics = derive_mrcr_metrics(weak, bootstrap_samples=10, bootstrap_seed=4)
+    assert weak_metrics[f"{prefix}/micro_recovery_identifiable"] == 0.0
+    assert f"{prefix}/micro_needle_recovery_ratio" not in weak_metrics
 
 
 def test_summarize_per_example_losses_scores_only_response_body_tokens():

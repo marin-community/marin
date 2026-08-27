@@ -36,7 +36,6 @@ MRCR_PREAMBLE_PREFIX = "Here are some examples of conversations succeeded by a f
 
 _EXAMPLE_START = "======EXAMPLE======"
 _EXAMPLE_END = "======END EXAMPLE======"
-_VERSION = "2026.08.24.1"
 _MRCR_CHAT_TEMPLATE = (
     "{{ messages[0]['content'] }}{% generation %}{{ messages[1]['content'] }}{% endgeneration %}{{ eos_token }}"
 )
@@ -49,6 +48,8 @@ def _join(*parts: str) -> str:
 class MrcrCondition(StrEnum):
     FULL_CONTEXT = "full_context"
     QUERY_ONLY = "query_only"
+    NEEDLE_ONLY = "needle_only"
+    DISTRACTOR_ONLY = "distractor_only"
 
 
 class MrcrPromptVariant(StrEnum):
@@ -303,6 +304,23 @@ def transform_mrcr(config: MrcrTransformConfig) -> None:
                             raise ValueError(
                                 "desired_msg_index must identify a user request followed by an assistant response"
                             )
+                        conversation = messages[1:-1]
+                        if len(conversation) % 2:
+                            raise ValueError("MRCR target conversation must contain complete user/assistant pairs")
+                        conversation_pairs: list[tuple[_MrcrMessage, _MrcrMessage]] = []
+                        for index in range(0, len(conversation), 2):
+                            request, response = conversation[index : index + 2]
+                            if request["role"] != "user" or response["role"] != "assistant":
+                                raise ValueError("MRCR target conversation must alternate user and assistant messages")
+                            conversation_pairs.append((request, response))
+                        needle_pairs = [
+                            pair for pair in conversation_pairs if pair[0]["content"] == selected_request["content"]
+                        ]
+                        distractor_pairs = [
+                            pair for pair in conversation_pairs if pair[0]["content"] != selected_request["content"]
+                        ]
+                        if len(needle_pairs) != needles:
+                            raise ValueError("n_needles does not match the number of selected-request occurrences")
                         if not answer.startswith(nonce):
                             raise ValueError("MRCR answer does not begin with random_string_to_prepend")
                         target = answer.removeprefix(nonce)
@@ -359,17 +377,44 @@ def transform_mrcr(config: MrcrTransformConfig) -> None:
                             query_prompt, _ = _render_prompt(
                                 [variant_messages[0], variant_messages[-1]], assistant_prefix
                             )
-                            full = _preprocess(preprocessor, full_prompt, target)
-                            query_only = _preprocess(preprocessor, query_prompt, target)
+                            needle_prompt, _ = _render_prompt(
+                                [
+                                    variant_messages[0],
+                                    *[_copy_message(message) for pair in needle_pairs for message in pair],
+                                    variant_messages[-1],
+                                ],
+                                assistant_prefix,
+                            )
+                            distractor_prompt, _ = _render_prompt(
+                                [
+                                    variant_messages[0],
+                                    *[_copy_message(message) for pair in distractor_pairs for message in pair],
+                                    variant_messages[-1],
+                                ],
+                                assistant_prefix,
+                            )
+                            condition_prompts = {
+                                MrcrCondition.FULL_CONTEXT: full_prompt,
+                                MrcrCondition.QUERY_ONLY: query_prompt,
+                                MrcrCondition.NEEDLE_ONLY: needle_prompt,
+                                MrcrCondition.DISTRACTOR_ONLY: distractor_prompt,
+                            }
+                            processed_conditions = {
+                                condition: _preprocess(preprocessor, prompt, target)
+                                for condition, prompt in condition_prompts.items()
+                            }
+                            full = processed_conditions[MrcrCondition.FULL_CONTEXT]
                             if len(full["input_ids"]) > cap:
                                 raise ValueError("A prompt variant exceeded its canonical two-shot context cap")
                             full_target_ids = full["input_ids"][full["assistant_masks"].astype(bool)]
-                            query_target_ids = query_only["input_ids"][query_only["assistant_masks"].astype(bool)]
-                            if not np.array_equal(full_target_ids, query_target_ids):
-                                raise ValueError("Paired MRCR target tokenization differs between conditions")
                             scored_tokens = int(full["assistant_masks"].sum())
-                            if scored_tokens <= 0 or scored_tokens != int(query_only["assistant_masks"].sum()):
-                                raise ValueError("Paired MRCR scored-token masks differ between conditions")
+                            for condition, processed in processed_conditions.items():
+                                target_ids = processed["input_ids"][processed["assistant_masks"].astype(bool)]
+                                if not np.array_equal(full_target_ids, target_ids):
+                                    raise ValueError(f"MRCR target tokenization differs for condition {condition.value}")
+                                if scored_tokens <= 0 or scored_tokens != int(processed["assistant_masks"].sum()):
+                                    raise ValueError(f"MRCR scored-token mask differs for condition {condition.value}")
+                            query_only = processed_conditions[MrcrCondition.QUERY_ONLY]
                             max_query_only_tokens[variant.value] = max(
                                 max_query_only_tokens[variant.value], len(query_only["input_ids"])
                             )
@@ -392,10 +437,7 @@ def transform_mrcr(config: MrcrTransformConfig) -> None:
                             manifest = _writer(stack, manifest_writers, manifest_path, compressed=False)
                             manifest.write(json.dumps(manifest_record, sort_keys=True) + "\n")
 
-                            for condition, prompt in (
-                                (MrcrCondition.FULL_CONTEXT, full_prompt),
-                                (MrcrCondition.QUERY_ONLY, query_prompt),
-                            ):
+                            for condition, prompt in condition_prompts.items():
                                 record = {
                                     "messages": [
                                         {"role": "user", "content": prompt},

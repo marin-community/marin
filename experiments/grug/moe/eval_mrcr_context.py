@@ -395,7 +395,7 @@ def build_evaluation_steps(
             expert_weight_hidden_axis=shape.expert_weight_hidden_axis,
         )
         resource_suffix = f"-{shape.output_suffix}" if shape.output_suffix else ""
-        run_id = f"{cell.run_id}{resource_suffix}"
+        run_id = f"{cell.run_id}-oracle4{resource_suffix}"
         evaluation = GrugCheckpointEvalConfig(
             run_id=run_id,
             checkpoint_path=checkpoint_path,  # type: ignore[arg-type]

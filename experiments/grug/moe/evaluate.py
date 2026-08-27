@@ -50,6 +50,7 @@ _APPROVED_MODEL_OVERRIDES = frozenset(
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 _CE_CHUNK_SIZE = 512
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=128, h_block_size=256, v_block_size=256)
+_MIN_ORACLE_GAIN_NLL = 0.1
 ParamsT = TypeVar("ParamsT")
 
 
@@ -109,8 +110,12 @@ class MrcrExampleLoss:
     scored_tokens: int
     full_context_loss_sum: float
     query_only_loss_sum: float
+    needle_only_loss_sum: float
+    distractor_only_loss_sum: float
     full_context_scored_bytes: int
     query_only_scored_bytes: int
+    needle_only_scored_bytes: int
+    distractor_only_scored_bytes: int
 
     @property
     def full_context_nll(self) -> float:
@@ -124,6 +129,22 @@ class MrcrExampleLoss:
     def context_gain_nll(self) -> float:
         return self.query_only_nll - self.full_context_nll
 
+    @property
+    def needle_only_nll(self) -> float:
+        return self.needle_only_loss_sum / self.scored_tokens
+
+    @property
+    def distractor_only_nll(self) -> float:
+        return self.distractor_only_loss_sum / self.scored_tokens
+
+    @property
+    def isolated_needle_gain_nll(self) -> float:
+        return self.query_only_nll - self.needle_only_nll
+
+    @property
+    def distracted_needle_gain_nll(self) -> float:
+        return self.distractor_only_nll - self.full_context_nll
+
     def persisted_record(self) -> dict[str, Any]:
         return {
             "source_id": self.source_id,
@@ -135,9 +156,15 @@ class MrcrExampleLoss:
             "scored_tokens": self.scored_tokens,
             "full_context_loss_sum": self.full_context_loss_sum,
             "query_only_loss_sum": self.query_only_loss_sum,
+            "needle_only_loss_sum": self.needle_only_loss_sum,
+            "distractor_only_loss_sum": self.distractor_only_loss_sum,
             "full_context_nll": self.full_context_nll,
             "query_only_nll": self.query_only_nll,
+            "needle_only_nll": self.needle_only_nll,
+            "distractor_only_nll": self.distractor_only_nll,
             "context_gain_nll": self.context_gain_nll,
+            "isolated_needle_gain_nll": self.isolated_needle_gain_nll,
+            "distracted_needle_gain_nll": self.distracted_needle_gain_nll,
         }
 
 
@@ -230,13 +257,13 @@ def validate_grug_checkpoint_eval_config(config: GrugCheckpointEvalConfig) -> No
         raise ValueError("dataset_manifest_paths must contain exactly one manifest for every paired MRCR cell")
     for cell in expected_manifests:
         conditions = {name.rsplit("/", 1)[-1] for name in component_names if _cell_name(name) == cell}
-        if conditions != {"full_context", "query_only"}:
+        if conditions != {"full_context", "query_only", "needle_only", "distractor_only"}:
             raise ValueError(f"paired MRCR cell is incomplete: {cell}")
 
 
 def _cell_name(component_name: str) -> str:
     cell, separator, condition = component_name.rpartition("/")
-    if not separator or condition not in ("full_context", "query_only"):
+    if not separator or condition not in ("full_context", "query_only", "needle_only", "distractor_only"):
         raise ValueError(f"invalid MRCR component name: {component_name}")
     return cell
 
@@ -250,21 +277,22 @@ def pair_mrcr_condition_losses(condition_losses: Iterable[MrcrConditionLoss]) ->
 
     paired: list[MrcrExampleLoss] = []
     for source_id, conditions in by_source.items():
-        if set(conditions) != {"full_context", "query_only"}:
-            raise ValueError(f"missing pair for source_id {source_id}")
+        if set(conditions) != {"full_context", "query_only", "needle_only", "distractor_only"}:
+            raise ValueError(f"incomplete condition set for source_id {source_id}")
         full = conditions["full_context"]
         query = conditions["query_only"]
+        needle = conditions["needle_only"]
+        distractor = conditions["distractor_only"]
         full_identity = dataclasses.astuple(full)[:6]
-        query_identity = dataclasses.astuple(query)[:6]
-        if full_identity != query_identity:
+        if any(full_identity != dataclasses.astuple(row)[:6] for row in (query, needle, distractor)):
             raise ValueError(f"paired metadata differs for source_id {source_id}")
-        if full.scored_tokens != query.scored_tokens:
+        if len({row.scored_tokens for row in (full, query, needle, distractor)}) != 1:
             raise ValueError(f"unequal scored-token counts for source_id {full.source_id}")
         if full.scored_tokens <= 0:
             raise ValueError(f"zero scored tokens for source_id {full.source_id}")
-        if full.scored_bytes != query.scored_bytes or full.scored_bytes <= 0:
+        if len({row.scored_bytes for row in (full, query, needle, distractor)}) != 1 or full.scored_bytes <= 0:
             raise ValueError(f"unequal or zero scored-byte counts for source_id {full.source_id}")
-        if not math.isfinite(full.loss_sum) or not math.isfinite(query.loss_sum):
+        if not all(math.isfinite(row.loss_sum) for row in (full, query, needle, distractor)):
             raise ValueError(f"non-finite loss for source_id {full.source_id}")
         paired.append(
             MrcrExampleLoss(
@@ -277,8 +305,12 @@ def pair_mrcr_condition_losses(condition_losses: Iterable[MrcrConditionLoss]) ->
                 scored_tokens=full.scored_tokens,
                 full_context_loss_sum=full.loss_sum,
                 query_only_loss_sum=query.loss_sum,
+                needle_only_loss_sum=needle.loss_sum,
+                distractor_only_loss_sum=distractor.loss_sum,
                 full_context_scored_bytes=full.scored_bytes,
                 query_only_scored_bytes=query.scored_bytes,
+                needle_only_scored_bytes=needle.scored_bytes,
+                distractor_only_scored_bytes=distractor.scored_bytes,
             )
         )
     return sorted(paired, key=lambda row: (row.prompt_variant, row.n_needles, row.distance_band, row.source_id))
@@ -289,49 +321,84 @@ def _bootstrap_seed(seed: int, prefix: str) -> int:
     return (seed + prefix_hash) % (2**64)
 
 
-def _gain_values(rows: Sequence[MrcrExampleLoss]) -> tuple[float, float]:
-    full_sum = sum(row.full_context_loss_sum for row in rows)
-    query_sum = sum(row.query_only_loss_sum for row in rows)
+def _contrast_values(rows: Sequence[MrcrExampleLoss]) -> dict[str, float]:
     tokens = sum(row.scored_tokens for row in rows)
-    micro = (query_sum - full_sum) / tokens
-    macro = float(np.mean([row.context_gain_nll for row in rows]))
-    return micro, macro
+    context = sum(row.query_only_loss_sum - row.full_context_loss_sum for row in rows) / tokens
+    oracle = sum(row.query_only_loss_sum - row.needle_only_loss_sum for row in rows) / tokens
+    real = sum(row.distractor_only_loss_sum - row.full_context_loss_sum for row in rows) / tokens
+    macro_context = float(np.mean([row.context_gain_nll for row in rows]))
+    macro_oracle = float(np.mean([row.isolated_needle_gain_nll for row in rows]))
+    macro_real = float(np.mean([row.distracted_needle_gain_nll for row in rows]))
+    return {
+        "micro_context": context,
+        "micro_oracle": oracle,
+        "micro_real": real,
+        "micro_interaction": real - oracle,
+        "macro_context": macro_context,
+        "macro_oracle": macro_oracle,
+        "macro_real": macro_real,
+        "macro_interaction": macro_real - macro_oracle,
+    }
 
 
-def _paired_bootstrap(
-    rows: Sequence[MrcrExampleLoss], *, samples: int, seed: int, prefix: str
-) -> tuple[tuple[float, float], tuple[float, float]]:
+def _paired_bootstrap(rows: Sequence[MrcrExampleLoss], *, samples: int, seed: int, prefix: str) -> dict[str, np.ndarray]:
     rng = np.random.Generator(np.random.PCG64(_bootstrap_seed(seed, prefix)))
     strata: dict[tuple[int, str], list[int]] = defaultdict(list)
     for index, row in enumerate(rows):
         strata[(row.n_needles, row.distance_band)].append(index)
     full = np.asarray([row.full_context_loss_sum for row in rows], dtype=np.float64)
     query = np.asarray([row.query_only_loss_sum for row in rows], dtype=np.float64)
+    needle = np.asarray([row.needle_only_loss_sum for row in rows], dtype=np.float64)
+    distractor = np.asarray([row.distractor_only_loss_sum for row in rows], dtype=np.float64)
     tokens = np.asarray([row.scored_tokens for row in rows], dtype=np.float64)
-    gains = query / tokens - full / tokens
-    boot_micro = np.zeros(samples, dtype=np.float64)
-    boot_macro_sum = np.zeros(samples, dtype=np.float64)
+    micro_context = np.zeros(samples, dtype=np.float64)
+    micro_oracle = np.zeros(samples, dtype=np.float64)
+    micro_real = np.zeros(samples, dtype=np.float64)
+    macro_context = np.zeros(samples, dtype=np.float64)
+    macro_oracle = np.zeros(samples, dtype=np.float64)
+    macro_real = np.zeros(samples, dtype=np.float64)
+    token_denominator = np.zeros(samples, dtype=np.float64)
     total_examples = 0
     for indices in strata.values():
         stratum = np.asarray(indices, dtype=np.int64)
         selected = stratum[rng.integers(0, len(stratum), size=(samples, len(stratum)))]
-        boot_micro += np.sum(query[selected] - full[selected], axis=1)
-        boot_macro_sum += np.sum(gains[selected], axis=1)
+        micro_context += np.sum(query[selected] - full[selected], axis=1)
+        micro_oracle += np.sum(query[selected] - needle[selected], axis=1)
+        micro_real += np.sum(distractor[selected] - full[selected], axis=1)
+        macro_context += np.sum((query[selected] - full[selected]) / tokens[selected], axis=1)
+        macro_oracle += np.sum((query[selected] - needle[selected]) / tokens[selected], axis=1)
+        macro_real += np.sum((distractor[selected] - full[selected]) / tokens[selected], axis=1)
+        token_denominator += np.sum(tokens[selected], axis=1)
         total_examples += len(stratum)
-    denominator = np.zeros(samples, dtype=np.float64)
-    # Repeat the deterministic stratum draws so the token denominator matches each numerator draw.
-    rng = np.random.Generator(np.random.PCG64(_bootstrap_seed(seed, prefix)))
-    for indices in strata.values():
-        stratum = np.asarray(indices, dtype=np.int64)
-        selected = stratum[rng.integers(0, len(stratum), size=(samples, len(stratum)))]
-        denominator += np.sum(tokens[selected], axis=1)
-    boot_micro /= denominator
-    boot_macro = boot_macro_sum / total_examples
-    micro_percentiles = np.percentile(boot_micro, (2.5, 97.5))
-    macro_percentiles = np.percentile(boot_macro, (2.5, 97.5))
-    micro_bounds = (float(micro_percentiles[0]), float(micro_percentiles[1]))
-    macro_bounds = (float(macro_percentiles[0]), float(macro_percentiles[1]))
-    return micro_bounds, macro_bounds
+    micro_recovery = np.divide(
+        micro_real,
+        micro_oracle,
+        out=np.full(samples, np.nan, dtype=np.float64),
+        where=micro_oracle != 0,
+    )
+    macro_recovery = np.divide(
+        macro_real,
+        macro_oracle,
+        out=np.full(samples, np.nan, dtype=np.float64),
+        where=macro_oracle != 0,
+    )
+    return {
+        "micro_context": micro_context / token_denominator,
+        "micro_oracle": micro_oracle / token_denominator,
+        "micro_real": micro_real / token_denominator,
+        "micro_interaction": (micro_real - micro_oracle) / token_denominator,
+        "micro_recovery": micro_recovery,
+        "macro_context": macro_context / total_examples,
+        "macro_oracle": macro_oracle / total_examples,
+        "macro_real": macro_real / total_examples,
+        "macro_interaction": (macro_real - macro_oracle) / total_examples,
+        "macro_recovery": macro_recovery,
+    }
+
+
+def _percentile_bounds(values: np.ndarray) -> tuple[float, float]:
+    percentiles = np.percentile(values, (2.5, 97.5))
+    return float(percentiles[0]), float(percentiles[1])
 
 
 def _group_metrics(
@@ -346,27 +413,57 @@ def _group_metrics(
         raise ValueError(f"cannot derive metrics for empty group {prefix}")
     full_loss = sum(row.full_context_loss_sum for row in rows) / sum(row.scored_tokens for row in rows)
     query_loss = sum(row.query_only_loss_sum for row in rows) / sum(row.scored_tokens for row in rows)
-    micro, macro = _gain_values(rows)
-    micro_ci, macro_ci = _paired_bootstrap(rows, samples=bootstrap_samples, seed=bootstrap_seed, prefix=prefix)
+    contrasts = _contrast_values(rows)
+    bootstrap = _paired_bootstrap(rows, samples=bootstrap_samples, seed=bootstrap_seed, prefix=prefix)
     metrics = {
         f"{prefix}/scored_tokens": float(sum(row.scored_tokens for row in rows)),
         f"{prefix}/examples": float(len(rows)),
-        f"{prefix}/micro_context_gain_nll": micro,
-        f"{prefix}/micro_context_gain_nll_ci95_low": micro_ci[0],
-        f"{prefix}/micro_context_gain_nll_ci95_high": micro_ci[1],
-        f"{prefix}/micro_context_ppl_ratio": math.exp(micro),
-        f"{prefix}/micro_context_ppl_ratio_ci95_low": math.exp(micro_ci[0]),
-        f"{prefix}/micro_context_ppl_ratio_ci95_high": math.exp(micro_ci[1]),
-        f"{prefix}/macro_context_gain_nll": macro,
-        f"{prefix}/macro_context_gain_nll_ci95_low": macro_ci[0],
-        f"{prefix}/macro_context_gain_nll_ci95_high": macro_ci[1],
-        f"{prefix}/macro_context_ppl_ratio": math.exp(macro),
-        f"{prefix}/macro_context_ppl_ratio_ci95_low": math.exp(macro_ci[0]),
-        f"{prefix}/macro_context_ppl_ratio_ci95_high": math.exp(macro_ci[1]),
     }
+    for aggregation in ("micro", "macro"):
+        for contrast in ("context", "oracle", "real", "interaction"):
+            name = f"{aggregation}_{contrast}"
+            low, high = _percentile_bounds(bootstrap[name])
+            metrics[f"{prefix}/{name}_gain_nll" if contrast != "interaction" else f"{prefix}/{name}_nll"] = contrasts[
+                name
+            ]
+            metric_stem = f"{prefix}/{name}_gain_nll" if contrast != "interaction" else f"{prefix}/{name}_nll"
+            metrics[f"{metric_stem}_ci95_low"] = low
+            metrics[f"{metric_stem}_ci95_high"] = high
+        oracle = contrasts[f"{aggregation}_oracle"]
+        oracle_ci_low, _ = _percentile_bounds(bootstrap[f"{aggregation}_oracle"])
+        positive_fraction = float(np.mean(bootstrap[f"{aggregation}_oracle"] > 0))
+        no_zero_denominators = bool(np.all(bootstrap[f"{aggregation}_oracle"] != 0))
+        identifiable = (
+            oracle >= _MIN_ORACLE_GAIN_NLL and oracle_ci_low > 0 and positive_fraction >= 0.99 and no_zero_denominators
+        )
+        metrics[f"{prefix}/{aggregation}_recovery_oracle_positive_fraction"] = positive_fraction
+        metrics[f"{prefix}/{aggregation}_recovery_identifiable"] = float(identifiable)
+        if identifiable:
+            recovery = contrasts[f"{aggregation}_real"] / oracle
+            recovery_low, recovery_high = _percentile_bounds(bootstrap[f"{aggregation}_recovery"])
+            metrics[f"{prefix}/{aggregation}_needle_recovery_ratio"] = recovery
+            metrics[f"{prefix}/{aggregation}_needle_recovery_ratio_ci95_low"] = recovery_low
+            metrics[f"{prefix}/{aggregation}_needle_recovery_ratio_ci95_high"] = recovery_high
+
+    micro = contrasts["micro_context"]
+    micro_ci = _percentile_bounds(bootstrap["micro_context"])
+    macro = contrasts["macro_context"]
+    macro_ci = _percentile_bounds(bootstrap["macro_context"])
+    metrics.update(
+        {
+            f"{prefix}/micro_context_ppl_ratio": math.exp(micro),
+            f"{prefix}/micro_context_ppl_ratio_ci95_low": math.exp(micro_ci[0]),
+            f"{prefix}/micro_context_ppl_ratio_ci95_high": math.exp(micro_ci[1]),
+            f"{prefix}/macro_context_ppl_ratio": math.exp(macro),
+            f"{prefix}/macro_context_ppl_ratio_ci95_low": math.exp(macro_ci[0]),
+            f"{prefix}/macro_context_ppl_ratio_ci95_high": math.exp(macro_ci[1]),
+        }
+    )
     if include_cell_raw:
         full_bytes = sum(row.full_context_scored_bytes for row in rows)
         query_bytes = sum(row.query_only_scored_bytes for row in rows)
+        needle_bytes = sum(row.needle_only_scored_bytes for row in rows)
+        distractor_bytes = sum(row.distractor_only_scored_bytes for row in rows)
         metrics.update(
             {
                 f"{prefix}/full_context/loss": full_loss,
@@ -377,11 +474,29 @@ def _group_metrics(
                 f"{prefix}/query_only/bpb": (
                     sum(row.query_only_loss_sum for row in rows) / query_bytes * math.log2(math.e)
                 ),
+                f"{prefix}/needle_only/loss": (
+                    sum(row.needle_only_loss_sum for row in rows) / sum(row.scored_tokens for row in rows)
+                ),
+                f"{prefix}/needle_only/bpb": (
+                    sum(row.needle_only_loss_sum for row in rows) / needle_bytes * math.log2(math.e)
+                ),
+                f"{prefix}/distractor_only/loss": (
+                    sum(row.distractor_only_loss_sum for row in rows) / sum(row.scored_tokens for row in rows)
+                ),
+                f"{prefix}/distractor_only/bpb": (
+                    sum(row.distractor_only_loss_sum for row in rows) / distractor_bytes * math.log2(math.e)
+                ),
             }
         )
     else:
         metrics[f"{prefix}/full_context/micro_loss"] = full_loss
         metrics[f"{prefix}/query_only/micro_loss"] = query_loss
+        metrics[f"{prefix}/needle_only/micro_loss"] = sum(row.needle_only_loss_sum for row in rows) / sum(
+            row.scored_tokens for row in rows
+        )
+        metrics[f"{prefix}/distractor_only/micro_loss"] = sum(row.distractor_only_loss_sum for row in rows) / sum(
+            row.scored_tokens for row in rows
+        )
     return metrics
 
 
