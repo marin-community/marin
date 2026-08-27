@@ -94,6 +94,15 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+SharedExpertCompute = Literal["separate", "fused"]
+SmallParamSharding = Literal["replicated", "fsdp"]
+
+
+def _small_param_spec(sharding: SmallParamSharding, *, shard_dim: int) -> P:
+    """Partition a 2-D small parameter over the EP model's FSDP axes."""
+    if sharding == "replicated":
+        return P(None, None)
+    return P(*(_FSDP_AXES if dim == shard_dim else None for dim in range(2)))
 
 
 def _batch_spec() -> P:
@@ -163,6 +172,7 @@ class GrugModelConfig:
     intermediate_dim: int = 256
     shared_expert_intermediate_dim: int = 512
     num_shared_experts: int = 1
+    shared_expert_compute: SharedExpertCompute = "separate"
     num_experts: int = 256
     num_experts_per_token: int = 4
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
@@ -195,6 +205,8 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    small_param_sharding: SmallParamSharding = "replicated"
+    """Layout of the router, attention gate, and GatedNorm factors."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -213,6 +225,10 @@ class GrugModelConfig:
                 raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
         if self.global_every <= 0:
             raise ValueError("global_every must be positive")
+        if self.shared_expert_compute not in ("separate", "fused"):
+            raise ValueError(f"unknown shared expert compute: {self.shared_expert_compute}")
+        if self.small_param_sharding not in ("replicated", "fsdp"):
+            raise ValueError(f"unknown small parameter sharding: {self.small_param_sharding}")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -304,6 +320,7 @@ class GrugModelConfig:
                 )
             ),
             num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
+            shared_expert_compute=_hf_config_attr(hf_config, ("shared_expert_compute",), "separate"),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
             latent_dim=None if latent_dim is None else int(latent_dim),
@@ -351,6 +368,7 @@ class GrugModelConfig:
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "num_shared_experts": self.num_shared_experts,
+            "shared_expert_compute": self.shared_expert_compute,
             # grug-specific (no public equivalent)
             "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
@@ -465,7 +483,7 @@ class CausalSelfAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            attn_gate=reshard(jnp.zeros((d, n)), _small_param_spec(cfg.small_param_sharding, shard_dim=0)),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             cfg=cfg,
         )
@@ -580,7 +598,8 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        attn_gate = reshard(self.attn_gate, P(None, None))
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn_gate))[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
@@ -617,20 +636,34 @@ class GatedNorm(eqx.Module):
     w_up: jax.Array
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(
+        hidden_dim: int,
+        initializer_std: float,
+        small_param_sharding: SmallParamSharding,
+        *,
+        key: PRNGKeyArray,
+    ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
-            w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
-            w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            w_down=reshard(
+                _init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std),
+                _small_param_spec(small_param_sharding, shard_dim=0),
+            ),
+            w_up=reshard(
+                _init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std),
+                _small_param_spec(small_param_sharding, shard_dim=1),
+            ),
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        w_down = reshard(self.w_down, P(None, None))
+        w_up = reshard(self.w_up, P(None, None))
+        gate_hidden = jnp.einsum("...d,dr->...r", x, w_down)
         # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
         # (e.g. compare no activation, relu, etc.).
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
         return x * gate.astype(x.dtype)
 
 
@@ -676,6 +709,29 @@ class DenseMLP(eqx.Module):
         # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
         # residual add fails with a ShardingTypeError on a multi-node mesh.
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+
+
+def _fused_shared_expert_mlp(
+    experts: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+) -> Float[Array, "B S D"]:
+    b, s, _ = x.shape
+    x_flat = rearrange(x, "b s d -> (b s) d")
+    gate_width = sum(expert.w_gate.shape[-1] for expert in experts)
+    gate_up_weight = jnp.concatenate(
+        tuple(expert.w_gate for expert in experts) + tuple(expert.w_up for expert in experts),
+        axis=-1,
+    )
+    gate_up = jnp.einsum("td,dm->tm", x_flat, gate_up_weight)
+    gate, up = jnp.split(gate_up, (gate_width,), axis=-1)
+    down_weight = jnp.concatenate(tuple(expert.w_down for expert in experts), axis=0)
+    out_flat = jnp.einsum(
+        "tm,md->td",
+        jax.nn.silu(gate) * up,
+        down_weight,
+        out_sharding=_batch_spec(),
+    )
+    return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
 def _local_routing_stats(
@@ -930,7 +986,10 @@ class MoEMLP(eqx.Module):
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
         latent = cfg.latent_dim
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=reshard(
+                _init_weight(k_router, (d, e), cfg.initializer_std),
+                _small_param_spec(cfg.small_param_sharding, shard_dim=0),
+            ),
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
                 None
@@ -1107,10 +1166,12 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=gn_attn_key
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
@@ -1141,8 +1202,11 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            for shared_expert in self.shared:
-                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+            if self.mlp.cfg.shared_expert_compute == "fused":
+                mlp_out = mlp_out + _fused_shared_expert_mlp(self.shared, mlp_in)
+            else:
+                for shared_expert in self.shared:
+                    mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
@@ -1197,11 +1261,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=embed_gn_key
+            ),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, cfg.small_param_sharding, key=final_gn_key
+            ),
             config=cfg,
         )
 

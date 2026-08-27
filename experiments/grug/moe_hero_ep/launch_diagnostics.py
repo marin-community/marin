@@ -47,6 +47,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
+    GpuCommandBufferMode,
     GrugEvalConfig,
     GrugRunConfig,
     MasterParamMode,
@@ -59,6 +60,9 @@ from experiments.grug.moe_hero_ep.train import (
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 DIAGNOSTIC_PARAM_DTYPES = ("bfloat16", "float32")
+DIAGNOSTIC_SHARED_EXPERT_COMPUTE = ("separate", "fused")
+DIAGNOSTIC_SMALL_PARAM_SHARDING = ("replicated", "fsdp")
+DIAGNOSTIC_MASTER_PARAM_MODES = tuple(mode.value for mode in MasterParamMode)
 
 
 def build_diagnostic_run(
@@ -70,6 +74,7 @@ def build_diagnostic_run(
     seed: int = 0,
     batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
+    num_expert_waves: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
@@ -87,7 +92,10 @@ def build_diagnostic_run(
     profile_steps: int = 0,
     profile_start_step: int = 5,
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
-    param_dtype: str = "bfloat16",
+    param_dtype: str | None = None,
+    shared_expert_compute: str = "separate",
+    small_param_sharding: str = "replicated",
+    gpu_command_buffer_mode: GpuCommandBufferMode = GpuCommandBufferMode.DISABLED,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build a bounded diagnostic run for the production EP64 hero recipe.
@@ -113,8 +121,18 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
-    if param_dtype not in DIAGNOSTIC_PARAM_DTYPES:
+    if param_dtype is not None and param_dtype not in DIAGNOSTIC_PARAM_DTYPES:
         raise ValueError(f"param_dtype must be one of {DIAGNOSTIC_PARAM_DTYPES}, got {param_dtype}")
+    if shared_expert_compute not in DIAGNOSTIC_SHARED_EXPERT_COMPUTE:
+        raise ValueError(
+            f"shared_expert_compute must be one of {DIAGNOSTIC_SHARED_EXPERT_COMPUTE}, got {shared_expert_compute}"
+        )
+    if small_param_sharding not in DIAGNOSTIC_SMALL_PARAM_SHARDING:
+        raise ValueError(
+            f"small_param_sharding must be one of {DIAGNOSTIC_SMALL_PARAM_SHARDING}, got {small_param_sharding}"
+        )
+    if master_param_mode == MasterParamMode.DEVICE and param_dtype not in (None, "float32"):
+        raise ValueError("device master parameters require float32 device parameters")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
     # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
@@ -132,11 +150,16 @@ def build_diagnostic_run(
         num_train_steps=total_schedule_steps,
         batch_size=batch_size,
     )
-    model = HERO_MODEL_CONFIG
+    model = dataclasses.replace(
+        HERO_MODEL_CONFIG,
+        shared_expert_compute=shared_expert_compute,
+        small_param_sharding=small_param_sharding,
+    )
     overrides = {
         name: value
         for name, value in (
             ("num_experts", num_experts),
+            ("num_expert_waves", num_expert_waves),
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
@@ -162,6 +185,11 @@ def build_diagnostic_run(
             f"{RAGGED_MOE_IMPLEMENTATION} needs one process per GPU: pass "
             f"processes_per_task={HERO_GPUS_PER_NODE}, got {processes_per_task}"
         )
+    if (
+        model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
+        and gpu_command_buffer_mode != GpuCommandBufferMode.DISABLED
+    ):
+        raise ValueError(f"{RAGGED_MOE_IMPLEMENTATION} requires disabled GPU command buffers")
     pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
     if pooled and model.pooled_transport_capacity_factor is None:
         raise AssertionError("the pooled-wave hero requires a transport capacity factor")
@@ -170,6 +198,9 @@ def build_diagnostic_run(
     # Only the pooled transport has a receiver capacity of its own to report.
     transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
+    shared_expert_compute_tag = f"shared-expert-compute-{shared_expert_compute}"
+    small_param_sharding_tag = f"small-param-sharding-{small_param_sharding}"
+    master_param_tag = f"master-params-{master_param_mode.value.replace('_', '-')}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = hero_grug_trainer_config(
@@ -178,6 +209,10 @@ def build_diagnostic_run(
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
+    )
+    grug_trainer = dataclasses.replace(
+        grug_trainer,
+        gpu_command_buffer_mode=gpu_command_buffer_mode,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -224,9 +259,12 @@ def build_diagnostic_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
-                    f"master-params-{master_param_mode.value.replace('_', '-')}",
                     *transport_capacity_tags,
                     wave_tag,
+                    shared_expert_compute_tag,
+                    small_param_sharding_tag,
+                    master_param_tag,
+                    f"command-buffers-{gpu_command_buffer_mode.value}",
                     size_tag,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
@@ -250,10 +288,11 @@ def build_diagnostic_run(
                 debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
         )
-        trainer = dataclasses.replace(
-            trainer,
-            mp=jmp.get_policy(f"params={param_dtype},compute=bfloat16,output=bfloat16"),
-        )
+        if param_dtype is not None:
+            trainer = dataclasses.replace(
+                trainer,
+                mp=jmp.get_policy(f"params={param_dtype},compute=bfloat16,output=bfloat16"),
+            )
         data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
             total_steps=total_schedule_steps,
@@ -344,6 +383,13 @@ def build_diagnostic_run(
     ),
 )
 @click.option(
+    "--num-expert-waves",
+    type=click.IntRange(min=1),
+    default=HERO_MODEL_CONFIG.num_expert_waves,
+    show_default=True,
+    help="Set the number of static pooled-transport waves.",
+)
+@click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
     default=HERO_MODEL_CONFIG.num_experts_per_token,
@@ -371,7 +417,7 @@ def build_diagnostic_run(
 )
 @click.option(
     "--master-params",
-    type=click.Choice([mode.value for mode in MasterParamMode]),
+    type=click.Choice(DIAGNOSTIC_MASTER_PARAM_MODES),
     default=HERO_MASTER_PARAM_MODE.value,
     show_default=True,
     help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
@@ -458,9 +504,29 @@ def build_diagnostic_run(
 @click.option(
     "--param-dtype",
     type=click.Choice(DIAGNOSTIC_PARAM_DTYPES),
-    default="bfloat16",
+    default=None,
+    help="Override the parameter and returned-gradient dtype. Defaults to the selected master-parameter policy.",
+)
+@click.option(
+    "--shared-expert-compute",
+    type=click.Choice(DIAGNOSTIC_SHARED_EXPERT_COMPUTE),
+    default="separate",
     show_default=True,
-    help="Parameter and returned-gradient dtype. Compute and output stay bfloat16.",
+    help="Run shared experts separately or as one fused MLP.",
+)
+@click.option(
+    "--small-param-sharding",
+    type=click.Choice(DIAGNOSTIC_SMALL_PARAM_SHARDING),
+    default="replicated",
+    show_default=True,
+    help="Shard or replicate the router, attention gate, and GatedNorm factors.",
+)
+@click.option(
+    "--gpu-command-buffer-mode",
+    type=click.Choice(tuple(mode.value for mode in GpuCommandBufferMode)),
+    default=GpuCommandBufferMode.DISABLED.value,
+    show_default=True,
+    help="Capture the default GPU operation set, or disable command buffers.",
 )
 @click.option(
     "--capacity-factor",
@@ -478,6 +544,7 @@ def main(
     seed: int,
     batch_size: int,
     num_experts: int | None,
+    num_expert_waves: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
@@ -495,7 +562,10 @@ def main(
     profile_steps: int,
     profile_start_step: int,
     training_data: str,
-    param_dtype: str,
+    param_dtype: str | None,
+    shared_expert_compute: str,
+    small_param_sharding: str,
+    gpu_command_buffer_mode: str,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
         run_id=run_id,
@@ -505,6 +575,7 @@ def main(
         seed=seed,
         batch_size=batch_size,
         num_experts=num_experts,
+        num_expert_waves=num_expert_waves,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
@@ -533,6 +604,9 @@ def main(
         profile_start_step=profile_start_step,
         training_data_mode=TrainingDataMode(training_data),
         param_dtype=param_dtype,
+        shared_expert_compute=shared_expert_compute,
+        small_param_sharding=small_param_sharding,
+        gpu_command_buffer_mode=GpuCommandBufferMode(gpu_command_buffer_mode),
     )
 
 

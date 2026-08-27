@@ -140,6 +140,16 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
 
 
+def test_segmented_kernel_config_selects_the_d6144_b200_forward_tile(monkeypatch):
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 100)
+
+    hero_config = fa4_cute._segmented_kernel_config(128, 48)
+    other_config = fa4_cute._segmented_kernel_config(128, 40)
+
+    assert hero_config.forward_tile == (128, 64)
+    assert other_config.forward_tile == (64, 64)
+
+
 def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
         del k, v, sm_scale, kernel_config
@@ -150,7 +160,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         return q
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, num_query_heads: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 8, 1),

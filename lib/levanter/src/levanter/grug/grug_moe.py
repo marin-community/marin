@@ -124,12 +124,12 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
     ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
-        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
             selected_experts,
             combine_weights,
-            w_gate_up,
+            self.w_gate,
+            self.w_up,
             self.w_down,
             activation=self.activation,
             implementation=self.implementation,
@@ -147,7 +147,8 @@ def moe_mlp(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-    w_up_gate: Float[Array, "E D I2"],
+    w_gate: Float[Array, "E D I"],
+    w_up: Float[Array, "E D I"],
     w_down: Float[Array, "E I D"],
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
@@ -200,16 +201,23 @@ def moe_mlp(
             f"dim ({x.shape[0]})"
         )
 
-    num_experts = int(w_up_gate.shape[0])
+    if w_gate.shape != w_up.shape:
+        raise ValueError(f"w_gate and w_up must have identical [E, D, I] shapes; got {w_gate.shape} vs {w_up.shape}")
+    num_experts = int(w_gate.shape[0])
     if w_down.shape[0] != num_experts:
         raise ValueError(
-            f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
+            f"w_down expert dimension ({w_down.shape[0]}) must match gate/up expert dimension ({num_experts})"
+        )
+    if w_down.shape[1] != w_gate.shape[2]:
+        raise ValueError(
+            f"w_down intermediate dimension ({w_down.shape[1]}) must match gate/up width ({w_gate.shape[2]})"
         )
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
 
     if mesh is None or mesh.empty:
+        w_up_gate = jnp.concatenate([w_gate, w_up], axis=-1)
         out, dropped = _moe_mlp_local(
             x,
             selected_experts,
@@ -239,6 +247,7 @@ def moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
+        separate_gate_up = resolved_implementation == "fixed_pooled_wave_all_to_all"
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
@@ -258,14 +267,22 @@ def moe_mlp(
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
-        w_up_gate_spec = P("expert", None, None)
+        w_gate_up_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
 
         x = _reshard_for_shard_map(x, mesh, batch_spec)
         selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
-        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
-        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+        if separate_gate_up:
+            weight_values = (w_gate, w_up, w_down)
+            weight_specs = (w_gate_up_spec, w_gate_up_spec, w_down_spec)
+        else:
+            weight_values = (jnp.concatenate([w_gate, w_up], axis=-1), w_down)
+            weight_specs = (w_gate_up_spec, w_down_spec)
+        weight_values = tuple(
+            _reshard_for_shard_map(weight, mesh, spec)
+            for weight, spec in zip(weight_values, weight_specs, strict=True)
+        )
 
         shard_fn = shard_map(
             partial(
@@ -279,13 +296,12 @@ def moe_mlp(
                 batch_spec,
                 batch_spec,
                 batch_spec,
-                w_up_gate_spec,
-                w_down_spec,
+                *weight_specs,
             ),
             out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
             check_vma=False,
         )
-        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, overflow = shard_fn(x, selected_experts, combine_weights, *weight_values)
         if report_capacity_overflow:
             return out, overflow
         return out
@@ -297,6 +313,7 @@ def moe_mlp(
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
+    w_up_gate = jnp.concatenate([w_gate, w_up], axis=-1)
     if expert_chunks > 1 and resolved_implementation == "sonic_cute":
         # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
         # needs a real data axis; without one the local kernel hits an unbound-axis error.

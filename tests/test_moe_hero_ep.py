@@ -86,6 +86,166 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
     )
 
 
+def test_diagnostic_run_selects_the_profiled_performance_modes():
+    step = launch.build_diagnostic_run(
+        run_id="profiled-modes",
+        dp_racks=1,
+        num_steps=1,
+        moe_implementation="fixed_pooled_wave_all_to_all",
+        num_expert_waves=1,
+        param_dtype="float32",
+        shared_expert_compute="fused",
+        small_param_sharding="fsdp",
+        master_param_mode=train.MasterParamMode.DEVICE,
+        gpu_command_buffer_mode=train.GpuCommandBufferMode.DEFAULT,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.num_expert_waves == 1
+    assert config.model.shared_expert_compute == "fused"
+    assert config.model.small_param_sharding == "fsdp"
+    assert config.trainer.trainer.mp.param_dtype == jnp.float32
+    assert config.trainer.master_param_mode == train.MasterParamMode.DEVICE
+    assert config.trainer.offload_opt_state
+    assert config.trainer.gpu_command_buffer_mode == train.GpuCommandBufferMode.DEFAULT
+
+
+def test_diagnostic_run_rejects_bfloat16_device_parameters():
+    with pytest.raises(ValueError, match="device master parameters require float32"):
+        launch.build_diagnostic_run(
+            run_id="invalid-master-mode",
+            dp_racks=1,
+            num_steps=1,
+            param_dtype="bfloat16",
+            master_param_mode=train.MasterParamMode.DEVICE,
+            version="dev",
+        )
+
+
+def test_diagnostic_run_rejects_command_buffers_for_ragged_transport():
+    with pytest.raises(ValueError, match="ragged_all_to_all requires disabled GPU command buffers"):
+        launch.build_diagnostic_run(
+            run_id="invalid-ragged-command-buffers",
+            dp_racks=1,
+            num_steps=1,
+            moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+            processes_per_task=4,
+            gpu_command_buffer_mode=train.GpuCommandBufferMode.DEFAULT,
+            version="dev",
+        )
+
+
+@pytest.mark.timeout(180)
+def test_small_parameter_sharding_preserves_model_value_and_gradients():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import dataclasses
+        import math
+
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, set_mesh
+
+        from experiments.grug.moe_hero_ep import model
+
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        base = model.GrugModelConfig(
+            vocab_size=32,
+            hidden_dim=16,
+            intermediate_dim=8,
+            shared_expert_intermediate_dim=0,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=1,
+            local_kv_heads=1,
+            global_kv_heads=1,
+            head_dim=8,
+            max_seq_len=4,
+            sliding_window=4,
+            global_every=1,
+            capacity_factor=1.0,
+            initializer_std=0.5 / math.sqrt(16),
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
+        )
+        tokens = jnp.arange(16, dtype=jnp.int32).reshape(4, 4)
+        weights = jnp.ones_like(tokens, dtype=jnp.float32)
+
+        def loss(transformer):
+            return transformer.next_token_loss(tokens, weights)
+
+        with set_mesh(mesh):
+            replicated = model.Transformer.init(base, key=jax.random.key(0))
+            sharded = model.Transformer.init(
+                dataclasses.replace(base, small_param_sharding="fsdp"),
+                key=jax.random.key(0),
+            )
+            replicated_value, replicated_grad = eqx.filter_value_and_grad(loss)(replicated)
+            sharded_value, sharded_grad = eqx.filter_value_and_grad(loss)(sharded)
+
+        np.testing.assert_allclose(sharded_value, replicated_value, rtol=1e-5, atol=1e-5)
+        replicated_leaves = jax.tree.leaves(eqx.filter(replicated_grad, eqx.is_array))
+        sharded_leaves = jax.tree.leaves(eqx.filter(sharded_grad, eqx.is_array))
+        assert len(sharded_leaves) == len(replicated_leaves)
+        for actual, expected in zip(sharded_leaves, replicated_leaves, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_fused_shared_experts_match_separate_value_and_gradients():
+    keys = jax.random.split(jax.random.key(1), 7)
+    x = jax.random.normal(keys[0], (2, 3, 8))
+    experts = tuple(
+        model.DenseMLP(
+            w_gate=jax.random.normal(keys[1 + index * 3], (8, 4)),
+            w_up=jax.random.normal(keys[2 + index * 3], (8, 4)),
+            w_down=jax.random.normal(keys[3 + index * 3], (4, 8)),
+        )
+        for index in range(2)
+    )
+
+    def separate_loss(experts, x):
+        output = experts[0](x) + experts[1](x)
+        return jnp.sum(output**2)
+
+    def fused_loss(experts, x):
+        return jnp.sum(model._fused_shared_expert_mlp(experts, x) ** 2)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1)):
+        separate_value, separate_grads = jax.value_and_grad(separate_loss, argnums=(0, 1))(experts, x)
+        fused_value, fused_grads = jax.value_and_grad(fused_loss, argnums=(0, 1))(experts, x)
+
+    np.testing.assert_allclose(fused_value, separate_value, rtol=5e-5, atol=5e-5)
+    jax.tree.map(
+        lambda actual, expected: np.testing.assert_allclose(actual, expected, rtol=5e-5, atol=5e-5),
+        fused_grads,
+        separate_grads,
+    )
+
+
 def test_full_bank_top_k_is_rejected_before_launch():
     # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
     # more entries than there are experts. Without this the job dies in the router, which is after
@@ -214,12 +374,14 @@ def _runtime_env_config(
     watch_mode=train.WatchMode.INLINE,
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
+    gpu_command_buffer_mode=train.GpuCommandBufferMode.DISABLED,
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
+            gpu_command_buffer_mode=gpu_command_buffer_mode,
         ),
         model=SimpleNamespace(moe_implementation=moe_implementation),
         resources=ResourceConfig.with_gpu("GB200", count=4),
@@ -243,7 +405,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert explicit_overlap in flags
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
-    assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
+    assert f"{train.XLA_GPU_COMMAND_BUFFER_FLAG}=" in flags
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
@@ -431,6 +593,31 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
     assert all(leaf.dtype == jnp.float32 for leaf in got)
     for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
         np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+
+
+def test_run_grug_uses_the_default_noncollective_command_buffer_set(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(gpu_command_buffer_mode=train.GpuCommandBufferMode.DEFAULT)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    expected = f"{train.XLA_GPU_COMMAND_BUFFER_FLAG}={train.XLA_DEFAULT_GPU_COMMAND_BUFFER_CAPTURE_SET}"
+    assert expected in flags
+    assert "COLLECTIVES" not in expected
+
+
+def test_run_grug_rejects_command_buffers_for_ragged_transport(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        gpu_command_buffer_mode=train.GpuCommandBufferMode.DEFAULT,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        with pytest.raises(ValueError, match="ragged_all_to_all requires disabled GPU command buffers"):
+            train.run_grug(config)
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
