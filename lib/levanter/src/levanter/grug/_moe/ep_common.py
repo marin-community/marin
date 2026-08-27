@@ -3,13 +3,11 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
-from functools import partial
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
-from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
@@ -88,34 +86,6 @@ def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, 
         accepted.append(take)
         remaining = jnp.maximum(remaining - take, 0)
     return jnp.stack(accepted, axis=0)
-
-
-def _use_sonic_gather_sum() -> bool:
-    return sonic_gather_sum_available() and jax.default_backend() == "gpu"
-
-
-def _unpermute_from_global_expert(
-    intermediate: Float[Array, "TK H"],
-    sorted_indices: Int[Array, "TK"],
-    combine_weights_local: Float[Array, "Tlocal K"],
-    *,
-    tokens_per_shard: int,
-    topk: int,
-) -> Float[Array, "Tlocal H"]:
-    """Weight each token's expert outputs by its routing weights and sum them."""
-    positions = jnp.argsort(sorted_indices)
-    if _use_sonic_gather_sum():
-        # One kernel for the gather and the sum, materializing neither the unpermuted
-        # ``[TK, H]`` buffer nor the ``[T, K, H]`` view -- at top-8 that view is eight times
-        # the output. It accumulates in fp32 like the einsum below and keeps the routing
-        # weight in fp32 through the multiply, where the einsum has to cast it down to avoid
-        # promoting the larger operand, so the two agree to a single rounding.
-        return sonic_gather_sum(intermediate, positions.reshape(tokens_per_shard, topk), combine_weights_local)
-    unsorted = _sort_activations(intermediate, positions)
-    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
-    return jnp.einsum(
-        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
-    )
 
 
 def _clip_receiver_group_sizes(
@@ -219,32 +189,3 @@ def _expert_granular_a2a_params(
         my_send.reshape(-1),
     )
     return dispatch, ret
-
-
-@partial(jax.custom_vjp, nondiff_argnums=(2,))
-def _gather_dispatch_rows(x_local, sorted_indices, topk):
-    """Build the expert-sorted dispatch buffer with one gather.
-
-    Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
-    materializing the repeated buffer or running a data-sized permute. The backward pass
-    is the transpose: each token sums the cotangent rows of its ``topk`` sorted slots.
-    """
-    return x_local[sorted_indices // topk]
-
-
-def _gather_dispatch_rows_fwd(x_local, sorted_indices, topk):
-    return _gather_dispatch_rows(x_local, sorted_indices, topk), sorted_indices
-
-
-def _gather_dispatch_rows_bwd(topk, sorted_indices, cotangent):
-    tokens_per_shard = sorted_indices.shape[0] // topk
-    positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
-    if _use_sonic_gather_sum():
-        ones = jnp.ones((tokens_per_shard, topk), dtype=jnp.float32)
-        grad_x = sonic_gather_sum(cotangent, positions, ones)
-    else:
-        grad_x = jnp.sum(cotangent[positions], axis=1, dtype=jnp.float32)
-    return grad_x.astype(cotangent.dtype), None
-
-
-_gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
