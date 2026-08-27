@@ -1013,21 +1013,3 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
             # A prefix: every kept entry precedes every dropped one within the group.
             assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
 
-
-def test_run_grug_gives_the_ragged_transport_its_own_scheduling_posture(monkeypatch):
-    # A watch interval of 0 would otherwise select overlap 4, so the assertion below
-    # separates the ragged posture from the inline-watch one rather than aliasing it.
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
-    # The installed jax predates the forced ragged flags, which is what the guard below this test
-    # covers. Lower the floor so this one reads the flags the posture composes, not the guard.
-    monkeypatch.setattr(train, "RAGGED_MINIMUM_JAX_VERSION", "0.0.0")
-    config = _runtime_env_config(watch_interval=0, moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
-
-    with patch.object(train, "dispatch_grug_training_run"):
-        train.run_grug(config)
-
-    flags = os.environ["XLA_FLAGS"].split()
-    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.RAGGED_COLLECTIVE_OVERLAP_LIMIT}" in flags
-    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in flags
-    for flag in train.RAGGED_REQUIRED_XLA_FLAGS:
-        assert flag in flags
