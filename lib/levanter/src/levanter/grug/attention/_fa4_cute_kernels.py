@@ -1267,7 +1267,7 @@ def segmented_flash_attention_backward_sm90_launcher(
         score_mod_bwd=None,
         mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
         has_aux_tensors=not use_builtin_sliding_window,
-        subtile_factor=1,
+        q_subtile_factor=1,
         dQ_single_wg=config.dq_single_wg,
     )
 
