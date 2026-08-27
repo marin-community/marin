@@ -11,20 +11,15 @@ the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
 ``europe-west4``; select the us-central1 GCS sample for a us-central1 run or
 the equivalent S3 path to run on CoreWeave.
 
-Example (the "full" preset from the `ab-test-zephyr` skill, sized to match
-`datakit_nemotron_ferry.py`'s data volume and worker pool). Every per-source
-stage now shares one pool (see ``zephyr_datakit_steps``'s ``zephyr_context``),
-so ``--max-concurrent`` no longer needs to stay near 1 to avoid provisioning a
-pod per pipeline -- but the pool's single coordinator actor has a fixed
-concurrent-call budget (100) shared between every in-flight ``run_pipeline``
-wait and every worker's poll/heartbeat/registration call, so it cannot be
-raised freely either; see the skill for the sizing rationale:
+Example (the full preset from the `ab-test-zephyr` skill):
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
-        --pool-workers 512 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
-        --first-stage exact --last-stage fuzzy \
-        --max-concurrent 8 --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
+        --pool-workers 256 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+        --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
+        --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
+        --target all --max-concurrent 128 \
+        --dedup-max-parallelism 1000 --dedup-cc-max-iterations 3
 
 The "light" preset uses ``--source-fraction`` instead of ``--sources`` to
 auto-select a byte-budgeted subset of sources, favoring shard-dense sources so
@@ -32,9 +27,16 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
 
     python -m experiments.datakit.zephyr_benchmark \
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
-        --pool-workers 128 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
-        --first-stage exact --last-stage fuzzy \
-        --max-concurrent 8 --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
+        --pool-workers 64 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+        --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
+        --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
+        --target all --max-concurrent 80 \
+        --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
+
+Use ``--target map`` to run tokenization and MinHash only. A shuffle-only run
+uses ``--target shuffle --shuffle-input-run-tag <completed-map-run-tag>``;
+the benchmark verifies that every MinHash input from that map run exists before
+starting the worker pool, then runs exact and fuzzy dedup with a fresh run tag.
 """
 
 import argparse
@@ -45,17 +47,18 @@ from enum import StrEnum
 from typing import NamedTuple
 
 from fray.types import ResourceConfig
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     SOURCE_DISCOVERY_DEPTHS,
-    PoolConfig,
+    PipelineScale,
     ZephyrDatakitSteps,
     pool_zephyr_context,
     sample_sources,
@@ -70,35 +73,37 @@ GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
 COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 
-class BenchmarkStage(StrEnum):
-    """Stage boundary for a benchmark run."""
+class BenchmarkTarget(StrEnum):
+    """Datakit work selected for one benchmark run."""
 
+    ALL = "all"
+    MAP = "map"
+    SHUFFLE = "shuffle"
     EXACT = "exact"
     TOKENIZE = "tokenize"
     MINHASH = "minhash"
     FUZZY = "fuzzy"
 
 
-_STAGE_ORDER = tuple(BenchmarkStage)
-
-
-def _steps_between(
-    steps: ZephyrDatakitSteps,
-    first_stage: BenchmarkStage,
-    last_stage: BenchmarkStage,
-) -> list[StepSpec]:
-    first_index = _STAGE_ORDER.index(first_stage)
-    last_index = _STAGE_ORDER.index(last_stage)
-    if first_index > last_index:
-        raise ValueError(f"first stage {first_stage} follows last stage {last_stage}")
-
-    stage_steps = {
-        BenchmarkStage.EXACT: [steps.exact_dedup],
-        BenchmarkStage.TOKENIZE: list(steps.tokenize.values()),
-        BenchmarkStage.MINHASH: list(steps.minhash.values()),
-        BenchmarkStage.FUZZY: [steps.fuzzy_dedup],
+def _target_steps(steps: ZephyrDatakitSteps, target: BenchmarkTarget) -> list[StepSpec]:
+    stage_steps: dict[BenchmarkTarget, list[StepSpec]] = {
+        BenchmarkTarget.EXACT: [steps.exact_dedup],
+        BenchmarkTarget.TOKENIZE: list(steps.tokenize.values()),
+        BenchmarkTarget.MINHASH: list(steps.minhash.values()),
+        BenchmarkTarget.FUZZY: [steps.fuzzy_dedup],
     }
-    return [step for stage in _STAGE_ORDER[first_index : last_index + 1] for step in stage_steps[stage]]
+    if target is BenchmarkTarget.MAP:
+        return [*stage_steps[BenchmarkTarget.TOKENIZE], *stage_steps[BenchmarkTarget.MINHASH]]
+    if target is BenchmarkTarget.SHUFFLE:
+        return [*stage_steps[BenchmarkTarget.EXACT], *stage_steps[BenchmarkTarget.FUZZY]]
+    if target is BenchmarkTarget.ALL:
+        return [
+            *stage_steps[BenchmarkTarget.EXACT],
+            *stage_steps[BenchmarkTarget.TOKENIZE],
+            *stage_steps[BenchmarkTarget.MINHASH],
+            *stage_steps[BenchmarkTarget.FUZZY],
+        ]
+    return stage_steps[target]
 
 
 class SourceShardStats(NamedTuple):
@@ -215,6 +220,56 @@ def _resolve_sources(
     return selected_sources
 
 
+def _benchmark_output_prefix(sample_prefix: str, run_tag: str) -> str:
+    return marin_temp_bucket(
+        ttl_days=BENCHMARK_OUTPUT_TTL_DAYS,
+        prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, run_tag), "outputs"),
+        source_prefix=sample_prefix,
+    )
+
+
+def _benchmark_steps(
+    *,
+    sample_prefix: str,
+    selected_sources: list[str] | None,
+    run_tag: str,
+    target: BenchmarkTarget,
+    shuffle_input_run_tag: str | None,
+    scale: PipelineScale,
+    zephyr_context: ZephyrContext,
+) -> ZephyrDatakitSteps:
+    output_prefix = _benchmark_output_prefix(sample_prefix, run_tag)
+    sources = sample_sources(sample_prefix, selected_sources, run_tag)
+    steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
+
+    if target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY):
+        return steps
+    if shuffle_input_run_tag is None:
+        raise ValueError(f"--shuffle-input-run-tag is required with --target {target}")
+
+    input_prefix = _benchmark_output_prefix(sample_prefix, shuffle_input_run_tag)
+    input_sources = sample_sources(sample_prefix, selected_sources, shuffle_input_run_tag)
+    input_steps = zephyr_datakit_steps(
+        input_sources,
+        scale,
+        zephyr_context,
+        output_path_prefix=input_prefix,
+    )
+    missing = [name for name, step in input_steps.minhash.items() if not step_is_built(step)]
+    if missing:
+        shown = ", ".join(missing[:10])
+        remainder = f" and {len(missing) - 10} more" if len(missing) > 10 else ""
+        raise RuntimeError(
+            f"shuffle input run {shuffle_input_run_tag!r} is missing MinHash artifacts for {shown}{remainder}; "
+            "run the same source selection with --target map first"
+        )
+
+    return replace(
+        steps,
+        fuzzy_dedup=replace(input_steps.fuzzy_dedup, output_path_prefix=output_prefix),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -238,8 +293,17 @@ def main() -> None:
     parser.add_argument("--pool-cpu", required=True, type=float)
     parser.add_argument("--pool-ram", required=True)
     parser.add_argument("--pool-disk", required=True)
-    parser.add_argument("--first-stage", required=True, type=BenchmarkStage, choices=list(BenchmarkStage))
-    parser.add_argument("--last-stage", required=True, type=BenchmarkStage, choices=list(BenchmarkStage))
+    parser.add_argument("--map-task-cpu", required=True, type=float)
+    parser.add_argument("--map-task-ram", required=True)
+    parser.add_argument("--map-task-disk", required=True)
+    parser.add_argument("--reduce-task-cpu", required=True, type=float)
+    parser.add_argument("--reduce-task-ram", required=True)
+    parser.add_argument("--reduce-task-disk", required=True)
+    parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
+    parser.add_argument(
+        "--shuffle-input-run-tag",
+        help="Completed map benchmark whose MinHash artifacts feed --target shuffle/fuzzy.",
+    )
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
     parser.add_argument(
@@ -257,24 +321,44 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
+    if args.target in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY) and args.shuffle_input_run_tag is None:
+        parser.error(f"--shuffle-input-run-tag is required with --target {args.target}")
+    if args.target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY) and args.shuffle_input_run_tag is not None:
+        parser.error("--shuffle-input-run-tag is only valid with --target shuffle or fuzzy")
+
     selected_sources = _resolve_sources(args.sample_prefix, args.sources, args.source_fraction, args.pool_workers)
-    sources = sample_sources(args.sample_prefix, selected_sources, args.run_tag)
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
+    map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
+    reduce_task = ResourceConfig(cpu=args.reduce_task_cpu, ram=args.reduce_task_ram, disk=args.reduce_task_disk)
     scale = replace(
         SMOKE_SCALE,
-        pool=PoolConfig(n_workers=args.pool_workers, worker=worker),
+        pool=replace(
+            SMOKE_SCALE.pool,
+            n_workers=args.pool_workers,
+            worker=worker,
+            map_task=map_task,
+            reduce_task=reduce_task,
+        ),
         dedup_max_parallelism=args.dedup_max_parallelism,
         cc_max_iterations=args.dedup_cc_max_iterations,
     )
-    output_prefix = marin_temp_bucket(
-        ttl_days=BENCHMARK_OUTPUT_TTL_DAYS,
-        prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
-        source_prefix=args.sample_prefix,
+    zephyr_context = pool_zephyr_context(
+        "zephyr-benchmark",
+        scale,
+        max_concurrent_pipelines=args.max_concurrent,
     )
-    with pool_zephyr_context("zephyr-benchmark", scale, max_concurrent_pipelines=args.max_concurrent) as zephyr_context:
-        steps = zephyr_datakit_steps(sources, scale, zephyr_context, output_path_prefix=output_prefix)
+    steps = _benchmark_steps(
+        sample_prefix=args.sample_prefix,
+        selected_sources=selected_sources,
+        run_tag=args.run_tag,
+        target=args.target,
+        shuffle_input_run_tag=args.shuffle_input_run_tag,
+        scale=scale,
+        zephyr_context=zephyr_context,
+    )
+    with zephyr_context:
         StepRunner().run(
-            _steps_between(steps, args.first_stage, args.last_stage),
+            _target_steps(steps, args.target),
             max_concurrent=args.max_concurrent,
         )
 

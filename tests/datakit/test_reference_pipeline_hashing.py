@@ -13,6 +13,7 @@ import dataclasses
 import json
 
 import pytest
+from fray.types import ResourceConfig
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -113,7 +114,16 @@ def test_store_hash_tracks_content_not_resources():
     layout = dataclasses.replace(SMOKE_SCALE.store, task_count=2)
     relaid = _build(scale=dataclasses.replace(SMOKE_SCALE, store=layout)).output_buckets.hash_id
     # The worker fleet is execution policy -> must NOT re-key.
-    pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
+    pool = dataclasses.replace(
+        SMOKE_SCALE,
+        pool=PoolConfig(
+            n_workers=999,
+            worker=ResourceConfig(cpu=8, ram="64g", disk="32g"),
+            map_task=ResourceConfig(cpu=1, ram="8g", disk="4g"),
+            reduce_task=ResourceConfig(cpu=3, ram="30g", disk="8g"),
+            coordinator=ResourceConfig(cpu=1, ram="16g", preemptible=False),
+        ),
+    )
     resourced = _build(scale=pool).output_buckets.hash_id
     execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id

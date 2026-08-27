@@ -33,7 +33,8 @@ exact dedup, fuzzy dedup, the decontamination DF filter, and the store combine s
 Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
 worker group. Steps that require process-local model caches use dedicated
 ``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
-worker shape. ``--max-concurrent`` limits concurrent StepRunner steps.
+worker, task, and coordinator shapes. ``--max-concurrent`` limits concurrent
+StepRunner steps.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
 normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
@@ -254,13 +255,17 @@ class PoolConfig:
     """The Zephyr worker fleet for the reference pipeline.
 
     ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
+    ``map_task`` and ``reduce_task`` set the resources admitted for one task;
+    ``None`` uses the whole worker. ``coordinator`` sizes the shared coordinator.
     Subprocess-compatible stages share this pool. Inline stages create a
-    dedicated pool with the same settings. The worker must fit the largest
-    task that can use the pool.
+    dedicated pool with the worker settings.
     """
 
     n_workers: int = 512
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+    map_task: ResourceConfig | None = None
+    reduce_task: ResourceConfig | None = None
+    coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="8g", preemptible=False))
 
 
 @dataclass(frozen=True)
@@ -586,16 +591,9 @@ def pool_zephyr_context(
     source's shard count instead of sharing ``scale.pool``.
 
     ``max_concurrent_pipelines`` defaults to the pool's own default
-    (``MAX_CONCURRENT_PIPELINES``) when unset; pass a caller's step-level concurrency limit
-    to keep that default from silently re-capping it -- but don't raise it far past that
-    default. The coordinator is one actor with a fixed concurrent-call budget
-    (``ActorConfig(max_concurrency=100)`` in ``zephyr.execution``) shared between every
-    in-flight ``run_pipeline`` call (held for a whole pipeline's duration, not briefly) and
-    every worker's poll/heartbeat/registration call; raising concurrent pipelines without
-    headroom for worker traffic can starve worker calls of a slot entirely, deadlocking the
-    pool (pipelines wait on workers that can't report back). A caller that genuinely needs
-    more concurrent pipelines than this leaves headroom for should raise the coordinator's
-    own ``max_concurrency`` rather than push ``max_concurrent_pipelines`` close to it.
+    (``MAX_CONCURRENT_PIPELINES``) when unset. Zephyr sizes the coordinator actor's
+    call budget from the worker and pipeline limits so pipeline waits cannot starve
+    worker polling and heartbeat calls.
     """
     kwargs: dict[str, int] = {}
     if max_concurrent_pipelines is not None:
@@ -603,6 +601,7 @@ def pool_zephyr_context(
     return ZephyrContext(
         name=name,
         resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
         **kwargs,
@@ -635,6 +634,9 @@ def zephyr_datakit_steps(
             output_path=output_path,
             worker_resources=scale.pool.worker,
             max_workers=scale.pool.n_workers,
+            max_parallelism=scale.dedup_max_parallelism,
+            map_task_resources=scale.pool.map_task,
+            reduce_task_resources=scale.pool.reduce_task,
             zephyr_context=zephyr_context,
         ),
     )
@@ -652,6 +654,7 @@ def zephyr_datakit_steps(
                 tokenizer_revision=TOKENIZER_REVISION,
                 max_workers=scale.pool.n_workers,
                 worker_resources=scale.pool.worker,
+                map_task_resources=scale.pool.map_task,
                 zephyr_context=zephyr_context,
             ),
             output_path_prefix=output_path_prefix,
@@ -677,6 +680,8 @@ def zephyr_datakit_steps(
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
                 worker_resources=scale.pool.worker,
+                map_task_resources=scale.pool.map_task,
+                reduce_task_resources=scale.pool.reduce_task,
                 zephyr_context=zephyr_context,
             ),
         )
@@ -703,6 +708,8 @@ def zephyr_datakit_steps(
             cc_max_iterations=scale.cc_max_iterations,
             cc_resume=True,
             worker_resources=scale.pool.worker,
+            map_task_resources=scale.pool.map_task,
+            reduce_task_resources=scale.pool.reduce_task,
             zephyr_context=zephyr_context,
         ),
     )

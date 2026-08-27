@@ -120,6 +120,7 @@ class TokenizeAttributesConfig:
     text_field: str = "text"
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    map_task_resources: ResourceConfig | None = None
     zephyr_context: ZephyrContext | None = None
 
     def __post_init__(self):
@@ -220,7 +221,7 @@ def _process_split(
     outcome = ctx.execute(
         pipeline,
         verbose=True,
-        map_task_resources=config.worker_resources,
+        map_task_resources=config.map_task_resources or config.worker_resources,
     )
     return split_dir, dict(outcome.counters)
 
@@ -290,6 +291,7 @@ def tokenize_attributes_step(
     text_field: str = "text",
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
+    map_task_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -317,6 +319,7 @@ def tokenize_attributes_step(
             on non-normalized paths (not used here, but mirrored to the config).
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
+        map_task_resources: Resources reserved for each map task in a shared worker.
         zephyr_context: Optional shared Zephyr context.
         override_output_path: Optional explicit output path.
     """
@@ -343,6 +346,8 @@ def tokenize_attributes_step(
             kwargs["validation_source"] = read_artifact(validation_normalize.output_path, NormalizedData)
         if worker_resources is not None:
             kwargs["worker_resources"] = worker_resources
+        if map_task_resources is not None:
+            kwargs["map_task_resources"] = map_task_resources
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))
 
     hash_attrs: dict = {

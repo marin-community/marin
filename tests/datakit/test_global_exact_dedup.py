@@ -74,8 +74,11 @@ def test_global_exact_deduplicate_writes_one_attribute_shard_per_input(tmp_path:
     result = global_exact_deduplicate(
         sources={"c": source_c, "b": source_b, "a": source_a},
         output_path=str(tmp_path / "output"),
-        worker_resources=ResourceConfig(cpu=1, ram="1g"),
+        worker_resources=ResourceConfig(cpu=2, ram="2g"),
         max_workers=2,
+        max_parallelism=3,
+        map_task_resources=ResourceConfig(cpu=1, ram="1g"),
+        reduce_task_resources=ResourceConfig(cpu=1, ram="1g"),
     )
 
     a_shards = _attribute_shards(result, source_a)

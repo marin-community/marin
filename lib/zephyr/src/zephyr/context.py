@@ -71,6 +71,12 @@ V = TypeVar("V")
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
 
+# A shared coordinator receives one long-lived run_pipeline call per active
+# pipeline plus polling and heartbeat traffic from every worker. Keep the old
+# floor for small pools, then reserve two call slots per worker so pipeline
+# waits cannot consume the executor needed by worker control traffic.
+MIN_COORDINATOR_ACTOR_CONCURRENCY = 100
+
 
 def _generate_execution_id() -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -499,6 +505,10 @@ class ZephyrContext:
 
         pool_id = uuid.uuid4().hex[:8]
         coordinator_name = f"zephyr-{self.name}-coordinator-{pool_id}"
+        coordinator_concurrency = max(
+            MIN_COORDINATOR_ACTOR_CONCURRENCY,
+            2 * worker_count + self.max_concurrent_pipelines,
+        )
         coordinator_group = self.client.create_actor_group(
             ZephyrCoordinator,
             self.chunk_storage_prefix,
@@ -514,7 +524,7 @@ class ZephyrContext:
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
-            actor_config=ActorConfig(max_concurrency=100),
+            actor_config=ActorConfig(max_concurrency=coordinator_concurrency),
         )
         coordinator: ActorHandle | None = None
         try:

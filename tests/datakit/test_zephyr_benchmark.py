@@ -9,18 +9,27 @@ bucket-qualified, scheme-stripped keys.
 """
 
 import pytest
+from marin.execution.step_spec import StepSpec
 
-from experiments.datakit import zephyr_benchmark
-from experiments.datakit.reference_pipeline import SOURCE_DISCOVERY_DEPTHS
+from experiments.datakit import reference_pipeline, zephyr_benchmark
+from experiments.datakit.reference_pipeline import SMOKE_SCALE, SOURCE_DISCOVERY_DEPTHS, pool_zephyr_context
 from experiments.datakit.zephyr_benchmark import (
+    BenchmarkTarget,
     SourceShardStats,
+    _benchmark_steps,
     _resolve_sources,
     _select_source_fraction,
     _source_shard_stats,
+    _target_steps,
 )
 
 _SAMPLE_PREFIX = "gs://marin-test/sample_100b"
 _ROOT_KEY = "marin-test/sample_100b"
+
+
+@pytest.fixture(autouse=True)
+def _marin_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-test")
 
 
 class _FakeObjectStore:
@@ -155,3 +164,77 @@ def test_resolve_sources_does_not_double_count_a_repeated_source(monkeypatch):
 
     with pytest.raises(ValueError, match="exceeds the 1 parquet shards"):
         _resolve_sources(_SAMPLE_PREFIX, sources_arg="hplt_v3,hplt_v3", source_fraction=None, pool_workers=2)
+
+
+def _patch_benchmark_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        zephyr_benchmark,
+        "sample_sources",
+        lambda sample_prefix, names, run_tag: {
+            name: StepSpec(
+                name=f"sample/{name}",
+                override_output_path=f"{sample_prefix}/{name}",
+                hash_attrs={"run_tag": run_tag},
+            )
+            for name in names or ["a"]
+        },
+    )
+    monkeypatch.setattr(
+        zephyr_benchmark,
+        "_benchmark_output_prefix",
+        lambda sample_prefix, run_tag: f"{sample_prefix}/benchmarks/{run_tag}",
+    )
+
+
+def test_shuffle_target_reads_completed_map_run_and_writes_fresh_output(monkeypatch):
+    _patch_benchmark_graph(monkeypatch)
+    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda step: True)
+    requested_paths: list[str] = []
+    monkeypatch.setattr(
+        reference_pipeline,
+        "read_artifact",
+        lambda path, _cls: requested_paths.append(path),
+    )
+    monkeypatch.setattr(reference_pipeline, "compute_fuzzy_dups_attrs", lambda **kwargs: kwargs["inputs"])
+
+    context = pool_zephyr_context("test-benchmark", SMOKE_SCALE)
+    steps = _benchmark_steps(
+        sample_prefix=_SAMPLE_PREFIX,
+        selected_sources=["a"],
+        run_tag="shuffle-v2",
+        target=BenchmarkTarget.SHUFFLE,
+        shuffle_input_run_tag="map-v1",
+        scale=SMOKE_SCALE,
+        zephyr_context=context,
+    )
+
+    assert steps.fuzzy_dedup.output_path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/shuffle-v2/")
+    assert all(step.output_path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/map-v1/") for step in steps.fuzzy_dedup.deps)
+    assert steps.fuzzy_dedup.fn is not None
+    steps.fuzzy_dedup.fn(steps.fuzzy_dedup.output_path)
+    assert requested_paths
+    assert all(path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/map-v1/") for path in requested_paths)
+
+
+def test_shuffle_target_requires_every_map_artifact(monkeypatch):
+    _patch_benchmark_graph(monkeypatch)
+    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda step: False)
+
+    with pytest.raises(RuntimeError, match="run the same source selection with --target map first"):
+        _benchmark_steps(
+            sample_prefix=_SAMPLE_PREFIX,
+            selected_sources=["a"],
+            run_tag="shuffle-v2",
+            target=BenchmarkTarget.SHUFFLE,
+            shuffle_input_run_tag="map-v1",
+            scale=SMOKE_SCALE,
+            zephyr_context=pool_zephyr_context("test-benchmark", SMOKE_SCALE),
+        )
+
+
+def test_map_and_shuffle_targets_select_disjoint_stage_families():
+    sources = {"a": StepSpec(name="sample/a")}
+    steps = reference_pipeline.zephyr_datakit_steps(sources, output_path_prefix="gs://marin-test/benchmark")
+
+    assert _target_steps(steps, BenchmarkTarget.MAP) == [steps.tokenize["a"], steps.minhash["a"]]
+    assert _target_steps(steps, BenchmarkTarget.SHUFFLE) == [steps.exact_dedup, steps.fuzzy_dedup]
