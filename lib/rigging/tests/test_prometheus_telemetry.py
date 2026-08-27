@@ -155,48 +155,6 @@ def test_metric_snapshot_publisher_caps_processor_output(monkeypatch: pytest.Mon
     assert indices == ["0", "1"]
 
 
-def test_oversized_batch_is_rejected_whole_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _transport(monkeypatch)
-    scrapes = iter(
-        (
-            '# TYPE vllm:selected gauge\nvllm:selected{index="0"} 0\n'
-            'vllm:selected{index="1"} 1\nvllm:selected{index="2"} 2\n',
-            '# TYPE vllm:selected gauge\nvllm:selected{index="recovered"} 4\n',
-        )
-    )
-    monkeypatch.setattr(
-        "rigging.telemetry.prometheus.requests.get",
-        lambda *_args, **_kwargs: _PrometheusResponse(next(scrapes)),
-    )
-    collector = PrometheusCollector(
-        metric_source="vllm",
-        scraper=PrometheusScraper("http://vllm/metrics"),
-        processor=lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:"),
-        publisher=metrics.RejectOversizedMetricSnapshotPublisher(
-            max_records=2,
-            attributes={"metric_source": "vllm"},
-        ),
-    )
-
-    collector.poll_once()
-    transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 0)
-    transport.wait_for_value(
-        "prometheus_dropped_samples",
-        {"metric_source": "vllm", "drop_reason": "sample_limit"},
-        3,
-    )
-    assert not [record for record in transport.records if record["name"] == "selected"]
-
-    collector.poll_once()
-    transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 1)
-    transport.wait_for_value(
-        "prometheus_dropped_samples",
-        {"metric_source": "vllm", "drop_reason": "sample_limit"},
-        0,
-    )
-    assert transport.record("selected", {"index": "recovered"})["value"] == 4
-
-
 def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
     monkeypatch.setattr(

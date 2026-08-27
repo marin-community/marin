@@ -35,6 +35,9 @@ from marin.inference.vllm_server import (
     _starts_nccl_ras_probe,
 )
 from prometheus_client.parser import text_string_to_metric_families
+from rigging import telemetry
+from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
+from rigging.testing import RecordingTelemetryTransport
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -81,6 +84,59 @@ vllm:late_histogram_created{{engine="0"}} 1
         "late_histogram_sum",
     }
     assert len(snapshots) == 5
+
+
+def test_vllm_metric_overflow_rejects_whole_batch_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
+    telemetry.shutdown(0.01)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    scrapes = iter(
+        (
+            tuple(
+                text_string_to_metric_families(
+                    '# TYPE vllm:selected gauge\nvllm:selected{index="0"} 0\n'
+                    'vllm:selected{index="1"} 1\nvllm:selected{index="2"} 2\n'
+                )
+            ),
+            tuple(text_string_to_metric_families('# TYPE vllm:selected gauge\nvllm:selected{index="recovered"} 4\n')),
+        )
+    )
+    scraper = PrometheusScraper("http://vllm/metrics")
+    monkeypatch.setattr(scraper, "scrape", lambda: next(scrapes))
+    collector = PrometheusCollector(
+        metric_source="vllm",
+        scraper=scraper,
+        processor=lambda families: vllm_server._vllm_metric_snapshots(
+            families,
+            family_names=frozenset({"vllm:selected"}),
+        ),
+        publisher=vllm_server._VllmMetricSnapshotPublisher(
+            max_records=2,
+            attributes={"metric_source": "vllm"},
+        ),
+    )
+
+    try:
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 0)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            3,
+        )
+        assert not [record for record in transport.records if record["name"] == "selected"]
+
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 1)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            0,
+        )
+        assert transport.record("selected", {"index": "recovered"})["value"] == 4
+    finally:
+        telemetry.shutdown(0.1)
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

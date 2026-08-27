@@ -9,14 +9,11 @@ enqueues them through the package's shared emit path, capping admission so one
 oversized scrape cannot exhaust the export queue.
 """
 
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from rigging import telemetry
 from rigging.telemetry import serialization
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -103,37 +100,3 @@ class MetricSnapshotPublisher:
                 attributes=attributes,
             )
         )
-
-
-class RejectOversizedMetricSnapshotPublisher(MetricSnapshotPublisher):
-    """Reject an oversized batch whole instead of publishing an arbitrary prefix."""
-
-    def __init__(
-        self,
-        *,
-        max_records: int,
-        attributes: Mapping[str, str] | None = None,
-    ) -> None:
-        super().__init__(max_records=max_records, attributes=attributes)
-        self._overflow_active = False
-
-    def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
-        runtime = telemetry._runtime
-        if runtime is None:
-            return MetricPublishResult(False, 0, 0, 0)
-        if len(snapshots) > self._max_records:
-            if not self._overflow_active:
-                logger.warning(
-                    "Rejecting oversized metric batch with %d samples; limit is %d",
-                    len(snapshots),
-                    self._max_records,
-                )
-            self._overflow_active = True
-            return MetricPublishResult(
-                configured=True,
-                enqueued_records=0,
-                sample_limit_dropped_records=len(snapshots),
-                telemetry_lost_records=0,
-            )
-        self._overflow_active = False
-        return super().publish(snapshots)

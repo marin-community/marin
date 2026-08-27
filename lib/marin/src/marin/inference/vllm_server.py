@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -25,7 +25,7 @@ from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.telemetry.metrics import MetricSnapshot, RejectOversizedMetricSnapshotPublisher
+from rigging.telemetry.metrics import MetricPublishResult, MetricSnapshot, MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
@@ -1102,6 +1102,44 @@ def _vllm_metric_snapshots(
     return prefixed_metric_snapshots(selected_families, metric_prefix=VLLM_METRIC_PREFIX)
 
 
+class _VllmMetricSnapshotPublisher(MetricSnapshotPublisher):
+    """Reject an over-limit selected vLLM batch instead of publishing a prefix.
+
+    First-N admission makes dashboard data depend on exposition order. Collector
+    health reports the dropped batch while serving and later scrapes continue.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_records: int,
+        attributes: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(max_records=max_records, attributes=attributes)
+        self._overflow_active = False
+
+    def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
+        runtime = telemetry._runtime
+        if runtime is None:
+            return MetricPublishResult(False, 0, 0, 0)
+        if len(snapshots) > self._max_records:
+            if not self._overflow_active:
+                logger.warning(
+                    "Rejecting oversized vLLM metric batch with %d samples; limit is %d",
+                    len(snapshots),
+                    self._max_records,
+                )
+            self._overflow_active = True
+            return MetricPublishResult(
+                configured=True,
+                enqueued_records=0,
+                sample_limit_dropped_records=len(snapshots),
+                telemetry_lost_records=0,
+            )
+        self._overflow_active = False
+        return super().publish(snapshots)
+
+
 def _configure_vllm_telemetry(
     handle: VllmServerHandle,
     *,
@@ -1126,7 +1164,7 @@ def _configure_vllm_telemetry(
             _vllm_metric_snapshots,
             family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
         ),
-        publisher=RejectOversizedMetricSnapshotPublisher(
+        publisher=_VllmMetricSnapshotPublisher(
             max_records=_VLLM_METRIC_SAMPLE_LIMIT,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),
