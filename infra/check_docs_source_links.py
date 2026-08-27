@@ -38,15 +38,20 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+def _iter_links(md_path: Path):
+    """Yield (raw, normalized) markdown link targets in one file."""
+    text = md_path.read_text(encoding="utf-8")
+    for match in LINK_RE.finditer(text):
+        yield match.group(1), _normalize_url(match.group(1))
+
+
 def _check_docs() -> list[str]:
     errors: list[str] = []
     if not DOCS_DIR.exists():
         return errors
 
     for md_path in DOCS_DIR.rglob("*.md"):
-        text = md_path.read_text(encoding="utf-8")
-        for match in LINK_RE.finditer(text):
-            url = _normalize_url(match.group(1))
+        for _, url in _iter_links(md_path):
             gh_match = GITHUB_RE.match(url)
             if not gh_match:
                 continue
@@ -83,9 +88,7 @@ def _iter_relative_check_files() -> list[Path]:
 def _check_relative_links() -> list[str]:
     findings: list[str] = []
     for md_path in _iter_relative_check_files():
-        text = md_path.read_text(encoding="utf-8")
-        for match in LINK_RE.finditer(text):
-            url = _normalize_url(match.group(1))
+        for raw, url in _iter_links(md_path):
             if not url or "://" in url or url.startswith(("mailto:", "#", "{")):
                 continue
             if GITHUB_RE.match(url):
@@ -94,7 +97,7 @@ def _check_relative_links() -> list[str]:
             base = ROOT_DIR if url.startswith("/") else md_path.parent
             target = (base / url.lstrip("/")).resolve()
             if not target.exists():
-                findings.append(f"{md_path.relative_to(ROOT_DIR)}: {match.group(1)}")
+                findings.append(f"{md_path.relative_to(ROOT_DIR)}: {raw}")
     return findings
 
 

@@ -3,8 +3,8 @@ Marin compute runs on GCP TPUs (provided by TRC) and CoreWeave GPUs. The named
 cluster configs in `lib/iris/config/` are the source of truth:
 
 - `marin` (production GCP): a single multi-region cluster whose TPU pools span
-  v5e (us-west4, europe-west4), v5p (us-central1, us-east5), and v6e
-  (us-east1, us-east5, europe-west4).
+  v4 (us-central2), v5e (us-west4, europe-west4), v5p (us-central1, us-east5),
+  and v6e (us-east1, us-east5, europe-west4).
 - `marin-dev`: dev cluster with smaller scale caps.
 - `cw-rno2a`, `cw-us-east-02a`, `cw-us-east-08a`, `cw-us-west-04a`: CoreWeave
   GPU clusters (see `lib/iris/docs/coreweave.md`).
