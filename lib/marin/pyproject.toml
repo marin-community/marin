@@ -172,7 +172,7 @@ datakit = [
 ]
 
 # PDF-only dependencies for experiments/datakit/build_pdf_source/*; kept out of `datakit` so plain
-# datakit fleet jobs don't install torch (via docling) and the OCR toolchain.
+# datakit fleet jobs don't install the PDF toolchain.
 pdf = [
     # Reads WARC response records out of Common Crawl byte ranges
     # (experiments/datakit/build_pdf_source/fetch.py).

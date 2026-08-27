@@ -189,15 +189,17 @@ def _response_from_exception(
     timeout_seconds: float,
 ) -> InferenceResponse:
     if isinstance(exc, httpx.TimeoutException):
-        return inference_error_response(
+        return _inference_error_response(
             request,
             504,
             "timed out forwarding request to upstream endpoint",
             detail=f"timeout_seconds={timeout_seconds:.1f}",
         )
     if isinstance(exc, httpx.HTTPError):
-        return inference_error_response(request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc))
-    return inference_error_response(
+        return _inference_error_response(
+            request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc)
+        )
+    return _inference_error_response(
         request,
         502,
         "unexpected worker failure while forwarding request to upstream endpoint",
@@ -206,7 +208,7 @@ def _response_from_exception(
     )
 
 
-def inference_error_response(
+def _inference_error_response(
     request: InferenceRequest,
     status_code: int,
     message: str,
@@ -216,8 +218,8 @@ def inference_error_response(
 ) -> InferenceResponse:
     """Build the standard brokered error envelope, ``{"error": {"message": ...}}``.
 
-    Shared by the forwarding worker and the converter pool so every error a client sees has one
-    shape regardless of which kind of worker produced it.
+    Every path out of the forwarding worker returns one, so a client sees the same error shape
+    whether the request was refused, timed out, or failed upstream.
     """
     logger.warning(
         "Returning brokered error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
