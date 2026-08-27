@@ -265,11 +265,16 @@ def _match_attention_batch_sharding(x: jax.Array, reference: jax.Array) -> jax.A
 
     # JAX 0.11.1 requires dot_general batch dimensions to use the same sharding.
     # Keep K/V sequence sharding, but match Q's batch, head, and contracted dimensions.
+    x_spec = (*x_sharding.spec, *((None,) * (x.ndim - len(x_sharding.spec))))
+    reference_spec = (
+        *reference_sharding.spec,
+        *((None,) * (reference.ndim - len(reference_sharding.spec))),
+    )
     target_spec = P(
-        reference_sharding.spec[0],
-        x_sharding.spec[1],
-        reference_sharding.spec[2],
-        reference_sharding.spec[3],
+        reference_spec[0],
+        x_spec[1],
+        reference_spec[2],
+        reference_spec[3],
     )
     return reshard(x, NamedSharding(reference_sharding.mesh, target_spec))
 
