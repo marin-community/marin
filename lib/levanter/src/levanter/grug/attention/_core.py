@@ -3,6 +3,7 @@
 import functools
 import inspect
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -13,8 +14,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -257,34 +257,7 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
-def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | None:
-    """Describe the score layout when attention input shardings are ambiguous."""
-    q_sharding = named_sharding_of(q)
-    k_sharding = named_sharding_of(k)
-    if q_sharding is None or k_sharding is None or q_sharding.mesh != k_sharding.mesh:
-        return None
-
-    q_spec = (*q_sharding.spec, *((None,) * (q.ndim - len(q_sharding.spec))))
-    k_spec = (*k_sharding.spec, *((None,) * (k.ndim - len(k_sharding.spec))))
-    batch_sharding_matches = q_spec[0] == k_spec[0] and q_spec[2] == k_spec[2]
-    contracting_sharding_is_ambiguous = q_spec[3] is not None and k_spec[3] is not None
-    if batch_sharding_matches and not contracting_sharding_is_ambiguous:
-        return None
-    return NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[2], q_spec[1], k_spec[1]))
-
-
-def _reference_context_sharding(q: jax.Array, v: jax.Array) -> NamedSharding | None:
-    q_sharding = named_sharding_of(q)
-    v_sharding = named_sharding_of(v)
-    if q_sharding is None or v_sharding is None or q_sharding.mesh != v_sharding.mesh:
-        return None
-
-    q_spec = (*q_sharding.spec, *((None,) * (q.ndim - len(q_sharding.spec))))
-    v_spec = (*v_sharding.spec, *((None,) * (v.ndim - len(v_sharding.spec))))
-    return NamedSharding(v_sharding.mesh, P(v_spec[0], q_spec[1], v_spec[2], v_spec[3]))
-
-
-def reference_attention(
+def _reference_attention_math(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
@@ -298,13 +271,7 @@ def reference_attention(
     v = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
-    score_sharding = _reference_score_sharding(q, k)
-    scores = jnp.einsum(
-        "bqhd,bkhd->bhqk",
-        q * scale,
-        k,
-        out_sharding=score_sharding,
-    )
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
 
     explicit = None
     if mask is None:
@@ -336,13 +303,33 @@ def reference_attention(
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum(
-        "bhqk,bkhd->bqhd",
-        weights,
-        v,
-        out_sharding=_reference_context_sharding(q, v) if score_sharding is not None else None,
-    )
+    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
+
+
+def reference_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    logits_dtype: jnp.dtype | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Reference attention whose output sharding follows ``q``.
+
+    jax 0.11.1 explicit-sharding mode refuses to infer layouts for the two
+    contractions here (``align_kv_heads`` drops the head-axis sharding, and a
+    sharded ``head_dim`` makes the score contraction ambiguous). Rather than
+    re-deriving jax's inference per einsum, run the math under Auto axes so the
+    compiler picks intermediate layouts, and pin only the output to ``q``'s
+    sharding.
+    """
+    out_sharding = named_sharding_of(q)
+    if out_sharding is None:
+        return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+    # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
+    return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
 
 
 def _tpu_splash_attention(
