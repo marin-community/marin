@@ -63,8 +63,8 @@ INSPECTOR_CORE_HOURS = 2.1
 # page-weighted loss that measured *worse* on all five domain splits.
 #
 # `route_features`' own 36 page signals cost 1.86 core-h/M on x86 and 1.84 on aarch64, measured over
-# 1,000 documents in `pdf-oxide-evaluation.md`; the 124-feature FinePDFs incumbent extraction behind
-# `ocr_prob` is the other 1.54.
+# 1,000 documents in `pdf-oxide-evaluation.md` (on the mark/pdf_processing campaign branch); the
+# 124-feature FinePDFs incumbent extraction behind `ocr_prob` is the other 1.54.
 ROUTE_FEATURES_CORE_HOURS = 1.86
 INCUMBENT_FEATURES_CORE_HOURS = 1.54
 # pdf-inspector's `detect_pdf_bytes`, at 0.441 ms/page. A second library call, so it is not free

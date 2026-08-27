@@ -23,9 +23,10 @@ pipeline changed.
 
 That engine is PDFium, through ``pypdfium2``, and the reason is licensing: PyMuPDF is AGPL and this
 was its last runtime role once the router pass and the Docling route were removed. PDFium is
-BSD-3-Clause. ``pdfium-evaluation.md`` has the adjudication -- blind, two-way and corpus-weighted,
-the model's reading of a PDFium-rendered page is preferred 0.481 to 0.498 of the time against a null
-of 0.500, with all five arms containing parity. The rendering changes on 8% of pages and is not
+BSD-3-Clause. ``pdfium-evaluation.md``, on the ``mark/pdf_processing`` campaign branch with the
+probes that produced it, has the adjudication: blind, two-way and corpus-weighted, the model's
+reading of a PDFium-rendered page is preferred 0.481 to 0.498 of the time against a null of 0.500,
+with all five arms containing parity. The rendering changes on 8% of pages and is not
 worse on them. It is also the operationally safer engine on this corpus: over every page of 100,000
 oracle-sample documents on both architectures, PDFium recorded zero native aborts in 3,577,944
 renders where MuPDF recorded one deterministic SIGSEGV, repeating on 3 of 3 retries.
@@ -95,7 +96,7 @@ DEFAULT_MAX_PAGES = 1000
 # payload, and is 1.16x faster on x86 and 1.46x on aarch64. PNG is lossless, so this is the one
 # lever that moves cost with provably identical pixels; level 6 is slower than either alternative
 # for a payload no smaller than level 1, so the knob has no useful middle
-# (``pdfium-evaluation.md``, "The PNG finding survives").
+# (``pdfium-evaluation.md`` on ``mark/pdf_processing``, "The PNG finding survives").
 PNG_COMPRESS_LEVEL = 1
 
 

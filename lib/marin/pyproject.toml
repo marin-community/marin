@@ -189,7 +189,7 @@ pdf = [
     # of five arms containing the 0.500 null. It is also cheaper (rasterises 1.21x faster on x86,
     # 1.43x on aarch64) and operationally cleaner: zero native aborts in 3,577,944 renders against
     # MuPDF's one deterministic SIGSEGV over the same corpus
-    # (experiments/datakit/build_pdf_source/pdfium-evaluation.md).
+    # (pdfium-evaluation.md, on the mark/pdf_processing campaign branch).
     #
     # Pinned exactly. The vendored PDFium version moves independently of the binding's, and both
     # the router's `mean_render_dpi` feature and the page dimensions the feed sends the model are
