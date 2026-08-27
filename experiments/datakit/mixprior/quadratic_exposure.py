@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from dataclasses import dataclass
 from functools import partial
 from typing import NamedTuple
@@ -44,6 +46,7 @@ PHASE_DIAGONAL_SLICE = slice(6, 8)
 RESIDUAL_LENGTHSCALE_INDEX = 8
 RESIDUAL_OUTPUTSCALE_INDEX = 9
 PARAMETER_COUNT = 10
+logger = logging.getLogger(__name__)
 
 
 class QuadraticExposureLayout(NamedTuple):
@@ -454,12 +457,26 @@ def quadratic_model_metadata(
 
 @jax.enable_x64()
 def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> FittedQuadraticExposureGP:
+    started = time.monotonic()
+    swarms = (campaign.target, *campaign.sources)
+    logger.info(
+        "Preparing GP data for target %s from %d swarms on %s",
+        campaign.target.swarm_id,
+        len(swarms),
+        device,
+    )
     training = prepare_training_data(campaign, quadratic_exposure_features)
     train_X = jax.device_put(training.features, device)
     train_Y = jax.device_put(training.standardized_objective_values, device)
     train_Yvar = jax.device_put(training.standardized_objective_variances, device)
     layout = quadratic_exposure_layout(campaign.target.content_matrix.shape[1])
     initial_lengthscale = moment_lengthscale(training.features[:, : layout.feature_count], layout)
+    logger.info(
+        "Prepared %d observations with %d features; initial lengthscale %.6f",
+        len(training.features),
+        training.features.shape[1] - 1,
+        initial_lengthscale,
+    )
     objective = partial(
         negative_log_posterior,
         train_X=train_X,
@@ -475,6 +492,8 @@ def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> Fitt
         train_Y,
         train_Yvar,
     )
+    jax.block_until_ready(conditioning.cholesky)
+    logger.info("GP fit and conditioning completed in %.1fs", time.monotonic() - started)
     return FittedQuadraticExposureGP(
         parameters=parameters,
         train_X=train_X,

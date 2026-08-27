@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from statistics import NormalDist
 from typing import NamedTuple, TypedDict
@@ -131,8 +132,21 @@ def sample_candidate_pool(space: CandidatePoolInputs, size: int, seed: int) -> n
     observed_weights = quantize_mixtures(space.observed_weights)
     rng = np.random.default_rng(seed)
     pool = exclude_observed(center_designs, observed_weights)
+    started = time.monotonic()
+    logger.info(
+        "Sampling %s candidate mixtures with seed %d from %d centers",
+        f"{size:,}",
+        seed,
+        len(center_designs),
+    )
     for _ in range(MAX_POOL_DRAWS):
         if len(pool) >= size:
+            logger.info(
+                "Sampled %s candidate mixtures with seed %d in %.1fs",
+                f"{size:,}",
+                seed,
+                time.monotonic() - started,
+            )
             return pool[:size]
         global_count = round(POOL_DRAW_SIZE * GLOBAL_PROPOSAL_FRACTION)
         local_count = POOL_DRAW_SIZE - global_count
@@ -168,7 +182,19 @@ def sample_candidate_pool(space: CandidatePoolInputs, size: int, seed: int) -> n
         weights = quantize_mixtures(weights)
         pool = unique_mixtures(np.concatenate([pool, weights]))
         pool = exclude_observed(pool, observed_weights)
-        logger.info("Sampled %s/%s mixtures", f"{min(len(pool), size):,}", f"{size:,}")
+        completed = min(len(pool), size)
+        elapsed = time.monotonic() - started
+        rate = completed / elapsed
+        eta = (size - completed) / rate
+        logger.info(
+            "Sampled %s/%s mixtures for seed %d (%.1f%%, %.0f rows/s, ETA %.1fs)",
+            f"{completed:,}",
+            f"{size:,}",
+            seed,
+            100.0 * completed / size,
+            rate,
+            eta,
+        )
     raise ValueError(
         f"Could only sample {len(pool):,} of {size:,} mixtures after {MAX_POOL_DRAWS * POOL_DRAW_SIZE:,} draws"
     )
@@ -184,6 +210,7 @@ def sample_candidate_pool_union(
         raise ValueError("At least one pool seed is required")
     if len(set(seeds)) != len(seeds):
         raise ValueError("Pool seeds must be distinct")
+    logger.info("Sampling candidate pools for %d seeds", len(seeds))
     pools = [sample_candidate_pool(space, size_per_seed, seed) for seed in seeds]
     pool = unique_mixtures(np.concatenate(pools))
     logger.info(
@@ -307,12 +334,25 @@ def acquire_noisy_expected_improvement(
 
 
 def _score_candidate_pool(weights: np.ndarray, scorer: PoolChunkScorer, name: str) -> np.ndarray:
+    started = time.monotonic()
+    logger.info("Scoring %s pool rows with %s", f"{len(weights):,}", name)
     values = []
     for start in range(0, len(weights), ACQUISITION_CHUNK_SIZE):
         stop = min(start + ACQUISITION_CHUNK_SIZE, len(weights))
         values.append(scorer(weights[start:stop], start))
         if stop == len(weights) or stop % PROGRESS_ROWS == 0:
-            logger.info("Scored %s/%s pool rows with %s", f"{stop:,}", f"{len(weights):,}", name)
+            elapsed = time.monotonic() - started
+            rate = stop / elapsed
+            eta = (len(weights) - stop) / rate
+            logger.info(
+                "Scored %s/%s pool rows with %s (%.1f%%, %.0f rows/s, ETA %.1fs)",
+                f"{stop:,}",
+                f"{len(weights):,}",
+                name,
+                100.0 * stop / len(weights),
+                rate,
+                eta,
+            )
     return np.concatenate(values)
 
 
@@ -367,14 +407,24 @@ def select_candidate(
     acquisition: Acquisition,
 ) -> CandidateSelection:
     weights = validate_candidate_pool(weights, campaign.target.data.weights.shape[1:])
+    logger.info("Acquiring one candidate with %s from %s pool rows", acquisition.name, f"{len(weights):,}")
     acquired = acquire_candidate(acquisition, model, campaign.target, weights)
-    return build_candidate_selection(
+    selection = build_candidate_selection(
         campaign,
         model,
         weights,
         acquired,
         acquisition=acquisition,
     )
+    logger.info(
+        "Selected pool row %d: acquisition %.6f, posterior %.6f ± %.6f, PI %.1f%%",
+        selection.acquired.pool_index,
+        selection.acquired.acquisition_value,
+        selection.posterior["objective_mean"],
+        selection.posterior["objective_sd"],
+        100.0 * selection.posterior["probability_of_improvement"],
+    )
+    return selection
 
 
 def build_candidate_selection(

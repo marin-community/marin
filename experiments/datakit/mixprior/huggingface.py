@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -22,6 +23,7 @@ from experiments.datakit.mixprior.campaign import (
 from experiments.datakit.mixprior.data import ArtifactReference, read_record, sha256
 
 HF_COMMIT_URI = re.compile(r"^hf://datasets/[^/@]+/[^/@]+@[0-9a-f]{40}/.+$")
+logger = logging.getLogger(__name__)
 
 
 def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path) -> Path:
@@ -29,6 +31,7 @@ def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path
     filesystem = HfFileSystem(token=False)
     if not HF_COMMIT_URI.fullmatch(campaign_uri):
         raise ValueError("Campaign URI must pin a 40-character Hugging Face commit")
+    logger.info("Downloading campaign from %s", campaign_uri)
     campaign_root_uri = campaign_uri.rsplit("/", 1)[0]
     destination.mkdir(parents=True, exist_ok=False)
     manifest_path = destination / CAMPAIGN_MANIFEST
@@ -44,7 +47,8 @@ def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path
     swarms_by_id = {reference["swarm_id"]: reference for reference in registry["swarms"]}
 
     basis_ids = set()
-    for swarm_id in [manifest["target_swarm"], *manifest["source_swarms"]]:
+    swarm_ids = [manifest["target_swarm"], *manifest["source_swarms"]]
+    for index, swarm_id in enumerate(swarm_ids, start=1):
         swarm_reference = swarms_by_id[swarm_id]
         swarm_path = destination / _safe_relative_path(swarm_reference["path"])
         _download_reference(filesystem, campaign_root_uri, destination, swarm_reference, swarm_path)
@@ -54,6 +58,7 @@ def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path
             _download_reference(filesystem, campaign_root_uri, destination, reference, artifact_path)
         content_path = swarm_path.parent / _safe_relative_path(swarm["content"]["path"])
         basis_ids.add(read_record(content_path)["basis_id"])
+        logger.info("Downloaded swarm %d/%d: %s", index, len(swarm_ids), swarm_id)
 
     bases_by_id = {reference["basis_id"]: reference for reference in registry["content_bases"]}
     for basis_id in basis_ids:
@@ -64,6 +69,13 @@ def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path
         lookup_reference = basis["lookup"]
         lookup_path = basis_path.parent / _safe_relative_path(lookup_reference["path"])
         _download_reference(filesystem, campaign_root_uri, destination, lookup_reference, lookup_path)
+        logger.info("Downloaded content basis %s", basis_id)
+    logger.info(
+        "Downloaded campaign with %d swarms and %d content bases to %s",
+        len(swarm_ids),
+        len(basis_ids),
+        destination,
+    )
     return manifest_path
 
 

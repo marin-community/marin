@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import jax
@@ -20,6 +21,8 @@ from experiments.datakit.mixprior.search import (
     select_candidate,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def search_candidate(
     campaign: Campaign,
@@ -30,10 +33,18 @@ def search_candidate(
     device: jax.Device,
 ) -> CandidateDecision:
     """Fit the quadratic exposure GP and acquire from the standard pool."""
+    logger.info(
+        "Searching target %s with %s, %d pool seeds, and %s rows per seed",
+        campaign.target.swarm_id,
+        acquisition.name,
+        len(pool_seeds),
+        f"{pool_size_per_seed:,}",
+    )
     model = fit_quadratic_exposure_model(campaign, device)
     pool = sample_standard_candidate_pool(campaign_pool_inputs(campaign), pool_size_per_seed, pool_seeds)
     selection = select_candidate(campaign, model, pool.weights, acquisition)
     diagnostics = candidate_diagnostics(campaign.target, selection.weights, selection.posterior)
+    logger.info("Candidate search completed for target %s", campaign.target.swarm_id)
     return CandidateDecision(
         model.model_metadata,
         pool.weights,
@@ -55,6 +66,7 @@ def generate_candidate(
     device: jax.Device,
 ) -> CandidateArtifact:
     """Load a campaign, fit the quadratic GP, and persist its decision."""
+    logger.info("Generating candidate from %s", campaign_manifest)
     campaign = load_campaign(campaign_manifest)
     decision = search_candidate(
         campaign,
@@ -63,10 +75,12 @@ def generate_candidate(
         pool_seeds=pool_seeds,
         device=device,
     )
-    return write_candidate_bundle(
+    artifact = write_candidate_bundle(
         campaign_manifest=campaign_manifest,
         campaign=campaign,
         decision=decision,
         output_dir=output_dir,
         dependency_lock=dependency_lock,
     )
+    logger.info("Generated candidate %s in %s", artifact["candidate_id"], output_dir)
+    return artifact

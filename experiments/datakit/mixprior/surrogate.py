@@ -175,7 +175,15 @@ def fit_map_restarts(
     started_all = time.monotonic()
     summaries = []
     candidates = []
-    for initialization in initializations:
+    logger.info("Fitting GP with %d MAP restarts on %s", len(initializations), device)
+    for index, initialization in enumerate(initializations, start=1):
+        logger.info(
+            "Starting GP restart %d/%d: %s seed %d",
+            index,
+            len(initializations),
+            initialization.name,
+            initialization.seed,
+        )
         started = time.monotonic()
         result = minimize(
             compiled_objective,
@@ -213,4 +221,13 @@ def fit_map_restarts(
     best_objective, best_parameters = min(candidates, key=lambda candidate: candidate[0])
     best_index = next(index for index, summary in enumerate(summaries) if summary.optimizer_objective == best_objective)
     summaries[best_index] = summaries[best_index]._replace(selected=True)
-    return MapFit(best_parameters, tuple(summaries), time.monotonic() - started_all)
+    elapsed = time.monotonic() - started_all
+    selected = summaries[best_index]
+    logger.info(
+        "Selected GP restart %s seed %d with MLL %.6f after %.1fs",
+        selected.name,
+        selected.seed,
+        selected.marginal_log_likelihood,
+        elapsed,
+    )
+    return MapFit(best_parameters, tuple(summaries), elapsed)

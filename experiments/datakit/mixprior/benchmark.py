@@ -120,9 +120,16 @@ def rank_replay(
     device: jax.Device,
 ) -> list[dict[str, float | int]]:
     target, sources = transition(campaign, name)
+    logger.info(
+        "Starting %s rank replay with %d target observations and %d source swarms",
+        name,
+        len(target.data.weights),
+        len(sources),
+    )
     actual = campaign.objective.observations(target).values
     rows = []
     for prefix in RANK_PREFIXES:
+        logger.info("Fitting %s rank prefix %d/%d", name, prefix, len(target.data.weights))
         observed = subset_swarm(target, list(range(prefix)))
         fitted = fit_quadratic_exposure_model(replace(campaign, target=observed, sources=sources), device)
         predicted = fitted.predict(target, target.data.weights[prefix:]).mean
@@ -183,6 +190,12 @@ def regret_replay(
     best_possible = float(objective.max())
     selected = list(initial)
     curve = []
+    logger.info(
+        "Starting %s regret replay with %d initial observations and horizon %d",
+        acquisition.name,
+        len(initial),
+        REGRET_HORIZON,
+    )
     while len(selected) <= REGRET_HORIZON:
         curve.append(
             {
@@ -239,6 +252,7 @@ def main() -> None:
     parser.add_argument("--output")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logger.info("Starting %s benchmark on %s", args.mode, default_device())
     with TemporaryDirectory(prefix="mixprior-benchmark-") as temporary:
         manifest = download_campaign(CAMPAIGN_URI, CAMPAIGN_SHA256, Path(temporary) / "campaign")
         campaign = load_campaign(manifest)
@@ -249,6 +263,7 @@ def main() -> None:
 
     if args.output:
         StoragePath(args.output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        logger.info("Wrote benchmark result to %s", args.output)
     print("RESULT " + json.dumps(payload), flush=True)
 
 

@@ -23,6 +23,7 @@ from experiments.datakit.mixprior.search import (
 from experiments.datakit.mixprior.surrogate import default_device
 
 DEPENDENCY_LOCK = Path(__file__).parents[3] / "uv.lock"
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -35,6 +36,13 @@ def main() -> None:
     parser.add_argument("--pool-seed", type=int, action="append")
     parser.add_argument("--acquisition-seed", type=int, default=DEFAULT_ACQUISITION_SEED)
     args = parser.parse_args()
+    device = default_device()
+    logger.info(
+        "Starting candidate generation on %s with %d pool seeds and %s rows per seed",
+        device,
+        len(args.pool_seed or DEFAULT_POOL_SEEDS),
+        f"{args.pool_size_per_seed:,}",
+    )
 
     with TemporaryDirectory(prefix="mixprior-") as temporary:
         campaign_dir = Path(temporary) / "campaign"
@@ -46,12 +54,13 @@ def main() -> None:
             acquisition=noisy_expected_improvement(args.acquisition_seed),
             pool_size_per_seed=args.pool_size_per_seed,
             pool_seeds=tuple(args.pool_seed or DEFAULT_POOL_SEEDS),
-            device=default_device(),
+            device=device,
         )
+        logger.info("Copying pinned campaign artifacts into the candidate bundle")
         shutil.copytree(campaign_dir, args.output_dir / "campaign")
 
     manifest_path = write_bundle_manifest(args.output_dir, args.campaign_uri)
-    print(f"Wrote candidate {candidate['candidate_id']} to {manifest_path}")
+    logger.info("Candidate %s is ready at %s", candidate["candidate_id"], manifest_path)
 
 
 if __name__ == "__main__":

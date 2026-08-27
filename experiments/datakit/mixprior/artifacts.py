@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
@@ -27,6 +28,7 @@ CANDIDATE_ARTIFACT = "candidate.parquet"
 POOL_ARTIFACT = "candidate_pool.npz"
 ACQUISITION_ARTIFACT = "acquisition_values.npy"
 BUNDLE_MANIFEST_ARTIFACT = "bundle_manifest.parquet"
+logger = logging.getLogger(__name__)
 
 
 class CandidateDecision(NamedTuple):
@@ -139,6 +141,7 @@ def write_candidate_bundle(
         raise ValueError("Selected acquisition value does not match its pool row")
     if not np.array_equal(selected_weights, pool[acquired.pool_index]):
         raise ValueError("Selected weights do not match the selected pool row")
+    logger.info("Writing candidate bundle with %s pool rows to %s", f"{len(pool):,}", output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
     pool_path = output_dir / POOL_ARTIFACT
     acquisition_path = output_dir / ACQUISITION_ARTIFACT
@@ -204,6 +207,11 @@ def write_candidate_bundle(
         "diagnostics": decision.diagnostics,
     }
     write_record(candidate_path, payload)
+    logger.info(
+        "Wrote candidate %s and %d supporting artifacts",
+        payload["candidate_id"],
+        3,
+    )
     return payload
 
 
@@ -237,4 +245,5 @@ def write_bundle_manifest(output_dir: Path, campaign_uri: str) -> Path:
     }
     manifest_path = output_dir / BUNDLE_MANIFEST_ARTIFACT
     write_record(manifest_path, bundle_manifest)
+    logger.info("Wrote bundle manifest to %s", manifest_path)
     return manifest_path

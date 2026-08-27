@@ -11,6 +11,7 @@ before it becomes a typed ``Campaign``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
@@ -36,6 +37,7 @@ from experiments.datakit.mixprior.objective import (
 )
 
 CAMPAIGN_MANIFEST = "transfer_campaign.parquet"
+logger = logging.getLogger(__name__)
 
 
 class SwarmReference(ArtifactReference):
@@ -96,6 +98,7 @@ class CampaignInputs(NamedTuple):
 
 
 def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
+    logger.info("Loading campaign manifest from %s", manifest_path)
     manifest = cast(CampaignManifest, read_record(manifest_path))
     if manifest.get("schema_version") != 1:
         raise ValueError("Unsupported transfer campaign schema")
@@ -117,12 +120,20 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
         raise ValueError("Campaign swarm IDs must be unique")
 
     loaded: dict[str, Swarm] = {}
-    for reference in references:
+    for index, reference in enumerate(references, start=1):
         swarm_path = _checked_path(root, reference)
         swarm = load_swarm(swarm_path)
         if swarm.swarm_id != reference["swarm_id"]:
             raise ValueError(f"Campaign expected swarm {reference['swarm_id']}, got {swarm.swarm_id}")
         loaded[swarm.swarm_id] = swarm
+        logger.info(
+            "Loaded swarm %d/%d: %s (%d observations, %d components)",
+            index,
+            len(references),
+            swarm.swarm_id,
+            len(swarm.data.weights),
+            len(swarm.data.mixture_components),
+        )
 
     role_fields = (
         "objective_reference_swarm",
@@ -152,6 +163,13 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
     _checked_path(basis_path.parent, basis["lookup"])
 
     target_id = manifest["target_swarm"]
+    logger.info(
+        "Loaded campaign for target %s with %d source swarms, %d response tasks, and content basis %s",
+        target_id,
+        len(manifest["source_swarms"]),
+        len(objective_metrics),
+        basis_id,
+    )
     return CampaignInputs(
         target=loaded[target_id],
         sources=tuple(loaded[swarm_id] for swarm_id in manifest["source_swarms"]),
@@ -163,6 +181,11 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
 
 
 def build_variance_normalized_campaign(inputs: CampaignInputs) -> Campaign:
+    logger.info(
+        "Fitting scalar objective from %d metrics with hinge epsilon %.6f",
+        len(inputs.objective_metrics),
+        inputs.hinge_tolerance,
+    )
     objective = fit_harrier_hinge_objective(
         inputs.objective_reference.data,
         inputs.noise_reference.data,
