@@ -1,11 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the OCR extraction route: page rendering and the sender's document assembly."""
+"""Tests for the OCR extraction route: page rendering and the sender's document assembly.
+
+Rendering runs where it runs in production -- in a child process the sender task is willing to lose
+-- so every test that goes through ``ocr_batch`` exercises the real protocol against the real
+rasteriser. What the child cannot be made to do here, dying and stalling, has its own module
+(``test_ocr_render_isolation.py``) where the child is a stub the test steers.
+"""
 
 import base64
 import io
 import threading
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pytest
@@ -13,17 +20,20 @@ import pytest
 from experiments.datakit.build_pdf_source import extract_inspector, extract_ocr
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
+from experiments.datakit.build_pdf_source.ocr_extract import client
 from experiments.datakit.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
     MAX_PIXELS,
     RAISED_MAX_VISUAL_TOKENS,
     VISUAL_TOKEN_PIXELS,
+    RenderedPage,
     RenderOptions,
     effective_dpi,
     iter_rendered_pages,
     open_pdf,
     target_dimensions,
 )
+from experiments.datakit.build_pdf_source.ocr_extract.render_worker import RenderWorker
 
 # The rasteriser ships in marin-core's ``pdf`` extra, which the workspace root does not install.
 # The modules above are importable without it -- they defer the import to the functions that
@@ -126,16 +136,25 @@ def endpoint():
     return OcrEndpoint(base_url="http://unused/v1", model="test-model", max_visual_tokens=2048)
 
 
+@pytest.fixture(scope="module")
+def worker():
+    """One rasteriser child for the module, as a sender process holds one for its whole life."""
+    worker = RenderWorker(deadline=30.0)
+    yield worker
+    worker.stop()
+
+
 @pytest.fixture
-def run_batch(monkeypatch, endpoint):
+def run_batch(monkeypatch, endpoint, worker):
     """Run ``ocr_batch`` with a stand-in for the endpoint call.
 
-    The substitute replaces the network, not the logic under test: rendering, the in-flight bound,
-    page ordering, boilerplate removal and record assembly all run for real.
+    The substitute replaces the network, not the logic under test: rendering in the child process,
+    the in-flight bound, page ordering, boilerplate removal and record assembly all run for real.
     """
 
     def run(rows, respond, *, keys=None, raised_keys=frozenset(), render_options=None, boilerplate=None, loop=None):
         monkeypatch.setattr(extract_ocr, "ocr_page", respond)
+        monkeypatch.setattr(extract_ocr, "render_worker", lambda deadline: worker)
         return list(
             ocr_batch(
                 _batch(rows),
@@ -230,16 +249,17 @@ def test_a_coloured_page_keeps_its_channels():
 
     with open_pdf(_blue_page_pdf()) as document:
         page = next(iter(iter_rendered_pages(document, RenderOptions())))
-    image = Image.open(io.BytesIO(base64.b64decode(page.data_uri.split(",", 1)[1])))
+    image = Image.open(io.BytesIO(page.png))
     red, green, blue = (band.getextrema()[0] for band in image.convert("RGB").split())
     assert blue > 200, f"the blue channel should dominate a blue page, got r={red} g={green} b={blue}"
     assert red < 60, f"the red channel should be empty on a blue page, got r={red} g={green} b={blue}"
 
 
-def test_rendered_pages_are_png_data_uris():
+def test_rendered_pages_come_back_as_png_bytes():
+    """Bytes, not the data URI: the page crosses a pipe before anything asks for base64."""
     with open_pdf(_pdf(1)) as document:
         page = next(iter(iter_rendered_pages(document, RenderOptions())))
-    assert page.data_uri.startswith("data:image/png;base64,")
+    assert page.png.startswith(b"\x89PNG\r\n\x1a\n")
     assert page.dpi > 0
 
 
@@ -437,6 +457,41 @@ def test_the_ocr_record_matches_its_declared_schema(run_batch):
     """A record that does not fit the schema fails only at write time, a whole shard later."""
     records = run_batch([_row(0, _pdf(2))], _page_text)
     assert pa.RecordBatch.from_pylist(records, schema=extract_ocr.OUTPUT_SCHEMA).num_rows == 1
+
+
+# --- the request the page is sent in ------------------------------------------------------------
+
+
+def test_a_rendered_page_reaches_the_endpoint_as_a_png_data_uri(monkeypatch, endpoint):
+    """The page travels as PNG bytes and is base64'd once, here, at the only boundary that wants it.
+
+    Nothing else in the pipeline would notice this going wrong. The endpoint would reject every
+    image in the run, which reads as a fleet problem rather than as a malformed request.
+    """
+    sent: dict = {}
+
+    class Completions:
+        def create(self, **request):
+            sent.update(request)
+            message = SimpleNamespace(content="transcribed")
+            return SimpleNamespace(
+                usage=SimpleNamespace(completion_tokens=7),
+                choices=[SimpleNamespace(message=message, finish_reason="stop")],
+            )
+
+    monkeypatch.setattr(
+        client,
+        "_client",
+        lambda endpoint, connections: SimpleNamespace(chat=SimpleNamespace(completions=Completions())),
+    )
+    png = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+
+    result = client.ocr_page(endpoint, 4, RenderedPage(png=png, page_index=0, pixels=2088960, dpi=149.5))
+
+    image = sent["messages"][0]["content"][0]
+    assert image["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(png).decode()
+    assert image["max_pixels"] == endpoint.max_visual_tokens * VISUAL_TOKEN_PIXELS
+    assert result == PageOcr(text="transcribed", completion_tokens=7, truncated=False)
 
 
 # --- page fence unwrapping ---------------------------------------------------------------------
