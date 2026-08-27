@@ -14,6 +14,7 @@ from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe.benchmark_grug_moe_pipeline import _validate_local_mesh
 from experiments.grug.moe.grug_moe_pipeline import (
+    AutomaticPipelineSchedule,
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
     batches_for_pipeline,
@@ -156,7 +157,7 @@ def test_pipeline_accepts_fewer_microbatches_than_stages():
 def test_dualpipe_v_maps_two_logical_stages_to_each_physical_rank():
     config = GrugMoePipelineConfig(stages=4, physical_stages=2, microbatches=4)
 
-    assert automatic_stage_to_mpmd_indices(config, "dualpipe_v") == (0, 1, 1, 0)
+    assert automatic_stage_to_mpmd_indices(config, AutomaticPipelineSchedule.DUALPIPE_V) == (0, 1, 1, 0)
 
 
 def test_automatic_pipeline_excludes_qb_bias_from_differentiated_parameters():

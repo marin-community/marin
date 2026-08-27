@@ -1,25 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Canonical pipeline-parallel implementation for Grug MoE.
+"""Pipeline-parallel training for Grug MoE.
 
-This file is intentionally model-specific. A new Grug model should copy it and
-adapt the stage boundaries and stage-local forward functions. Stage boundaries
-remain explicit for both the MPMD task implementation and JaxPP's automatic
-equation transform.
-
-The implementation provides standard 1F1B, an explicit zero-bubble schedule,
-JaxPP's equation-level automatic zero-bubble transform, and automatic DualPipeV
-with two logical stages on each physical pipeline rank.
+Supports standard 1F1B, explicit and automatic zero-bubble schedules, and
+automatic DualPipeV with two logical stages on each physical pipeline rank.
 Standard 1F1B supports any positive microbatch count, including counts smaller
 than the number of stages. Zero-bubble requires at least one microbatch per
 stage and retains stage-local VJP residual arrays between its input- and
 weight-gradient tasks. DualPipeV also requires at least one microbatch per
 logical stage.
-
-The intended call sequence is visible in the public function names: construct
-the mesh, initialize and place the state, split and place each batch, build the
-step once, pass it through ``prepare_explicit_step``, then call it for each batch.
 """
 
 from __future__ import annotations
@@ -28,6 +18,7 @@ import dataclasses
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TypeGuard
 
 import equinox as eqx
@@ -78,6 +69,11 @@ type _ArrayValue = jax.Array | jax.ShapeDtypeStruct | jaxpp.MpmdArray
 type _StagePullback = Callable[[tuple[jax.Array, jax.Array]], tuple[GrugMoePipelineStage, jax.Array]]
 
 
+class AutomaticPipelineSchedule(StrEnum):
+    ZERO_BUBBLE = "zero_bubble"
+    DUALPIPE_V = "dualpipe_v"
+
+
 @dataclass(frozen=True)
 class GrugMoePipelineConfig:
     stages: int
@@ -110,7 +106,7 @@ def make_pipeline_mesh(
     replica_axis_size: int | None = None,
 ):
     """Build the concrete Grug mesh and wrap it as a JaxPP MPMD mesh."""
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
     if replica_axis_size is None:
         replica_axis_size = max(1, jax.process_count() // config.mpmd_stages)
     fixed_axes = config.mpmd_stages * replica_axis_size * expert_axis_size
@@ -396,7 +392,7 @@ def _initialize_mpmd_stage_state(
     stage_to_mpmd_index: tuple[int, ...],
     memory_threshold: int | None,
 ) -> _InitializedMpmdStageState:
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
     qb_targets = tuple(
         pp.MpmdSharding(mpmd_mesh, mesh_ids={mpmd_index}, spec=P(None, None)) for mpmd_index in stage_to_mpmd_index
     )
@@ -427,8 +423,8 @@ def make_mpmd_pipeline_state(
     layer_counts: tuple[int, ...] | None = None,
     memory_threshold: int | None = None,
 ) -> GrugMoePipelineState:
-    """Place parameters before initializing optimizer state to avoid peak replication."""
-    pp, _ = _require_jaxpp()
+    """Return explicit training state sharded by pipeline stage."""
+    pp, _ = _jaxpp_modules()
     stages = split_transformer(model, num_stages, layer_counts=layer_counts)
     stage_targets = tuple(_mpmd_sharding_tree(mpmd_mesh, stage_index, stage) for stage_index, stage in enumerate(stages))
     stages = pp.spmd_to_mpmd_reshard(
@@ -462,8 +458,8 @@ def make_mpmd_automatic_pipeline_state(
     stage_to_mpmd_index: tuple[int, ...] | None = None,
     memory_threshold: int | None = None,
 ) -> tuple[GrugMoeAutomaticPipelineState, tuple[GrugMoePipelineStage, ...]]:
-    """Place each stage before creating its optimizer state."""
-    pp, _ = _require_jaxpp()
+    """Return automatic state and static stages using the requested placement."""
+    pp, _ = _jaxpp_modules()
     if stage_to_mpmd_index is None:
         stage_to_mpmd_index = tuple(range(num_stages))
     if len(stage_to_mpmd_index) != num_stages:
@@ -507,7 +503,7 @@ def staged_loss(
     *,
     logsumexp_weight: float | None = None,
 ) -> jax.Array:
-    """Reference sequential execution of the split model, used for parity checks."""
+    """Return the loss from sequential execution of split stages."""
     hidden = stages[0].embed(batch.tokens)
     router_loss = jnp.array(0.0, dtype=jnp.float32)
     for stage in stages:
@@ -532,7 +528,7 @@ def microbatched_staged_loss(
     num_microbatches: int,
     logsumexp_weight: float | None = None,
 ) -> jax.Array:
-    """Sequential oracle for the loss scaling used by the MPMD microbatch step."""
+    """Return the loss after sequential microbatch accumulation."""
     cross_entropy_sum = jnp.array(0.0, dtype=jnp.float32)
     loss_denominator = jnp.array(0.0, dtype=jnp.float32)
     router_loss = jnp.array(0.0, dtype=jnp.float32)
@@ -637,7 +633,7 @@ def stage_pullback_weight_gradient(pullback, hidden_cotangent: jax.Array) -> Gru
     return pullback((hidden_cotangent, router_loss_cotangent))[0]
 
 
-def _require_jaxpp():
+def _jaxpp_modules():
     if jaxpp is None or mpmd is None:
         raise ModuleNotFoundError("The canonical Grug pipeline requires `uv sync --extra pipeline`.")
     return jaxpp, mpmd
@@ -645,18 +641,18 @@ def _require_jaxpp():
 
 def automatic_stage_to_mpmd_indices(
     config: GrugMoePipelineConfig,
-    schedule_name: str,
+    schedule_name: AutomaticPipelineSchedule,
 ) -> tuple[int, ...]:
     """Return the physical MPMD rank that owns each logical automatic stage."""
     schedule = _automatic_schedule(config, schedule_name)
     return tuple(int(schedule.get_mpmd_idx(stage_index)) for stage_index in range(config.stages))
 
 
-def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: str):
-    pp, _ = _require_jaxpp()
-    if schedule_name == "zero_bubble":
+def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: AutomaticPipelineSchedule):
+    pp, _ = _jaxpp_modules()
+    if schedule_name == AutomaticPipelineSchedule.ZERO_BUBBLE:
         return pp.ZeroBubble(num_stages=config.stages)
-    if schedule_name == "dualpipe_v":
+    if schedule_name == AutomaticPipelineSchedule.DUALPIPE_V:
         return pp.DualPipeV(num_stages=config.stages, mpmd_dim=config.mpmd_stages)
     raise ValueError(f"unknown automatic pipeline schedule: {schedule_name}")
 
@@ -692,7 +688,7 @@ def _partition_spec_tree(tree):
 
 
 def _mpmd_sharding_tree(mpmd_mesh, stage_index: int, tree):
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
 
     def sharding(value):
         if not _is_array(value):
@@ -722,7 +718,7 @@ def _state_named_shardings(mpmd_mesh, state: GrugMoePipelineState) -> GrugMoePip
 
 def place_pipeline_batches(mpmd_mesh, batches_by_microbatch, *, memory_threshold: int | None = None):
     """Move every microbatch copy onto the stage that will consume it."""
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
     placed = []
     for stage_batches in batches_by_microbatch:
         placed.append(
@@ -781,7 +777,7 @@ def make_automatic_pipeline_step(
     *,
     config: GrugMoePipelineConfig,
     mpmd_mesh,
-    schedule_name: str = "zero_bubble",
+    schedule_name: AutomaticPipelineSchedule = AutomaticPipelineSchedule.ZERO_BUBBLE,
     logsumexp_weight: float | None = None,
 ):
     """Build a JaxPP automatic ZeroBubble or DualPipeV optimizer step.
@@ -790,11 +786,8 @@ def make_automatic_pipeline_step(
     state initializer. ``sample_batches`` must have the leading microbatch axis
     produced by :func:`stacked_microbatches`.
 
-    The stage loop stays model-specific. JaxPP uses the explicit markers to
-    place forward work and partition each reverse jaxpr into activation- and
-    weight-gradient tasks for the selected schedule.
     """
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
     schedule = _automatic_schedule(config, schedule_name)
 
     def pipeline_step(
@@ -879,7 +872,7 @@ def prepare_automatic_mpmd_step(
     memory_threshold: int | None = None,
 ) -> PreparedAutomaticMpmdStep:
     """Compile with stage-local state and place only the still-SPMD batch inputs."""
-    pp, _ = _require_jaxpp()
+    pp, _ = _jaxpp_modules()
     compiled = step.compile(state, batches, loss_denominator)
     args_shardings, kwargs_shardings = compiled.in_shardings
     if kwargs_shardings:
@@ -957,8 +950,8 @@ def make_explicit_zero_bubble_step(
     sample_batches,
     logsumexp_weight: float | None = None,
 ):
-    """Build an explicit JaxPP zero-bubble optimizer step with reusable VJP residuals."""
-    pp, _ = _require_jaxpp()
+    """Build an explicit JaxPP zero-bubble optimizer step."""
+    pp, _ = _jaxpp_modules()
     schedules = pp.ZeroBubble(num_stages=config.stages).tasks(config.microbatches)
     planner_schedules = tuple(
         tuple((task.fwd_or_bwd.name, task.mubatch_idx) for task in stage_tasks) for stage_tasks in schedules
@@ -986,7 +979,7 @@ def _make_explicit_step(
     logsumexp_weight: float | None,
     zero_bubble_schedules: tuple[tuple[tuple[str, int], ...], ...] | None,
 ):
-    _, explicit_mpmd = _require_jaxpp()
+    _, explicit_mpmd = _jaxpp_modules()
     num_stages = len(sample_state.params)
     if num_stages != config.stages:
         raise ValueError(f"config has {config.stages} stages but state has {num_stages}")

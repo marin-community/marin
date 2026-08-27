@@ -28,11 +28,13 @@ class PipelineSchedule(StrEnum):
         return self in {self.AUTOMATIC_ZERO_BUBBLE, self.AUTOMATIC_DUALPIPE_V}
 
     @property
-    def automatic_schedule_name(self) -> str:
+    def automatic_schedule(self):
+        from experiments.grug.moe.grug_moe_pipeline import AutomaticPipelineSchedule  # noqa: PLC0415
+
         if self == self.AUTOMATIC_DUALPIPE_V:
-            return "dualpipe_v"
+            return AutomaticPipelineSchedule.DUALPIPE_V
         if self == self.AUTOMATIC_ZERO_BUBBLE:
-            return "zero_bubble"
+            return AutomaticPipelineSchedule.ZERO_BUBBLE
         raise ValueError(f"{self.value} is not an automatic pipeline schedule")
 
 
@@ -285,7 +287,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
             batches = stacked_microbatches(batch, config.microbatches)
             if config.schedule == PipelineSchedule.AUTOMATIC_DUALPIPE_V:
                 stage_to_mpmd_index = automatic_stage_to_mpmd_indices(
-                    pipeline_config, config.schedule.automatic_schedule_name
+                    pipeline_config, config.schedule.automatic_schedule
                 )
             else:
                 stage_to_mpmd_index = None
@@ -330,7 +332,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
             batches,
             config=pipeline_config,
             mpmd_mesh=mpmd_mesh,
-            schedule_name=config.schedule.automatic_schedule_name,
+            schedule_name=config.schedule.automatic_schedule,
         )
     else:
         if config.schedule == PipelineSchedule.ONE_F_ONE_B:
