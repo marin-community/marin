@@ -47,8 +47,6 @@ def test_plan_binds_required_checks_to_github_actions() -> None:
     assert {check.integration_id for check in plan.required_checks} == {GITHUB_ACTIONS_APP_ID}
     assert tuple(check.context for check in plan.classic_required_checks) == CLASSIC_REQUIRED_CHECKS
     assert {check.integration_id for check in plan.classic_required_checks} == {GITHUB_ACTIONS_APP_ID}
-    assert "agentic-lint" in REQUIRED_CHECKS
-    assert "agentic-lint" in CLASSIC_REQUIRED_CHECKS
 
 
 def test_plan_targets_marins_dependency_update_environment() -> None:

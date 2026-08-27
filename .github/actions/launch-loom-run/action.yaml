@@ -1,0 +1,81 @@
+name: Launch Loom run
+description: Exchange GitHub OIDC for a short-lived Loom token and launch one run
+
+inputs:
+  loom-url:
+    description: Loom deployment URL
+    required: true
+  profile:
+    description: Profile bound to the calling workflow's Loom federation
+    required: true
+  idempotency-key:
+    description: Durable key for this run
+    required: true
+  title:
+    description: Session title
+    required: true
+  goal:
+    description: Complete session goal
+    required: true
+  base:
+    description: Optional repository revision for the session worktree
+    required: false
+    default: ""
+  github-issue:
+    description: Optional GitHub issue or pull-request number
+    required: false
+    default: ""
+  channel:
+    description: Optional stable Loom conversation channel
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Federate and launch
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        CHANNEL: ${{ inputs.channel }}
+        GOAL: ${{ inputs.goal }}
+        GITHUB_ISSUE: ${{ inputs.github-issue }}
+        IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+        LOOM_PROFILE: ${{ inputs.profile }}
+        LOOM_URL: ${{ inputs.loom-url }}
+        TITLE: ${{ inputs.title }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$LOOM_PROFILE" ]]; then
+          echo "::error::The Loom profile repository variable is not configured."
+          exit 1
+        fi
+
+        audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
+        oidc=$(curl --fail-with-body --silent --show-error \
+          -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
+        loom_token=$(curl --fail-with-body --silent --show-error \
+          -X POST "$LOOM_URL/api/auth/federate" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+
+        request=$(jq -n \
+          --arg profile "$LOOM_PROFILE" \
+          --arg key "$IDEMPOTENCY_KEY" \
+          --arg channel "$CHANNEL" \
+          --arg repo "$GITHUB_REPOSITORY" \
+          --arg title "$TITLE" \
+          --arg goal "$GOAL" \
+          --arg base "$BASE" \
+          --arg issue "$GITHUB_ISSUE" \
+          '{profile: $profile, idempotency_key: $key, source: "actions",
+            session: {repo: $repo, title: $title, goal: $goal}}
+          | if $channel == "" then . else .channel = $channel end
+          | if $base == "" then . else .session.base = $base end
+          | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end')
+        curl --fail-with-body --silent --show-error \
+          -X POST "$LOOM_URL/api/runs" \
+          -H "Authorization: Bearer $loom_token" \
+          -H 'Content-Type: application/json' \
+          -d "$request"

@@ -85,6 +85,7 @@ DEFAULT_REPO = "marin-community/marin"
 # classification. The weekly refinement engine evaluates candidate rules
 # separately; this command only maintains the review-feedback tables.
 DEFAULT_MODEL = "gpt-5.6-luna"
+DEFAULT_AGENT_COMMAND = "codex exec"
 DEFAULT_BATCH_SIZE = 20
 # One headless Codex subprocess per batch, so concurrency caps simultaneous
 # processes and subscription rate pressure.
@@ -273,7 +274,7 @@ def _parse_codex_batch(output: str) -> list[BatchedClassification] | None:
         return None
 
 
-def make_codex_classifier(model: str, agent_command: str = "codex exec") -> Classifier:
+def make_codex_classifier(model: str, agent_command: str = DEFAULT_AGENT_COMMAND) -> Classifier:
     """Build a sandboxed, schema-constrained Codex classifier."""
     env = _headless_env()
     base_command = shlex.split(agent_command)
@@ -473,7 +474,6 @@ def _is_bot(author: dict | None, bot_logins: set[str]) -> bool:
 
 
 def _is_reviewer_comment(comment: Comment) -> bool:
-    """Whether a comment is human feedback rather than bot or agent output."""
     return not comment.is_bot and not comment.body.lstrip().startswith("🤖")
 
 
@@ -1115,7 +1115,7 @@ def cli() -> None:
 @click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Codex model id for the classifier")
 @click.option(
     "--agent-command",
-    default="codex exec",
+    default=DEFAULT_AGENT_COMMAND,
     show_default=True,
     help="Headless agent invocation for classification (reads its prompt on stdin)",
 )

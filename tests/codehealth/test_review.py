@@ -169,10 +169,13 @@ def test_resolution_sends_context_only_for_uncached_comments() -> None:
 
 
 def test_codex_classifier_uses_read_only_schema_constrained_run(monkeypatch) -> None:
-    calls: list[tuple[list[str], str]] = []
+    calls: list[tuple[list[str], str, dict]] = []
 
     def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
-        calls.append((command, kwargs["input"]))
+        schema_path = command[command.index("--output-schema") + 1]
+        with open(schema_path) as schema_file:
+            schema = json.load(schema_file)
+        calls.append((command, kwargs["input"], schema))
         output_path = command[command.index("--output-last-message") + 1]
         with open(output_path, "w") as output:
             json.dump(
@@ -206,11 +209,22 @@ def test_codex_classifier_uses_read_only_schema_constrained_run(monkeypatch) -> 
         ]
     )
 
-    command, prompt = calls[0]
+    command, prompt, schema = calls[0]
     assert command[:2] == ["codex", "exec"]
     assert command[command.index("--sandbox") + 1] == "read-only"
-    assert "--output-schema" in command
     assert "Diff context:" in prompt
+    assert schema["required"] == ["results"]
+    assert schema["additionalProperties"] is False
+    item_schema = schema["properties"]["results"]["items"]
+    assert set(item_schema["required"]) == {
+        "id",
+        "class",
+        "catchable_strict",
+        "catchable_generous",
+        "confidence",
+        "reason",
+    }
+    assert item_schema["additionalProperties"] is False
     assert result[0].catchable_strict
     assert result[0].catchable_generous
 

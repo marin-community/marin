@@ -44,44 +44,28 @@ jobs:
           - unit: harbor
             forks: harbor
     permissions:
-      id-token: write  # mint the OIDC token Loom federates; nothing else is needed
+      contents: read
+      id-token: write
     steps:
+      - name: Checkout workflow actions
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+
       - name: Launch a Weaver refresh session for ${{ matrix.unit }}
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
-        env:
-          # Loom profile bound to this workflow's federation mapping; grants the session fork write.
-          LOOM_PROFILE: ${{ vars.LOOM_FORK_FERRY_PROFILE }}
-          FORKS: ${{ matrix.forks }}
-          UNIT: ${{ matrix.unit }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$LOOM_PROFILE" ]]; then
-            echo "::error::Set the LOOM_FORK_FERRY_PROFILE repo variable to the Loom profile bound to this workflow's federation."
-            exit 1
-          fi
-
-          # GitHub Actions OIDC token, audience = Loom.
-          oidc=$(curl -sS --fail-with-body \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${LOOM_URL}" | jq -r .value)
-
-          # Exchange it for a short-lived Loom token.
-          loom_token=$(curl -sS --fail-with-body -X POST "${LOOM_URL}/api/auth/federate" \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
-
-          # Launch one visible, self-reporting Weaver session for this fork unit. idempotency_key
-          # keeps a rerun of the same weekly job from opening a second session.
-          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream: stage the refresh, pin Marin as the descriptor directs (a fork branch tip, or a promoted release wheel re-pinned from its manifest), run the fork's e2e, and on green open the Marin pin PR (or file the descriptor's blocker issue on a real external blocker)."
-          curl -sS --fail-with-body -X POST "${LOOM_URL}/api/runs" \
-            -H "Authorization: Bearer $loom_token" \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n \
-              --arg profile "$LOOM_PROFILE" \
-              --arg key "fork-ferry-${UNIT}-${GITHUB_RUN_ID}" \
-              --arg unit "$UNIT" \
-              --arg repo "$GITHUB_REPOSITORY" \
-              --arg title "Fork ferry: ${UNIT}" \
-              --arg goal "$goal" \
-              '{profile: $profile, idempotency_key: $key, source: "actions", channel: $unit,
-                session: {repo: $repo, title: $title, goal: $goal}}')"
+        uses: ./.github/actions/launch-loom-run
+        with:
+          loom-url: ${{ env.LOOM_URL }}
+          profile: ${{ vars.LOOM_FORK_FERRY_PROFILE }}
+          idempotency-key: fork-ferry-${{ matrix.unit }}-${{ github.run_id }}
+          channel: ${{ matrix.unit }}
+          title: Fork ferry ${{ matrix.unit }}
+          goal: >-
+            Use the refresh-fork skill to refresh ${{ matrix.forks }} toward
+            upstream: stage the refresh, pin Marin as the descriptor directs (a
+            fork branch tip, or a promoted release wheel re-pinned from its
+            manifest), run the fork's e2e, and on green open the Marin pin PR
+            (or file the descriptor's blocker issue on a real external blocker).

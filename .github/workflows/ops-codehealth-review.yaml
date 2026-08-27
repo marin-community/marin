@@ -24,42 +24,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       id-token: write
     steps:
-      - name: Launch Weaver aggregation
+      - name: Checkout workflow actions
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+
+      - name: Build aggregation goal
+        id: goal
         env:
-          LOOM_PROFILE: ${{ vars.LOOM_CODEHEALTH_PROFILE }}
           REPORT: ${{ github.event_name == 'schedule' && github.event.schedule == '23 7 * * 1' || inputs.report }}
         run: |
           set -euo pipefail
-          if [[ -z "$LOOM_PROFILE" ]]; then
-            echo "::error::Set LOOM_CODEHEALTH_PROFILE to the profile bound to this workflow's Loom federation."
-            exit 1
-          fi
-
-          audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
-          oidc=$(curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
-          loom_token=$(curl --fail-with-body --silent --show-error \
-            -X POST "$LOOM_URL/api/auth/federate" \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
-
           goal="From the repository root, run 'uv run python -m infra.codehealth.review aggregate --days 7' and require every GitHub fetch, Codex classification batch, and Finelog flush to succeed."
           if [[ "$REPORT" == "true" ]]; then
             goal+=" Then run 'uv run python -m infra.codehealth.review report --days 30' and include the gist URL in the session result."
           fi
-          curl --fail-with-body --silent --show-error \
-            -X POST "$LOOM_URL/api/runs" \
-            -H "Authorization: Bearer $loom_token" \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n \
-              --arg profile "$LOOM_PROFILE" \
-              --arg key "codehealth:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-              --arg repo "$GITHUB_REPOSITORY" \
-              --arg title "Aggregate code-health review data" \
-              --arg goal "$goal" \
-              '{profile: $profile, idempotency_key: $key, source: "actions",
-                session: {repo: $repo, title: $title, goal: $goal}}')" \
-            "$LOOM_URL/api/runs"
+          {
+            echo 'value<<EOF'
+            echo "$goal"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Launch Weaver aggregation
+        uses: ./.github/actions/launch-loom-run
+        with:
+          loom-url: ${{ env.LOOM_URL }}
+          profile: ${{ vars.LOOM_CODEHEALTH_PROFILE }}
+          idempotency-key: codehealth:${{ github.run_id }}:${{ github.run_attempt }}
+          title: Aggregate code-health review data
+          goal: ${{ steps.goal.outputs.value }}

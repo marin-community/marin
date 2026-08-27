@@ -179,20 +179,20 @@ config:
       createServiceAccount: false
   marin-loom:githubFederations:
     - name: fork-ferry
-      repositoryId: "775839592"
+      repositoryId: &marinRepositoryId "775839592"
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry
       ref: refs/heads/main
     - name: pr-review
-      repositoryId: "775839592"
+      repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-weaver-review.yaml@refs/heads/main
       profile: pr-review
       serviceTag: pr-review
       event: pull_request_target
       ref: refs/heads/main
     - name: codehealth
-      repositoryId: "775839592"
+      repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-codehealth-review.yaml@refs/heads/main
       profile: codehealth
       serviceTag: codehealth
