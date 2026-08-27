@@ -228,6 +228,51 @@ async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
         .unwrap();
 }
 
+async fn write_root_telemetry(store: &Arc<Store>, batch_id: &str, name: &str) {
+    let register_store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        register_store.register_table(
+            TELEMETRY_NAMESPACE,
+            telemetry_schema(),
+            StoragePolicy::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("schema_version", DataType::Int32, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("batch_id", DataType::Utf8, false),
+            Field::new("record_index", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("resource_attributes_json", DataType::Utf8, false),
+            Field::new("attributes_json", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1])),
+            Arc::new(arrow::array::Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec![batch_id])),
+            Arc::new(arrow::array::Int64Array::from(vec![0])),
+            Arc::new(StringArray::from(vec!["marinskyrl"])),
+            Arc::new(StringArray::from(vec!["gauge"])),
+            Arc::new(StringArray::from(vec![name])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = store.write_rows(TELEMETRY_NAMESPACE, &ipc, None).unwrap();
+    store
+        .await_persisted(TELEMETRY_NAMESPACE, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
 /// Every value of `column` the hub holds for `namespace`, read straight off the hub
 /// store. Lets a test assert on a column a log reader never surfaces — notably the
 /// stamped origin `cluster` on a generic stat table. Holds the query-visibility read
@@ -692,51 +737,7 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
     let fx = Fixture::new("telemetry-unseen-service").await;
-    let source = Arc::clone(&fx.source);
-    tokio::task::spawn_blocking(move || {
-        source.register_table(
-            TELEMETRY_NAMESPACE,
-            telemetry_schema(),
-            StoragePolicy::default(),
-        )
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![
-            Field::new("schema_version", DataType::Int32, false),
-            Field::new("timestamp_ms", DataType::Int64, false),
-            Field::new("batch_id", DataType::Utf8, false),
-            Field::new("record_index", DataType::Int64, false),
-            Field::new("service", DataType::Utf8, false),
-            Field::new("kind", DataType::Utf8, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("resource_attributes_json", DataType::Utf8, false),
-            Field::new("attributes_json", DataType::Utf8, false),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1])),
-            Arc::new(arrow::array::Int64Array::from(vec![1])),
-            Arc::new(StringArray::from(vec!["batch"])),
-            Arc::new(arrow::array::Int64Array::from(vec![0])),
-            Arc::new(StringArray::from(vec!["marinskyrl"])),
-            Arc::new(StringArray::from(vec!["gauge"])),
-            Arc::new(StringArray::from(vec!["queue_depth"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-            Arc::new(StringArray::from(vec!["{}"])),
-        ],
-    )
-    .unwrap();
-    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
-    let (_, last_seq) = fx
-        .source
-        .write_rows(TELEMETRY_NAMESPACE, &ipc, None)
-        .unwrap();
-    fx.source
-        .await_persisted(TELEMETRY_NAMESPACE, last_seq, Duration::from_secs(5))
-        .await
-        .unwrap();
+    write_root_telemetry(&fx.source, "batch", "queue_depth").await;
     fx.forward_from_start(TELEMETRY_NAMESPACE);
 
     fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
@@ -748,6 +749,43 @@ async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
     assert_eq!(
         fx.cursor(TELEMETRY_NAMESPACE),
         Some(fx.tip(TELEMETRY_NAMESPACE))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
+    let target = disk_store("telemetry-concurrent-target");
+    let (target_addr, target_requests) =
+        serve(Arc::clone(&target), hub_policy(SOURCE_CLUSTER)).await;
+    let fx_a = Fixture::with_hub(
+        "telemetry-concurrent-a",
+        Some(Arc::clone(&target)),
+        target_addr,
+        Arc::clone(&target_requests),
+    )
+    .await;
+    let fx_b = Fixture::with_hub(
+        "telemetry-concurrent-b",
+        Some(target),
+        target_addr,
+        target_requests,
+    )
+    .await;
+    write_root_telemetry(&fx_a.source, "batch-a", "queue_a").await;
+    write_root_telemetry(&fx_b.source, "batch-b", "queue_b").await;
+    fx_a.forward_from_start(TELEMETRY_NAMESPACE);
+    fx_b.forward_from_start(TELEMETRY_NAMESPACE);
+
+    tokio::join!(
+        fx_a.drain(PRIV_A, TELEMETRY_NAMESPACE),
+        fx_b.drain(PRIV_A, TELEMETRY_NAMESPACE)
+    );
+
+    let mut names = hub_column(fx_a.target_store(), "telemetry_v1.marinskyrl", "name").await;
+    names.sort();
+    assert_eq!(
+        names,
+        vec![Some("queue_a".to_string()), Some("queue_b".to_string())]
     );
 }
 
