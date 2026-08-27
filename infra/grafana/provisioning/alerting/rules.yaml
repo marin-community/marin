@@ -424,19 +424,17 @@ groups:
                 params:
                   - key: sql
                     value: >-
-                      WITH ranked AS (
-                        SELECT metric, zone, bucket, storage_class, value_bytes, collected_at,
-                               ROW_NUMBER() OVER (
-                                 PARTITION BY provider, metric, zone, bucket, storage_class
-                                 ORDER BY collected_at DESC, seq DESC
-                               ) AS row_num
+                      WITH latest_collection AS (
+                        SELECT MAX(collected_at) AS collected_at
                         FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                          AND metric IN ('used_bytes', 'quota_bytes')
                       ), latest AS (
                         SELECT metric, zone, storage_class, value_bytes
-                        FROM ranked
-                        WHERE row_num = 1
+                        FROM "storage.usage" AS samples
+                        JOIN latest_collection
+                          ON samples.collected_at = latest_collection.collected_at
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
                       ), usage AS (
                         SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
                         FROM latest
