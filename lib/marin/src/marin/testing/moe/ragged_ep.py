@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The 4-GPU correctness gate for the ragged all-to-all expert-parallel MoE transport.
+"""4-GPU correctness check for the ragged all-to-all expert-parallel MoE transport.
 
 A hero arm costs a production rack, so any change to the transport's offset arithmetic or expert
 kernels earns one only after this passes. It runs as a remote job, so it lives here rather than in
@@ -44,14 +44,14 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _select_expert_mlp,
 )
 from levanter.grug.grug_moe import moe_mlp
+from pydantic import BaseModel
+from rigging.filesystem.storage_path import StoragePath
+
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.namespacing import user_namespaced_name
-from pydantic import BaseModel
-from rigging.filesystem.storage_path import StoragePath
-
 
 logger = logging.getLogger(__name__)
 

@@ -22,7 +22,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
-from marin.testing.moe import ragged_ep_gate as ragged_ep_check
+from marin.testing.moe import ragged_ep
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
@@ -980,10 +980,10 @@ def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
     # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
     rng = np.random.default_rng(0)
     tokens_per_shard = 8
-    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
-    selected = rng.integers(0, ragged_ep_check.NUM_EXPERTS, size=(tokens, ragged_ep_check.TOPK))
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    selected = rng.integers(0, ragged_ep.NUM_EXPERTS, size=(tokens, ragged_ep.TOPK))
 
-    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, ragged_ep_check.NO_DROP_CAPACITY)
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, ragged_ep.NO_DROP_CAPACITY)
 
     assert keep.shape == selected.shape
     assert keep.all()
@@ -994,16 +994,16 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
     # which is what lets the transport read them in place. The mask has to agree.
     rng = np.random.default_rng(1)
     tokens_per_shard = 16
-    tokens = tokens_per_shard * ragged_ep_check.EP_SIZE
-    topk, num_experts = ragged_ep_check.TOPK, ragged_ep_check.NUM_EXPERTS
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    topk, num_experts = ragged_ep.TOPK, ragged_ep.NUM_EXPERTS
     # Skew hard toward the low experts so the gate actually bites.
     selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
 
-    keep = ragged_ep_check._keep_mask(selected, tokens_per_shard, 1.0)
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, 1.0)
 
     dropped = int((1.0 - keep).sum())
     assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
-    for shard in range(ragged_ep_check.EP_SIZE):
+    for shard in range(ragged_ep.EP_SIZE):
         lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
         flat_selected = selected[lo:hi].reshape(-1)
         flat_keep = keep[lo:hi].reshape(-1)

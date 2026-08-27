@@ -3,7 +3,7 @@
 
 """Submit the 4-GPU ragged all-to-all correctness gate to the standing GB200 cluster.
 
-The gate itself is `marin.testing.moe.ragged_ep_gate`, which the worker imports; this file only
+The check itself is `marin.testing.moe.ragged_ep`, which the worker imports; this file only
 submits it. All-to-all is GPU-only, so it cannot run in CPU CI. It carries the ``cluster`` marker
 and is deselected by default; submit it from the repository root with::
 
@@ -22,7 +22,7 @@ import pytest
 from iris.client.client import IrisClient
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
-from marin.testing.moe.ragged_ep_gate import build_benchmark
+from marin.testing.moe.ragged_ep import build_benchmark
 
 from tests.cluster.conftest import MARIN_GB200_CLUSTER
 
