@@ -1,7 +1,8 @@
 # pdf-inspector as a cheap extraction route, at 1.17.0
 
 `pdf-inspector` is a Rust PDF classifier and Markdown extractor proposed as a cheaper front end to
-— or replacement for — the Docling CPU route in [`pdf-extraction-routing.md`](pdf-extraction-routing.md).
+— or replacement for — the Docling CPU route, whose report `pdf-extraction-routing.md` retired with it
+to the `mark/pdf_processing` campaign branch.
 An earlier pass evaluated 1.14.1 and found it beat Docling in 41.4% of blind head-to-heads, with two
 significant losses (RTL and table-heavy documents) and no significant wins. Upstream 1.17.0 rewrites
 exactly those two areas across ten commits. This is the paired re-run.
@@ -273,6 +274,9 @@ handling — not on a claim that it reads documents better than Docling, which t
 failed to support.
 
 ## Reproducing
+
+**The modules below are not in this tree.** They stayed with the campaign, on `mark/pdf_processing`
+under `experiments/datakit/build_pdf_source/quality/`, so check that branch out to run any of this.
 
 ```bash
 # Stage 0: survival, latency, and the egress accounting. Once per architecture.

@@ -2,8 +2,9 @@
 
 Every PDF in the focus crawl goes down one of two extraction routes: pdf-inspector, which reads the
 embedded text layer on CPU, or `Infinity-Parser2-Flash`, which reads a rendered image on GPU. The
-router decides which. This report replaces [the first router](pdf-extraction-routing.md), whose
-cheap route and whose training label have both been retired.
+router decides which. This report replaces the first router, whose cheap route and whose training
+label have both been retired; its own report is `pdf-extraction-routing.md`, on the
+`mark/pdf_processing` campaign branch.
 
 ## What changed under the router
 

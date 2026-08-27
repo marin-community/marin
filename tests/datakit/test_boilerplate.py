@@ -120,14 +120,25 @@ def test_a_pattern_on_too_few_pages_is_not_boilerplate():
     assert result.lines_removed == 0
 
 
-def test_repeated_table_rows_are_never_stripped():
-    """A table repeated across pages is content; after digit folding its rows look like chrome."""
-    pages = [f"<docling_table>| Region | Total |</docling_table>\nBody {i}" for i in range(8)]
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param("<table><tr><td>Region</td><td>Total</td></tr></table>", id="ocr_html"),
+        pytest.param("| Region | Total |", id="inspector_markdown"),
+    ],
+)
+def test_repeated_table_rows_are_never_stripped(row):
+    """A table repeated across pages is content; after digit folding its rows look like chrome.
+
+    Both forms the surviving routes emit are covered: the OCR prompt asks the model for HTML tables,
+    and pdf-inspector writes pipe tables on 55.2% of documents.
+    """
+    pages = [f"{row}\nBody {i}" for i in range(8)]
 
     result = strip_boilerplate(pages, _OPTIONS)
 
     assert result.top_lines == 0
-    assert all("docling_table" in page for page in result.pages)
+    assert all(row in page for page in result.pages)
 
 
 def test_a_page_that_is_entirely_boilerplate_becomes_empty_and_is_kept():
