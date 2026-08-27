@@ -155,6 +155,7 @@ def test_pipeline_accepts_fewer_microbatches_than_stages():
 
 
 def test_dualpipe_v_maps_two_logical_stages_to_each_physical_rank():
+    pytest.importorskip("jaxpp")
     config = GrugMoePipelineConfig(stages=4, physical_stages=2, microbatches=4)
 
     assert automatic_stage_to_mpmd_indices(config, AutomaticPipelineSchedule.DUALPIPE_V) == (0, 1, 1, 0)
