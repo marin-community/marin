@@ -206,10 +206,11 @@ pdf = [
     # Reads WARC response records out of Common Crawl byte ranges
     # (experiments/datakit/build_pdf_source/fetch.py).
     "warcio>=1.7.5",
-    # PDF parsing and the FinePDFs OCR router
-    # (experiments/datakit/build_pdf_source/{ocr_features,classify}.py). PyMuPDF is pinned to the version
-    # the router's features were trained against; its per-page measurements are not stable across
-    # MuPDF releases.
+    # Rasterises pages for the VLM feed and measures render geometry before the router decides
+    # (experiments/datakit/build_pdf_source/ocr_extract/render.py). Pinned: its per-page
+    # measurements are not stable across MuPDF releases, and the router's `mean_render_dpi` feature
+    # is one of them. AGPL, which is the licensing argument for replacing it with PDFium; see the
+    # `pypdfium2` note below.
     "pymupdf==1.26.1",
     # The CPU build. Plain `xgboost` depends on nvidia-nccl-cu12, which installs its library at the
     # same `nvidia/nccl/lib/libnccl.so.2` that torch's nvidia-nccl-cu13 owns, so whichever lands
@@ -217,16 +218,32 @@ pdf = [
     # `Booster.inplace_predict` (classify.py), so the GPU build buys nothing and costs a latent
     # library collision.
     "xgboost-cpu>=3.0.5",
-    # Text extraction from the non-OCR route (experiments/datakit/build_pdf_source/docling_extract/).
-    # Not pinned: the extractor tracks upstream docling rather than vendoring a fork of it, and
-    # tests/datakit/test_docling_fields.py fails loudly if an upstream release collides with the
-    # model fields it adds.
-    "docling>=2.117.0",
-    # Runs docling's layout model as an INT8 graph on the CoreWeave CPU fleet, which is Emerald
-    # Rapids and has AMX-INT8 (experiments/datakit/build_pdf_source/layout_model.py). nncf is build-time
-    # only -- it quantizes the graph; openvino is what executes it.
-    "openvino>=2025.3.0",
-    "nncf>=2.14.0",
+    # The CPU extraction route: a Rust PDF classifier and Markdown extractor
+    # (experiments/datakit/build_pdf_source/extract_inspector.py). It replaced Docling, which cost
+    # 278 CPU core-hours per million pages against this library's 2.1 -- 132x -- for corpus-wide
+    # quality parity on a CPU-constrained cluster; `docling`, `openvino` and `nncf` retired with it,
+    # along with the INT8 layout graph that existed to make it affordable
+    # (experiments/datakit/build_pdf_source/pdf-inspector-evaluation.md).
+    #
+    # Pinned exactly. It is a native extension whose parsing limits and timings move release to
+    # release -- 1.17.0 extracts 1.77x slower than 1.14.1, with a p99 ratio of 10.5x -- and the
+    # router's booster was fit on columns this build produced, so a different build shifts the
+    # feature distribution its threshold was calibrated against. The extraction step checks the
+    # installed version in its worker before reading a document. Ships abi3 manylinux wheels for
+    # x86_64 and aarch64, so it resolves on both the Emerald Rapids and Grace pools, and on neither
+    # macOS nor any other platform: local test runs must not depend on it.
+    #
+    # The published wheel compiles in an OCR engine: the crate's `python` feature implies `ocr`,
+    # which implies `render-pdfium`, `ocr-oar` and `model-download`, so the binary carries PDFium
+    # bindings, ONNX Runtime bindings and a ureq HTTP client that fetches model files over HTTPS.
+    # It stays inert on the entry points this repository calls. `detect_pdf_bytes` and
+    # `extract_pages_markdown_bytes` reach `detect_pdf_mem` and `extract_pages_markdown_mem`,
+    # neither of which references `crate::vision`; the OCR pipeline, its model download and its
+    # external runtimes are reachable only from `process_pdf_with_ocr` and
+    # `process_pdf_with_ocr_bytes`, which nothing here calls, and no environment variable enables
+    # any of it implicitly. Measured as well as read: over 1,000 crawl PDFs on each architecture the
+    # worker held zero sockets between documents and wrote zero model-cache files.
+    "pdf-inspector==1.17.0",
 ]
 
 math = ["pylatexenc", "sympy"]

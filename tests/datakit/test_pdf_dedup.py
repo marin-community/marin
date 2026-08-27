@@ -32,8 +32,13 @@ def local_fray():
 
 
 def _record(text: str, offset: int) -> dict:
-    """A combined-corpus record on the docling side: null OCR diagnostics, ``needs_ocr`` false."""
+    """A combined-corpus record on the pdf-inspector side: the shared columns, the route, and nulls.
+
+    Every route-specific column the combine may carry is defaulted to null off the schema itself,
+    so a column added to either route does not silently drop out of this round-trip assertion.
+    """
     return {
+        **dict.fromkeys(COMBINED_SCHEMA.names),
         "id": generate_id(text),
         "text": text,
         "source_id": source_id("crawl.warc.gz", offset),
@@ -48,16 +53,11 @@ def _record(text: str, offset: int) -> dict:
         "extraction_error": None,
         "boilerplate_lines_removed": 0,
         "needs_ocr": False,
-        "pages_ocred": None,
-        "pages_failed": None,
-        "pages_truncated": None,
-        "pages_unrendered": None,
-        "mean_render_dpi": None,
-        "pages_below_legibility_floor": None,
-        "completion_tokens": None,
-        "looped_pages": None,
-        "loop_chars_dropped": None,
-        "layout_backend": "torch_heron",
+        "pdf_bytes": 91_000,
+        "mean_render_dpi": 149.5,
+        "pages_below_legibility_floor": 0,
+        "inspector_pdf_type": "text_based",
+        "inspector_markdown_chars": len(text),
     }
 
 
