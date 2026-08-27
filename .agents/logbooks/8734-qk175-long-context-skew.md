@@ -41,3 +41,11 @@ author: held
 - Result: submitted in `us-central2` with production priority and non-preemptible v4-2048 resources.
 - Interpretation: the coordinator is running and the 256-worker training job is waiting for the reserved v4-2048 scale group to become ready.
 - Next action: verify worker startup, W&B initialization, and forward training progress.
+
+### 2026-08-27 - Degraded v4-2048 slice
+
+- Status: the coordinator remains running, but all 256 training tasks are pending.
+- Evidence: the scheduler reports that the largest `tpu-name` group has 254 workers. The slice has 255 registered workers; TPU host `t1v-n-25bf471b-w-74` is registering as `worker-0` with empty TPU metadata, colliding with the real `worker-0`.
+- Interpretation: this is a worker-identity collision caused by missing TPU worker-index metadata, not an ordinary capacity wait. No training step has started.
+- Decision: keep the job unchanged while recovery authorization is pending.
+- Next action: replace the degraded v4-2048 slice, then verify that all 256 workers share one TPU name before training starts.
