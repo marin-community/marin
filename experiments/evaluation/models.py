@@ -130,6 +130,26 @@ _FACTORY_MODELS: tuple[ModelConfig, ...] = (
         "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/",
         generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"}),
     ),
+    _snowball(
+        "grug-67b-step141-qk157",
+        "s3://marin-na/marin/exports/grug/mrcr-8701/step-141000-qk157/hf-bf16-vllm/",
+        chat_template=CONCAT_CHAT_TEMPLATE,
+    ),
+    _snowball(
+        "grug-67b-step156-qk157",
+        "s3://marin-na/marin/exports/grug/mrcr-8701/step-156000-qk157/hf-bf16-vllm/",
+        chat_template=CONCAT_CHAT_TEMPLATE,
+    ),
+    _snowball(
+        "grug-67b-step157-qk157",
+        "s3://marin-na/marin/exports/grug/mrcr-8701/step-157000-qk157/hf-bf16-vllm/",
+        chat_template=CONCAT_CHAT_TEMPLATE,
+    ),
+    _snowball(
+        "grug-67b-step157-qk175",
+        "s3://marin-na/marin/exports/grug/mrcr-8701/step-157000-qk175/hf-bf16-vllm/",
+        chat_template=CONCAT_CHAT_TEMPLATE,
+    ),
 )
 
 

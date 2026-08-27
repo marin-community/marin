@@ -5,9 +5,11 @@
 
 import textwrap
 
+import fsspec
 import pytest
 from draccus.utils import ParsingError
 from iris.rpc import job_pb2
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
     ModelConfig,
@@ -18,10 +20,53 @@ from marin.evaluation.model_config import (
     scan_model_configs,
     serve_config_vllm_args,
 )
-from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
+from marin.evaluation.serving_config import _serve_host_memory, auto_serve_overrides, inference_config_for_model
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
+
+
+def test_r2_credentials_reach_gpu_inference_environment(monkeypatch):
+    credentials = {
+        "R2_KEY_ID": "access-key",
+        "R2_KEY_SECRET": "secret-key",
+        "R2_S3_ENDPOINT": "https://example.r2.cloudflarestorage.com",
+    }
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
+
+    model = ModelConfig(
+        name="r2-model",
+        location="s3://marin-na/export/",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(
+        platform=Platform.GPU,
+        gpu_type="H100",
+        gpu_count=8,
+        target_cluster="cw-us-east-02a",
+    )
+    lowered = inference_config_for_model(
+        model,
+        choice,
+        env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    assert lowered.iris.worker_environment.env_vars.items() >= credentials.items()
+
+
+def test_auto_serve_overrides_reads_object_store_config_through_bucket_router(monkeypatch):
+    fs = fsspec.filesystem("memory")
+    path = "marin-na/export/config.json"
+    fs.pipe(path, b'{"max_position_embeddings": 262144}')
+    monkeypatch.setattr("marin.evaluation.serving_config.filesystem_for", lambda _url: (fs, path))
+
+    _, max_model_len = auto_serve_overrides("s3://marin-na/export", 300_000)
+
+    assert max_model_len == 262_144
+
 
 _CATALOG_YAML = textwrap.dedent(
     """

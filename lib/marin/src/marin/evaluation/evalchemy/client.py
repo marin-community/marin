@@ -26,6 +26,10 @@ from pathlib import Path
 import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+LOCAL_TASKS_RELATIVE_PATH = "experiments/evaluation/tasks"
+MRCR_MAX_LENGTH_ENV = "MARIN_MRCR_MAX_LENGTH"
+MRCR_MAX_GEN_TOKS_ENV = "MARIN_MRCR_MAX_GEN_TOKS"
+MRCR_TOKENIZER_ENV = "MARIN_MRCR_TOKENIZER"
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
@@ -94,7 +98,15 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     return ",".join(f"{key}={value}" for key, value in args.items())
 
 
-def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
+def build_command(
+    config: dict,
+    task: dict,
+    output_path: str,
+    python: str,
+    max_length: int | None,
+    *,
+    include_path: str | None = None,
+) -> list[str]:
     """The ``evalchemy`` argv for one task. ``python`` identifies the evaluator virtualenv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
@@ -155,7 +167,22 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         cmd += ["--limit", str(config["max_eval_instances"])]
     if use_chat:
         cmd.append("--apply_chat_template")
+    if include_path is not None:
+        cmd += ["--include_path", include_path]
     return cmd
+
+
+def task_environment(config: dict, max_length: int | None) -> dict[str, str]:
+    """Environment visible to local task preprocessing in the Evalchemy subprocess."""
+
+    env = dict(os.environ)
+    env[MRCR_TOKENIZER_ENV] = config["tokenizer"]
+    env[MRCR_MAX_GEN_TOKS_ENV] = str(generation_budget(config["max_gen_toks"], max_length))
+    if max_length is not None:
+        env[MRCR_MAX_LENGTH_ENV] = str(max_length)
+    else:
+        env.pop(MRCR_MAX_LENGTH_ENV, None)
+    return env
 
 
 def scored_results(local_out: str) -> bool:
@@ -206,16 +233,26 @@ def main() -> None:
     configured_lengths = [value for value in (available_context, configured_context) if value is not None]
     max_length = min(configured_lengths) if configured_lengths else None
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
+    iris_workdir = Path(os.environ["IRIS_WORKDIR"])
+    include_path = str(iris_workdir / LOCAL_TASKS_RELATIVE_PATH)
+    subprocess_env = task_environment(config, max_length)
     failures: list[str] = []
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
             # Evalchemy is installed beside the uvx environment's interpreter.
-            cmd = build_command(config, task, local_out, sys.executable, max_length)
+            cmd = build_command(
+                config,
+                task,
+                local_out,
+                sys.executable,
+                max_length,
+                include_path=include_path,
+            )
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure
             # does not discard another task's already-scored output.
-            result = subprocess.run(cmd)
+            result = subprocess.run(cmd, env=subprocess_env)
             produced = os.listdir(local_out)
             scored = scored_results(local_out)
             if produced:

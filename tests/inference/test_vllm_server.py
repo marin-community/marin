@@ -310,6 +310,29 @@ def test_subprocess_environment_overrides_reach_vllm():
         cache.close()
 
 
+def test_r2_model_uses_r2_credentials_only_in_vllm_subprocess(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "coreweave-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "coreweave-secret-key")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://coreweave.example")
+    monkeypatch.setenv("R2_KEY_ID", "r2-access-key")
+    monkeypatch.setenv("R2_KEY_SECRET", "r2-secret-key")
+    monkeypatch.setenv("R2_S3_ENDPOINT", "https://r2.example")
+
+    cache, environment = _prepare_vllm_compilation_cache(
+        model_name_or_path="s3://marin-na/export",
+        extra_cli_args=None,
+        launcher=_FakeLauncher("serve"),
+        mode=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    try:
+        assert environment["AWS_ACCESS_KEY_ID"] == "r2-access-key"
+        assert environment["AWS_SECRET_ACCESS_KEY"] == "r2-secret-key"
+        assert environment["AWS_ENDPOINT_URL"] == "https://r2.example"
+        assert os.environ["AWS_ENDPOINT_URL"] == "https://coreweave.example"
+    finally:
+        cache.close()
+
+
 def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),

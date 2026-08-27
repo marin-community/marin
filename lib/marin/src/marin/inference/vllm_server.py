@@ -23,7 +23,8 @@ from urllib.parse import urlparse
 import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
-from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.cluster_config import StoreType, data_buckets, marin_prefix
+from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.telemetry.metrics import MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
@@ -909,6 +910,30 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
+def _model_s3_environment(model_name_or_path: str) -> dict[str, str]:
+    """Return generic AWS variables for the registered backend serving an S3 model."""
+    parsed = urlparse(model_name_or_path)
+    if parsed.scheme != "s3":
+        return {}
+    spec = data_buckets().get(parsed.netloc)
+    if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
+        return {}
+    credentials = s3_credentials(spec.store)
+    if credentials is None:
+        raise ValueError(f"no credentials configured for model bucket {parsed.netloc!r}")
+    key, secret = credentials
+    endpoint = s3_endpoint(spec.store)
+    region = spec.signing_region or "auto"
+    return {
+        "AWS_ACCESS_KEY_ID": key,
+        "AWS_SECRET_ACCESS_KEY": secret,
+        "AWS_ENDPOINT_URL": endpoint,
+        "AWS_ENDPOINT_URL_S3": endpoint,
+        "AWS_REGION": region,
+        "AWS_DEFAULT_REGION": region,
+    }
+
+
 def _prepare_vllm_compilation_cache(
     *,
     model_name_or_path: str,
@@ -918,6 +943,7 @@ def _prepare_vllm_compilation_cache(
 ) -> tuple[VllmCompilationCache, dict[str, str]]:
     native_env = _vllm_env()
     native_env.update(launcher.env())
+    native_env.update(_model_s3_environment(model_name_or_path))
     cache = VllmCompilationCache.prepare(
         launcher_identity=launcher.cache_identity(),
         compile_identity=VllmCompileIdentity.from_vllm_args(

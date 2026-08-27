@@ -61,6 +61,7 @@ test = [
     "pytest-asyncio",
     "pytest-xdist",
     "pytest-timeout",
+    "tiktoken>=0.12.0",
     # for scaling law plotting tests
     "plotly",
 ]

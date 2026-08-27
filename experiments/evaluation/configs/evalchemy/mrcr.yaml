@@ -1,0 +1,13 @@
+tasks: [mrcr]
+task_options:
+  mrcr:
+    num_fewshot: 0
+    task_alias: mrcr
+    generation: true
+    completion_only: true
+apply_chat_template: false
+batch_size: 1
+seed: 0
+max_tokens: 2048
+extra_model_args:
+  num_concurrent: 1
