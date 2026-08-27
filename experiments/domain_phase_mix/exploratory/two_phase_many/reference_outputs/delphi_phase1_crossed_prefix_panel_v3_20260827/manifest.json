@@ -1,0 +1,214 @@
+{
+  "common_fit_branch_ids": [
+    "fit_maximin_00",
+    "fit_maximin_01",
+    "fit_maximin_02",
+    "fit_maximin_03",
+    "fit_maximin_04",
+    "fit_maximin_05",
+    "fit_maximin_06",
+    "fit_maximin_07",
+    "fit_maximin_08",
+    "fit_maximin_09",
+    "fit_maximin_10",
+    "fit_maximin_11",
+    "fit_maximin_12",
+    "fit_maximin_13",
+    "fit_maximin_14",
+    "fit_maximin_15",
+    "fit_maximin_16",
+    "fit_maximin_17",
+    "fit_maximin_18",
+    "fit_maximin_19",
+    "fit_maximin_20",
+    "fit_maximin_21",
+    "fit_maximin_22",
+    "fit_maximin_23",
+    "fit_maximin_24",
+    "fit_maximin_25",
+    "fit_maximin_26",
+    "fit_maximin_27",
+    "fit_maximin_28",
+    "fit_maximin_29",
+    "fit_maximin_30",
+    "fit_maximin_31",
+    "fit_maximin_32",
+    "fit_maximin_33",
+    "fit_maximin_34",
+    "fit_maximin_35",
+    "fit_maximin_36",
+    "fit_maximin_37",
+    "fit_maximin_38",
+    "fit_maximin_39",
+    "fit_maximin_40",
+    "fit_maximin_41",
+    "fit_maximin_42",
+    "fit_maximin_43",
+    "fit_maximin_44",
+    "fit_maximin_45",
+    "fit_maximin_46",
+    "fit_maximin_47",
+    "fit_maximin_48",
+    "fit_maximin_49"
+  ],
+  "common_random_numbers": {
+    "continuation_trainer_seed": 0,
+    "fit_data_seed": 970000,
+    "high_exposure_sentinel": {
+      "action_id": "fit_maximin_26",
+      "data_seed": 930002
+    },
+    "low_exposure_sentinel": {
+      "action_id": "fit_maximin_00",
+      "data_seed": 930001
+    }
+  },
+  "contract_version": "delphi_phase1_crossed_prefix_panel_20260827_v3",
+  "controls": {
+    "branch_code_commit_policy": "rerun every panel cell under one exact launch commit; reuse zero old cells",
+    "phase0_hardware_bridge_interpretation": "the bridge detects a composite phase-0 hardware-by-code offset at one cap-10 weight point; it does not identify a hardware-only correction and must not be used as one",
+    "phase0_hardware_bridge_state": "shared_bounded_ensemble_kl0p05__v6e_bridge",
+    "prefix_seed_diagnostic_limitation": "one paired seed contrast is not a null distribution and both cap-4 KL=0 states are outside the historical total-exposure envelope",
+    "prefix_seed_single_draw_diagnostic_state": "cap4_shared_bounded_ensemble_kl0__seed1"
+  },
+  "controls_per_prefix": 3,
+  "endpoint_labels_used_for_branch_selection": false,
+  "endpoint_labels_used_for_state_selection": {
+    "all_other_states": false,
+    "observed_cap10_best": true
+  },
+  "estimand": "prefix-conditioned response to the same absolute phase-1 action",
+  "exposure_policy": "This panel intentionally drops the later harsh-cap experiment's 10-total-epoch gate and instead keeps the complete frozen action bank within its original historical support envelope. The bounded-shape DSP must therefore cover the observed 0.245-to-53.7 phase-1 materialized-epoch range.",
+  "fit_branches_per_prefix": 50,
+  "fit_rows": 450,
+  "missing_cell_policy": "Idempotently rerun the exact frozen row until complete. Do not replace missing actions or states. Any irrecoverable missing fit row blocks the confirmatory interaction comparison; incomplete data may only support explicitly labeled descriptive regularized fits.",
+  "new_control_rows": 27,
+  "new_fit_rows": 450,
+  "panel_rows_sha256": "148d66bceca853119c68dbe52be99862fc3f81d1d58bf9cd1eaf680d7ab20eeb",
+  "panel_weights_sha256": "daa000aa487437dafd9daab2989efc9e1fa9a656e8b8910bb2d81cbfca4f3c3e",
+  "prefix_count": 9,
+  "prefix_registry_sha256": "81993db01c30afaaaba9dda373df233e07e1933fce2277a4b25a5e055d83cb5e",
+  "primary_inference": {
+    "comparison": "action-blocked cross-validated error of prefix-shared versus prefix-varying bounded-shape DSP",
+    "confirmatory_state_ids": [
+      "shared_bounded_ensemble_kl0p05",
+      "shared_bounded_ensemble_kl0p2",
+      "shared_bounded_ensemble_kl0p5",
+      "cap4_shared_bounded_ensemble_kl0",
+      "cap4_shared_bounded_ensemble_kl0p05",
+      "cap4_shared_bounded_ensemble_kl0p2"
+    ],
+    "multiplicity": "Uncheatable is the sole confirmatory target; components and other endpoints are exploratory",
+    "required_sensitivity": "repeat the primary comparison without cap4_shared_bounded_ensemble_kl0, whose prefix lies outside the historical total-exposure envelope",
+    "resampling_unit": "the 50 common phase-1 actions, kept intact across prefix states",
+    "target": "Uncheatable BPB",
+    "uncertainty": "paired bootstrap over common actions with prefix-seed controls reported separately"
+  },
+  "primary_model_contract": "Compare prefix-shared and prefix-varying parameters in a bounded-shape DSP branch-response model. The 38-dimensional tangent linear fit is descriptive and a lack-of-fit diagnostic, not the primary mechanistic claim.",
+  "rank_audit": {
+    "centered_condition_number": 23.27004151568458,
+    "centered_minimum_singular_value": 0.028177072669760717,
+    "centered_tangent_rank": 38,
+    "residual_degrees_of_freedom_per_state": 11,
+    "tangent_degrees_of_freedom": 38
+  },
+  "reused_fit_rows": 0,
+  "selection_rule": "use the complete frozen 50-action bank without endpoint-label-dependent reselection",
+  "source_artifacts": {
+    "cap10_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "common_weights_sha256": "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355",
+    "harsh_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1"
+  },
+  "state_roles": {
+    "cap4_shared_bounded_ensemble_kl0__seed1": "single-draw prefix-seed diagnostic; excluded from the confirmatory model comparison",
+    "observed_cap10_best": "descriptive-only outcome-selected incumbent; excluded from the confirmatory prefix-shared versus prefix-varying comparison",
+    "shared_bounded_ensemble_kl0p05__v6e_bridge": "hardware-by-code diagnostic; excluded from the confirmatory model comparison"
+  },
+  "support_audit": {
+    "interpretation": "The frozen phase-1 actions remain inside their original phase-1 support. Total-exposure violations are reported rather than silently filtered because the cap-4 KL=0 prefix itself lies outside the cap-10 prefix envelope; replacing actions by state would destroy the common-action estimand.",
+    "per_state": [
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "observed_cap10_best",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_05",
+        "worst_total_support_excess_bucket": "dolmino_common_crawl_hq",
+        "worst_total_support_excess_epochs": -0.5160682895581359
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "shared_bounded_ensemble_kl0p05",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_05",
+        "worst_total_support_excess_bucket": "dolmino_common_crawl_hq",
+        "worst_total_support_excess_epochs": -0.5703233383258052
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "shared_bounded_ensemble_kl0p2",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_05",
+        "worst_total_support_excess_bucket": "dolmino_common_crawl_hq",
+        "worst_total_support_excess_epochs": -0.5403895183160565
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "shared_bounded_ensemble_kl0p5",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_05",
+        "worst_total_support_excess_bucket": "dolmino_common_crawl_hq",
+        "worst_total_support_excess_epochs": -0.5310351995630102
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 1,
+        "state_id": "cap4_shared_bounded_ensemble_kl0",
+        "total_support_violation_actions": 50,
+        "worst_total_support_excess_action": "fit_maximin_07",
+        "worst_total_support_excess_bucket": "dolmino_olmocr_pdfs_hq",
+        "worst_total_support_excess_epochs": 1.2298308859017393
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "cap4_shared_bounded_ensemble_kl0p05",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_29",
+        "worst_total_support_excess_bucket": "dolma3_cc/literature_high",
+        "worst_total_support_excess_epochs": -0.29538819278442285
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "cap4_shared_bounded_ensemble_kl0p2",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_29",
+        "worst_total_support_excess_bucket": "dolma3_cc/literature_high",
+        "worst_total_support_excess_epochs": -0.5816409369244273
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 1,
+        "state_id": "cap4_shared_bounded_ensemble_kl0__seed1",
+        "total_support_violation_actions": 50,
+        "worst_total_support_excess_action": "fit_maximin_07",
+        "worst_total_support_excess_bucket": "dolmino_olmocr_pdfs_hq",
+        "worst_total_support_excess_epochs": 1.2298308859017393
+      },
+      {
+        "phase1_support_violation_actions": 0,
+        "prefix_only_total_support_violation_buckets": 0,
+        "state_id": "shared_bounded_ensemble_kl0p05__v6e_bridge",
+        "total_support_violation_actions": 0,
+        "worst_total_support_excess_action": "fit_maximin_05",
+        "worst_total_support_excess_bucket": "dolmino_common_crawl_hq",
+        "worst_total_support_excess_epochs": -0.5703233383258052
+      }
+    ]
+  },
+  "total_rows": 477
+}

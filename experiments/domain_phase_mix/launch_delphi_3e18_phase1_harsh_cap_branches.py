@@ -104,7 +104,7 @@ class HarshBranchTrainingConfig:
     prefix_checkpoint: PrefixCheckpoint
     prefix_replay_code_commit: str
     candidate_weights_sha256: str
-    candidate_aliases_sha256: str
+    candidate_aliases_sha256: str | None
     continuation_weights_sha256: str
     design_manifest_sha256: str
     continuation_id: str

@@ -102,14 +102,6 @@ class BranchTrainingConfig:
     continuation_weights_sha256: str
     continuation_id: str
     code_commit: str
-<<<<<<< HEAD
-=======
-    prefix_hardware: TpuHardware
-    continuation_hardware: TpuHardware
-    continuation_hardware_version: VersionedValue[tuple[str, str, str]]
-    selection_manifest_sha256: str | None
-    selection_contract_sha256: str | None
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
 
 
 @dataclass(frozen=True)
@@ -123,134 +115,6 @@ class SaveBranchManifestConfig:
     code_commit: str
     branch_rows_json: str
     selected_run_orders: VersionedValue[tuple[int, ...]]
-<<<<<<< HEAD
-=======
-    prefix_hardware: TpuHardware
-    continuation_hardware: TpuHardware
-    continuation_hardware_version: VersionedValue[tuple[str, str, str]]
-    selection_manifest_sha256: str | None
-    selection_contract_sha256: str | None
-
-
-def hardware_identity(hardware: TpuHardware) -> tuple[str, str, str]:
-    return hardware.tpu_type, hardware.region, hardware.zone
-
-
-def hardware_from_run_spec(run_spec: base.DelphiSwarmRunSpec) -> TpuHardware:
-    return TpuHardware(tpu_type=run_spec.tpu_type, region=run_spec.tpu_region, zone=run_spec.tpu_zone)
-
-
-def resolve_branch_deployment(tpu_type: str, region: str, zone: str) -> BranchDeployment:
-    identity = (tpu_type, region, zone)
-    for deployment in SUPPORTED_BRANCH_DEPLOYMENTS:
-        if hardware_identity(deployment.hardware) == identity:
-            if deployment.hardware.region != PREFIX_HARDWARE.region:
-                raise ValueError("Prefix and continuation hardware must remain in the same GCS region")
-            return deployment
-    supported = [hardware_identity(deployment.hardware) for deployment in SUPPORTED_BRANCH_DEPLOYMENTS]
-    raise ValueError(f"Unsupported branch TPU deployment {identity}; expected one of {supported}")
-
-
-def move_run_spec_to_branch_hardware(
-    run_spec: base.DelphiSwarmRunSpec,
-    deployment: BranchDeployment,
-) -> base.DelphiSwarmRunSpec:
-    source_hardware = hardware_from_run_spec(run_spec)
-    if source_hardware != PREFIX_HARDWARE:
-        raise ValueError(f"Prefix run spec hardware changed: {source_hardware} != {PREFIX_HARDWARE}")
-    continuation_hardware = deployment.hardware
-    tensor_parallel_size = 1
-    device_count = EXPECTED_TPU_DEVICE_COUNTS[continuation_hardware.tpu_type]
-    while run_spec.model_hidden_dim % (device_count // tensor_parallel_size) != 0:
-        tensor_parallel_size *= 2
-        if tensor_parallel_size > device_count:
-            raise ValueError(
-                f"Could not resolve tensor parallelism for hidden_dim={run_spec.model_hidden_dim}, "
-                f"hardware={continuation_hardware}"
-            )
-    base_tensor_parallel_size = base._tensor_parallel_size(run_spec.model_hidden_dim, continuation_hardware.tpu_type)
-    if tensor_parallel_size != base_tensor_parallel_size:
-        raise ValueError(
-            "The base training builder and physical TPU topology resolve different tensor parallelism: "
-            f"{base_tensor_parallel_size} != {tensor_parallel_size}"
-        )
-    return replace(
-        run_spec,
-        tpu_type=continuation_hardware.tpu_type,
-        tpu_region=continuation_hardware.region,
-        tpu_zone=continuation_hardware.zone,
-        tensor_parallel_size=tensor_parallel_size,
-    )
-
-
-def panel_hardware_status(hardware: TpuHardware) -> str:
-    if hardware == PREFIX_HARDWARE:
-        return CANONICAL_PANEL_HARDWARE_STATUS
-    return MIGRATED_PANEL_HARDWARE_STATUS
-
-
-def hardware_canary_gate() -> HardwareCanaryGate:
-    return HardwareCanaryGate(
-        paired_run_order=0,
-        noise_run_orders=tuple(range(TOTAL_BRANCH_ROWS - BRANCH_NOISE_REPEAT_COUNT, TOTAL_BRANCH_ROWS)),
-        terminal_primary_absolute_bpb_max=0.0002,
-        terminal_diagnostic_absolute_bpb_max=0.0002,
-        terminal_component_absolute_bpb_max=0.0005,
-        terminal_noise_range_fraction_max=0.25,
-        boundary_train_loss_relative_max=0.001,
-        first_50_logged_steps_train_loss_relative_max=0.002,
-        provenance_comparison_mask=(
-            "experiment_name",
-            "prefix_hardware",
-            "continuation_hardware",
-            "observed_continuation_hardware",
-            "panel_hardware_status",
-            "terminal_checkpoint_uri",
-            "minimum_initial_step",
-            "branch_code_commit",
-        ),
-        failure_action="do_not_migrate_full_panel",
-    )
-
-
-def hardware_canary_gate_payload(noise_run_orders: tuple[int, ...] | None = None) -> dict[str, object]:
-    payload = asdict(hardware_canary_gate())
-    if noise_run_orders is None:
-        noise_run_orders = hardware_canary_gate().noise_run_orders
-    payload["noise_run_orders"] = list(noise_run_orders)
-    payload["provenance_comparison_mask"] = list(hardware_canary_gate().provenance_comparison_mask)
-    return payload
-
-
-def local_artifact_dir(deployment: BranchDeployment) -> Path:
-    hardware = deployment.hardware
-    return LOCAL_ARTIFACT_ROOT / f"{hardware.tpu_type}_{hardware.zone}"
-
-
-def observe_tpu_hardware(expected: TpuHardware) -> ObservedTpuHardware:
-    devices = jax.devices()
-    platforms = {device.platform for device in devices}
-    device_kinds = {device.device_kind for device in devices}
-    if platforms != {"tpu"}:
-        raise ValueError(f"Expected TPU devices for {expected.tpu_type}, observed platforms {sorted(platforms)}")
-    if len(device_kinds) != 1:
-        raise ValueError(f"Expected one TPU device kind, observed {sorted(device_kinds)}")
-    expected_count = EXPECTED_TPU_DEVICE_COUNTS[expected.tpu_type]
-    if len(devices) != expected_count or jax.local_device_count() != expected_count:
-        raise ValueError(
-            f"Expected {expected_count} devices for {expected.tpu_type}, observed "
-            f"global={len(devices)}, local={jax.local_device_count()}"
-        )
-    device_kind = next(iter(device_kinds))
-    if EXPECTED_TPU_KIND_FRAGMENTS[expected.tpu_type] not in device_kind.lower():
-        raise ValueError(f"Expected {expected.tpu_type}, observed JAX device kind {device_kind!r}")
-    return ObservedTpuHardware(
-        platform="tpu",
-        device_kind=device_kind,
-        global_device_count=len(devices),
-        local_device_count=jax.local_device_count(),
-    )
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
 
 
 def file_sha256(path: Path) -> str:
@@ -797,16 +661,6 @@ def run_phase_1_branch(config: BranchTrainingConfig) -> None:
         "continuation_id": config.continuation_id,
         "phase_weights_sha256": phase_weights_sha256(run_spec.phase_weights),
         "branch_code_commit": config.code_commit,
-<<<<<<< HEAD
-=======
-        "selection_manifest_sha256": config.selection_manifest_sha256,
-        "selection_contract_sha256": config.selection_contract_sha256,
-        "prefix_hardware": asdict(config.prefix_hardware),
-        "continuation_hardware": asdict(config.continuation_hardware),
-        "observed_continuation_hardware": asdict(observed_hardware),
-        "minimum_initial_step": replay.EXPECTED_PREFIX_TRAIN_STEPS,
-        "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
         "terminal_checkpoint_uri": terminal_uri,
         "terminal_checkpoint_step": replay.EXPECTED_FULL_TRAIN_STEPS - 1,
     }
@@ -835,25 +689,6 @@ def save_branch_manifest(config: SaveBranchManifestConfig) -> None:
         "continuation_weights_sha256": config.continuation_weights_sha256,
         "prefix_replay_code_commit": config.prefix_replay_code_commit,
         "code_commit": config.code_commit,
-<<<<<<< HEAD
-=======
-        "selection_manifest_sha256": config.selection_manifest_sha256,
-        "selection_contract_sha256": config.selection_contract_sha256,
-        "branch_run_id_base": config.branch_run_id_base,
-        "branch_noise_design_sha256": config.branch_noise_design_sha256,
-        "prefix_hardware": asdict(config.prefix_hardware),
-        "continuation_hardware": asdict(config.continuation_hardware),
-        "panel_hardware_status": panel_hardware_status(config.continuation_hardware),
-        "hardware_canary_gate": hardware_canary_gate_payload(
-            tuple(int(row["run_order"]) for row in branch_rows if row["branch_role"] == "same_prefix_branch_noise")
-        ),
-        "panel_hardware_caveat": (
-            "The v6e continuation panel is valid for surrogate fitting and selection only. Any frontier finalist must "
-            "be confirmed on the canonical v5p continuation hardware before a performance claim."
-            if config.continuation_hardware != PREFIX_HARDWARE
-            else "The prefix and continuation use the canonical v5p hardware."
-        ),
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
         "prefix_completed_updates": replay.EXPECTED_PREFIX_TRAIN_STEPS,
         "prefix_checkpoint_step": replay.EXPECTED_PREFIX_HF_STEP,
         "terminal_completed_updates": replay.EXPECTED_FULL_TRAIN_STEPS,
@@ -970,14 +805,6 @@ def main() -> None:
                 code_commit=code_commit,
                 branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                 selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
-<<<<<<< HEAD
-=======
-                prefix_hardware=PREFIX_HARDWARE,
-                continuation_hardware=deployment.hardware,
-                continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
-                selection_manifest_sha256=None,
-                selection_contract_sha256=None,
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
             )
         )
         logger.info("Wrote %d phase-1 branch specs under %s", len(rows), LOCAL_ARTIFACT_DIR)
@@ -1034,14 +861,6 @@ def main() -> None:
                         continuation_weights_sha256=args.expected_continuation_sha256,
                         continuation_id=str(row["continuation_id"]),
                         code_commit=code_commit,
-<<<<<<< HEAD
-=======
-                        prefix_hardware=PREFIX_HARDWARE,
-                        continuation_hardware=deployment.hardware,
-                        continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
-                        selection_manifest_sha256=None,
-                        selection_contract_sha256=None,
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
                     ),
                 )
             )
@@ -1059,14 +878,6 @@ def main() -> None:
                     code_commit=code_commit,
                     branch_rows_json=json.dumps(serializable_rows, sort_keys=True),
                     selected_run_orders=versioned(tuple(int(row["run_order"]) for row in serializable_rows)),
-<<<<<<< HEAD
-=======
-                    prefix_hardware=PREFIX_HARDWARE,
-                    continuation_hardware=deployment.hardware,
-                    continuation_hardware_version=versioned(hardware_identity(deployment.hardware)),
-                    selection_manifest_sha256=None,
-                    selection_contract_sha256=None,
->>>>>>> 0dd17851fd (Freeze Delphi KL0.05 Wave 2 acquisition)
                 ),
             )
         )

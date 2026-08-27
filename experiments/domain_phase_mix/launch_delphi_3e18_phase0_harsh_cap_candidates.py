@@ -73,9 +73,10 @@ PANEL_HARDWARE_STATUS = "v6e_only"
 @dataclass(frozen=True)
 class HarshCandidatePrefixTrainingConfig:
     prefix_config: replay.PrefixTrainingConfig
+    experiment_name: str
     candidate_id: str
     candidate_weights_sha256: str
-    candidate_aliases_sha256: str
+    candidate_aliases_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -232,7 +233,7 @@ def run_harsh_candidate_prefix(config: HarshCandidatePrefixTrainingConfig) -> No
         raise ValueError(f"Candidate checkpoint is not the permanent boundary state: {metadata}")
 
     provenance = {
-        "experiment_name": EXPERIMENT_NAME,
+        "experiment_name": config.experiment_name,
         "candidate_id": config.candidate_id,
         "candidate_weights_sha256": config.candidate_weights_sha256,
         "candidate_aliases_sha256": config.candidate_aliases_sha256,
@@ -352,6 +353,7 @@ def build_steps(
                             "selection_target=uncheatable",
                         ),
                     ),
+                    experiment_name=EXPERIMENT_NAME,
                     candidate_id=candidate_id,
                     candidate_weights_sha256=candidate_weights_sha256,
                     candidate_aliases_sha256=candidate_aliases_sha256,
