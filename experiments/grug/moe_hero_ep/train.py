@@ -37,6 +37,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -93,15 +94,6 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
-# The ragged transport runs on the device-initiated kernel and nothing else. Engagement needs both:
-# the kernel switch, and symmetric-buffer registration for the ragged op's operands. The scoped list
-# registers only those buffers, so every other collective keeps NCCL's host-launched kernels. Both
-# require jax 0.11.1 -- older jaxlibs abort at import on unknown XLA_FLAGS entries. The 4-GPU gate
-# in `tests/cluster/grug/` imports this tuple, so both run the transport the hero runs.
-RAGGED_REQUIRED_XLA_FLAGS = (
-    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
-)
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
 # First release defining both flags. Older jaxlibs abort at import on an unknown XLA_FLAGS entry,
 # with a message that names the flag but not why it was set, on every rank at once. The GPU extras

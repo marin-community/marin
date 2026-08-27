@@ -22,15 +22,11 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
+from marin.testing.moe import ragged_ep_gate as ragged_ep_check
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
-
-# The drop oracle lives with the 4-GPU gate that judges the transport against it, but it is
-# plain NumPy, so its own tests belong here where they run. Reaching into a cluster module
-# for it is the cost of keeping oracle and gate in one file.
-from tests.cluster.grug import test_ragged_ep_check as ragged_ep_check
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():

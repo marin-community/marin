@@ -29,6 +29,15 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
 
+# The device-initiated (NCCL LSA) ragged all-to-all kernel and nothing else. Engagement needs both
+# entries: the kernel switch, and symmetric-buffer registration for the ragged op's operands. The
+# scoped list registers only those buffers, so every other collective keeps NCCL's host-launched
+# kernels. Both require jax 0.11.1; older jaxlibs abort at import on an unknown XLA_FLAGS entry.
+RAGGED_REQUIRED_XLA_FLAGS = (
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+)
+
 # An expert MLP takes both views of the receiver buffer's group sizes: the physical sizes,
 # which charge trailing padding to the last expert, and the active sizes, which count only
 # received rows. Which one a kernel needs depends on whether it covers the buffer or reads
