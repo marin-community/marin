@@ -31,3 +31,13 @@ author: held
 - Result: launcher and production run record prepared.
 - Interpretation: pending launch validation.
 - Next action: pin the source commit and resolved output path, then submit once.
+
+### 2026-08-27 - Production launch
+
+- Commit Hash: `1691d0a9afbfe849538e180186bec7759574cf2c`
+- Iris job: `/held/iris-run-job-20260827-194841`
+- W&B run ID: `moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew2`
+- Output: `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew2-ec6741`
+- Result: submitted in `us-central2` with production priority and non-preemptible v4-2048 resources.
+- Interpretation: the coordinator is running and the 256-worker training job is waiting for the reserved v4-2048 scale group to become ready.
+- Next action: verify worker startup, W&B initialization, and forward training progress.
