@@ -1,5 +1,16 @@
 # Routing PDFs between Docling and the VLM
 
+> **Superseded.** This report describes router v1, which scored a document from page signals
+> *before* extraction and chose between Docling and the VLM. Both halves of that are gone: Docling
+> was replaced by pdf-inspector (`pdf-inspector-evaluation.md`) and the router now scores what an
+> extraction actually produced (`pdf-router-v2.md`). Two modules it cites,
+> `quality/route_features.py` and `quality/fit_route_booster.py`, went with v1 and are on
+> `mark/pdf_processing`.
+>
+> It is kept because it is the measurement that motivated the replacement -- the 28.7% figure below
+> is what the incumbent was costing, and it is the number router v2 had to beat. Read it as history,
+> not as a description of what runs.
+
 Every PDF in the focus crawl goes down one of two extraction routes: Docling, which reads the
 embedded text layer on CPU, or `Infinity-Parser2-Flash`, which reads a rendered image on GPU. The
 router decides which. This report measures what the router was doing, why it was wrong, and what
