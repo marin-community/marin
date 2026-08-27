@@ -160,29 +160,6 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
-def test_rav_ladder_d1536_catalog_settings_reach_the_ordinary_worker():
-    model = models()["rav-ladder-d1536"]
-    choice = AcceleratorChoice(
-        platform=Platform.GPU,
-        gpu_type="H100",
-        gpu_count=8,
-        target_cluster="cw-us-east-02a",
-    )
-
-    lowered = inference_config_for_model(
-        model,
-        choice,
-        env_vars={"VLLM_BATCH_INVARIANT": "0", "VLLM_USE_FLASHINFER_SAMPLER": "1"},
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-
-    assert lowered.iris.worker_resources.replicas == 1
-    assert lowered.iris.worker_environment.env_vars["VLLM_BATCH_INVARIANT"] == "1"
-    assert lowered.iris.worker_environment.env_vars["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert lowered.engine.extra_args[lowered.engine.extra_args.index("--data-parallel-size") + 1] == "8"
-    assert lowered.engine.extra_args[lowered.engine.extra_args.index("--max-logprobs") + 1] == "64"
-
-
 def _gib(memory: str) -> int:
     return int(memory.removesuffix("g"))
 

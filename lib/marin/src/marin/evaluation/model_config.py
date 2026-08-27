@@ -65,9 +65,9 @@ class ServeConfig:
     """Model-server behavior independent of scheduler placement.
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
-    inference settings. The remaining typed vLLM fields map onto ``vllm serve`` flags through
-    :func:`serve_config_vllm_args`; ``vllm_extra_args`` is the escape hatch for flags without a typed
-    field and wins when it names the same option.
+    inference settings. The remaining typed vLLM fields map onto command-line flags or process
+    settings; ``vllm_extra_args`` is the escape hatch for flags without a typed field and wins when
+    it names the same option.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
