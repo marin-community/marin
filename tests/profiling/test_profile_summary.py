@@ -742,7 +742,10 @@ def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Pat
     monkeypatch.setitem(sys.modules, "xprof.convert", convert_module)
     monkeypatch.setitem(sys.modules, "xprof.convert.raw_to_tool_data", raw_to_tool_data_module)
 
-    export = export_xplane_tables(xplane_path, tmp_path / "tables", count_trace_events=True)
+    output_dir = tmp_path / "tables"
+    output_dir.mkdir()
+    (output_dir / "memory_profile.json").write_text('{"stale":true}', encoding="utf-8")
+    export = export_xplane_tables(xplane_path, output_dir, count_trace_events=True)
 
     assert export.trace_event_count == 1_000_000
     assert export.table_sizes["overview_page"] == len('{"cols":[],"rows":[]}')

@@ -394,6 +394,7 @@ def _run_benchmark(config: BenchmarkConfig) -> None:
             "/tmp/grug-moe-pipeline-profiler",
             run_id=config.profile_run_id,
         )
+        profiler_callback(SimpleNamespace(step=-1))
 
     step_times = []
     loss = None
