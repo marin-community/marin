@@ -114,8 +114,10 @@ case-insensitive literal substring scan over activity, newest first.
 
 The API runs four ONNX inference threads on each 4-vCPU Cloud Run instance. Request-based
 billing retains one warm instance, admits one request per instance, and scales concurrent
-searches out to at most four instances. Startup CPU boost reduces model initialization time
-for burst instances without allocating CPU to idle instances continuously.
+searches out to at most four instances. The production dashboard bundles its JavaScript,
+styles, and fonts into the HTML response so an uncached page load does not consume that
+single-request capacity with parallel static assets. Startup CPU boost reduces model
+initialization time for burst instances without allocating CPU to idle instances continuously.
 
 CLI search prints one result block with an execution-specific grading key, title,
 source ID, and one primary source excerpt of at most 240 characters. File results use
@@ -311,7 +313,7 @@ work-log entries), `/feedback` (recent result grades), `/wiki/<id>` (a note), an
 `/chunk/<id>` (an activity chunk). Conversation details load when an entry is opened.
 The feedback table links each grade to its source and keeps explanation-only submissions
 visible. The API's catch-all route serves `index.html` for any path that isn't
-`/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
+`/api/...`, `/health`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
 history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
