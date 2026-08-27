@@ -26,6 +26,8 @@ def test_frozen_graft_panel_crosses_identical_actions_over_prefix_states() -> No
     assert manifest["total_rows"] == 54
     assert manifest["prefix_seeds"] == [0, 1, 2]
     assert manifest["data_seeds"] == [973_000, 973_001, 973_002]
+    assert "tied" not in manifest["analysis"]["primary_estimand"]
+    assert manifest["analysis"]["additive_null"] == "Y(prefix, action) = alpha_prefix + beta_action"
 
     action_counts: dict[str, dict[str, tuple[int, ...]]] = {}
     for prefix_id in graft.PREFIX_IDS:
@@ -40,6 +42,7 @@ def test_frozen_graft_panel_crosses_identical_actions_over_prefix_states() -> No
             "sealed_referees_per_prefix": 0,
             "total": 27,
         }
+        assert prefix_manifest["analysis_contract"] == manifest["analysis"]
         assert summary.role.value_counts().to_dict() == {
             "paired_tied_control": 9,
             "imported_frontier_graft": 9,

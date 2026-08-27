@@ -5,11 +5,14 @@
     "best_untrained_proportional_model_candidate"
   ],
   "analysis": {
+    "additive_null": "Y(prefix, action) = alpha_prefix + beta_action",
     "pairing": "Each prefix seed and fresh data seed block contains tied, fit_079, and novel actions.",
-    "primary_estimand": "prefix-by-action difference-in-differences relative to the matched tied continuation",
+    "primary_estimand": "[Y(proportional, fit_079) - Y(proportional, novel)] - [Y(cap4, fit_079) - Y(cap4, novel)]",
+    "primary_interpretation": "The two shared actions are runtime-identical across prefixes, so zero is implied by the additive null. A nonzero contrast identifies an interaction for these prefixes and actions.",
     "secondary_estimands": [
       "raw endpoint BPB",
-      "within-prefix candidate-minus-tied BPB"
+      "within-prefix candidate-minus-prefix-specific-tied BPB",
+      "tied-anchored difference-in-differences, descriptive only"
     ]
   },
   "artifacts": {
@@ -17,14 +20,14 @@
     "cap4_selected_prefixes.json": "5baf0fe8e5a4c605f79474c6633c6cb4dc4284c42a847ef020c8e687e112d1d8",
     "cap4_shared_bounded_ensemble_kl0/continuation_summary.csv": "bb9f52f4eba7634e26e5b29c40e39ff1c3f09c459818982a1d5063e545325b56",
     "cap4_shared_bounded_ensemble_kl0/continuation_weights.csv": "15b5590e5e6812a19209b3a400904e532d39f6539865609fbbdc52ed44a593e2",
-    "cap4_shared_bounded_ensemble_kl0/manifest.json": "ca508b313e2d13fd6b345337a4f34f2b94311510654383e805dfcedf6f12bdc4",
+    "cap4_shared_bounded_ensemble_kl0/manifest.json": "748c9db2358ba86307ff91c8db6f261a413b5aa6cf96256a025c5ef90d8a36eb",
     "proportional_candidate_weights.csv": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
     "proportional_control/continuation_summary.csv": "78384e90188315451f9f11a9ae29c4c709e4ec9334eb87963274a6fca6cdb654",
     "proportional_control/continuation_weights.csv": "e75598febae4431cafce33015a848fd09f07b3b880667080deb3317a9029ca8a",
-    "proportional_control/manifest.json": "09469d4fd0f75f00ecc1a7aa1960b9a402d42493b63144c509e2cdebe3c89e12",
+    "proportional_control/manifest.json": "7338ed6d438250edc278e4d5d61ea70931d5c916cdbc7d48856d82c66a60b871",
     "proportional_selected_prefixes.json": "c5f7a6aead2b4209f00c7beacc4aeaced064ab4cf10b3bf26c699e7039f7cece"
   },
-  "contract_version": "delphi_phase1_cross_prefix_graft_20260826_v1",
+  "contract_version": "delphi_phase1_cross_prefix_graft_20260827_v2",
   "data_seeds": [
     973000,
     973001,
@@ -60,5 +63,6 @@
   ],
   "research_question": "Does a frontier-relevant phase-1 action retain its gain after grafting across prefix states?",
   "rows_per_prefix": 27,
+  "selection_caveat": "fit_079 was selected from cap-4 outcomes and novel from a proportional-prefix model. Fresh data seeds remove realized continuation-noise reuse, but prefix-asymmetric selection can inflate a nonzero shared-action interaction. The panel can refute strict additivity for these cells; it cannot establish a general transfer law.",
   "total_rows": 54
 }

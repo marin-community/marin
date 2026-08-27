@@ -1,9 +1,20 @@
 {
+  "analysis_contract": {
+    "additive_null": "Y(prefix, action) = alpha_prefix + beta_action",
+    "pairing": "Each prefix seed and fresh data seed block contains tied, fit_079, and novel actions.",
+    "primary_estimand": "[Y(proportional, fit_079) - Y(proportional, novel)] - [Y(cap4, fit_079) - Y(cap4, novel)]",
+    "primary_interpretation": "The two shared actions are runtime-identical across prefixes, so zero is implied by the additive null. A nonzero contrast identifies an interaction for these prefixes and actions.",
+    "secondary_estimands": [
+      "raw endpoint BPB",
+      "within-prefix candidate-minus-prefix-specific-tied BPB",
+      "tied-anchored difference-in-differences, descriptive only"
+    ]
+  },
   "artifacts": {
     "continuation_summary.csv": "bb9f52f4eba7634e26e5b29c40e39ff1c3f09c459818982a1d5063e545325b56",
     "continuation_weights.csv": "15b5590e5e6812a19209b3a400904e532d39f6539865609fbbdc52ed44a593e2"
   },
-  "contract_version": "delphi_phase1_cross_prefix_graft_20260826_v1",
+  "contract_version": "delphi_phase1_cross_prefix_graft_20260827_v2",
   "parent_manifest_inputs": {
     "candidate_predictions_sha256": "4a78e0c3b9958493ef0a8d45018426cdf8f23602577da1e52c7a1fb67444607c",
     "cap4_candidate_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1",
@@ -27,5 +38,6 @@
   },
   "selected_candidate_ids": [
     "cap4_shared_bounded_ensemble_kl0"
-  ]
+  ],
+  "selection_caveat": "fit_079 was selected from cap-4 outcomes and novel from a proportional-prefix model. Fresh data seeds remove realized continuation-noise reuse, but prefix-asymmetric selection can inflate a nonzero shared-action interaction. The panel can refute strict additivity for these cells; it cannot establish a general transfer law."
 }

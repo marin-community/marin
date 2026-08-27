@@ -59,7 +59,7 @@ DEFAULT_CANDIDATE_PREDICTIONS = (
 DEFAULT_FRONTIER_CONTRACT = (
     REFERENCE_OUTPUTS / "delphi_phase1_proportional_prefix_wave1_20260825" / "validated_frontier_contract.json"
 )
-DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "delphi_phase1_cross_prefix_graft_20260826"
+DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "delphi_phase1_cross_prefix_graft_v2_20260827"
 
 PROPORTIONAL_PREFIX = "proportional_control"
 CAP4_PREFIX = "cap4_shared_bounded_ensemble_kl0"
@@ -70,6 +70,7 @@ IMPORTED_CONTINUATION_ID = "fit_079"
 NOVEL_CONTINUATION_ID = "novel_rank0"
 MIXTURE_BLOCK_SIZE = common_design.MIXTURE_BLOCK_SIZE
 COUNT_PREFIX = proportional_confirmation.COUNT_PREFIX
+CONTRACT_VERSION = "delphi_phase1_cross_prefix_graft_20260827_v2"
 
 
 def parse_args() -> argparse.Namespace:
@@ -278,8 +279,15 @@ def build_design(args: argparse.Namespace) -> tuple[dict[str, tuple[pd.DataFrame
             raise ValueError(f"Cross-prefix allocation changed for {prefix_id}")
         designs[prefix_id] = (summary, weights)
 
+    primary_estimand = " ".join(
+        (
+            "[Y(proportional, fit_079) - Y(proportional, novel)]",
+            "-",
+            "[Y(cap4, fit_079) - Y(cap4, novel)]",
+        )
+    )
     manifest: dict[str, object] = {
-        "contract_version": "delphi_phase1_cross_prefix_graft_20260826_v1",
+        "contract_version": CONTRACT_VERSION,
         "outcome_informed": True,
         "research_question": (
             "Does a frontier-relevant phase-1 action retain its gain after grafting across prefix states?"
@@ -302,10 +310,25 @@ def build_design(args: argparse.Namespace) -> tuple[dict[str, tuple[pd.DataFrame
             "frontier_contract_sha256": file_sha256(args.frontier_contract),
         },
         "analysis": {
-            "primary_estimand": "prefix-by-action difference-in-differences relative to the matched tied continuation",
-            "secondary_estimands": ["raw endpoint BPB", "within-prefix candidate-minus-tied BPB"],
+            "additive_null": "Y(prefix, action) = alpha_prefix + beta_action",
+            "primary_estimand": primary_estimand,
+            "primary_interpretation": (
+                "The two shared actions are runtime-identical across prefixes, so zero is implied by the additive null. "
+                "A nonzero contrast identifies an interaction for these prefixes and actions."
+            ),
+            "secondary_estimands": [
+                "raw endpoint BPB",
+                "within-prefix candidate-minus-prefix-specific-tied BPB",
+                "tied-anchored difference-in-differences, descriptive only",
+            ],
             "pairing": "Each prefix seed and fresh data seed block contains tied, fit_079, and novel actions.",
         },
+        "selection_caveat": (
+            "fit_079 was selected from cap-4 outcomes and novel from a proportional-prefix model. Fresh data seeds "
+            "remove realized continuation-noise reuse, but prefix-asymmetric selection can inflate a nonzero "
+            "shared-action interaction. The panel can refute strict additivity for these cells; it cannot establish a "
+            "general transfer law."
+        ),
     }
     return designs, manifest
 
@@ -324,10 +347,12 @@ def write_design(args: argparse.Namespace) -> dict[str, object]:
             weights.loc[:, list(harsh_design.WEIGHT_ARTIFACT_COLUMNS)].to_csv(index=False).encode(),
         )
         prefix_manifest_payload = {
-            "contract_version": "delphi_phase1_cross_prefix_graft_20260826_v1",
+            "contract_version": CONTRACT_VERSION,
             "selected_candidate_ids": [prefix_id],
             "rows": {"controls_per_prefix": 27, "fit_per_prefix": 0, "sealed_referees_per_prefix": 0, "total": 27},
             "role_counts_per_prefix": summary.role.value_counts().to_dict(),
+            "analysis_contract": manifest["analysis"],
+            "selection_caveat": manifest["selection_caveat"],
             "parent_manifest_inputs": manifest["inputs"],
             "artifacts": {
                 summary_path.name: file_sha256(summary_path),
