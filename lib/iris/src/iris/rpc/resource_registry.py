@@ -82,12 +82,13 @@ def list_codec(
     request_type: type[Request],
     response_type: type[Response],
     resources: Callable[[Response], Iterable[Message]],
-    page: Callable[[Response], resource_pb2.PageInfo],
+    page: Callable[[Response], resource_pb2.PageInfo] | None = None,
 ) -> ResourceCodec[Request, Response]:
     def encode(_request: Request, response: Response) -> Message:
+        bodies = tuple(resources(response))
         return resource_pb2.ListResponse(
-            resources=[_resource(body) for body in resources(response)],
-            page=page(response),
+            resources=[_resource(body) for body in bodies],
+            page=page(response) if page is not None else resource_pb2.PageInfo(total_count=len(bodies)),
         )
 
     return ResourceCodec(ResourceVerb.LIST, request_type, response_type, resource_pb2.ListResponse, encode)
@@ -116,7 +117,58 @@ class ResourceRegistryBuilder:
     def __init__(self) -> None:
         self._bindings: dict[tuple[str, ResourceVerb], ResourceBinding] = {}
 
-    def bind(
+    def get(
+        self,
+        path: str,
+        handler: Callable[[Request, RequestContext], Response],
+        *,
+        request_type: type[Request],
+        response_type: type[Response],
+        dashboard_readable: bool,
+    ) -> None:
+        self._bind(
+            path,
+            get_codec(request_type, response_type),
+            handler,
+            dashboard_readable=dashboard_readable,
+        )
+
+    def list(
+        self,
+        path: str,
+        handler: Callable[[Request, RequestContext], Response],
+        *,
+        request_type: type[Request],
+        response_type: type[Response],
+        resources: Callable[[Response], Iterable[Message]],
+        page: Callable[[Response], resource_pb2.PageInfo] | None = None,
+        dashboard_readable: bool,
+    ) -> None:
+        self._bind(
+            path,
+            list_codec(request_type, response_type, resources, page),
+            handler,
+            dashboard_readable=dashboard_readable,
+        )
+
+    def batch_get(
+        self,
+        path: str,
+        handler: Callable[[Request, RequestContext], Response],
+        *,
+        request_type: type[Request],
+        response_type: type[Response],
+        resources: Callable[[Request, Response], Iterable[Message]],
+        dashboard_readable: bool,
+    ) -> None:
+        self._bind(
+            path,
+            batch_get_codec(request_type, response_type, resources),
+            handler,
+            dashboard_readable=dashboard_readable,
+        )
+
+    def _bind(
         self,
         path: str,
         codec: ResourceCodec[Request, Response],

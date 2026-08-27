@@ -309,6 +309,18 @@ message TaskAttempt {
   TaskOutputArchive output_archive = 14;
 }
 
+// Select one Attempt or all Attempts belonging to a Task. Attempt reads use
+// this noun-owned selector rather than teaching the generic resource service
+// how Task and Attempt identifiers are structured.
+message TaskAttemptSelector {
+  string task_id = 1;
+  int32 attempt_id = 2;
+}
+
+message TaskAttemptList {
+  repeated TaskAttempt attempts = 1;
+}
+
 message ResourceUsage {
   int64 memory_mb = 1;
   int64 disk_mb = 2;

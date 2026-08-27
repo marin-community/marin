@@ -124,9 +124,6 @@ from iris.rpc.proto_display import (
 from iris.rpc.resource_registry import (
     ResourceRegistry,
     ResourceRegistryBuilder,
-    batch_get_codec,
-    get_codec,
-    list_codec,
 )
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 from iris.version import client_revision_date
@@ -139,57 +136,127 @@ _T = TypeVar("_T")
 
 def _build_resource_registry(service: "ControllerServiceImpl") -> ResourceRegistry:
     registry = ResourceRegistryBuilder()
-    registry.bind(
+    registry.get(
         "/job/get",
-        get_codec(
-            controller_pb2.Controller.GetJobStatusRequest,
-            controller_pb2.Controller.GetJobStatusResponse,
-        ),
         service.get_job_status,
+        request_type=controller_pb2.Controller.GetJobStatusRequest,
+        response_type=controller_pb2.Controller.GetJobStatusResponse,
         dashboard_readable=True,
     )
-    registry.bind(
+    registry.list(
         "/job/list",
-        list_codec(
-            controller_pb2.Controller.ListJobsRequest,
-            controller_pb2.Controller.ListJobsResponse,
-            resources=lambda response: response.jobs,
-            page=lambda response: resource_pb2.PageInfo(
-                total_count=response.total_count,
-                has_more=response.has_more,
-            ),
-        ),
         service.list_jobs,
+        request_type=controller_pb2.Controller.ListJobsRequest,
+        response_type=controller_pb2.Controller.ListJobsResponse,
+        resources=lambda response: response.jobs,
+        page=lambda response: resource_pb2.PageInfo(
+            total_count=response.total_count,
+            has_more=response.has_more,
+        ),
         dashboard_readable=True,
     )
-    registry.bind(
+    registry.batch_get(
         "/job/batch-get",
-        batch_get_codec(
-            controller_pb2.Controller.GetJobStateRequest,
-            controller_pb2.Controller.GetJobStateResponse,
-            resources=_job_state_snapshots,
-        ),
         service.get_job_state,
+        request_type=controller_pb2.Controller.GetJobStateRequest,
+        response_type=controller_pb2.Controller.GetJobStateResponse,
+        resources=_job_state_snapshots,
         dashboard_readable=True,
     )
-    registry.bind(
+    registry.get(
         "/task/get",
-        get_codec(
-            controller_pb2.Controller.GetTaskStatusRequest,
-            controller_pb2.Controller.GetTaskStatusResponse,
-        ),
         service.get_task_status,
+        request_type=controller_pb2.Controller.GetTaskStatusRequest,
+        response_type=controller_pb2.Controller.GetTaskStatusResponse,
         dashboard_readable=True,
     )
-    registry.bind(
+    registry.list(
         "/task/list",
-        list_codec(
-            controller_pb2.Controller.ListTasksRequest,
-            controller_pb2.Controller.ListTasksResponse,
-            resources=lambda response: response.tasks,
-            page=lambda response: resource_pb2.PageInfo(total_count=len(response.tasks)),
-        ),
         service.list_tasks,
+        request_type=controller_pb2.Controller.ListTasksRequest,
+        response_type=controller_pb2.Controller.ListTasksResponse,
+        resources=lambda response: response.tasks,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/attempt/get",
+        service.get_attempt,
+        request_type=job_pb2.TaskAttemptSelector,
+        response_type=job_pb2.TaskAttempt,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/attempt/list",
+        service.list_attempts,
+        request_type=job_pb2.TaskAttemptSelector,
+        response_type=job_pb2.TaskAttemptList,
+        resources=lambda response: response.attempts,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/worker/get",
+        service.get_worker_status,
+        request_type=controller_pb2.Controller.GetWorkerStatusRequest,
+        response_type=controller_pb2.Controller.GetWorkerStatusResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/worker/list",
+        service.list_workers,
+        request_type=controller_pb2.Controller.ListWorkersRequest,
+        response_type=controller_pb2.Controller.ListWorkersResponse,
+        resources=lambda response: response.workers,
+        page=lambda response: resource_pb2.PageInfo(
+            total_count=response.total_count,
+            has_more=response.has_more,
+        ),
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/endpoint/list",
+        service.endpoint_service.list_endpoints,
+        request_type=controller_pb2.Controller.ListEndpointsRequest,
+        response_type=controller_pb2.Controller.ListEndpointsResponse,
+        resources=lambda response: response.endpoints,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/user/list",
+        service.list_users,
+        request_type=controller_pb2.Controller.ListUsersRequest,
+        response_type=controller_pb2.Controller.ListUsersResponse,
+        resources=lambda response: response.users,
+        dashboard_readable=True,
+    )
+    registry.get(
+        "/user-budget/get",
+        service.get_user_budget,
+        request_type=controller_pb2.Controller.GetUserBudgetRequest,
+        response_type=controller_pb2.Controller.GetUserBudgetResponse,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/user-budget/list",
+        service.list_user_budgets,
+        request_type=controller_pb2.Controller.ListUserBudgetsRequest,
+        response_type=controller_pb2.Controller.ListUserBudgetsResponse,
+        resources=lambda response: response.users,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/backend/list",
+        service.list_backends,
+        request_type=controller_pb2.Controller.ListBackendsRequest,
+        response_type=controller_pb2.Controller.ListBackendsResponse,
+        resources=lambda response: response.backends,
+        dashboard_readable=True,
+    )
+    registry.list(
+        "/peer/list",
+        service.list_peers,
+        request_type=controller_pb2.Controller.ListPeersRequest,
+        response_type=controller_pb2.Controller.ListPeersResponse,
+        resources=lambda response: response.peers,
         dashboard_readable=True,
     )
     return registry.freeze()
@@ -2382,6 +2449,45 @@ class ControllerServiceImpl:
             task_statuses.append(proto_task_status)
 
         return controller_pb2.Controller.ListTasksResponse(tasks=task_statuses)
+
+    def get_attempt(
+        self,
+        request: job_pb2.TaskAttemptSelector,
+        ctx: Any,
+    ) -> job_pb2.TaskAttempt:
+        """Return one numbered Attempt belonging to a Task."""
+        del ctx
+        if not request.HasField("attempt_id"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id is required")
+        if request.attempt_id < 0:
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id must be non-negative")
+        attempts = self._attempts_for_task(request.task_id)
+        for attempt in attempts:
+            if attempt.attempt_id == request.attempt_id:
+                return attempt
+        raise ConnectError(Code.NOT_FOUND, f"Attempt {request.task_id}:{request.attempt_id} not found")
+
+    def list_attempts(
+        self,
+        request: job_pb2.TaskAttemptSelector,
+        ctx: Any,
+    ) -> job_pb2.TaskAttemptList:
+        """Return the ordered Attempt history for one Task."""
+        del ctx
+        if request.HasField("attempt_id"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "attempt_id is not valid when listing Attempts")
+        return job_pb2.TaskAttemptList(attempts=self._attempts_for_task(request.task_id))
+
+    def _attempts_for_task(self, task_id_raw: str) -> list[job_pb2.TaskAttempt]:
+        try:
+            task_id = JobName.from_wire(task_id_raw)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        task = _read_task_with_attempts(self._db, task_id)
+        if task is None:
+            raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
+        return list(task_to_proto(task).attempts)
 
     def kick_tasks(
         self,

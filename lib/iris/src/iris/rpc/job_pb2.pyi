@@ -445,6 +445,20 @@ class TaskAttempt(_message.Message):
     output_archive: TaskOutputArchive
     def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ..., pod_name: _Optional[str] = ..., pod_uid: _Optional[str] = ..., node_name: _Optional[str] = ..., terminal_reason: _Optional[str] = ..., output_archive: _Optional[_Union[TaskOutputArchive, _Mapping]] = ...) -> None: ...
 
+class TaskAttemptSelector(_message.Message):
+    __slots__ = ("task_id", "attempt_id")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    attempt_id: int
+    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+
+class TaskAttemptList(_message.Message):
+    __slots__ = ("attempts",)
+    ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
+    attempts: _containers.RepeatedCompositeFieldContainer[TaskAttempt]
+    def __init__(self, attempts: _Optional[_Iterable[_Union[TaskAttempt, _Mapping]]] = ...) -> None: ...
+
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "process_count")
     MEMORY_MB_FIELD_NUMBER: _ClassVar[int]

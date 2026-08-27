@@ -1160,6 +1160,43 @@ def test_get_job_status_reports_task_summary_counts(service):
     assert response.job.completed_count == 0
 
 
+def test_attempt_reads_preserve_retry_history(service, state):
+    job_id = JobName.root("test-user", "attempt-history")
+    service.launch_job(make_job_request(job_id.to_wire(), max_retries_preemption=1), None)
+    task_id = _query_tasks_with_attempts(state, job_id)[0].task_id
+    first_worker = WorkerId("attempt-worker-0")
+    second_worker = WorkerId("attempt-worker-1")
+    _register_worker(state, first_worker)
+    _register_worker(state, second_worker)
+    _assign_and_transition(state, task_id, first_worker, job_pb2.TASK_STATE_RUNNING)
+
+    with state._db.transaction() as cur:
+        finalize(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, task_id, "capacity reclaimed")],
+            now=Timestamp.now(),
+        )
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=second_worker)], health=state._health)
+
+    selector = job_pb2.TaskAttemptSelector(task_id=task_id.to_wire())
+    attempts = service.list_attempts(selector, None)
+    first = service.get_attempt(
+        job_pb2.TaskAttemptSelector(task_id=task_id.to_wire(), attempt_id=0),
+        None,
+    )
+    current = service.get_attempt(
+        job_pb2.TaskAttemptSelector(task_id=task_id.to_wire(), attempt_id=1),
+        None,
+    )
+
+    assert [attempt.attempt_id for attempt in attempts.attempts] == [0, 1]
+    assert first.state == job_pb2.TASK_STATE_PREEMPTED
+    assert first.worker_id == str(first_worker)
+    assert current.state == job_pb2.TASK_STATE_ASSIGNED
+    assert current.worker_id == str(second_worker)
+
+
 # =============================================================================
 # Worker Tests
 # =============================================================================
