@@ -13,6 +13,13 @@ import pytest
 from zephyr.polars_io import scan_storage_options
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_endpoint(monkeypatch):
+    """Hosts inside a cluster carry endpoint env vars that would override the test configs."""
+    monkeypatch.delenv("AWS_ENDPOINT_URL_S3", raising=False)
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+
+
 @pytest.fixture
 def coreweave_fsspec_conf(monkeypatch):
     """The FSSPEC_S3 shape rigging exports inside a CoreWeave cluster."""
@@ -59,8 +66,25 @@ def test_non_s3_paths_get_no_options(coreweave_fsspec_conf):
 
 def test_plain_aws_defers_to_polars_defaults(monkeypatch):
     monkeypatch.setitem(fsspec.config.conf, "s3", {})
-    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
     assert scan_storage_options("s3://bucket/chunk.parquet") is None
+
+
+def test_session_token_is_mirrored(monkeypatch):
+    monkeypatch.setitem(
+        fsspec.config.conf,
+        "s3",
+        {
+            "endpoint_url": "http://minio.local:9000",
+            "key": "sts-key-id",
+            "secret": "sts-secret",
+            "token": "sts-session-token",
+        },
+    )
+    options = scan_storage_options("s3://bucket/chunk.parquet")
+    assert options is not None
+    assert options["aws_access_key_id"] == "sts-key-id"
+    assert options["aws_secret_access_key"] == "sts-secret"
+    assert options["aws_session_token"] == "sts-session-token"
 
 
 def test_path_style_endpoint_is_not_forced_virtual(monkeypatch):

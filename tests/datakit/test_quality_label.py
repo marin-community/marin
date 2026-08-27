@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for quality-labeling the clean all-routes OCR corpus.
+"""Tests for quality-labeling the clean combined corpus.
 
 The step's contracts: the window cut is exactly the deployed ``score_bme`` convention (the
 calibration was fit on scores produced by it), the 0-4 scale exists only through the calibration
@@ -18,14 +18,14 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import generate_id
 
-from experiments.build_pdf_source import quality_label as quality_module
-from experiments.build_pdf_source.extract_ocr import _OUTPUT_SCHEMA
-from experiments.build_pdf_source.quality_label import (
-    QUALITY_SCHEMA,
+from experiments.datakit.build_pdf_source import quality_label as quality_module
+from experiments.datakit.build_pdf_source.combine_routes import COMBINED_SCHEMA
+from experiments.datakit.build_pdf_source.quality_label import (
     DocumentScores,
     calibrate,
     cut_windows,
     keep_document,
+    quality_output_schema,
     score_shard,
     score_texts,
 )
@@ -33,6 +33,8 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CH
 
 _IDENTITY_XK = np.array([0.0, 1.0])
 _IDENTITY_YK = np.array([0.0, 1.0])
+
+_QUALITY_SCHEMA = quality_output_schema(COMBINED_SCHEMA)
 
 
 class _FakeScorer:
@@ -59,7 +61,7 @@ def _distinct_text(length: int) -> str:
 
 
 def _document(text: str) -> dict:
-    """A stored clean-corpus record, shaped like the extraction schema the step reads."""
+    """A stored clean-corpus record, shaped like the combined schema the step reads."""
     page = text if text.endswith("\n") else text + "\n"
     return {
         "id": generate_id(page),
@@ -75,6 +77,7 @@ def _document(text: str) -> dict:
         "extraction_status": "success",
         "extraction_error": None,
         "boilerplate_lines_removed": 0,
+        "needs_ocr": True,
         "pages_ocred": 1,
         "pages_failed": 0,
         "pages_truncated": 0,
@@ -161,7 +164,7 @@ def _write_input_shard(tmp_path, rows: list[dict], basename: str) -> str:
     rows = sorted(rows, key=lambda row: row["id"])  # the clean corpus is id-sorted per shard
     input_file = tmp_path / "input" / basename
     input_file.parent.mkdir()
-    pq.write_table(pa.Table.from_pylist(rows, schema=_OUTPUT_SCHEMA), str(input_file))
+    pq.write_table(pa.Table.from_pylist(rows, schema=COMBINED_SCHEMA), str(input_file))
     return str(input_file)
 
 
@@ -177,12 +180,12 @@ def test_score_shard_drops_below_threshold_docs_and_preserves_basename_order_and
     rows = [_document("K kept, barely"), _document("D dropped, barely"), _document("H kept, high quality")]
     input_file = _write_input_shard(tmp_path, rows, "part-00003-of-00023.parquet")
 
-    result = score_shard(input_file, str(tmp_path / "out"), model_dir="unused")
+    result = score_shard(input_file, str(tmp_path / "out"), model_dir="unused", schema=_QUALITY_SCHEMA)
 
     output_file = tmp_path / "out" / "part-00003-of-00023.parquet"
     assert output_file.exists()
     table = pq.read_table(str(output_file))
-    assert table.schema.equals(QUALITY_SCHEMA)
+    assert table.schema.equals(_QUALITY_SCHEMA)
     assert result["count"] == 2
 
     kept_ids = [row["id"] for row in sorted(rows, key=lambda row: row["id"]) if not row["text"].startswith("D")]
@@ -200,8 +203,8 @@ def test_score_shard_with_nothing_kept_still_writes_the_empty_copartitioned_shar
     _patch_loader(monkeypatch, _FakeScorer(default=0.0))
     input_file = _write_input_shard(tmp_path, [_document("all junk")], "part-00000-of-00023.parquet")
 
-    score_shard(input_file, str(tmp_path / "out"), model_dir="unused")
+    score_shard(input_file, str(tmp_path / "out"), model_dir="unused", schema=_QUALITY_SCHEMA)
 
     table = pq.read_table(str(tmp_path / "out" / "part-00000-of-00023.parquet"))
     assert table.num_rows == 0
-    assert table.schema.equals(QUALITY_SCHEMA)
+    assert table.schema.equals(_QUALITY_SCHEMA)

@@ -42,12 +42,16 @@ pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>
 pub struct RequestStats {
     total: AtomicUsize,
     zstd: AtomicUsize,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
 }
 
 impl RequestStats {
-    fn observe(&self, request: &axum::extract::Request) {
+    /// Record a POST entering the test server. `true` means the caller must invoke
+    /// [`Self::finish`] after the response completes.
+    fn begin(&self, request: &axum::extract::Request) -> bool {
         if request.method() != axum::http::Method::POST {
-            return;
+            return false;
         }
         self.total.fetch_add(1, Ordering::SeqCst);
         if request
@@ -57,6 +61,13 @@ impl RequestStats {
         {
             self.zstd.fetch_add(1, Ordering::SeqCst);
         }
+        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+        true
+    }
+
+    fn finish(&self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub fn total(&self) -> usize {
@@ -66,12 +77,23 @@ impl RequestStats {
     pub fn zstd_requests(&self) -> usize {
         self.zstd.load(Ordering::SeqCst)
     }
+
+    pub fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::SeqCst)
+    }
 }
 
 /// A disk-backed store with its flush/maintenance tasks running, so a push becomes
 /// query-visible exactly as it does in production.
 pub fn disk_store(tag: &str) -> Arc<Store> {
-    let store = Arc::new(Store::new(Some(unique_dir(tag)), String::new()).unwrap());
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir(tag)),
+            String::new(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+        )
+        .unwrap(),
+    );
     store.bootstrap_maintenance();
     store
 }
@@ -107,8 +129,12 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let counted = Arc::clone(&counted);
                 async move {
-                    counted.observe(&req);
-                    next.run(req).await
+                    let observed = counted.begin(&req);
+                    let response = next.run(req).await;
+                    if observed {
+                        counted.finish();
+                    }
+                    response
                 }
             },
         ),
@@ -137,16 +163,20 @@ pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
         move |request: axum::extract::Request| {
             let counted = Arc::clone(&counted);
             async move {
-                counted.observe(&request);
+                let observed = counted.begin(&request);
                 let error = connectrpc::ConnectError::new(
                     connectrpc::ErrorCode::InvalidArgument,
                     "empty key",
                 );
-                (
+                let response = (
                     axum::http::StatusCode::BAD_REQUEST,
                     [(axum::http::header::CONTENT_TYPE, "application/json")],
                     error.to_json(),
-                )
+                );
+                if observed {
+                    counted.finish();
+                }
+                response
             }
         },
     ));

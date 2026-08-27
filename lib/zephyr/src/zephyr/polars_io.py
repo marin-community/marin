@@ -68,6 +68,11 @@ def scan_storage_options(path: str) -> dict[str, str] | None:
     if key and secret:
         options["aws_access_key_id"] = key
         options["aws_secret_access_key"] = secret
+        # STS credentials are a key/secret/token triple; passing only the pair makes
+        # object_store sign with an incomplete identity and the store rejects the request.
+        token = conf.get("token") or os.environ.get("AWS_SESSION_TOKEN")
+        if token:
+            options["aws_session_token"] = token
     return options
 
 

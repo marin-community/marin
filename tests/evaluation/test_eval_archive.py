@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import json
 
-from finestore.reader import CompositeReader
-from fsspec.core import url_to_fs
-from marin.evaluation.samples import (
+from finestore.eval import (
     Choice,
     EvalSample,
     EvaluationStore,
@@ -19,6 +17,8 @@ from marin.evaluation.samples import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.reader import CompositeReader
+from fsspec.core import url_to_fs
 
 from experiments.evaluation.migrate_archive import MigrationCounts, archive_sample_count, migrate_run
 from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks

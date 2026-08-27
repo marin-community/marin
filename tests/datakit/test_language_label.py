@@ -15,7 +15,7 @@ from collections.abc import Sequence
 import pytest
 from marin.datakit.normalize import generate_id
 
-from experiments.build_pdf_source.language_label import (
+from experiments.datakit.build_pdf_source.language_label import (
     LANGUAGE_THRESHOLD,
     PREDICT_TOP_K,
     clean_page,

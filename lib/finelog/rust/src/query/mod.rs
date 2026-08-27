@@ -10,24 +10,32 @@
 //! durability contract makes written rows visible because they are sealed before
 //! WriteRows/PushLogs ack.
 
+pub mod exact_aggregate;
+pub mod exact_prune;
+pub(crate) mod file_scan;
+pub mod group_extrema;
+pub mod index_cache;
 pub mod optimizer;
+pub(crate) mod predicate;
 pub mod provider;
-pub mod sidecar;
 pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -51,6 +59,12 @@ const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
 const QUERY_POOL_FRACTION: f64 = 0.7;
 
 const MEBIBYTE: usize = 1024 * 1024;
+
+/// Repartition multi-file Parquet scans once they contain enough work to
+/// amortize parallel decoder setup. DataFusion's 10 MiB default serialized the
+/// narrow covering projections used by dashboard queries, even when they
+/// represented hundreds of thousands of rows across several files.
+const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -216,7 +230,13 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
-    let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
+    cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let state = SessionStateBuilder::new_with_default_features()
+        .with_config(cfg)
+        .with_runtime_env(shared_runtime_env())
+        .with_query_planner(Arc::new(exact_aggregate::FinelogQueryPlanner))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
     udf::register_scalar_udfs(&ctx);
     ctx
@@ -224,6 +244,7 @@ pub fn make_ctx() -> SessionContext {
 
 /// A collected query result: its arrow schema (always present, even for an
 /// empty result so the IPC stream can carry it) and the result batches.
+#[derive(Clone)]
 pub struct QueryResult {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
@@ -421,6 +442,19 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
+        .iter()
+        .map(|provider| {
+            (
+                provider.name.clone(),
+                exact_aggregate::AggregateSource {
+                    segment_paths: provider.provider.segment_paths().to_vec(),
+                    index_cache: Arc::clone(provider.provider.index_cache()),
+                    schema: provider.provider.schema(),
+                },
+            )
+        })
+        .collect();
     let names: Vec<String> = providers.iter().map(|p| p.name.clone()).collect();
     for rp in providers {
         // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
@@ -428,6 +462,12 @@ pub async fn run_query_over(
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
+    ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
+        aggregate_sources.clone(),
+    )));
+    ctx.add_optimizer_rule(Arc::new(group_extrema::GroupExtremaRewrite::new(
+        aggregate_sources,
+    )));
     let started = Instant::now();
     let result = async {
         let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
@@ -786,7 +826,12 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -886,9 +931,13 @@ mod tests {
             let mut preds =
                 build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
             add_cluster_filter(&mut preds.where_parts, cluster);
-            NamespaceProvider::build(Arc::clone(&full), &paths)
-                .map(|provider| (provider, preds))
-                .unwrap()
+            NamespaceProvider::build(
+                Arc::clone(&full),
+                &paths,
+                crate::query::index_cache::test_index_cache(),
+            )
+            .map(|provider| (provider, preds))
+            .unwrap()
         };
         let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
             rows.sort_by(|a, b| a.key.cmp(&b.key));

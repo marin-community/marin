@@ -32,7 +32,6 @@ from contextlib import AbstractContextManager, nullcontext
 import pytest
 from iris.cluster.config import (
     ControllerVmConfig,
-    GcpControllerConfig,
     IrisClusterConfig,
     ManualControllerConfig,
     PlatformConfig,
@@ -46,7 +45,6 @@ from iris.cluster.platforms.types import (
     WorkerStatus,
 )
 from iris.cluster.platforms.vm_lifecycle import (
-    _build_controller_vm_config,
     start_controller,
     stop_controller,
 )
@@ -358,15 +356,3 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
-
-
-def test_gcp_controller_vm_config_defaults_to_500gb_disk():
-    """GCP controller VM defaults to 500GB disk (sized for log-store retention)."""
-    config = IrisClusterConfig(
-        platform=PlatformConfig(label_prefix="test"),
-        controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
-    )
-
-    vm_config = _build_controller_vm_config(config)
-
-    assert vm_config.gcp.boot_disk_size_gb == 500

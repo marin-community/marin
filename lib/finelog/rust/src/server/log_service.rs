@@ -251,8 +251,9 @@ impl LogService for LogServiceImpl {
         // blocking pool, then build the provider over them.
         let store = Arc::clone(&self.store);
         let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
-            .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
+        let provider =
+            NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
+                .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
 
         // Run the read (DataFusion schedules its own CPU tasks; await directly).
         let ctx = make_ctx();

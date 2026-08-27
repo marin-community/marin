@@ -28,9 +28,7 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
-from finestore.reader import CompositeReader
-from marin.evaluation.records import list_records
-from marin.evaluation.samples import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -42,6 +40,8 @@ from marin.evaluation.samples import (
     sample_from_archive_row,
     trajectory_step_rows,
 )
+from finestore.reader import CompositeReader
+from marin.evaluation.records import list_records
 from rigging.filesystem import (
     StoragePath,
     get_bucket_location,

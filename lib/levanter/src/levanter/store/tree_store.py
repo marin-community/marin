@@ -98,22 +98,6 @@ class TreeStore(Generic[T]):
             is_leaf=heuristic_is_leaf_batched,
         )
 
-    async def extend_with_batch_async(self, batch: T):
-        """
-        Append a batch of data (as a pytree with batched leaves) to the store.
-
-        This method works only when the "leaves" are lists of numpy arrays or scalars.
-        For instance, HF's BatchEncoding is a dict of lists of numpy arrays.
-        """
-        futures = jtu.tree_map(
-            lambda writer, xs: writer.extend_async(xs),
-            self.tree,
-            batch,
-            is_leaf=heuristic_is_leaf_batched,
-        )
-
-        await asyncio.gather(*jax.tree.leaves(futures))
-
     def trim_to_size(self, size: int):
         """
         Trim the store to a given size.

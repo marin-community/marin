@@ -1,5 +1,5 @@
 //! Row-group pruning for `contains(data, needle)` via per-segment trigram
-//! sidecars.
+//! sections in `.fidx` bundles.
 //!
 //! The provider delegates the scan to DataFusion as usual, then this module
 //! *injects* a `ParquetAccessPlan` into each `PartitionedFile`: the parquet
@@ -26,20 +26,17 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::ParquetAccessPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
-use crate::query::sidecar::SidecarManager;
-use crate::store::segment::segment_row_group_rows;
-use crate::store::trigram::{needle_trigrams, sidecar_path, MIN_TRIGRAM_LEN};
+use crate::query::index_cache::IndexCache;
+use crate::store::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
 
 /// An inclusive key range constraining a single column, distilled from a query's
-/// top-level conjuncts. Used to scope which segments' sidecars are read: a
+/// top-level conjuncts. Used to scope which segments' index sections are read: a
 /// segment whose key band can't overlap this range is pruned by the parquet key
 /// statistics anyway, so its blooms are never loaded.
 ///
@@ -54,8 +51,8 @@ pub struct StringRange {
 }
 
 /// Inject access plans for already-extracted per-column `needles` (from
-/// [`substring_needles_by_column`]). Does the blocking sidecar + footer reads
-/// (routed through the [`SidecarManager`] cache), so the provider runs it under
+/// [`substring_needles_by_column`]). Does the blocking bundle + footer reads
+/// (routed through the [`IndexCache`] cache), so the provider runs it under
 /// `spawn_blocking`. `key_ranges` (from [`string_column_ranges`]) scopes which
 /// segments are consulted by key band. Returns `plan` unchanged when `needles`
 /// is empty or nothing prunes.
@@ -64,11 +61,12 @@ pub fn apply_with_needles(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
+    index_cache: &IndexCache,
 ) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
         return plan;
     }
-    let access_plans = build_access_plans(segment_paths, needles, key_ranges);
+    let access_plans = build_access_plans(segment_paths, needles, key_ranges, index_cache);
     if access_plans.is_empty() {
         return plan;
     }
@@ -181,7 +179,7 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
 ///
 /// Pure expr inspection (no I/O) — the provider calls this on the hot path to
 /// decide (cheaply) whether the substring prune applies at all before touching
-/// any sidecar. A column the query constrains but a given segment's sidecar does
+/// any bundle. A column the query constrains but a given segment's bundle does
 /// not index is simply ignored when that segment is pruned.
 pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
@@ -286,19 +284,20 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 
 /// Per-segment access plans keyed by file basename (unique within a namespace).
 ///
-/// A segment contributes an entry only when its sidecar loads, aligns with the
+/// A segment contributes an entry only when its trigram section loads, aligns with the
 /// parquet's row-group count, and the needles actually prune at least one row
-/// group. Everything else (missing/stale/corrupt sidecar, short needle, key band
+/// group. Everything else (missing/stale/corrupt section, short needle, key band
 /// out of scope, nothing pruned) is skipped — the file then scans unpruned,
 /// which is correct.
 ///
-/// Sidecar reads go through the process-global [`SidecarManager`], so a repeated
-/// query (the dashboard's poll loop) reuses parsed blooms instead of re-reading
-/// them, and the resident bytes stay within the cache budget.
+/// Bundle reads go through the store's shared [`IndexCache`], so a repeated
+/// query reuses parsed blooms and resident bytes stay within the configured
+/// budget.
 fn build_access_plans(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
+    manager: &IndexCache,
 ) -> HashMap<String, ParquetAccessPlan> {
     // Decompose each constrained column's needles into trigram sets ONCE, not
     // once per segment — a single query commonly spans dozens of segments.
@@ -315,51 +314,59 @@ fn build_access_plans(
         return HashMap::new();
     }
 
-    let manager = SidecarManager::global();
     let mut out = HashMap::new();
     let mut total_row_groups = 0usize;
     let mut skipped_row_groups = 0usize;
     let mut total_spans = 0usize;
     let mut skipped_spans = 0usize;
     let mut scoped_out = 0usize;
-    for path in segment_paths {
+    'segments: for path in segment_paths {
         let p = Path::new(path);
         let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let sidecar = sidecar_path(p);
-        let Some(header) = manager.get_header(&sidecar) else {
-            // No / invalid sidecar: expected for L0 / unindexed-namespace
+        let Some(segment) = manager.indexed_segment(p) else {
+            // No valid bundle: expected for L0 or an unindexed namespace.
             // segments. The file just scans unpruned — correct, never a false
             // negative.
             tracing::debug!(
                 segment = basename,
-                "no usable trigram sidecar; scanning unpruned"
+                "no usable trigram section; scanning unpruned"
             );
             continue;
         };
-        // Key-band scoping: when the query constrains the segment's key column
-        // and this segment's band provably can't overlap it, the parquet key
-        // statistics will already prune every row group, so skip the bloom read.
-        if !header.key_column.is_empty() {
-            if let Some(range) = key_ranges.get(&header.key_column) {
-                if !header.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref()) {
-                    scoped_out += 1;
-                    continue;
-                }
-            }
-        }
         // A span survives only if it survives EVERY constrained column's needles.
-        // A column this segment's sidecar does not index can't prune, so it
+        // A column this segment's bundle does not index can't prune, so it
         // simply contributes no constraint here. The mask is sized from the
-        // sidecar's own span count; the parquet is consulted below, only for a
+        // section's own span count; the Parquet footer is consulted below for a
         // segment whose blooms actually pruned something.
-        let mut keep = vec![true; header.span_count as usize];
+        let mut keep: Option<Vec<bool>> = None;
+        let mut span_rows = None;
         let mut applied_any = false;
         for (&col, needle_trigrams) in &trigrams_by_column {
-            let Some(index) = manager.get_column(&sidecar, &header, col) else {
+            let Some((coverage, index)) = manager.get_trigram(p, &segment.header, col) else {
                 continue;
             };
+            if !coverage.key_column.is_empty() {
+                if let Some(range) = key_ranges.get(&coverage.key_column) {
+                    if !coverage.key_band_overlaps(range.lo.as_deref(), range.hi.as_deref()) {
+                        scoped_out += 1;
+                        continue 'segments;
+                    }
+                }
+            }
+            let keep = keep.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
+            if keep.len() != coverage.span_count as usize
+                || span_rows.is_some_and(|rows| rows != coverage.span_rows as usize)
+            {
+                tracing::warn!(
+                    segment = basename,
+                    column = col,
+                    "inconsistent trigram sections; ignoring section"
+                );
+                continue;
+            }
+            span_rows = Some(coverage.span_rows as usize);
             applied_any = true;
             for trigrams in needle_trigrams {
                 for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
@@ -367,28 +374,31 @@ fn build_access_plans(
                 }
             }
         }
+        let Some(keep) = keep else {
+            continue;
+        };
         if !applied_any || keep.iter().all(|&k| k) {
             continue;
         }
         // Map the span mask onto the segment's row groups. This parses the whole
         // footer, so it runs last — after the cheap header and key-band checks,
         // and only for a segment an access plan would be attached to.
-        let Some(row_group_rows) = segment_row_group_rows(p) else {
-            continue;
-        };
-        let Some(access) = span_access_plan(&keep, header.span_rows as usize, &row_group_rows)
-        else {
+        let Some(access) = span_access_plan(
+            &keep,
+            span_rows.unwrap_or_default(),
+            &segment.row_group_rows,
+        ) else {
             tracing::warn!(
                 segment = basename,
-                sidecar_spans = header.span_count,
-                sidecar_span_rows = header.span_rows,
-                parquet_rows = row_group_rows.iter().sum::<usize>(),
-                "stale trigram sidecar (spans do not cover the segment); scanning unpruned"
+                index_spans = keep.len(),
+                index_span_rows = span_rows,
+                parquet_rows = segment.row_group_rows.iter().sum::<usize>(),
+                "stale trigram section (spans do not cover the segment); scanning unpruned"
             );
             continue;
         };
-        total_row_groups += row_group_rows.len();
-        skipped_row_groups += row_group_rows.len() - access.row_group_indexes().len();
+        total_row_groups += segment.row_group_rows.len();
+        skipped_row_groups += segment.row_group_rows.len() - access.row_group_indexes().len();
         total_spans += keep.len();
         skipped_spans += keep.iter().filter(|&&k| !k).count();
         out.insert(basename.to_string(), access);
@@ -414,7 +424,7 @@ fn build_access_plans(
 /// different strides, so a row group can be fully kept, fully skipped, or —
 /// the case that makes the decoupling worthwhile — partly covered, where it
 /// carries a row selection instead. `None` when the spans do not account for
-/// exactly the segment's rows, which means the sidecar is stale.
+/// exactly the segment's rows, which means the section is stale.
 fn span_access_plan(
     keep: &[bool],
     span_rows: usize,
@@ -474,38 +484,17 @@ fn rewrite_file_groups(
     plan: Arc<dyn ExecutionPlan>,
     access_plans: &HashMap<String, ParquetAccessPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-    let Some(cfg) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
-        return plan;
-    };
-    let new_groups: Vec<FileGroup> = cfg
-        .file_groups
-        .iter()
-        .map(|group| {
-            let files = group
-                .files()
-                .iter()
-                .map(|pf| {
-                    match pf
-                        .object_meta
-                        .location
-                        .filename()
-                        .and_then(|b| access_plans.get(b))
-                    {
-                        Some(access) => pf.clone().with_extensions(Arc::new(access.clone())),
-                        None => pf.clone(),
-                    }
-                })
-                .collect::<Vec<_>>();
-            FileGroup::new(files)
-        })
-        .collect();
-    let new_cfg = FileScanConfigBuilder::from(cfg.clone())
-        .with_file_groups(new_groups)
-        .build();
-    DataSourceExec::from_data_source(new_cfg)
+    crate::query::file_scan::rewrite_parquet_files(plan, |file| {
+        match file
+            .object_meta
+            .location
+            .filename()
+            .and_then(|basename| access_plans.get(basename))
+        {
+            Some(access) => file.clone().with_extensions(Arc::new(access.clone())),
+            None => file.clone(),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -635,7 +624,7 @@ mod tests {
     fn short_needles_are_dropped_before_the_blocking_path() {
         // `substring_needles_by_column` filters needles too short to form a
         // trigram, so the provider returns on the hot path without touching a
-        // sidecar.
+        // bundle.
         let filters = vec![
             contains_expr("data", "ab"),             // 2 bytes: no trigram
             like_expr("data", "%xy%", false, false), // 2 bytes: no trigram
@@ -676,8 +665,8 @@ mod tests {
         assert!(mirrored.get("key").unwrap().hi.is_none());
     }
 
-    /// Write a log segment spanning two sidecar spans (all rows under `key`, the
-    /// needle in span 1 only) plus its trigram sidecar; return the segment path.
+    /// Write a log segment spanning two index spans (all rows under `key`, the
+    /// needle in span 1 only) plus its trigram section; return the segment path.
     fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
         use crate::store::segment::write_segment_to_dir;
         use crate::store::trigram::SIDECAR_SPAN_ROWS;
@@ -705,11 +694,15 @@ mod tests {
         )
         .unwrap();
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        crate::store::trigram::write_sidecar(
+        crate::store::segment_index::write_segment_index(
             &path,
             std::slice::from_ref(&batch),
-            &["data"],
-            Some("key"),
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                ["data"],
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
         )
         .unwrap();
         path.to_string_lossy().into_owned()
@@ -735,9 +728,10 @@ mod tests {
             "data".to_string(),
             vec!["Bootstrap completed for TPU".to_string()],
         )]);
+        let index_cache = IndexCache::new(16);
 
         // No key constraint: the needle prunes row group 0, so a plan is produced.
-        let unscoped = build_access_plans(&paths, &needles, &HashMap::new());
+        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &index_cache);
         assert_eq!(
             unscoped.len(),
             1,
@@ -752,7 +746,10 @@ mod tests {
                 hi: Some(b"/system/z".to_vec()),
             },
         )]);
-        assert_eq!(build_access_plans(&paths, &needles, &inband).len(), 1);
+        assert_eq!(
+            build_access_plans(&paths, &needles, &inband, &index_cache).len(),
+            1
+        );
 
         // Out-of-band key range: the segment is scoped out before its blooms load,
         // so no access plan is emitted (the key statistics prune it at scan time).
@@ -763,7 +760,7 @@ mod tests {
                 hi: Some(b"/zzz9".to_vec()),
             },
         )]);
-        assert!(build_access_plans(&paths, &needles, &out_of_band).is_empty());
+        assert!(build_access_plans(&paths, &needles, &out_of_band, &index_cache).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -796,7 +793,7 @@ mod tests {
         assert!(matches!(plan.inner()[1], RowGroupAccess::Skip));
 
         // Spans that do not account for exactly the segment's rows mean a stale
-        // sidecar, which must not produce a plan at all.
+        // section, which must not produce a plan at all.
         assert!(span_access_plan(&keep, 4, &[10, 20]).is_none());
         assert!(span_access_plan(&keep, 8, &[10, 10]).is_none());
     }

@@ -43,8 +43,7 @@ def test_pool_round_robin():
 
         # Round-robin should cycle through servers
         results = [pool.call().get() for _ in range(6)]
-        # Should see values from all three servers (0, 100, 200, 0, 100, 200)
-        assert set(results) == {0, 100, 200}
+        assert results == [0, 100, 200, 0, 100, 200]
     finally:
         for server in servers:
             server.stop()

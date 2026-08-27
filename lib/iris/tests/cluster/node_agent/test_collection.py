@@ -135,7 +135,7 @@ def test_k8s_collection_exports_normalized_node_and_device_records(monkeypatch: 
     }
 
 
-def test_missing_expected_dcgm_source_is_observable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_k8s_collection_without_dcgm_exports_unavailable_source(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
     scraper = kubernetes.NodeStatsScraper(
         InMemoryK8sService(namespace="iris"),

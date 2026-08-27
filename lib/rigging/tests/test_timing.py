@@ -277,6 +277,12 @@ def test_exponential_backoff_does_not_overflow_at_high_attempt_counts():
     assert interval == 1.0
 
 
+def test_exponential_backoff_factor_one_stays_constant():
+    backoff = ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.0, jitter=0.0)
+
+    assert [backoff.next_interval() for _ in range(3)] == [0.05, 0.05, 0.05]
+
+
 # --- TokenBucket tests ---
 
 

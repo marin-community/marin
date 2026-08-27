@@ -136,6 +136,24 @@ class TimeBreakdown:
     other: BreakdownPart
 
 
+def empty_category_totals() -> dict[str, float]:
+    """Zeroed accumulator keyed by the :class:`TimeBreakdown` categories."""
+    return {"compute": 0.0, "communication": 0.0, "host": 0.0, "stall": 0.0, "other": 0.0}
+
+
+def make_time_breakdown(duration_basis: str, totals: dict[str, float], total_duration: float) -> TimeBreakdown:
+    """Assemble a ``TimeBreakdown`` from per-category durations and the total they share."""
+    return TimeBreakdown(
+        duration_basis=duration_basis,
+        total_duration=total_duration,
+        compute=breakdown_part(totals["compute"], total_duration),
+        communication=breakdown_part(totals["communication"], total_duration),
+        host=breakdown_part(totals["host"], total_duration),
+        stall=breakdown_part(totals["stall"], total_duration),
+        other=breakdown_part(totals["other"], total_duration),
+    )
+
+
 @dataclass(frozen=True)
 class HotOp:
     """Per-op aggregate useful for ranking hotspots."""

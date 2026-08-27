@@ -22,10 +22,10 @@ pytest.importorskip("docling")
 
 from marin.inference.types import InferenceRequest
 
-import experiments.build_pdf_source.docling_extract.converter as converter_module
-from experiments.build_pdf_source.docling_extract.converter import ExtractedText, ExtractionOptions
-from experiments.build_pdf_source.docling_extract.model_spec import LayoutBackend
-from experiments.build_pdf_source.docling_extract.service import (
+import experiments.datakit.build_pdf_source.docling_extract.converter as converter_module
+from experiments.datakit.build_pdf_source.docling_extract.converter import ExtractedText, ExtractionOptions
+from experiments.datakit.build_pdf_source.docling_extract.model_spec import LayoutBackend
+from experiments.datakit.build_pdf_source.docling_extract.service import (
     CONVERT_PATH,
     SOURCE_URL_HEADER,
     build_arch_adaptive_handler,

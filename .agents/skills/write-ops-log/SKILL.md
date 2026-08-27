@@ -6,9 +6,10 @@ description: Publish a tagged postmortem incident record to Echo. Use after an i
 # Skill: Write an Ops Log
 
 Publish the incident record to Echo. Do not add a repository debug-log file.
-The audience is a future engineer with no memory of the investigation who must
-reconstruct what broke, what was tried, what changed the direction, what fixed
-it, and which reusable guidance could have shortened the work.
+The audience is a future engineer who must quickly decide what to check or do
+next. Record the smallest set of facts that supports that action. Link raw
+evidence and detailed chronology rather than reproducing them; Echo entries
+consume limited model context whenever they are retrieved.
 
 ## Search before writing
 
@@ -43,43 +44,29 @@ tags:
 ## TL;DR
 
 - <user-visible symptom>
-- <root cause>
-- <fix or mitigation>
-- <remaining caveat>
+- <diagnostic discriminator or immediate action>
+- <fix or remaining caveat>
 
-## Original problem report
+## Response
 
-<What the user observed, including the exact error or dashboard text.>
+<The shortest safe procedure for diagnosing, mitigating, or avoiding the
+incident.>
 
-## Investigation path
+## Cause and resolution
 
-1. <What was checked, why, and what it established.>
-
-## User course corrections
-
-- <What direction changed, what the user supplied, and why it mattered.>
-
-## Root cause
-
-<One or two concrete paragraphs with code, query, log, or dashboard evidence.>
-
-## Fix
-
-<What changed. Separate code changes from live repair or migration steps.>
-
-## How OPS.md could have shortened this
-
-<The reusable procedure or diagnostic signal to add, or state that no generic
-OPS.md change follows from this incident.>
+<Only the evidence needed to justify the response and explain the resolution.>
 
 ## Artifacts
 
-- <PR, issue, dashboard, durable log bundle, or source URL>
+- <Canonical PR, issue, dashboard, durable log bundle, or report>
 ```
 
 Use the incident's investigation date. Use lowercase kebab-case tags and no
 more than 20. Always include `incident` and `debugging`; add `ops` for
 infrastructure work, followed by the subsystem, severity, and resolution.
+Omit any body section that adds no actionable value. Add a compact original
+report, investigation step, or course correction only when it changes how a
+future reader should recognize or respond to the incident.
 
 ## Write the record
 
@@ -103,8 +90,10 @@ associated PR description or issue. Do not commit the temporary OKF file.
 ## Keep the record useful
 
 - Preserve exact error strings and canonical evidence URLs.
-- Summarize decisions and dead ends; do not paste raw logs or narrate every tool
-  call.
+- Prefer decisions, discriminating evidence, and response steps over narrative.
+  Do not paste raw logs, duplicate source artifacts, or narrate every tool call.
+- Link readers to the external source of record when its detail is not needed
+  to choose or carry out the action.
 - Keep incident-specific detail here. Promote recurring procedures and
   guardrails to the relevant `OPS.md`.
 - Update `docs/` when behavior or configuration guidance belongs with the

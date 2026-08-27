@@ -8,9 +8,9 @@ import io
 import numpy as np
 import pytest
 
-from experiments.build_pdf_source.common import RangeFetch
-from experiments.build_pdf_source.fetch import iter_planned_pdfs, read_fetch_tasks
-from experiments.build_pdf_source.plan import IndexScan, coalesce_ranges, pack_tasks, sample_ranges, write_plan
+from experiments.datakit.build_pdf_source.common import RangeFetch
+from experiments.datakit.build_pdf_source.fetch import iter_planned_pdfs, read_fetch_tasks
+from experiments.datakit.build_pdf_source.plan import IndexScan, coalesce_ranges, pack_tasks, sample_ranges, write_plan
 
 _WARCS = ["crawl/warc/a.warc.gz", "crawl/warc/b.warc.gz"]
 

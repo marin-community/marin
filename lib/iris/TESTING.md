@@ -133,19 +133,51 @@ concrete class for testing.)
 
 ## E2E Tests
 
-All Iris E2E tests live in `tests/e2e/`. Every test is marked `requires_cluster`.
-Tests are organized into two files:
+Iris separates deterministic product journeys from live adapter proofs.
 
-- **`test_smoke.py`**: Realistic scenario walkthroughs using a **module-scoped** cluster
-  shared across all smoke tests. Covers diverse job types, dashboard screenshots,
-  scheduling, endpoints, log levels, multi-region routing, profiling, and GPU metadata.
-- **`test_chaos.py`**: Chaos/failure injection tests using a **function-scoped** cluster
-  (fresh cluster per test). Tests bundle download failures, task timeouts, worker crashes,
-  heartbeat failures, RPC failures, checkpoint/snapshot, and high concurrency.
+### Product journeys
+
+`tests/journeys/` owns cross-component state-machine behavior. A journey uses the
+real controller, service, persistence, reconciliation, and checkpoint code with
+a manual clock. Fakes replace only external systems such as an execution backend
+or federation peer. Assertions use public job and task reads plus the fake's
+externally visible launch/stop observations; journeys do not inspect controller
+tables or private attributes.
+
+Journey actions form the shared vocabulary for behaviors such as:
+
+```python
+job = journey.submit("training", tasks=8, failure_retries=1)
+journey.settle()
+journey.fail(job[7])
+journey.settle()
+journey.succeed(job[7])
+```
+
+The harness checks invariants after every control tick: Attempt history is
+append-only, terminal state does not revive, one Task has at most one live
+Attempt, job counts agree with public Task reads, and a backend launch is not
+duplicated. Add a journey when behavior crosses persistence, scheduling,
+reconciliation, federation, or restart boundaries. Extend its vocabulary with a
+domain action, not a SQL setup helper.
+
+### Live adapters
+
+`tests/e2e/` proves boundaries the journey fakes intentionally omit: a real task
+process, worker registration, bundle transfer, controller RPC, browser, container,
+or cloud provider. Every such test is marked `requires_cluster`. Keep one focused
+adapter proof per boundary; do not repeat controller retry or failure policy in a
+live test when a journey already owns it. Failure injection must identify the
+fault that was consumed and assert the resulting external behavior. Avoid random
+failure rates and wall-clock polling.
+
+The module-scoped smoke cluster covers representative job and dashboard paths.
+Function-scoped clusters isolate worker/process fault adapters. Docker-dependent
+tests also carry the `docker` marker.
 
 Core fixtures:
 
-- `cluster`: Function-scoped local cluster with `IrisClient` and RPC access (chaos tests)
+- `cluster`: Function-scoped local cluster with `IrisClient` and RPC access (adapter tests)
 - `smoke_cluster`: Module-scoped local cluster for smoke tests (12 workers)
 - `smoke_page` / `smoke_screenshot`: Module-scoped Playwright page and screenshot capture
 - `page` / `screenshot`: Function-scoped Playwright page and screenshot capture
@@ -153,7 +185,8 @@ Core fixtures:
 Cloud mode: smoke tests can connect to existing clusters via `--iris-controller-url`
 or start one via `--iris-config` + `--iris-mode`.
 
-Chaos injection is auto-reset between tests. Call `enable_chaos()` directly.
+Fault injection is auto-reset between tests. Call `enable_chaos()` only at an
+external boundary that the test names.
 Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 
 ## Running Tests
@@ -165,8 +198,11 @@ uv run --package marin-iris --group test pytest lib/iris/tests/
 # E2E smoke tests (shared cluster, fast)
 uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
 
-# E2E chaos tests (fresh cluster per test, slower)
-uv run pytest lib/iris/tests/e2e/test_chaos.py -m requires_cluster -o "addopts="
+# E2E worker/process adapters (fresh cluster per test, slower)
+uv run pytest lib/iris/tests/e2e/test_failure_adapters.py -m requires_cluster -o "addopts="
+
+# Deterministic cross-component journeys
+uv run pytest lib/iris/tests/journeys/
 
 # All E2E tests
 uv run pytest lib/iris/tests/e2e/ -m requires_cluster -o "addopts="

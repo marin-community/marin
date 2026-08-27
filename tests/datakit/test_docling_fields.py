@@ -19,7 +19,7 @@ from docling_core.types.doc.base import BoundingBox, CoordOrigin
 from docling_core.types.doc.document import ProvenanceItem
 from docling_core.types.doc.page import TextCell
 
-from experiments.build_pdf_source.docling_extract.fields import (
+from experiments.datakit.build_pdf_source.docling_extract.fields import (
     _ADDED_FIELDS,
     patch_docling_models,
 )
@@ -125,8 +125,12 @@ def test_a_name_docling_gives_a_different_meaning_is_refused():
 
 def test_a_name_docling_gives_the_same_meaning_is_accepted():
     """If upstream adds an identical field, adopting it is correct -- no reconciliation needed."""
+    # The fields are already attached (autouse fixture), so this re-run exercises exactly the
+    # existing-with-same-annotation branch: it must not raise, and must leave the declared
+    # annotation in place rather than re-stamping or clobbering it.
     patch_docling_models.cache_clear()
 
     patch_docling_models()
 
-    assert ProvenanceItem.model_fields["media_char_width"].annotation is not None
+    _, name, annotation, _ = next(spec for spec in _ADDED_FIELDS if spec[0] is ProvenanceItem)
+    assert ProvenanceItem.model_fields[name].annotation == annotation

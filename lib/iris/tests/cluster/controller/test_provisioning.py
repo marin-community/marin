@@ -10,15 +10,20 @@ covered without driving a live controller.
 """
 
 import pytest
+from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.provisioning import classify_create_failure
-from iris.cluster.controller.autoscaler.runtime import _ScaleUpOutcome, _ScaleUpRequest
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.platforms.types import InfraError, QuotaExhaustedError
+from iris.cluster.platforms.types import QuotaExhaustedError
 from iris.cluster.stats.tables import ProvisioningOutcome
 from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
 from tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle
-from tests.cluster.controller.conftest import make_autoscaler, make_scale_group_config, mark_discovered_ready
+from tests.cluster.controller.conftest import (
+    make_autoscaler,
+    make_demand_entries,
+    make_scale_group_config,
+    mark_discovered_ready,
+)
 
 
 class FakeTable:
@@ -35,19 +40,12 @@ class FakeTable:
 def group():
     config = make_scale_group_config(
         name="tpu_v6e-preemptible_8-us-east5-b",
+        max_slices=1,
         accelerator_variant="v6e",
         zones=["us-east5-b"],
         capacity_type=CapacityType.PREEMPTIBLE,
     )
     return ScalingGroup(config, make_mock_platform())
-
-
-@pytest.fixture
-def autoscaler_with_sink(group):
-    table = FakeTable()
-    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
-    yield autoscaler, table
-    autoscaler.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -62,10 +60,17 @@ def test_classify_create_failure(message, expected):
     assert classify_create_failure(message) == expected
 
 
-def test_ready_row_carries_identity_and_latency(autoscaler_with_sink, group):
-    autoscaler, table = autoscaler_with_sink
-    created_at = Timestamp.from_ms(Timestamp.now().epoch_ms() - 5000)
-    autoscaler._record_provisioning_outcome(group, ProvisioningOutcome.READY, created_at=created_at, worker_count=2)
+def test_ready_row_carries_identity_and_latency(group, monkeypatch):
+    now = Timestamp.from_ms(6_000)
+    monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: now))
+    handle = make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=1_000)
+    platform = make_mock_platform(slices_to_discover=[handle])
+    group = ScalingGroup(group.config, platform)
+    group.reconcile()
+    table = FakeTable()
+    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
+
+    autoscaler.run_once([], {}, timestamp=now)
 
     (row,) = table.rows
     assert row.resource_type == "tpu"
@@ -73,19 +78,41 @@ def test_ready_row_carries_identity_and_latency(autoscaler_with_sink, group):
     assert row.zone == "us-east5-b"
     assert row.accelerator_variant == "v6e"
     assert row.outcome == ProvisioningOutcome.READY
-    assert row.worker_count == 2
-    assert row.provision_latency_ms >= 4000  # ~5s create->ready
+    assert row.worker_count == 1
+    assert row.provision_latency_ms == 5_000
 
 
-def test_nonready_outcome_records_zero_latency(autoscaler_with_sink, group):
-    """Latency is create→ready wall time; a slice that never readied records 0,
-    not its time-to-failure, even when a created_at is available."""
-    autoscaler, table = autoscaler_with_sink
-    autoscaler._record_provisioning_outcome(
-        group,
-        ProvisioningOutcome.STOCKOUT,
-        created_at=Timestamp.from_ms(Timestamp.now().epoch_ms() - 5000),
-        error_message='There is no more capacity in the zone "us-east5-b"',
+def test_no_sink_is_noop(group):
+    """A scale-up remains operational when local mode configures no provisioning sink."""
+    platform = make_mock_platform()
+    group = ScalingGroup(group.config, platform)
+    autoscaler = make_autoscaler({group.name: group})
+    try:
+        autoscaler.run_once(
+            make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v6e"),
+            {},
+            timestamp=Timestamp.from_ms(1_000),
+        )
+        assert autoscaler.get_status().recent_actions[0].action_type == "scale_up"
+    finally:
+        autoscaler.shutdown()
+
+
+def test_submit_time_stockout_records_stockout(group):
+    """A create that fails at submit (QuotaExhaustedError — no slice handle, so no
+    later describe() outcome) is recorded here; a stockout message classifies as
+    STOCKOUT rather than being lost to the success rate."""
+    platform = make_mock_platform()
+    error = QuotaExhaustedError('There is no more capacity in the zone "us-east5-b"')
+    platform.create_slice.side_effect = error
+    group = ScalingGroup(group.config, platform)
+    table = FakeTable()
+    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
+
+    autoscaler.run_once(
+        make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v6e"),
+        {},
+        timestamp=Timestamp.from_ms(1_000),
     )
 
     (row,) = table.rows
@@ -93,40 +120,19 @@ def test_nonready_outcome_records_zero_latency(autoscaler_with_sink, group):
     assert row.provision_latency_ms == 0
 
 
-def test_no_sink_is_noop(group):
-    """Without a sink injected, recording must not raise (test/local mode)."""
-    autoscaler = make_autoscaler({group.name: group})
-    try:
-        autoscaler._record_provisioning_outcome(group, ProvisioningOutcome.READY, created_at=Timestamp.now())
-    finally:
-        autoscaler.shutdown()
-
-
-def _scale_up_outcome(autoscaler, group, error):
-    request = _ScaleUpRequest(
-        group=group,
-        reason="demand",
-        action=autoscaler._log_action("scale_up", group.name, status="pending"),
-    )
-    return _ScaleUpOutcome(request=request, error=error)
-
-
-def test_submit_time_stockout_records_stockout(autoscaler_with_sink, group):
-    """A create that fails at submit (QuotaExhaustedError — no slice handle, so no
-    later describe() outcome) is recorded here; a stockout message classifies as
-    STOCKOUT rather than being lost to the success rate."""
-    autoscaler, table = autoscaler_with_sink
-    error = QuotaExhaustedError('There is no more capacity in the zone "us-east5-b"')
-    autoscaler._fold_scale_up(_scale_up_outcome(autoscaler, group, error), Timestamp.now())
-
-    (row,) = table.rows
-    assert row.outcome == ProvisioningOutcome.STOCKOUT
-
-
-def test_submit_time_create_error_records_error(autoscaler_with_sink, group):
+def test_submit_time_create_error_records_error(group):
     """A non-quota create error at submit is recorded as an ERROR outcome."""
-    autoscaler, table = autoscaler_with_sink
-    autoscaler._fold_scale_up(_scale_up_outcome(autoscaler, group, InfraError("boom")), Timestamp.now())
+    platform = make_mock_platform()
+    platform.create_slice.side_effect = RuntimeError("boom")
+    group = ScalingGroup(group.config, platform)
+    table = FakeTable()
+    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
+
+    autoscaler.run_once(
+        make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v6e"),
+        {},
+        timestamp=Timestamp.from_ms(1_000),
+    )
 
     (row,) = table.rows
     assert row.outcome == ProvisioningOutcome.ERROR

@@ -49,23 +49,47 @@ export interface ServerInfo {
   process: ProcessInfo
   store: StoreInfo
   metadataCache: MetadataCacheInfo
+  indexCache: IndexCacheInfo
   format: FormatInfo
 }
 
-export interface SidecarInfo {
+export interface IndexCacheInfo {
+  corruptBundles: number
+  corruptSections: number
+  exactAggregateFull: number
+  exactAggregatePartial: number
+  exactAggregateDeclined: number
+  exactAggregateFallbacks: number
+}
+
+export interface IndexSectionInfo {
+  id: string
+  kind: string
+  exactness: string
+  methodVersion: number
+  checksum: string
+  payloadBytes: number
+  externalBytes: number
   columns: string[]
-  spans: number
-  spanRows: number
+  available: boolean
+}
+
+export interface IndexBundleInfo {
+  bytes: number
+  externalBytes: number
+  checksum: string
+  sections: IndexSectionInfo[]
 }
 
 export interface PhysicalInfo {
+  segmentIdentity: string
   layoutVersion?: number
   layoutCurrent: boolean
   rowGroups: number
   footerBytes: number
   uncompressedBytes: number
   createdBy?: string
-  sidecar?: SidecarInfo
+  indexBundle?: IndexBundleInfo
 }
 
 export interface SegmentInfo {

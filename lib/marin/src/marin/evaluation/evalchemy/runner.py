@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from finestore.eval import export_lm_eval_samples
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
@@ -28,7 +29,6 @@ from marin.evaluation.evalchemy.runtime import (
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.evaluation.samples import export_lm_eval_samples
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 

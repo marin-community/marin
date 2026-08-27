@@ -1,22 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from copy import deepcopy
+
 import pytest
-from iris.cluster.backends.k8s.tasks import (
-    _KUEUE_POD_GROUP_NAME,
-    _LABEL_MANAGED,
-    _LABEL_RUNTIME,
-    _RUNTIME_LABEL_VALUE,
-    _TASK_CONTAINER_NAME,
-    K8sTaskProvider,
-    PodConfig,
-)
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
+
+KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
+LABEL_MANAGED = "iris.managed"
+LABEL_RUNTIME = "iris.runtime"
+RUNTIME_LABEL_VALUE = "iris-kubernetes"
+TASK_CONTAINER_NAME = "task"
 
 
 @pytest.fixture
@@ -103,6 +106,33 @@ def make_batch(
     )
 
 
+def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
+    """Reconcile a seeded pod through the public Kubernetes provider boundary."""
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    try:
+        provider.sync(make_batch(tasks_to_run=[make_run_req("/job/0")]))
+        applied = k8s.list_json(K8sResource.PODS)[0]
+        observed = deepcopy(pod)
+        observed["kind"] = "Pod"
+        observed_metadata = observed.setdefault("metadata", {})
+        observed_metadata["name"] = applied["metadata"]["name"]
+        observed_metadata["labels"] = {
+            **applied["metadata"]["labels"],
+            **observed_metadata.get("labels", {}),
+        }
+        k8s.seed_resource(K8sResource.PODS, observed_metadata["name"], observed)
+        if workload is not None:
+            workload_name = workload.get("metadata", {}).get("name", "workload")
+            k8s.seed_resource(K8sResource.WORKLOADS, workload_name, deepcopy(workload))
+        updates = provider.sync(make_batch(running_tasks=[entry]))
+        assert len(updates) == 1
+        return updates[0]
+    finally:
+        provider.close()
+
+
 # A Kueue admission message for an over-large GPU request (cpu=160 on 128-vCPU
 # H100 nodes under InfiniBand TAS): the whole pod cannot fit one node, so every
 # node is excluded and the workload never reserves quota. The motivating incident
@@ -117,7 +147,7 @@ SINGLETON_POD_UID = "pod-uid"
 def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
     """A Pending pod blocked on a Kueue scheduling gate (no container has started)."""
     return {
-        "metadata": {"name": name, "labels": {_KUEUE_POD_GROUP_NAME: pod_group}},
+        "metadata": {"name": name, "labels": {KUEUE_POD_GROUP_NAME: pod_group}},
         "status": {
             "phase": "Pending",
             "containerStatuses": [],
@@ -182,7 +212,7 @@ def imagepull_pod(name: str = "iris-job-0-0") -> dict:
             "phase": "Pending",
             "containerStatuses": [
                 {
-                    "name": _TASK_CONTAINER_NAME,
+                    "name": TASK_CONTAINER_NAME,
                     "state": {
                         "waiting": {"reason": "ImagePullBackOff", "message": 'Back-off pulling image "ghcr.io/nope"'}
                     },
@@ -215,8 +245,8 @@ def populate_pod(
 ) -> None:
     """Insert a pod manifest into InMemoryK8sService with correct Iris labels."""
     base_labels = {
-        _LABEL_MANAGED: "true",
-        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        LABEL_MANAGED: "true",
+        LABEL_RUNTIME: RUNTIME_LABEL_VALUE,
     }
     if labels:
         base_labels.update(labels)

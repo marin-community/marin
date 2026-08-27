@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::FileExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
@@ -21,6 +22,8 @@ use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::errors::StatsError;
 use crate::store::types::{parse_seg_filename, seg_filename};
@@ -60,6 +63,7 @@ pub const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 /// view of its contents or its remote copy.
 pub const LAYOUT_VERSION: u32 = 1;
 const LAYOUT_VERSION_KEY: &str = "finelog.layout_version";
+const SEGMENT_ID_KEY: &str = "finelog.segment_id";
 
 /// Rows per batch when streaming a segment through a re-encode. Bounds the
 /// rewrite's memory to one batch rather than the whole segment, which for a
@@ -81,17 +85,32 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
 /// prune the key band, and substring queries prune from the trigram sidecar.
 pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(TARGET_ROW_GROUP_BYTES, MAX_ROW_GROUP_ROWS, Uuid::new_v4())
+}
+
+pub(crate) fn parquet_writer_properties(
+    target_row_group_bytes: usize,
+    max_row_group_rows: usize,
+) -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties_with_id(target_row_group_bytes, max_row_group_rows, Uuid::new_v4())
+}
+
+fn parquet_writer_properties_with_id(
+    target_row_group_bytes: usize,
+    max_row_group_rows: usize,
+    segment_id: Uuid,
+) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
     Ok(WriterProperties::builder()
-        .set_max_row_group_bytes(Some(TARGET_ROW_GROUP_BYTES))
-        .set_max_row_group_row_count(Some(MAX_ROW_GROUP_ROWS))
+        .set_max_row_group_bytes(Some(target_row_group_bytes))
+        .set_max_row_group_row_count(Some(max_row_group_rows))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false)
-        .set_key_value_metadata(Some(vec![KeyValue::new(
-            LAYOUT_VERSION_KEY.to_string(),
-            LAYOUT_VERSION.to_string(),
-        )]))
+        .set_key_value_metadata(Some(vec![
+            KeyValue::new(LAYOUT_VERSION_KEY.to_string(), LAYOUT_VERSION.to_string()),
+            KeyValue::new(SEGMENT_ID_KEY.to_string(), segment_id.to_string()),
+        ]))
         .build())
 }
 
@@ -244,6 +263,49 @@ fn layout_version_of(meta: &ParquetMetaData) -> Option<u32> {
         .and_then(|v| v.parse::<u32>().ok())
 }
 
+fn segment_id_of(meta: &ParquetMetaData) -> Option<Uuid> {
+    meta.file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == SEGMENT_ID_KEY))
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+/// Immutable logical identity stamped into a segment's Parquet metadata.
+pub fn segment_id(path: &Path) -> Option<Uuid> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(file).ok()?;
+    segment_id_of(reader.metadata())
+}
+
+/// Stable local generation identity for an immutable segment.
+///
+/// New segments carry a UUID in their Parquet metadata. Segments written before
+/// that stamp was introduced derive an identity from their Unix file generation
+/// instead, so they can acquire indexes without forcing a fleet-wide rewrite.
+/// Finelog replaces immutable files with rename, which changes this identity;
+/// ordinary level-bump renames preserve it.
+pub fn segment_identity(path: &Path) -> Option<Uuid> {
+    let file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    let reader = SerializedFileReader::new(file).ok()?;
+    Some(segment_id_of(reader.metadata()).unwrap_or_else(|| legacy_segment_identity(&metadata)))
+}
+
+fn legacy_segment_identity(metadata: &std::fs::Metadata) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(b"finelog.local-segment-generation.v1\0");
+    hasher.update(metadata.dev().to_le_bytes());
+    hasher.update(metadata.ino().to_le_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    hasher.update(metadata.mtime().to_le_bytes());
+    hasher.update(metadata.mtime_nsec().to_le_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
+}
+
 /// Whether `path` was written by the current [`LAYOUT_VERSION`]. A segment
 /// written before the stamp existed, or by an older policy, reads as stale.
 pub fn segment_layout_is_current(path: &Path) -> bool {
@@ -277,6 +339,7 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
         .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| StatsError::Internal(format!("read {}: {e}", path.display())))?;
+    let segment_id = segment_id_of(builder.metadata()).unwrap_or_else(Uuid::new_v4);
     let schema = Arc::clone(builder.schema());
     let reader = builder
         .with_batch_size(REWRITE_BATCH_ROWS)
@@ -286,7 +349,11 @@ pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError
     let staging = PathBuf::from(format!("{}.tmp", path.display()));
     let out = std::fs::File::create(&staging)
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", staging.display())))?;
-    let opts = ArrowWriterOptions::new().with_properties(segment_writer_properties()?);
+    let opts = ArrowWriterOptions::new().with_properties(parquet_writer_properties_with_id(
+        TARGET_ROW_GROUP_BYTES,
+        MAX_ROW_GROUP_ROWS,
+        segment_id,
+    )?);
     let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
         .map_err(|e| StatsError::Internal(format!("parquet writer init: {e}")))?;
     for batch in reader {
@@ -399,8 +466,11 @@ static ROW_GROUP_LAYOUTS: OnceLock<Mutex<HashMap<PathBuf, CachedRowGroups>>> = O
 
 /// A segment's row-group row counts and the file identity they were read from.
 struct CachedRowGroups {
+    dev: u64,
+    ino: u64,
     len: u64,
     modified: SystemTime,
+    segment_identity: Uuid,
     rows: Arc<[usize]>,
 }
 
@@ -418,18 +488,29 @@ const ROW_GROUP_CACHE_ENTRIES: usize = 8192;
 /// the file's length and modified time; a path written again is read again rather
 /// than answered from the old entry.
 pub fn segment_row_group_rows(path: &Path) -> Option<Arc<[usize]>> {
+    cached_segment_identity_and_row_group_rows(path).map(|(_, rows)| rows)
+}
+
+/// Immutable segment identity plus row-group layout from one cached footer read.
+pub fn segment_id_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<[usize]>)> {
+    cached_segment_identity_and_row_group_rows(path)
+}
+
+fn cached_segment_identity_and_row_group_rows(path: &Path) -> Option<(Uuid, Arc<[usize]>)> {
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
-    let (len, modified) = (meta.len(), meta.modified().ok()?);
+    let (dev, ino, len, modified) = (meta.dev(), meta.ino(), meta.len(), meta.modified().ok()?);
 
     let cache = ROW_GROUP_LAYOUTS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(entry) = cache.lock().unwrap().get(path) {
-        if entry.len == len && entry.modified == modified {
-            return Some(Arc::clone(&entry.rows));
+        if entry.dev == dev && entry.ino == ino && entry.len == len && entry.modified == modified {
+            return Some((entry.segment_identity, Arc::clone(&entry.rows)));
         }
     }
 
     let reader = SerializedFileReader::new(file).ok()?;
+    let segment_identity =
+        segment_id_of(reader.metadata()).unwrap_or_else(|| legacy_segment_identity(&meta));
     let rows: Arc<[usize]> = reader
         .metadata()
         .row_groups()
@@ -443,12 +524,15 @@ pub fn segment_row_group_rows(path: &Path) -> Option<Arc<[usize]>> {
     cache.insert(
         path.to_path_buf(),
         CachedRowGroups {
+            dev,
+            ino,
             len,
             modified,
+            segment_identity,
             rows: Arc::clone(&rows),
         },
     );
-    Some(rows)
+    Some((segment_identity, rows))
 }
 
 /// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
@@ -635,6 +719,54 @@ mod tests {
 
         let (current, _) = write_segment_to_dir(&dir, 1, 200, &batch).unwrap();
         assert!(segment_layout_is_current(&current));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn segment_identity_is_unique_and_survives_layout_rewrite() {
+        let dir = tempdir();
+        let batch = batch_with_keys(1, vec![30, 10, 20]);
+        let (first, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let (second, _) = write_segment_to_dir(&dir, 1, 10, &batch).unwrap();
+        let first_id = segment_id(&first).unwrap();
+        assert_ne!(first_id, segment_id(&second).unwrap());
+
+        let (staging, _) = stage_rewritten_segment(&first).unwrap();
+        std::fs::rename(staging, &first).unwrap();
+
+        assert_eq!(segment_id(&first), Some(first_id));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_segment_identity_survives_rename_and_changes_on_replacement() {
+        let dir = tempdir();
+        let first_path = dir.join("seg_L1_0000000000000000001.parquet");
+        let renamed_path = dir.join("seg_L2_0000000000000000001.parquet");
+        let replacement = dir.join("replacement.parquet");
+        let batch = batch_with_keys(1, vec![30, 10, 20]);
+        write_legacy_layout(&first_path, &batch, 8);
+
+        assert_eq!(segment_id(&first_path), None);
+        let first_identity = segment_identity(&first_path).unwrap();
+        assert_eq!(
+            segment_id_and_row_group_rows(&first_path).unwrap().0,
+            first_identity
+        );
+
+        std::fs::rename(&first_path, &renamed_path).unwrap();
+        assert_eq!(segment_identity(&renamed_path), Some(first_identity));
+
+        write_legacy_layout(&replacement, &batch, 8);
+        std::fs::rename(&replacement, &renamed_path).unwrap();
+        let replacement_identity = segment_identity(&renamed_path).unwrap();
+        assert_ne!(replacement_identity, first_identity);
+        assert_eq!(
+            segment_id_and_row_group_rows(&renamed_path).unwrap().0,
+            replacement_identity,
+            "the row-group cache must reject a reused path with a new inode"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

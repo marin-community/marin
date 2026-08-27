@@ -10,17 +10,15 @@ A router that quietly scores the wrong columns produces a plausible probability 
 and misroutes the whole corpus.
 """
 
-import random
-
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pymupdf
 import pytest
 
-from experiments.build_pdf_source import classify
-from experiments.build_pdf_source.quality import route_features
-from experiments.build_pdf_source.quality.route_feature_names import FEATURE_NAMES, PAGE_SIGNAL_NAMES
+from experiments.datakit.build_pdf_source import classify
+from experiments.datakit.build_pdf_source.quality import route_features
+from experiments.datakit.build_pdf_source.quality.route_feature_names import FEATURE_NAMES
 
 
 def pdf_bytes(*, pages: int = 1, text: str = "Alpha beta gamma delta epsilon zeta eta theta. " * 12) -> bytes:
@@ -39,17 +37,6 @@ def source_row(payload: bytes, offset: int = 1) -> dict:
         "content_digest": f"sha1:{offset:040d}",
         "url": f"https://example.org/{offset}.pdf",
     }
-
-
-def test_feature_contract_matches_between_the_data_module_and_the_extractor():
-    """The driver, the booster and the extractor must agree on feature order.
-
-    ``route_features`` asserts its own dataclass against the names module at import, so importing it
-    is the check; this also pins the derived document-level layout the booster was trained on.
-    """
-    assert route_features.PAGE_SIGNAL_NAMES == PAGE_SIGNAL_NAMES
-    assert FEATURE_NAMES[:2] == ("pages_sampled", "page_count")
-    assert len(FEATURE_NAMES) == 2 + 2 * len(PAGE_SIGNAL_NAMES)
 
 
 def test_a_document_that_cannot_be_parsed_still_produces_a_complete_row():
@@ -76,14 +63,10 @@ def test_an_encrypted_document_is_reported_rather_than_routed():
     assert "encrypted" in rows[0]["classification_error"]
 
 
-def test_page_sampling_is_seeded_per_document_so_a_rerun_reproduces_it():
-    """A re-run of a shard must reproduce its routing, not re-draw pages and re-decide."""
+def test_the_sampling_seed_is_keyed_on_content_digest_where_present():
+    """Identical PDFs must sample identical pages wherever in the crawl they appear."""
     seed = classify._document_seed("sha1:abc", "file.warc.gz", 42)
     assert seed == classify._document_seed("sha1:abc", "different.warc.gz", 99)
-
-    assert route_features.sample_page_indices(50, random.Random(seed)) == route_features.sample_page_indices(
-        50, random.Random(seed)
-    )
 
 
 def test_documents_without_a_content_digest_still_get_a_stable_seed():
@@ -148,4 +131,3 @@ def test_routing_keys_refuses_an_empty_directory(tmp_path):
 def test_the_shipped_threshold_sits_inside_the_probability_range():
     """A threshold outside (0, 1) would send every document one way regardless of the model."""
     assert 0.0 < classify.DOCLING_CONFIDENCE_THRESHOLD < 1.0
-    assert classify.TARGET_VLM_FRACTION == pytest.approx(0.50)

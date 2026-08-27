@@ -49,7 +49,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
 from zephyr.polars_io import scan_parquet_chunk
-from zephyr.shard_keys import deterministic_hash
+from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -166,7 +166,7 @@ def _columns_to_dataframe(
     fast path, and ``pl.struct`` over existing columns is cheap. Field order
     (key first) drives the (key, sort_value) sort order.
 
-    ``key_bytes`` must be pre-encoded via ``msgspec.msgpack.encode`` so that
+    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so that
     ``_KEY_TMP_COL`` is always ``Binary`` — preventing struct schema mismatches
     when different mapper shards produce keys of different Python types.
     """
@@ -193,9 +193,6 @@ def _columns_to_dataframe(
         raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
-_msgpack_encoder = msgspec.msgpack.Encoder(order="deterministic")
-
-
 def _items_to_dataframe(
     items: list[Any],
     key_fn: Callable,
@@ -209,6 +206,10 @@ def _items_to_dataframe(
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
     directly.
+
+    ``num_output_shards=0`` means the caller assigns ``_SHARD_COL`` itself (the
+    combiner path in :meth:`ScatterWriter._flush`, whose rows are already
+    routed); routing is then skipped rather than computed and discarded.
     """
     shards: list[int] = []
     key_bytes: list[bytes] = []
@@ -216,11 +217,12 @@ def _items_to_dataframe(
     for item in items:
         key = key_fn(item)
         try:
-            kb = _msgpack_encoder.encode(key)
+            kb = encode_key(key)
         except TypeError as err:
             raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
-        key_hash = deterministic_hash(key)
-        shards.append(key_hash % num_output_shards if num_output_shards > 0 else 0)
+        # Route from the bytes we just encoded: deterministic_hash(key) would
+        # msgpack-encode the same key a second time for every scattered item.
+        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
         key_bytes.append(kb)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]

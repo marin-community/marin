@@ -104,6 +104,7 @@ def test_resolve_auth_spoofed_loopback_rejected():
         )
 
 
+@pytest.mark.requires_cluster
 def test_loopback_resolves_as_admin():
     """End-to-end: a tokenless loopback client is resolved as the anonymous admin."""
 
@@ -121,6 +122,7 @@ def test_loopback_resolves_as_admin():
         controller.close()
 
 
+@pytest.mark.requires_cluster
 def test_loopback_admin_submits_as_named_user():
     """A tokenless loopback caller is admin, so the job name's owner segment is
     authoritative — jobs are attributed to the user the client names (the CLI

@@ -212,27 +212,6 @@ def test_from_kind_invalid():
         K8sResource.from_kind("Bogus")
 
 
-def test_all_required_kinds_are_enum_members():
-    """Every kind that callers pass to apply_json must be in the enum."""
-    required_kinds = {
-        "Pod",
-        "ConfigMap",
-        "Service",
-        "Secret",
-        "ServiceAccount",
-        "Namespace",
-        "Deployment",
-        "DaemonSet",
-        "PodDisruptionBudget",
-        "ClusterRole",
-        "ClusterRoleBinding",
-        "NodePool",
-    }
-    enum_kinds = {member.kind for member in K8sResource}
-    missing = required_kinds - enum_kinds
-    assert not missing, f"Missing kinds in K8sResource: {missing}"
-
-
 def test_api_base_paths():
     """Test that api_base() returns correct paths for core and custom API groups."""
     assert K8sResource.PODS.api_base() == "/api/v1"

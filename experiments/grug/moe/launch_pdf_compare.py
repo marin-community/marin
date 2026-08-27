@@ -8,7 +8,7 @@ Trains grug-MoE compute-optimal rungs on two English PDF corpora and compares
 (secondary), following the #6570 focus-vs-main WET side-by-side:
 
 - ``pdf`` — the eng_Latn subset of our OCR pipeline's final NormalizedData
-  output (:data:`PDF_FINAL_DIR`, filled in at launch time). A small select step
+  output (:data:`PDF_FINAL_DIR`). A small select step
   materializes the ``language == "eng_Latn"`` rows to {id, text} parquet before
   tokenizing, since FinePDFs releases per-language and a fair comparison needs
   the same language cut.
@@ -37,12 +37,11 @@ v5p-8 README baselines (paloma macro 3.8104 @ d512) are TPU numbers on a
 different mix: numbers here are comparable only between the two arms, not to
 the README table.
 
-Launch checklist (DO NOT launch until the data pipeline output lands):
+Launch checklist:
 
-1. Fill in :data:`PDF_FINAL_DIR` with the final NormalizedData main output dir,
-   ``s3://marin-us-east-02a/marin/data/datakit/final/common_crawl_focus_2026_22_pdf_ocr_all_<hash8>/outputs/main``
-   (the hash8 comes from the merged pipeline's step key). ``main()`` refuses to
-   run while it is ``None``. If it ever changes, bump :data:`_DATA_VERSION`.
+1. :data:`PDF_FINAL_DIR` was filled in when the pipeline output landed
+   (``..._pdf_ocr_all_e4e8dda6/outputs/main``). If it ever changes, bump
+   :data:`_DATA_VERSION`.
 2. Data stage — select + tokenize both arms, then print measured token counts
    and per-rung clearance (also written to ``token_counts.json``)::
 
@@ -53,7 +52,9 @@ Launch checklist (DO NOT launch until the data pipeline output lands):
 
 3. Read the clearance verdict from the job logs. d512 runs unconditionally;
    launch d768 only if BOTH arms clear its 1.81e9-token budget (the train stage
-   re-checks and refuses otherwise).
+   re-checks and refuses otherwise). As launched, the pdf arm did NOT clear
+   d768, and pdf/d768 ran with ``PDFCMP_ALLOW_REPEATS=1`` -- its data repeats,
+   and the writeup must say so.
 4. Train stage — one CPU driver job per (arm, scale); the driver dispatches the
    actual 8xH100 training job via Fray inside cw-us-east-02a::
 
@@ -107,12 +108,11 @@ from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
-PDF_FINAL_DIR: str | None = (
+PDF_FINAL_DIR = (
     "s3://marin-us-east-02a/marin/data/datakit/final/common_crawl_focus_2026_22_pdf_ocr_all_e4e8dda6/outputs/main"
 )
-"""The pipeline's final NormalizedData main output dir — filled in at launch time (step 1
-of the module-docstring checklist). None until the pipeline output lands; ``main()``
-refuses to run without it."""
+"""The pipeline's final NormalizedData main output dir. If it ever changes, bump
+:data:`_DATA_VERSION`."""
 
 # Identity version for the data-side steps (select, tokenize, report). These pin an
 # explicit calendar version so a mutable --version can never silently rebuild the
@@ -154,16 +154,6 @@ _TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="256g", 
 _GPU_ATTENTION: GrugAttentionImplementation = "gpu_fa4_cute"
 
 
-def _require_pdf_final_dir() -> str:
-    if PDF_FINAL_DIR is None:
-        raise ValueError(
-            "PDF_FINAL_DIR is unset. Fill it with the pipeline's final NormalizedData main output dir "
-            "(s3://marin-us-east-02a/marin/data/datakit/final/common_crawl_focus_2026_22_pdf_ocr_all_"
-            "<hash8>/outputs/main) once the data pipeline lands — see the module-docstring checklist."
-        )
-    return PDF_FINAL_DIR
-
-
 def _select_english_rows(source_dir: str, output_dir: str) -> None:
     """Materialize the ``language == eng_Latn`` rows of a NormalizedData dir as {id, text} parquet.
 
@@ -194,7 +184,7 @@ def pdf_eng_latn_dataset() -> ArtifactStep[TokenizedCache]:
         "pdf_compare/pdf_eng_latn_text",
         remote(_select_english_rows, resources=_SELECT_RESOURCES),
         version=_DATA_VERSION,
-        source_dir=_require_pdf_final_dir(),
+        source_dir=PDF_FINAL_DIR,
         output_dir=OUT,
     )
     return tokenized(
@@ -348,7 +338,6 @@ def build_train_step(arm: str, scale: str, *, version: str | None = None) -> Art
                 project="marin_moe",
                 tags=["moe", "pdf-compare", arm, scale],
                 group="pdf-vs-finepdfs",
-                name=None,
             ),
             optimizer=optimizer,
             grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
@@ -373,7 +362,6 @@ def build_train_step(arm: str, scale: str, *, version: str | None = None) -> Art
 
 
 def build() -> list[ArtifactStep]:
-    _require_pdf_final_dir()
     stage = os.environ.get("STAGE", "data")
     if stage == "data":
         pdf = pdf_eng_latn_dataset()

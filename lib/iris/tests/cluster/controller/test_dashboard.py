@@ -7,7 +7,6 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
-import asyncio
 from unittest.mock import Mock
 
 import httpx
@@ -28,7 +27,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard, _CredentialAuth
+from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -2127,48 +2126,34 @@ def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_pa
     assert data_us["namespace"] == "us"
 
 
-async def _headers_seen_upstream(auth, headers=None) -> httpx.Headers:
-    """Send one request through a client using ``auth`` and return what upstream saw."""
-    seen = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers)
-        return httpx.Response(200, json={})
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
-        await client.post("https://iris.example/rpc", headers=headers or {})
-    return seen[0]
-
-
-def test_proxy_dashboard_forwards_endpoint_service_rpc():
+def _proxy_dashboard_with_transport(monkeypatch, credentials=None):
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(200, json={"endpoints": []})
 
-    dashboard = ProxyControllerDashboard("https://iris.example")
-    upstream_client = httpx.AsyncClient(
-        base_url="https://iris.example",
-        transport=httpx.MockTransport(handler),
-    )
-    dashboard._client = upstream_client
-    try:
-        with TestClient(dashboard.app) as client:
-            response = client.post(
-                "/iris.cluster.EndpointService/ListEndpoints",
-                json={"prefix": "/jobs/"},
-            )
-    finally:
-        asyncio.run(upstream_client.aclose())
+    async_client = httpx.AsyncClient
+
+    def make_async_client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_async_client)
+    return ProxyControllerDashboard("https://iris.example", credentials=credentials), requests
+
+
+def test_proxy_dashboard_forwards_endpoint_service_rpc(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch)
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.EndpointService/ListEndpoints",
+            json={"prefix": "/jobs/"},
+        )
 
     assert response.status_code == 200
     assert response.json() == {"endpoints": []}
     assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
-
-
-def _send_through(auth, headers=None) -> httpx.Headers:
-    return asyncio.run(_headers_seen_upstream(auth, headers))
 
 
 def _static_credentials() -> ClientCredentials:
@@ -2178,21 +2163,32 @@ def _static_credentials() -> ClientCredentials:
     )
 
 
-def test_credential_auth_both_providers_attaches_both_bearers():
-    headers = _send_through(_CredentialAuth(_static_credentials()))
+def test_credential_auth_both_providers_attaches_both_bearers(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, _static_credentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert response.status_code == 200
+    headers = requests[0].headers
     assert headers["authorization"] == "Bearer app-token"
     assert headers["proxy-authorization"] == "Bearer iap-token"
 
 
-def test_credential_auth_caller_supplied_bearer_is_overwritten():
-    headers = _send_through(
-        _CredentialAuth(_static_credentials()),
-        headers={"proxy-authorization": "Bearer forged"},
-    )
+def test_credential_auth_caller_supplied_bearer_is_overwritten(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, _static_credentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.ControllerService/ListJobs",
+            json={},
+            headers={"proxy-authorization": "Bearer forged"},
+        )
+
+    assert response.status_code == 200
+    headers = requests[0].headers
     assert headers["proxy-authorization"] == "Bearer iap-token"
 
 
-def test_credential_auth_expired_token_mints_a_fresh_one_per_request():
+def test_credential_auth_expired_token_mints_a_fresh_one_per_request(monkeypatch):
     class Rotating:
         def __init__(self):
             self.calls = 0
@@ -2201,12 +2197,25 @@ def test_credential_auth_expired_token_mints_a_fresh_one_per_request():
             self.calls += 1
             return f"t{self.calls}"
 
-    auth = _CredentialAuth(ClientCredentials(iap_provider=Rotating()))
-    assert _send_through(auth)["proxy-authorization"] == "Bearer t1"
-    assert _send_through(auth)["proxy-authorization"] == "Bearer t2"
+    dashboard, requests = _proxy_dashboard_with_transport(
+        monkeypatch,
+        ClientCredentials(iap_provider=Rotating()),
+    )
+    with TestClient(dashboard.app) as client:
+        first = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+        second = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [request.headers["proxy-authorization"] for request in requests] == ["Bearer t1", "Bearer t2"]
 
 
-def test_credential_auth_no_providers_sends_no_bearers():
-    headers = _send_through(_CredentialAuth(ClientCredentials()))
+def test_credential_auth_no_providers_sends_no_bearers(monkeypatch):
+    dashboard, requests = _proxy_dashboard_with_transport(monkeypatch, ClientCredentials())
+    with TestClient(dashboard.app) as client:
+        response = client.post("/iris.cluster.ControllerService/ListJobs", json={})
+
+    assert response.status_code == 200
+    headers = requests[0].headers
     assert "authorization" not in headers
     assert "proxy-authorization" not in headers

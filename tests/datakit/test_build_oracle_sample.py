@@ -16,8 +16,8 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-import experiments.build_pdf_source.quality.build_oracle_sample as oracle_module
-from experiments.build_pdf_source.quality.build_oracle_sample import (
+import experiments.datakit.build_pdf_source.quality.build_oracle_sample as oracle_module
+from experiments.datakit.build_pdf_source.quality.build_oracle_sample import (
     DOCLING_COLUMNS,
     FAILED_SCORE,
     MIN_TOKENS_FOR_ALL_SEGMENTS,
@@ -26,6 +26,8 @@ from experiments.build_pdf_source.quality.build_oracle_sample import (
     SEGMENT_TOKENS,
     SEGMENTS,
     OracleWork,
+    join_docling,
+    join_pdfs,
     label_columns,
     parse_score,
     record_key,
@@ -76,7 +78,7 @@ def test_docling_left_join_keeps_a_document_the_docling_route_dropped():
     """
     ocr = pl.LazyFrame({RECORD_KEY: ["a", "b", "c"], "text": ["A", "B", "C"]})
     docling = pl.LazyFrame({RECORD_KEY: ["a", "c"], "docling_text": ["dA", "dC"], "docling_page_offsets": [[1, 2], [3]]})
-    joined = ocr.join(docling, on=RECORD_KEY, how="left").sort(RECORD_KEY).collect()
+    joined = join_docling(ocr, docling).sort(RECORD_KEY).collect()
 
     assert joined.height == 3
     assert joined["docling_text"].to_list() == ["dA", None, "dC"]
@@ -180,7 +182,7 @@ def test_merge_join_drops_the_derived_key_but_keeps_the_corpus_identity():
     """``record_key`` is plumbing; ``source_id`` is the identity the dataset promises."""
     labeled = pl.LazyFrame({RECORD_KEY: ["a", "b"], "source_id": ["a", "b"], "text": ["A", "B"]})
     pdfs = pl.LazyFrame({RECORD_KEY: ["b"], "pdf": [b"%PDF-1.7"]})
-    merged = labeled.join(pdfs, on=RECORD_KEY, how="inner").drop(RECORD_KEY).collect()
+    merged = join_pdfs(labeled, pdfs).collect()
 
     assert RECORD_KEY not in merged.columns
     assert_frame_equal(merged, pl.DataFrame({"source_id": ["b"], "text": ["B"], "pdf": [b"%PDF-1.7"]}))

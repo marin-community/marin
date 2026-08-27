@@ -845,11 +845,6 @@ class Gemma3Config(Gemma2Config):
     # Gemma3 specific rope frequency for local attention
     rope_local_base_freq: float = 10_000.0
 
-    @property
-    def local_rope(self) -> RotaryEmbeddingsConfig:
-        """Local RoPE config used for Gemma-3's alternating local attention."""
-        return dataclasses.replace(self.rope, theta=self.rope_local_base_freq)
-
     # ---------- Convenience ----------
     @property  # type: ignore[override]
     def model_type(self):  # noqa: D401  # pyrefly: ignore[bad-override]

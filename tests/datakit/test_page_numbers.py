@@ -5,7 +5,7 @@
 
 import pytest
 
-from experiments.build_pdf_source.docling_extract.page_numbers import is_page_number
+from experiments.datakit.build_pdf_source.docling_extract.page_numbers import is_page_number
 
 
 @pytest.mark.parametrize(

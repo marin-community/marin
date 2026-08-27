@@ -127,9 +127,16 @@ from experiments.datakit.cluster.domain.v0.train import train_centroids
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.score import score_normalized
 from experiments.datakit.decontam.config import (
+    BLOOM_STEP_NAME,
+    ESTIMATED_DOC_COUNT,
+    EVAL_ROOT,
+    FALSE_POSITIVE_RATE,
+    FLAGGED_SAMPLE_SIZE,
     GLOBAL_DF_COMMON_MIN_ABS,
     GLOBAL_DF_COMMON_MIN_SOURCES,
     GLOBAL_DF_SAMPLE_DOCS,
+    NGRAM_LENGTH,
+    OVERLAP_THRESHOLD,
     SOURCE_DF_COMMON_FRAC,
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
@@ -178,19 +185,8 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
-# Decontam. The combined eval corpus written by decontam/prepare_eval_corpus.py,
-# staged per-region (``aa/<eval>/<split>.parquet`` + ``lmh/<task>/eval.parquet``).
-EVAL_ROOT = f"{marin_prefix()}/datakit/decontam/evals"
-# Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
-# hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
-# ~270 MB filter.
-ESTIMATED_DOC_COUNT = 50_000_000
-FALSE_POSITIVE_RATE = 1e-9
-NGRAM_LENGTH = 13
-OVERLAP_THRESHOLD = 0.5
-# Contaminated docs reservoir-sampled per shard into the flagged side output
-# the decontam stage report reads.
-FLAGGED_SAMPLE_SIZE = 8
+# Decontam policy (bloom name + parameters) is shared with the PDF pipeline via
+# experiments/datakit/decontam/config.py -- the cache-hit contract lives there.
 
 
 @dataclass(frozen=True)
@@ -657,7 +653,7 @@ def reference_datakit_steps(
     # consumes it directly. Same name/params as the testbed decon arm, so runs
     # sharing a prefix share the built bloom.
     decon_bloom_step = build_eval_bloom_step(
-        name="datakit/bloom/_combined_fixed",
+        name=BLOOM_STEP_NAME,
         eval_data_sources=[EVAL_ROOT],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,

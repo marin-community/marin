@@ -12,7 +12,7 @@ router as one that fires on nothing, so both directions are checked.
 import pymupdf
 import pytest
 
-from experiments.build_pdf_source.quality.route_features import document_signals, page_signals
+from experiments.datakit.build_pdf_source.quality.route_features import document_signals, page_signals
 
 BODY = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi. "
 

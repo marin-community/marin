@@ -83,7 +83,7 @@ class EvalMetrics:
     f1: float
 
 
-def _binary_metrics(y_true: list[int], y_pred: list[int]) -> tuple[float, float, float, float]:
+def binary_metrics(y_true: list[int], y_pred: list[int]) -> tuple[float, float, float, float]:
     tp = fp = fn = tn = 0
     for t, p in zip(y_true, y_pred, strict=True):
         if t == 1 and p == 1:
@@ -105,7 +105,7 @@ def _binary_metrics(y_true: list[int], y_pred: list[int]) -> tuple[float, float,
 def _metrics(scores: np.ndarray, targets: np.ndarray, threshold: float = DEFAULT_THRESHOLD) -> EvalMetrics:
     y_true = [1 if s >= threshold else 0 for s in targets.tolist()]
     y_pred = [1 if p >= 0.5 else 0 for p in scores.tolist()]
-    acc, prec, rec, f1 = _binary_metrics(y_true, y_pred)
+    acc, prec, rec, f1 = binary_metrics(y_true, y_pred)
     return EvalMetrics(
         n=len(y_true),
         auc=auc(y_true, scores.tolist()),
@@ -266,7 +266,7 @@ def fit(
     )
 
 
-def _save_scorer(model, remap: dict, tokenizer: str, config: FastTransformerConfig, out_dir: str, name: str) -> None:
+def save_scorer(model, remap: dict, tokenizer: str, config: FastTransformerConfig, out_dir: str, name: str) -> None:
     """Serialise the model + vocab remap + meta in the format `scorer.py` loads."""
     out_dir = out_dir.rstrip("/")
     eqx_name, remap_name, meta_name = artifact_names(name)
@@ -331,7 +331,7 @@ def train_from_labels(
     fitted = fit(config, data, hp)
     holdout = _metrics(predict(fitted.model, data.eval.ids), data.eval.scores)
     logger.info("HOLDOUT AUC=%.4f spearman=%.4f (best_epoch=%d)", holdout.auc, holdout.spearman_rho, fitted.best_epoch)
-    _save_scorer(fitted.model, remap, tokenizer, config, out_dir, name)
+    save_scorer(fitted.model, remap, tokenizer, config, out_dir, name)
     return fitted
 
 

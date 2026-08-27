@@ -9,14 +9,14 @@ import zlib
 
 import pytest
 
-from experiments.build_pdf_source.ocr_feature_names import DOC_FEATURE_NAMES, FEATURE_NAMES, FEATURE_PAGES
+from experiments.datakit.build_pdf_source.ocr_feature_names import DOC_FEATURE_NAMES, FEATURE_NAMES, FEATURE_PAGES
 
 # PyMuPDF only ships in marin-core's ``datakit`` extra, which the workspace root does not install,
 # and ``ocr_features`` imports it at module scope -- so the skip has to precede that import. The
 # feature contract above is pure data and needs no such guard.
 pymupdf = pytest.importorskip("pymupdf")
 
-from experiments.build_pdf_source.ocr_features import (  # noqa: E402
+from experiments.datakit.build_pdf_source.ocr_features import (  # noqa: E402
     CorruptPdf,
     _PagePass,
     document_features,

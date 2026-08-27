@@ -13,10 +13,10 @@ from concurrent.futures import Future
 
 import pytest
 
-from experiments.build_pdf_source.boilerplate import BoilerplateOptions
-from experiments.build_pdf_source.extract_ocr import OcrStatus, _Document
-from experiments.build_pdf_source.loop_repair import LoopOptions, find_loop, repair_page
-from experiments.build_pdf_source.ocr_extract.client import PageOcr
+from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions
+from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, _Document
+from experiments.datakit.build_pdf_source.loop_repair import LoopOptions, find_loop, repair_page
+from experiments.datakit.build_pdf_source.ocr_extract.client import PageOcr
 
 _OPTIONS = LoopOptions()
 _BOILERPLATE = BoilerplateOptions()

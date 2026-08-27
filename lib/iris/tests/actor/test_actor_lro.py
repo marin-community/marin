@@ -3,7 +3,7 @@
 
 """Tests for long-running operations (LRO) on actor RPC."""
 
-import time
+import threading
 
 import cloudpickle
 import pytest
@@ -20,12 +20,20 @@ class SlowActor:
     def add(self, a: int, b: int) -> int:
         return a + b
 
-    def slow_add(self, a: int, b: int, delay: float = 0.5) -> int:
-        time.sleep(delay)
-        return a + b
-
     def fail(self):
         raise ValueError("intentional failure")
+
+
+class GatedActor:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def add_after_release(self, a: int, b: int) -> int:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise TimeoutError("test did not release the actor operation")
+        return a + b
 
 
 def _make_client(port: int, name: str = "actor") -> ActorClient:
@@ -73,20 +81,19 @@ def test_lro_failure():
 def test_lro_cancel():
     """Cancelling an operation sets the cancelled flag."""
     server = ActorServer(host="127.0.0.1")
-    server.register("actor", SlowActor())
+    actor = GatedActor()
+    server.register("actor", actor)
     port = server.serve_background()
 
     try:
         client = _make_client(port)
-        # Start a slow operation
-        op_id = client.start_operation("slow_add", 1, 2, delay=0.1)
+        op_id = client.start_operation("add_after_release", 1, 2)
+        assert actor.started.wait(timeout=5)
 
-        # Cancel immediately
         op = client.cancel_operation(op_id)
-        # State may still be RUNNING (cooperative cancellation)
-        assert op.state in (actor_pb2.Operation.RUNNING, actor_pb2.Operation.CANCELLED)
+        assert op.state == actor_pb2.Operation.RUNNING
 
-        # get_operation auto-polls until completion; should be CANCELLED
+        actor.release.set()
         op = client.get_operation(op_id)
         assert op.state == actor_pb2.Operation.CANCELLED
     finally:

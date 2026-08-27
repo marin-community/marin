@@ -39,9 +39,13 @@ from iris.cli.build import (
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import KUBERNETES_WORKER_RUNTIME, clear_remote_state, make_local_config
+from iris.cluster.config import (
+    KUBERNETES_WORKER_RUNTIME,
+    clear_remote_state,
+    make_local_config,
+    slice_template_zone,
+)
 from iris.cluster.controller.autoscaler.scaling_group import (
-    _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
@@ -1765,7 +1769,7 @@ def worker_restart(
                     return wid, None, f"unknown scale group {row.scale_group!r}"
                 # TPU workers leave md_gce_zone empty; fall back to the scale
                 # group's slice-template zone.
-                zone = row.zone or _zone_from_template(sg_config.slice_template)
+                zone = row.zone or slice_template_zone(sg_config.slice_template)
                 if not zone:
                     return wid, None, "missing zone metadata"
                 wc = build_worker_config_for_group(base_worker_config, sg_config)

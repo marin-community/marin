@@ -633,6 +633,7 @@ class ResourceSpec:
     """Resource specification for jobs.
 
     Accepts human-readable memory/disk values (e.g., "8g", "512m").
+    Memory is the container limit for anonymous memory and ``/dev/shm`` combined.
     """
 
     cpu: float = 0.0

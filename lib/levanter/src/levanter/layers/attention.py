@@ -677,10 +677,6 @@ def _te_get_mask_type(mask):
         return AttnMaskType.NO_MASK
 
 
-_DUMMY_HEAD = "__head__"
-_DUMMY_BATCH = "__batch__"
-
-
 def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     """
     NVTE and the Splash Attention kernel require the Q, K, and V to be in a specific format. This function groups the axes

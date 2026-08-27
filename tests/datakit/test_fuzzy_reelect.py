@@ -19,7 +19,7 @@ from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
 
-from experiments.build_pdf_source.fuzzy_ocr_all import (
+from experiments.datakit.build_pdf_source.fuzzy_dedup import (
     consolidate_fuzzy_clean,
     reelect_cluster_canonicals,
     reelect_fuzzy_canonicals,

@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the native vLLM server subprocess: log routing and startup retry.
+"""Tests for the native vLLM server subprocess and explicit readiness boundary.
 
 ``_LogPump`` forwards the subprocess's stdout/stderr to the parent's fds and to the on-disk logs,
-routing by severity and flushing/draining on teardown. A second group covers
-``_start_vllm_native_server``'s bounded retry around a transient Run:ai streamer read fault: it
-retries that fault, fails fast on anything else, and shares one deadline across all attempts.
+routing by severity and flushing/draining on teardown. A second group covers starting a headless
+process without HTTP readiness and waiting once for an ordinary server.
 """
 
 import os
@@ -21,20 +20,34 @@ import pytest
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
-    TransientStartupError,
+    IsolatedCudaVllm,
+    VllmEnvironment,
+    VllmLauncherWithEnvironment,
     VllmServerHandle,
+    WorkspaceVllm,
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_logs,
     _native_logs_tail,
+    _prepare_vllm_compilation_cache,
     _ProcessGroupStatus,
-    _start_vllm_native_server,
+    _starts_nccl_ras_probe,
 )
-from rigging.timing import ExponentialBackoff
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
+
+
+def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
+    cuda = IsolatedCudaVllm(version="test")
+    workspace = WorkspaceVllm()
+
+    assert _starts_nccl_ras_probe(cuda)
+    assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
+    assert not _starts_nccl_ras_probe(workspace)
+    assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(workspace, {"VLLM_HOST_IP": "10.0.0.2"}))
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:
@@ -111,6 +124,15 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
 
     assert "FATAL partial line no newline" in _native_logs_tail(str(tmp_path))
     pump.close()
+
+
+def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
+    placement = "Worker placement: process_rank=0"
+    (tmp_path / "stdout.log").write_text("\n".join([placement, *(f"later line {index}" for index in range(250))]))
+    (tmp_path / "stderr.log").write_text("")
+
+    assert placement not in _native_logs_tail(str(tmp_path), max_lines=200)
+    assert placement in _native_logs(str(tmp_path))
 
 
 def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
@@ -240,10 +262,9 @@ def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, mo
     assert _linux_process_group_status(process_group_id) is _ProcessGroupStatus.HAS_LIVE_PROCESSES
 
 
-# --- bounded retry around a transient Run:ai streamer read fault during startup ---
+# --- explicit start and readiness lifecycle ---
 
 _FAKE_VLLM_SERVER = str(Path(__file__).parent / "fake_vllm_server.py")
-_FAST_BACKOFF = ExponentialBackoff(initial=0.001, maximum=0.01, factor=2.0, jitter=0.0)
 
 
 class _FakeLauncher:
@@ -268,58 +289,96 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _start(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmServerHandle:
-    return _start_vllm_native_server(
+def test_subprocess_environment_overrides_reach_vllm():
+    cache, environment = _prepare_vllm_compilation_cache(
         model_name_or_path="fake-model",
+        extra_cli_args=None,
+        launcher=VllmLauncherWithEnvironment(
+            _FakeLauncher("serve"),
+            {
+                "VLLM_HOST_IP": "10.0.0.2",
+                "GLOO_SOCKET_IFNAME": "eth0",
+            },
+        ),
+        mode=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    try:
+        assert environment["VLLM_HOST_IP"] == "10.0.0.2"
+        assert environment["GLOO_SOCKET_IFNAME"] == "eth0"
+    finally:
+        cache.close()
+
+
+def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
+    return VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         timeout_seconds=timeout_seconds,
         launcher=launcher,
-        # Managed mode would restore/publish a remote cache archive on every attempt.
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
-        max_attempts=3,
-        poll_interval_seconds=0.05,
-        backoff=_FAST_BACKOFF,
+        wait_for_ready=False,
     )
 
 
+def _wait_until_ready(environment: VllmEnvironment) -> None:
+    environment.wait_until_ready(poll_interval_seconds=0.05)
+
+
+def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
+    counter = tmp_path / "starts"
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        extra_args=["--headless"],
+        launcher=_FakeLauncher("hang", str(counter)),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    )
+
+    with environment:
+        deadline = time.monotonic() + 5
+        while not counter.exists():
+            if time.monotonic() > deadline:
+                raise AssertionError("headless child never started")
+            time.sleep(0.01)
+        assert environment.vllm_server is not None
+        assert environment.vllm_server.process.poll() is None
+
+
+def test_environment_rejects_a_clean_early_exit():
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        extra_args=["--headless"],
+        launcher=_FakeLauncher("exit"),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    )
+
+    with environment:
+        assert environment.vllm_server is not None
+        environment.vllm_server.process.wait(timeout=5)
+        with pytest.raises(RuntimeError, match="exited unexpectedly with code 0"):
+            environment.check_alive()
+
+
 def test_serves_when_startup_succeeds():
-    # A returned handle means the fake server answered /v1/models with 200.
-    handle = _start(_FakeLauncher("serve"))
-    handle.stop()
+    with _environment(_FakeLauncher("serve")) as environment:
+        _wait_until_ready(environment)
+        assert environment.model_id == "fake-model"
 
 
-def test_retries_streamer_fault_then_serves(tmp_path):
+def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):
     counter = tmp_path / "starts"
-    handle = _start(_FakeLauncher("fail", str(counter), "2"))
-    try:
-        assert counter.read_text() == "3"  # two streamer faults, served on the third start
-    finally:
-        handle.stop()
+    with pytest.raises(RuntimeError, match="Run:ai streamer read fault"):
+        with _environment(_FakeLauncher("stuck-fault", str(counter))) as environment:
+            _wait_until_ready(environment)
+    assert counter.read_text() == "1"
 
 
-def test_fails_fast_on_non_streamer_error(tmp_path):
-    counter = tmp_path / "starts"
-    with pytest.raises(RuntimeError) as excinfo:
-        _start(_FakeLauncher("fail", str(counter), "99", "RuntimeError: CUDA out of memory"))
-    assert not isinstance(excinfo.value, TransientStartupError)
-    assert "CUDA out of memory" in str(excinfo.value)
-    assert counter.read_text() == "1"  # a non-streamer failure is not retried
-
-
-def test_exhausts_retries_then_raises_with_diagnostics(tmp_path):
-    counter = tmp_path / "starts"
-    with pytest.raises(TransientStartupError) as excinfo:
-        _start(_FakeLauncher("fail", str(counter), "99"))
-    assert counter.read_text() == "3"  # retried up to the attempt budget
-    err = excinfo.value
-    assert "Could not receive runai_response from libstreamer" in str(err)  # streamer fault preserved
-    assert "fake-model" in str(err)  # attempted command preserved
-    assert err.__notes__
-
-
-def test_hang_times_out_without_retry(tmp_path):
-    # A live-but-never-ready server raises TimeoutError, not a streamer fault, so it is not retried.
+def test_hang_times_out_after_one_start(tmp_path):
     counter = tmp_path / "starts"
     with pytest.raises(TimeoutError):
-        _start(_FakeLauncher("hang", str(counter)), timeout_seconds=0.5)
+        with _environment(_FakeLauncher("hang", str(counter)), timeout_seconds=0.5) as environment:
+            _wait_until_ready(environment)
     assert counter.read_text() == "1"

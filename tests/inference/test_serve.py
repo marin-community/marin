@@ -20,6 +20,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -52,7 +53,6 @@ from marin.inference.levanter_backend import (
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -120,7 +120,11 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     @contextmanager
     def environment(**kwargs):
         observed.update(kwargs)
-        yield SimpleNamespace(model_id="public-model", server_url="http://127.0.0.1:8000/v1")
+        yield SimpleNamespace(
+            model_id="public-model",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
@@ -192,7 +196,7 @@ def test_isolated_cuda_vllm_marin_fork_command_and_env():
     assert cmd[:5] == [
         "uvx",
         "--from",
-        vllm_fork_ref(),
+        VLLM_FORK_REQUIREMENT,
         "--with",
         "runai-model-streamer[s3]==0.16.1",
     ]

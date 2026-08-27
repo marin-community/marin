@@ -5,7 +5,7 @@
 
 import pytest
 
-from experiments.build_pdf_source.boilerplate import (
+from experiments.datakit.build_pdf_source.boilerplate import (
     BoilerplateOptions,
     split_pages,
     strip_boilerplate,

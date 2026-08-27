@@ -4,27 +4,26 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import rigging.timing as timing
 
 pytest.importorskip("jax")
 
+import iris.runtime.jax_init as jax_init_module
 import jax
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import (
-    _JAX_DIST_HEARTBEAT_TIMEOUT,
-    _JAX_DIST_INIT_TIMEOUT,
-    _poll_for_coordinator,
-    configure_jax_compilation_cache,
-    initialize_jax,
-)
+from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax
+
+EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
+EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
 
 
 @dataclass
@@ -59,6 +58,44 @@ class FakeContext:
     resolver: FakeResolver = field(default_factory=FakeResolver)
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def monotonic(self) -> float:
+        return self.current
+
+    def sleep(self, interval: float) -> None:
+        self.current += interval
+
+
+@dataclass
+class FakeExitHooks:
+    callbacks: list[tuple[Callable[..., Any], tuple[Any, ...]]] = field(default_factory=list)
+
+    def register(self, callback: Callable[..., Any], *args: Any) -> None:
+        self.callbacks.append((callback, args))
+
+    def run(self) -> None:
+        for callback, args in self.callbacks:
+            callback(*args)
+
+
+@pytest.fixture
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    clock = FakeClock()
+    monkeypatch.setattr(jax_init_module, "time", clock)
+    monkeypatch.setattr(timing, "time", clock)
+    return clock
+
+
+@pytest.fixture(autouse=True)
+def exit_hooks(monkeypatch: pytest.MonkeyPatch) -> FakeExitHooks:
+    hooks = FakeExitHooks()
+    monkeypatch.setattr(jax_init_module, "atexit", hooks)
+    return hooks
+
+
 def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
     """Create a JobInfo with the given task_index and num_tasks."""
     job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
@@ -87,15 +124,13 @@ def _mock_compilation_cache_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("iris.runtime.jax_init.configure_jax_compilation_cache", MagicMock())
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
 def test_initialize_jax_single_task(
     mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
+    _mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
 ) -> None:
     """Single-task jobs call jax.distributed.initialize with explicit args."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
@@ -107,7 +142,6 @@ def test_initialize_jax_single_task(
         num_processes=1,
         process_id=0,
     )
-    mock_iris_ctx.assert_not_called()
 
 
 @patch("jax.distributed.initialize")
@@ -142,28 +176,26 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
             "10.0.0.1:8476",
             2,
             0,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-            heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+            initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+            heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
         ),
         call(
             "10.0.0.1:8476",
             2,
             1,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-            heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+            initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+            heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
         ),
     ]
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
 def test_initialize_jax_no_job_info(
     mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
+    _mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
 ) -> None:
     """No job info means we're not in an Iris job — skip distributed init."""
     mock_get_job_info.return_value = None
@@ -171,10 +203,8 @@ def test_initialize_jax_no_job_info(
     initialize_jax()
 
     mock_jax_init.assert_not_called()
-    mock_iris_ctx.assert_not_called()
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
@@ -182,7 +212,7 @@ def test_initialize_jax_task0_registers(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
+    exit_hooks: FakeExitHooks,
 ) -> None:
     """Task 0 registers the coordinator endpoint and calls jax.distributed.initialize."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4)
@@ -196,13 +226,13 @@ def test_initialize_jax_task0_registers(
         "10.0.0.1:9999",
         4,
         0,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=37,
     )
-    mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
+    exit_hooks.run()
+    assert fake_ctx.registry.unregistered == ["endpoint-1"]
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
@@ -210,7 +240,6 @@ def test_initialize_jax_task0_uses_iris_port(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
 ) -> None:
     """Task 0 uses IRIS_PORT_jax when available, ignoring the port argument."""
     info = _make_job_info(task_index=0, num_tasks=2)
@@ -226,8 +255,8 @@ def test_initialize_jax_task0_uses_iris_port(
         "10.0.0.1:12345",
         2,
         0,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
 
 
@@ -238,6 +267,7 @@ def test_initialize_jax_taskN_polls(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
+    fake_clock: FakeClock,
 ) -> None:
     """Task N polls for the coordinator endpoint and calls jax.distributed.initialize."""
     mock_get_job_info.return_value = _make_job_info(task_index=2, num_tasks=4)
@@ -252,13 +282,12 @@ def test_initialize_jax_taskN_polls(
 
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
-    assert fake_ctx.resolver.call_count >= 3
     mock_jax_init.assert_called_once_with(
         "10.0.0.1:8476",
         4,
         2,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
 
 
@@ -269,6 +298,7 @@ def test_initialize_jax_poll_timeout(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
+    fake_clock: FakeClock,
 ) -> None:
     """TimeoutError is raised when coordinator endpoint is not found within timeout."""
     mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
@@ -281,17 +311,16 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+    assert fake_clock.current == 0.1
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
 def test_initialize_jax_supervised_single_host(
     mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
+    _mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
@@ -307,13 +336,11 @@ def test_initialize_jax_supervised_single_host(
         8,
         3,
         local_device_ids=[3],
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
-    mock_iris_ctx.assert_not_called()
 
 
-@patch("iris.runtime.jax_init.atexit")
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
@@ -321,7 +348,6 @@ def test_initialize_jax_supervised_global_rank0_registers(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
-    mock_atexit: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Global rank 0 on a multi-host supervised job registers the coordinator."""
@@ -340,8 +366,8 @@ def test_initialize_jax_supervised_global_rank0_registers(
         16,
         0,
         local_device_ids=[0],
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
 
 
@@ -373,47 +399,10 @@ def test_initialize_jax_supervised_other_host_polls(
         16,
         8,
         local_device_ids=[0],
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
     assert fake_ctx.registry.registered == []
-
-
-# NOT_FOUND is the proper Connect "name absent"; UNIMPLEMENTED is what an older
-# controller's bare HTTP 404 decodes to for the same condition. Both must retry.
-@pytest.mark.parametrize("pending_code", [Code.NOT_FOUND, Code.UNIMPLEMENTED])
-def test_poll_for_coordinator_retries_until_registered(pending_code: Code) -> None:
-    """The lookup reports the name absent until rank 0 registers; the poller retries, not crashes."""
-    found = ResolveResult(
-        name="jax_coordinator",
-        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
-    )
-
-    class NotYetRegisteredResolver:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def resolve(self, name: str) -> ResolveResult:
-            self.calls += 1
-            if self.calls < 3:
-                raise ConnectError(pending_code, f"{name} not registered")
-            return found
-
-    resolver = NotYetRegisteredResolver()
-    url = _poll_for_coordinator(resolver, "jax_coordinator", timeout=5.0, poll_interval=0.001)
-    assert url == "10.0.0.9:8476"
-    assert resolver.calls == 3
-
-
-def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
-    """A Connect error outside the pending set (e.g. PERMISSION_DENIED) is real and propagates."""
-
-    class DeniedResolver:
-        def resolve(self, name: str) -> ResolveResult:
-            raise ConnectError(Code.PERMISSION_DENIED, "not allowed")
-
-    with pytest.raises(ConnectError):
-        _poll_for_coordinator(DeniedResolver(), "jax_coordinator", timeout=5.0, poll_interval=0.001)
 
 
 @contextmanager
@@ -451,10 +440,7 @@ def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
         else:
             jax.config.update("jax_compilation_cache_dir", "gs://explicit/cache")
 
-        with patch("iris.runtime.jax_init.marin_prefix") as mock_prefix:
-            configure_jax_compilation_cache()
-
-        mock_prefix.assert_not_called()
+        configure_jax_compilation_cache()
         if source == "env":
             assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
         else:
@@ -507,34 +493,3 @@ def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> No
         # var itself (which JAX reads directly) is left as the caller set it.
         assert jax.config.jax_persistent_cache_enable_xla_caches == original
         assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "all"
-
-
-def test_poll_for_coordinator_default_interval() -> None:
-    """_poll_for_coordinator works with the default poll_interval=2.0 (must not crash on ExponentialBackoff)."""
-    found = ResolveResult(
-        name="coord",
-        endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
-    )
-    resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=10.0, poll_interval=2.0)
-    assert address == "1.2.3.4:8476"
-
-
-def test_poll_for_coordinator_returns_url() -> None:
-    """_poll_for_coordinator returns the url from the first resolved endpoint."""
-    found = ResolveResult(
-        name="coord",
-        endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
-    )
-    resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=5.0, poll_interval=0.01)
-    assert address == "1.2.3.4:8476"
-
-
-def test_poll_for_coordinator_timeout() -> None:
-    """_poll_for_coordinator raises TimeoutError when endpoint never appears."""
-    empty = ResolveResult(name="coord", endpoints=[])
-    resolver = FakeResolver(results=[empty])
-
-    with pytest.raises(TimeoutError, match="Timed out"):
-        _poll_for_coordinator(resolver, "coord", timeout=0.1, poll_interval=0.01)

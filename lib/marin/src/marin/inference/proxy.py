@@ -32,6 +32,10 @@ from marin.inference.types import (
 
 logger = logging.getLogger(__name__)
 
+# Extra forwarding-limiter capacity beyond max_pending_requests: keeps the over-capacity 429 path
+# reachable while the pending budget is fully parked.
+_FORWARD_LIMITER_HEADROOM = 16
+
 
 @dataclass
 class ProxyStats:
@@ -74,9 +78,8 @@ class InferenceProxy:
         # Each in-flight request parks a thread in forward_raw_request until its brokered response
         # lands. anyio's default to_thread limiter is 40 threads, which silently caps the whole
         # fleet's concurrency at 40 no matter how many workers sit behind the broker; size the
-        # limiter to the pending budget instead. The extra headroom keeps the over-capacity 429
-        # path reachable while the budget is fully parked.
-        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + 16)
+        # limiter to the pending budget instead.
+        self._forward_limiter = anyio.CapacityLimiter(max_pending_requests + _FORWARD_LIMITER_HEADROOM)
         self._lock = threading.Lock()
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None

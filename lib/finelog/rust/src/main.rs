@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use finelog::query::configure_query_runtime;
-use finelog::query::sidecar::configure_sidecar_cache;
+use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
@@ -57,11 +57,14 @@ struct Args {
     #[arg(long, env = "FINELOG_QUERY_METADATA_CACHE_MB")]
     query_metadata_cache_mb: Option<NonZeroUsize>,
 
-    /// Trigram sidecar cache limit in MiB. Raise it past the deployment's total
-    /// sidecar bytes; a budget below the working set makes every substring query
-    /// re-read the blooms the last one evicted.
-    #[arg(long, env = "FINELOG_SIDECAR_CACHE_MB")]
-    sidecar_cache_mb: Option<NonZeroUsize>,
+    /// Decoded segment-index cache limit in MiB. This covers `.fidx` headers,
+    /// trigram blooms, exact postings, and value-count summaries.
+    #[arg(
+        long,
+        env = "FINELOG_INDEX_CACHE_MB",
+        default_value_t = NonZeroUsize::new(DEFAULT_INDEX_CACHE_MB).unwrap()
+    )]
+    index_cache_mb: NonZeroUsize,
 
     /// Mount the NON-proto test-only `/debug/*` admin routes (maintain/segments).
     /// Off the frozen contract; used only by the parity harness. Never set in
@@ -106,15 +109,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
-    if let Some(mb) = args.sidecar_cache_mb {
-        configure_sidecar_cache(mb.get())
-            .map_err(|e| format!("failed to configure sidecar cache: {e}"))?;
-    }
-
     let store = Arc::new(
         Store::new(
             args.log_dir.clone().map(PathBuf::from),
             args.remote_log_dir.clone(),
+            args.index_cache_mb.get(),
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );

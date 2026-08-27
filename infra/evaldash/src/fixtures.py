@@ -22,6 +22,16 @@ import json
 import sys
 from datetime import datetime, timedelta
 
+from finestore.eval import (
+    SAMPLES_PREFIX,
+    SAMPLES_SUFFIX,
+    Choice,
+    EvalSample,
+    Grading,
+    Message,
+    SampleKind,
+    write_sample_parquet,
+)
 from fsspec.core import url_to_fs
 from marin.evaluation.records import (
     RECORD_FILE,
@@ -36,16 +46,6 @@ from marin.evaluation.records import (
     RunTiming,
     ServingParams,
     write_record,
-)
-from marin.evaluation.samples import (
-    SAMPLES_PREFIX,
-    SAMPLES_SUFFIX,
-    Choice,
-    EvalSample,
-    Grading,
-    Message,
-    SampleKind,
-    write_sample_parquet,
 )
 
 # The dashboard's EvalProfileChart highlights this reference model; keep it in the fixtures so that

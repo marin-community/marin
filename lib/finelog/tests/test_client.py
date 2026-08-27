@@ -23,7 +23,16 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import MAP_STRING_STRING, Column, Schema, schema_from_proto, schema_to_arrow, schema_to_proto
+from finelog.schema import (
+    MAP_STRING_STRING,
+    Column,
+    CoveringProjection,
+    GroupedExtrema,
+    Schema,
+    schema_from_proto,
+    schema_to_arrow,
+    schema_to_proto,
+)
 
 
 class FakeLogClient:
@@ -859,6 +868,8 @@ def test_schema_from_proto_consistency():
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
         assert proto_col.index.trigram == src_col.trigram_index
+        assert tuple(proto_col.index.exact_values) == src_col.exact_values
+        assert proto_col.index.value_counts == src_col.value_counts
 
 
 def test_trigram_index_round_trips_through_proto():
@@ -875,3 +886,65 @@ def test_trigram_index_round_trips_through_proto():
         "level": False,
         "timestamp_ms": False,
     }
+
+
+def test_exact_indexes_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(
+                name="name",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                exact_values=("phase", "step"),
+            ),
+            Column(
+                name="service",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                value_counts=True,
+            ),
+        )
+    )
+    back = schema_from_proto(schema_to_proto(schema))
+    assert back.columns[0].exact_values == ("phase", "step")
+    assert back.columns[1].value_counts
+
+
+def test_covering_projections_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="name", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="value", type=stats_pb2.COLUMN_TYPE_FLOAT64),
+        ),
+        projections=(
+            CoveringProjection(
+                name="training-status",
+                predicate_column="name",
+                predicate_values=("phase", "step"),
+                columns=("name", "value"),
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_grouped_extrema_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="timestamp", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="scope", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        ),
+        key_column="timestamp",
+        grouped_extrema=(
+            GroupedExtrema(
+                filter_column="scope",
+                group_json_column="labels",
+                group_json_key="identity",
+                extrema_column="timestamp",
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema

@@ -37,6 +37,12 @@ from marin.inference.http_proxy import forwardable_request_headers, forwardable_
 
 logger = logging.getLogger(__name__)
 
+# Every /v1 request funnels through one httpx client, so httpx's default connection pool
+# (max_connections=100) would silently cap the whole serve at 100 concurrent requests — far below
+# what a batch-inference vLLM engine sustains (max_num_seqs is commonly 512+).
+_UPSTREAM_MAX_CONNECTIONS = 4096
+_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = 1024
+
 
 @dataclass(frozen=True)
 class ServingInfo:
@@ -72,14 +78,13 @@ def build_dashboard_app(
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        # Every /v1 request funnels through this one client, so httpx's default
-        # connection pool (max_connections=100) silently caps the whole serve at
-        # 100 concurrent requests — far below what a batch-inference vLLM engine
-        # sustains (max_num_seqs is commonly 512+).
         state["client"] = httpx.AsyncClient(
             base_url=upstream_base_url,
             timeout=httpx.Timeout(request_timeout_seconds, connect=10.0),
-            limits=httpx.Limits(max_connections=4096, max_keepalive_connections=1024),
+            limits=httpx.Limits(
+                max_connections=_UPSTREAM_MAX_CONNECTIONS,
+                max_keepalive_connections=_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS,
+            ),
         )
         try:
             yield

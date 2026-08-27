@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fake ``vllm serve`` child for test_vllm_server.py: exercises the startup-retry path with no GPU.
+"""Fake ``vllm serve`` child for test_vllm_server.py.
 
-``_start_vllm_native_server`` appends ``serve <model> ... --port <p>``, so ``--port`` is read from argv.
+``VllmEnvironment`` appends ``serve <model> ... --port <p>``, so ``--port`` is read from argv.
 
 Modes:
   serve                          Answer /v1/models with 200.
   hang <counter>                 Record the start, then sleep without becoming ready.
-  fail <counter> <n> [message]   Record the start; fail the first <n> starts (printing <message>,
-                                 default the libstreamer fault, to stderr), then serve.
+  stuck-fault <counter>          Log a streamer fault while the parent stays alive.
+  exit                           Exit successfully without becoming ready.
 """
 
 import sys
@@ -49,15 +49,12 @@ def main() -> None:
     elif mode == "hang":
         _record_start(sys.argv[2])
         time.sleep(30)
-    elif mode == "fail":
-        started = _record_start(sys.argv[2])
-        fail_until = int(sys.argv[3])
-        # A custom message is present only when arg 4 is not the appended ``serve`` subcommand.
-        message = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "serve" else STREAMER_FAULT
-        if started <= fail_until:
-            print(message, file=sys.stderr)
-            sys.exit(1)
-        _serve()
+    elif mode == "stuck-fault":
+        _record_start(sys.argv[2])
+        print(STREAMER_FAULT, file=sys.stderr, flush=True)
+        time.sleep(30)
+    elif mode == "exit":
+        return
     else:
         raise SystemExit(f"unknown mode: {mode}")
 

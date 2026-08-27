@@ -177,17 +177,18 @@ def test_two_single_slot_converters_serve_two_documents_concurrently() -> None:
     assert sorted(response.request_id for response in responses) == ["req-0", "req-1"]
 
 
+@dataclass
+class _FakeProcess:
+    """The slice of subprocess.Popen the supervisor reads: poll() and returncode."""
+
+    returncode: int | None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+
 def test_dead_converters_are_respawned_in_their_slots(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(converter_pool, "_RESPAWN_DELAY_SECONDS", 0.0)
-
-    @dataclass
-    class _FakeProcess:
-        """The slice of subprocess.Popen the supervisor reads: poll() and returncode."""
-
-        returncode: int | None
-
-        def poll(self) -> int | None:
-            return self.returncode
 
     spawned: list[int] = []
 
@@ -202,12 +203,45 @@ def test_dead_converters_are_respawned_in_their_slots(monkeypatch: pytest.Monkey
     }
     survivor = children[0]
 
-    respawned = converter_pool._respawn_dead(children, spawn)
+    respawned = converter_pool._respawn_dead(children, spawn, {})
 
     assert respawned == [1, 2]
     assert spawned == [1, 2]
     assert children[0] is survivor
     assert children[1].poll() is None and children[2].poll() is None
+
+
+def test_a_correlated_crash_pays_the_respawn_delay_once() -> None:
+    """N slots dying together must all respawn one delay later, not serialize N delays.
+
+    Uses a fake clock: no scan may block, and every dead slot becomes eligible at the same
+    deadline, so the scan at first-observation + delay respawns the whole batch.
+    """
+    now = {"t": 100.0}
+
+    spawned: list[int] = []
+
+    def spawn(slot: int) -> _FakeProcess:
+        spawned.append(slot)
+        return _FakeProcess(returncode=None)
+
+    children = {slot: _FakeProcess(returncode=-11) for slot in range(4)}
+    respawn_at: dict[int, float] = {}
+
+    # First scan observes the deaths and arms the deadlines; nothing is eligible yet.
+    assert converter_pool._respawn_dead(children, spawn, respawn_at, clock=lambda: now["t"]) == []
+    assert spawned == []
+
+    # Just before the shared deadline: still nothing.
+    now["t"] = 100.0 + converter_pool._RESPAWN_DELAY_SECONDS - 0.01
+    assert converter_pool._respawn_dead(children, spawn, respawn_at, clock=lambda: now["t"]) == []
+
+    # One delay after the crash, the whole batch respawns in a single scan.
+    now["t"] = 100.0 + converter_pool._RESPAWN_DELAY_SECONDS
+    assert converter_pool._respawn_dead(children, spawn, respawn_at, clock=lambda: now["t"]) == [0, 1, 2, 3]
+    assert spawned == [0, 1, 2, 3]
+    assert respawn_at == {}
+    assert all(children[slot].poll() is None for slot in range(4))
 
 
 def test_broker_stats_track_the_document_lifecycle() -> None:

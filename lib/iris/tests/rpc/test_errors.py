@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import iris.rpc.errors as errors_module
 import pytest
+import rigging.timing as timing
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.rpc.errors import (
@@ -13,6 +15,25 @@ from iris.rpc.errors import (
     poll_with_retries,
 )
 from rigging.timing import Deadline, ExponentialBackoff
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = 0.0
+
+    def monotonic(self) -> float:
+        return self.current
+
+    def sleep(self, interval: float) -> None:
+        self.current += interval
+
+
+@pytest.fixture
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    clock = FakeClock()
+    monkeypatch.setattr(errors_module, "time", clock)
+    monkeypatch.setattr(timing, "time", clock)
+    return clock
 
 
 def test_connect_error_with_traceback_populates_timestamp() -> None:
@@ -64,7 +85,7 @@ def test_call_with_retry_succeeds_first_attempt() -> None:
     assert call_count == 1
 
 
-def test_call_with_retry_retries_on_unavailable() -> None:
+def test_call_with_retry_retries_on_unavailable(fake_clock: FakeClock) -> None:
     """call_with_retry should retry on UNAVAILABLE errors."""
     call_count = 0
 
@@ -75,25 +96,34 @@ def test_call_with_retry_retries_on_unavailable() -> None:
             raise ConnectError(Code.UNAVAILABLE, "Service down")
         return "success"
 
-    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.01, maximum=0.05))
+    result = call_with_retry(
+        "test_op",
+        retry_then_succeed,
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
+    )
 
     assert result == "success"
     assert call_count == 3
 
 
-def test_call_with_retry_fails_after_max_attempts() -> None:
+def test_call_with_retry_fails_after_max_attempts(fake_clock: FakeClock) -> None:
     """call_with_retry should give up after max_attempts."""
 
     def always_fail():
         raise ConnectError(Code.UNAVAILABLE, "Always down")
 
     with pytest.raises(ConnectError) as exc_info:
-        call_with_retry("test_op", always_fail, max_attempts=3, backoff=ExponentialBackoff(initial=0.01, maximum=0.05))
+        call_with_retry(
+            "test_op",
+            always_fail,
+            max_attempts=3,
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
+        )
 
     assert exc_info.value.code == Code.UNAVAILABLE
 
 
-def test_call_with_retry_retries_on_deadline_exceeded() -> None:
+def test_call_with_retry_retries_on_deadline_exceeded(fake_clock: FakeClock) -> None:
     call_count = 0
 
     def retry_then_succeed():
@@ -103,12 +133,16 @@ def test_call_with_retry_retries_on_deadline_exceeded() -> None:
             raise ConnectError(Code.DEADLINE_EXCEEDED, "Request timed out")
         return "success"
 
-    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
+    result = call_with_retry(
+        "test_op",
+        retry_then_succeed,
+        backoff=ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0),
+    )
     assert result == "success"
     assert call_count == 3
 
 
-def test_call_with_retry_retries_on_resource_exhausted() -> None:
+def test_call_with_retry_retries_on_resource_exhausted(fake_clock: FakeClock) -> None:
     call_count = 0
 
     def retry_then_succeed():
@@ -118,7 +152,11 @@ def test_call_with_retry_retries_on_resource_exhausted() -> None:
             raise ConnectError(Code.RESOURCE_EXHAUSTED, "shed by concurrency limiter")
         return "success"
 
-    result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
+    result = call_with_retry(
+        "test_op",
+        retry_then_succeed,
+        backoff=ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0),
+    )
     assert result == "success"
     assert call_count == 3
 
@@ -140,7 +178,7 @@ def test_call_with_retry_no_retry_on_not_found() -> None:
     assert call_count == 1
 
 
-def test_call_with_retry_max_elapsed_stops_retrying() -> None:
+def test_call_with_retry_max_elapsed_stops_retrying(fake_clock: FakeClock) -> None:
     """call_with_retry should stop retrying after max_elapsed seconds."""
     call_count = 0
 
@@ -155,14 +193,14 @@ def test_call_with_retry_max_elapsed_stops_retrying() -> None:
             always_fail,
             max_attempts=1000,
             max_elapsed=0.5,
-            backoff=ExponentialBackoff(initial=0.05, maximum=0.1),
+            backoff=ExponentialBackoff(initial=0.05, maximum=0.1, jitter=0),
         )
 
-    # Should have retried several times within the 0.5s window, but not all 1000.
-    assert 2 <= call_count <= 30
+    assert call_count == 7
+    assert fake_clock.current == 0.5
 
 
-def test_call_with_retry_max_elapsed_succeeds_within_window() -> None:
+def test_call_with_retry_max_elapsed_succeeds_within_window(fake_clock: FakeClock) -> None:
     """call_with_retry should succeed if the call recovers within max_elapsed."""
     call_count = 0
 
@@ -178,7 +216,7 @@ def test_call_with_retry_max_elapsed_succeeds_within_window() -> None:
         fail_then_succeed,
         max_attempts=1000,
         max_elapsed=5.0,
-        backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
     )
     assert result == "recovered"
     assert call_count == 4
@@ -196,7 +234,7 @@ def test_poll_with_retries_succeeds_immediately() -> None:
     assert result == "ok"
 
 
-def test_poll_with_retries_retries_then_succeeds() -> None:
+def test_poll_with_retries_retries_then_succeeds(fake_clock: FakeClock) -> None:
     call_count = 0
 
     def flaky():
@@ -210,13 +248,13 @@ def test_poll_with_retries_retries_then_succeeds() -> None:
         "test",
         flaky,
         deadline=Deadline.from_seconds(5.0),
-        backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+        backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
     )
     assert result == "recovered"
     assert call_count == 3
 
 
-def test_poll_with_retries_respects_deadline() -> None:
+def test_poll_with_retries_respects_deadline(fake_clock: FakeClock) -> None:
     """Deadline expiry during unavailability raises TimeoutError, not the RPC error."""
 
     def always_fail():
@@ -228,11 +266,12 @@ def test_poll_with_retries_respects_deadline() -> None:
             always_fail,
             deadline=Deadline.from_seconds(0.3),
             unavailable_tolerance=3600.0,
-            backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
         )
+    assert fake_clock.current == 0.3
 
 
-def test_poll_with_retries_respects_unavailable_tolerance() -> None:
+def test_poll_with_retries_respects_unavailable_tolerance(fake_clock: FakeClock) -> None:
     """Unavailability tolerance expiry re-raises the RPC error."""
 
     def always_fail():
@@ -244,9 +283,10 @@ def test_poll_with_retries_respects_unavailable_tolerance() -> None:
             always_fail,
             deadline=Deadline.from_seconds(10.0),
             unavailable_tolerance=0.3,
-            backoff=ExponentialBackoff(initial=0.01, maximum=0.05),
+            backoff=ExponentialBackoff(initial=0.01, maximum=0.05, jitter=0),
         )
     assert exc_info.value.code == Code.UNAVAILABLE
+    assert fake_clock.current >= 0.3
 
 
 def test_poll_with_retries_raises_non_retryable_immediately() -> None:

@@ -3,17 +3,17 @@
 
 """Tests for the OCR extraction route: page rendering and the sender's document assembly."""
 
-import time
+import threading
 
 import pyarrow as pa
 import pymupdf
 import pytest
 
-from experiments.build_pdf_source import extract, extract_ocr
-from experiments.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
-from experiments.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
-from experiments.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
-from experiments.build_pdf_source.ocr_extract.render import (
+from experiments.datakit.build_pdf_source import extract, extract_ocr
+from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
+from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
+from experiments.datakit.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
+from experiments.datakit.build_pdf_source.ocr_extract.render import (
     MAX_PIXELS,
     VISUAL_TOKEN_PIXELS,
     RenderOptions,
@@ -157,13 +157,33 @@ def test_rendered_pages_are_png_data_uris():
 # --- document assembly -----------------------------------------------------------------------
 
 
-def test_pages_are_assembled_in_reading_order_when_requests_finish_out_of_order(run_batch):
-    """The whole point of the in-order queue: completion order must not reach the document."""
+def _reverse_completion_responder(total: int, text):
+    """A responder whose requests complete in strictly reverse submission order.
+
+    Request *k* blocks until request *k+1* has returned, so the last submission resolves first --
+    deterministically, with no timing involved. The request pool has 32 threads, far more than any
+    fixture submits, so every blocked request holds a thread without starving the one that unblocks
+    the chain.
+    """
+    returned = [threading.Event() for _ in range(total + 1)]
+    returned[total].set()
+    submissions = iter(range(total))
+    lock = threading.Lock()
 
     def respond(_endpoint, _connections, page) -> PageOcr:
-        # Earlier pages answer last.
-        time.sleep(0.02 * (5 - page.page_index))
-        return PageOcr(text=f"page {_word(page.page_index)}", completion_tokens=1)
+        with lock:
+            index = next(submissions)
+        assert returned[index + 1].wait(timeout=30), "the completion chain stalled"
+        result = PageOcr(text=text(page), completion_tokens=1)
+        returned[index].set()
+        return result
+
+    return respond
+
+
+def test_pages_are_assembled_in_reading_order_when_requests_finish_out_of_order(run_batch):
+    """The whole point of the in-order queue: completion order must not reach the document."""
+    respond = _reverse_completion_responder(5, lambda page: f"page {_word(page.page_index)}")
 
     (record,) = run_batch([_row(0, _pdf(5))], respond)
     assert record["text"] == "".join(f"page {_word(index)}\n" for index in range(5))
@@ -171,9 +191,8 @@ def test_pages_are_assembled_in_reading_order_when_requests_finish_out_of_order(
 
 
 def test_documents_are_emitted_in_input_order(run_batch):
-    def respond(_endpoint, _connections, page) -> PageOcr:
-        time.sleep(0.01)
-        return PageOcr(text=f"page {_word(page.page_index)}", completion_tokens=1)
+    """The last document's pages complete first, and the output order must not follow suit."""
+    respond = _reverse_completion_responder(6, lambda page: f"page {_word(page.page_index)}")
 
     rows = [_row(offset, _pdf(2)) for offset in (10, 20, 30)]
     records = run_batch(rows, respond)
@@ -267,8 +286,8 @@ def test_completion_tokens_are_summed_over_the_document(run_batch):
 def test_both_extraction_routes_share_a_column_prefix():
     """The two routes are concatenated downstream, so the shared columns must line up exactly."""
     shared = [(field.name, field.type) for field in PDF_DOCUMENT_FIELDS]
-    docling = [(field.name, field.type) for field in extract._OUTPUT_SCHEMA]
-    ocr = [(field.name, field.type) for field in extract_ocr._OUTPUT_SCHEMA]
+    docling = [(field.name, field.type) for field in extract.OUTPUT_SCHEMA]
+    ocr = [(field.name, field.type) for field in extract_ocr.OUTPUT_SCHEMA]
     assert docling == shared
     assert ocr[: len(shared)] == shared
 
@@ -276,7 +295,7 @@ def test_both_extraction_routes_share_a_column_prefix():
 def test_the_ocr_record_matches_its_declared_schema(run_batch):
     """A record that does not fit the schema fails only at write time, a whole shard later."""
     records = run_batch([_row(0, _pdf(2))], _page_text)
-    assert pa.RecordBatch.from_pylist(records, schema=extract_ocr._OUTPUT_SCHEMA).num_rows == 1
+    assert pa.RecordBatch.from_pylist(records, schema=extract_ocr.OUTPUT_SCHEMA).num_rows == 1
 
 
 # --- page fence unwrapping ---------------------------------------------------------------------

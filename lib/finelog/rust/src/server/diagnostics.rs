@@ -127,7 +127,14 @@ Threads:\t8\n";
         // The task parks in a 60s select; latch + notify must drain it FAR sooner
         // than POOL_DIAGNOSTICS_INTERVAL, proving the shutdown path cannot stall
         // the process for an interval (the lost-wakeup-race guard).
-        let store = Arc::new(Store::new(None, String::new()).unwrap());
+        let store = Arc::new(
+            Store::new(
+                None,
+                String::new(),
+                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            )
+            .unwrap(),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let notify = Arc::new(tokio::sync::Notify::new());
         let handle =

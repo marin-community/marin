@@ -37,10 +37,10 @@
 //! - It advances a namespace's cursor past a batch only once that batch can never be
 //!   sent again: the hub acked it, or the forwarder gave it up. A crash mid-batch
 //!   re-forwards it (at-least-once; tolerable for logs and append-only stats).
-//! - When a namespace falls further behind than [`MAX_FORWARD_LAG_SEQS`], when eviction
-//!   has already archived the segments its cursor points at, or when the hub refuses a
-//!   batch outright, it skips forward and logs what it dropped. A counted, visible gap
-//!   beats an unbounded queue.
+//! - A backlog is only a cursor into the source's already-bounded local retention, not a
+//!   separate in-memory queue. The forwarder drains it without an age or row-count cap.
+//!   It skips only when eviction has already removed the cursor's segments or when the
+//!   hub permanently refuses a malformed batch.
 //!
 //! A push failure backs off and retries; nothing here can take the store down.
 
@@ -53,6 +53,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Field, Int64Type, Schema as ArrowSchema};
 use connectrpc::client::{CallOptions, ClientConfig, ServiceTransport};
 use connectrpc::compression::{CompressionRegistry, GzipProvider, ZstdProvider};
+use futures::StreamExt;
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::TokioExecutor;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -81,9 +82,11 @@ const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Rows read from one namespace per batch. The hub durably acknowledges each outbound
 /// request, so a small row cap turns its one-second flush-coalescing interval into a
-/// throughput cap. Byte chunking still bounds each request and this read stays well
-/// below the store's million-row write limit.
-const FORWARD_BATCH_ROWS: i64 = 50_000;
+/// throughput cap. A live telemetry scan showed that reading 200,000 rows was faster
+/// than reading 50,000 because provider construction and planning dominate the bounded
+/// scan. Byte chunking still bounds each request, and this stays below the store's
+/// million-row write limit.
+const FORWARD_BATCH_ROWS: i64 = 200_000;
 
 /// Encoded bytes per outbound request. Keep one MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
@@ -93,13 +96,19 @@ const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
 
-/// How far a namespace's cursor may trail its durability watermark before the forwarder
-/// gives up on the backlog and jumps to `persisted - MAX_FORWARD_LAG_SEQS`, keeping the
-/// freshest window rather than discarding it all.
+/// Non-log chunks from one read turn may wait for durability concurrently. The hub
+/// coalesces writes that arrive within its one-second flush window, so a telemetry-sized
+/// turn split across several Arrow messages needs one durable flush instead of one per
+/// message. Log chunks stay serial to preserve line order at the hub.
+const FORWARD_CHUNK_CONCURRENCY: usize = 8;
+
+/// Emit one warning when a namespace's cursor trails this far behind. This is an
+/// observability threshold only: the backlog is still drained in full while its source
+/// segments remain locally retained.
 ///
 /// Measured in `seq` positions, not rows: `seq` is a namespace's own dense counter, so
 /// the two coincide only when no earlier gap exists.
-const MAX_FORWARD_LAG_SEQS: i64 = 2_000_000;
+const FORWARD_LAG_WARNING_SEQS: i64 = 2_000_000;
 
 /// Bearer lifetime, and how early to re-mint. Short-lived because the hub checks only
 /// signature + audience + expiry — it cannot reach a revocation list, so a leaked
@@ -268,10 +277,9 @@ pub struct Forwarder<T = HttpsTransport> {
     client: StatsServiceClient<T>,
     minter: TokenMinter,
     config: ForwardingConfig,
-    /// How far behind its watermark a namespace's cursor may fall before the forwarder
-    /// abandons the backlog and jumps to its freshest window. [`MAX_FORWARD_LAG_SEQS`]
-    /// unless overridden.
-    max_lag_seqs: i64,
+    /// Backlog size that emits a warning. It never changes the cursor.
+    lag_warning_seqs: i64,
+    warned_lag: Mutex<HashSet<String>>,
     /// Namespaces already created on the hub this process, so `RegisterTable` runs at
     /// most once each.
     registered: Mutex<HashSet<String>>,
@@ -305,7 +313,8 @@ where
             client,
             minter,
             config,
-            max_lag_seqs: MAX_FORWARD_LAG_SEQS,
+            lag_warning_seqs: FORWARD_LAG_WARNING_SEQS,
+            warned_lag: Mutex::new(HashSet::new()),
             registered: Mutex::new(HashSet::new()),
         }
     }
@@ -396,7 +405,7 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        cursor = self.cap_lag(name, cursor, persisted, progress);
+        self.observe_lag(name, cursor, persisted);
         // The forwarder stamps this column with its own cluster on the way out and
         // forwards only rows that do not already carry a foreign origin, so a hub's
         // own relayed rows never loop back. A registered table always has it (added
@@ -458,8 +467,21 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        for (ipc, last_seq) in chunks {
-            match self.push(name, ipc, stop).await {
+        let concurrency = if name == LOG_NAMESPACE_NAME {
+            1
+        } else {
+            FORWARD_CHUNK_CONCURRENCY
+        };
+        let pushes = chunks.into_iter().map(|(ipc, last_seq)| {
+            let mut chunk_stop = (*stop).clone();
+            async move { (last_seq, self.push(name, ipc, &mut chunk_stop).await) }
+        });
+        // `buffered` polls several pushes at once but yields their results in input
+        // order. The durable cursor therefore never advances past an earlier chunk that
+        // is still retrying, even when a later chunk reaches the hub first.
+        let mut pushes = futures::stream::iter(pushes).buffered(concurrency);
+        while let Some((last_seq, result)) = pushes.next().await {
+            match result {
                 Ok(()) => progress.batches += 1,
                 Err(PushError::Stopping(e)) => {
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
@@ -536,25 +558,24 @@ where
         true
     }
 
-    /// Abandon a backlog too large to be worth draining, keeping the freshest
-    /// [`Self::max_lag_seqs`] of it.
-    fn cap_lag(&self, name: &str, cursor: i64, persisted: i64, progress: &mut Progress) -> i64 {
-        if persisted - cursor <= self.max_lag_seqs {
-            return cursor;
+    /// Report a growing backlog once without changing its cursor. Clear the latch after
+    /// catch-up so a later independent incident is visible too.
+    fn observe_lag(&self, name: &str, cursor: i64, persisted: i64) {
+        let lag = persisted - cursor;
+        let mut warned = self.warned_lag.lock().unwrap();
+        if lag > self.lag_warning_seqs {
+            if warned.insert(name.to_string()) {
+                tracing::warn!(
+                    namespace = name,
+                    cursor,
+                    persisted,
+                    lag,
+                    "finelog forwarder: backlog exceeds the warning threshold; draining without skipping"
+                );
+            }
+        } else {
+            warned.remove(name);
         }
-        let resume_at = persisted - self.max_lag_seqs;
-        let skipped = resume_at - cursor;
-        progress.skipped_seqs += skipped;
-        tracing::warn!(
-            namespace = name,
-            cursor,
-            persisted,
-            skipped,
-            resume_at,
-            "finelog forwarder: backlog exceeds the lag cap; skipping ahead"
-        );
-        self.persist_cursor(name, resume_at);
-        resume_at
     }
 
     /// Up to [`FORWARD_BATCH_ROWS`] locally-written rows of `name` in `(cursor, persisted]`
@@ -581,8 +602,9 @@ where
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
-            .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?;
+        let provider =
+            NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
+                .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?;
 
         let table = quote_ident(name);
         let mut sql =
@@ -894,7 +916,7 @@ struct Progress {
     /// Requests the hub accepted, across every namespace. Counted in batches, not rows.
     batches: u64,
     /// `seq` positions the forwarder passed over and will never send — evicted before
-    /// they shipped, dropped by the lag cap, or in a batch the hub permanently refused.
+    /// they shipped or in a batch the hub permanently refused.
     /// An upper bound on rows lost: some positions held rows the scan would have filtered
     /// out anyway.
     skipped_seqs: i64,

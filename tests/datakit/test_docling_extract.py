@@ -20,19 +20,19 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
 from docling_core.types.doc.base import BoundingBox
 
-from experiments.build_pdf_source.docling_extract.assemble import (
+from experiments.datakit.build_pdf_source.docling_extract.assemble import (
     collapse_letter_spacing,
     is_letter_spaced_heading,
     join_cluster_cells,
     replace_faulty_characters,
 )
-from experiments.build_pdf_source.docling_extract.backend import (
+from experiments.datakit.build_pdf_source.docling_extract.backend import (
     PyMuPdfDocumentBackend,
     PyMuPdfPageBackend,
     blocks_to_cells,
 )
-from experiments.build_pdf_source.docling_extract.fields import patch_docling_models
-from experiments.build_pdf_source.docling_extract.serializer import alphabetic_ratio
+from experiments.datakit.build_pdf_source.docling_extract.fields import patch_docling_models
+from experiments.datakit.build_pdf_source.docling_extract.serializer import alphabetic_ratio
 
 _PAGE_HEIGHT = 800.0
 # A 10-point font advancing about 5 points per glyph, which is what the gap thresholds are relative to.
@@ -200,3 +200,37 @@ def test_unloading_a_page_backend_marks_it_invalid():
     assert page_backend.get_segmented_page() is None
     assert page_backend.get_text_in_rect(BoundingBox(l=0, t=0, r=10, b=10)) == ""
     assert list(page_backend.get_text_cells()) == []
+
+
+def test_list_marker_normalization_rebases_charspans_with_the_text():
+    """The head substitution moves every span by the size change, the same way merge_items rebases.
+
+    Both directions matter: a bullet folded to ``*`` shrinks the text (spans move left), a
+    checkmark expanded to ``[x]`` grows it (spans move right). A span must land on the same
+    characters afterwards, clamped at zero for a span that covered the replaced marker itself.
+    """
+    from docling_core.types.doc import DocItemLabel, DoclingDocument, ProvenanceItem  # noqa: PLC0415
+
+    from experiments.datakit.build_pdf_source.docling_extract.postprocess import ListMarkerNormalizer  # noqa: PLC0415
+
+    bbox = BoundingBox(l=0.0, t=10.0, r=100.0, b=0.0)
+    doc = DoclingDocument(name="charspans")
+    shrunk = doc.add_text(
+        label=DocItemLabel.TEXT,
+        text="  • item",
+        prov=ProvenanceItem(page_no=1, charspan=(4, 8), bbox=bbox),
+    )
+    grown = doc.add_text(
+        label=DocItemLabel.TEXT,
+        text="✓ done",
+        prov=ProvenanceItem(page_no=1, charspan=(2, 6), bbox=bbox),
+    )
+
+    ListMarkerNormalizer().process_document(doc)
+
+    assert shrunk.text == "* item"
+    assert tuple(shrunk.prov[0].charspan) == (2, 6)
+    assert shrunk.text[slice(*shrunk.prov[0].charspan)] == "item"
+    assert grown.text == "[x] done"
+    assert tuple(grown.prov[0].charspan) == (4, 8)
+    assert grown.text[slice(*grown.prov[0].charspan)] == "done"

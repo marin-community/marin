@@ -26,9 +26,10 @@ use uuid::Uuid;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
+use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
-use crate::store::schema::{schema_to_arrow, Column, Schema};
+use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
@@ -44,6 +45,19 @@ const MAX_JSON_DEPTH: usize = 32;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
 const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
+const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
+const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
+const ACCELERATOR_METRIC_NAMES: [&str; 9] = [
+    "gpu_memory_used_bytes",
+    "gpu_pcie_replay_errors",
+    "gpu_power_watts",
+    "gpu_row_remap_failures",
+    "gpu_temperature_celsius",
+    "gpu_tensor_active_ratio",
+    "gpu_utilization_percent",
+    "gpu_xid_error_code",
+    "hardware_inventory",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -231,7 +245,7 @@ struct TelemetryState {
     store: Arc<Store>,
     admission: Arc<Semaphore>,
     dedupe: Mutex<DedupeCache>,
-    namespace_registration: OnceCell<Result<(), String>>,
+    namespace_registration: OnceCell<()>,
 }
 
 struct PreparedBatch {
@@ -246,7 +260,7 @@ impl TelemetryState {
     async fn ensure_namespace_registered(&self) -> Result<(), ApiError> {
         let result = self
             .namespace_registration
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 let store = Arc::clone(&self.store);
                 match tokio::task::spawn_blocking(move || {
                     store.register_table(
@@ -263,7 +277,7 @@ impl TelemetryState {
                 }
             })
             .await;
-        result.as_ref().map_err(|error| {
+        result.map_err(|error| {
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "storage_unavailable",
@@ -287,6 +301,16 @@ pub fn router(
         admission: Arc::new(Semaphore::new(max_concurrent)),
         dedupe: Mutex::new(DedupeCache::new(dedupe_capacity)),
         namespace_registration: OnceCell::new(),
+    });
+    // The schema is server-owned, so apply additive index-policy evolution at
+    // startup even when telemetry reaches this store through StatsService or a
+    // forwarder instead of the HTTP endpoint below. Requests share the OnceCell
+    // and wait for this same registration if they arrive while it is running.
+    let startup_registration = Arc::clone(&state);
+    tokio::spawn(async move {
+        if let Err(error) = startup_registration.ensure_namespace_registered().await {
+            tracing::warn!(error = %error.message, "telemetry namespace startup registration failed");
+        }
     });
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
@@ -658,11 +682,19 @@ fn telemetry_schema() -> Schema {
             Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("batch_id", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("record_index", ColumnType::COLUMN_TYPE_INT64, false),
-            Column::new("service", ColumnType::COLUMN_TYPE_STRING, false),
-            Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("service", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
+            Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
-            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
+            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false)
+                .with_trigram_index()
+                .with_exact_values(
+                    TRAINING_STATUS_NAMES
+                        .into_iter()
+                        .chain(TRAINING_RUN_NAMES)
+                        .chain(ACCELERATOR_METRIC_NAMES),
+                )
+                .with_value_counts(),
             Column::new("value", ColumnType::COLUMN_TYPE_FLOAT64, true),
             Column::new("body_json", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("unit", ColumnType::COLUMN_TYPE_STRING, true),
@@ -675,6 +707,112 @@ fn telemetry_schema() -> Schema {
         ],
         "timestamp_ms",
     )
+    .with_covering_projection(CoveringProjection::new(
+        "training-status",
+        "name",
+        TRAINING_STATUS_NAMES,
+        [
+            "seq",
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "resource_attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "training-run-attribution",
+        "name",
+        TRAINING_RUN_NAMES,
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "resource_attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-power",
+        "name",
+        ["gpu_power_watts"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "resource_attributes_json",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-memory",
+        "name",
+        ["gpu_memory_used_bytes"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-faults",
+        "name",
+        [
+            "gpu_pcie_replay_errors",
+            "gpu_row_remap_failures",
+            "gpu_xid_error_code",
+        ],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-inventory",
+        "name",
+        ["hardware_inventory"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-temperature",
+        "name",
+        ["gpu_temperature_celsius"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-tensor-activity",
+        "name",
+        ["gpu_tensor_active_ratio"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-utilization",
+        "name",
+        ["gpu_utilization_percent"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
+    ))
+    .with_grouped_extrema(GroupExtremaConfig::new(
+        "service",
+        "resource_attributes_json",
+        "job_id",
+        "timestamp_ms",
+    ))
 }
 
 fn store_error(error: StatsError) -> ApiError {

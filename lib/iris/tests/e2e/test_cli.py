@@ -8,15 +8,15 @@ canonical ``config/examples/local.yaml``, then submits a job through the
 IrisClient to verify the full stack works.
 """
 
+import re
+import signal
+import subprocess
+import sys
 import threading
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
-from iris.cli import iris
 from iris.client import IrisClient
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import job_pb2
 
@@ -27,52 +27,45 @@ LOCAL_CONFIG = Path(__file__).resolve().parents[2] / "config" / "examples" / "lo
 
 def test_cli_local_cluster_e2e():
     """Start a local cluster via CLI, submit a job via IrisClient, verify completion."""
-    runner = CliRunner()
-
-    # Capture the LocalCluster instance so we can get the address and stop it
-    captured_controller: list[LocalCluster] = []
+    output: list[str] = []
+    controller_urls: list[str] = []
     controller_ready = threading.Event()
-    original_start = LocalCluster.start
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from iris.cli import main; main()",
+            "--config",
+            str(LOCAL_CONFIG),
+            "cluster",
+            "start",
+            "--local",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
 
-    def patched_start(self):
-        captured_controller.append(self)
-        result = original_start(self)
-        controller_ready.set()
-        return result
+    def read_output() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            output.append(line)
+            match = re.search(r"Controller started at (http://\S+)", line)
+            if match is not None:
+                controller_urls.append(match.group(1))
+                controller_ready.set()
 
-    # Run CLI in a background thread because `cluster start --local` blocks
-    # until the controller is stopped.
-    invoke_result: list = []
+    output_thread = threading.Thread(target=read_output, daemon=True)
+    output_thread.start()
 
-    def run_cli():
-        with patch.object(LocalCluster, "start", patched_start):
-            invoke_result.append(
-                runner.invoke(
-                    iris,
-                    ["--config", str(LOCAL_CONFIG), "cluster", "start", "--local"],
-                )
-            )
-
-    cli_thread = threading.Thread(target=run_cli, daemon=True)
-    cli_thread.start()
-
-    if not controller_ready.wait(timeout=30):
-        cli_thread.join(timeout=1)
-        if invoke_result and invoke_result[0].exception:
-            raise AssertionError(
-                f"CLI exited before the controller started: {invoke_result[0].output}"
-            ) from invoke_result[0].exception
-        raise AssertionError("Controller didn't start in time")
-    assert len(captured_controller) == 1
-
-    controller = captured_controller[0]
     try:
-        address = controller.discover()
-        assert address is not None
+        assert controller_ready.wait(timeout=30), "Controller did not start:\n" + "".join(output)
+        assert controller_urls
 
         # Submit a job through IrisClient; the autoscaler provisions a local
         # worker on demand, so the wait covers provisioning too.
-        client = IrisClient.remote(address, workspace=Path.cwd())
+        client = IrisClient.remote(controller_urls[0], workspace=Path.cwd())
 
         def hello():
             return 42
@@ -86,10 +79,13 @@ def test_cli_local_cluster_e2e():
         status = job.wait(timeout=90, raise_on_failure=True)
         assert status.state == job_pb2.JOB_STATE_SUCCEEDED
     finally:
-        controller.close()
-        cli_thread.join(timeout=5)
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+        try:
+            return_code = process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait(timeout=5)
+        output_thread.join(timeout=5)
 
-    assert invoke_result, "CLI did not return"
-    result = invoke_result[0]
-    assert result.exit_code == 0, f"CLI failed: {result.output}"
-    assert "Controller started at" in result.output
+    assert return_code == 0, "".join(output)

@@ -26,6 +26,8 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
 
+ACCELERATOR_SHM_FALLBACK_BYTES = 100 * 1024**3
+
 
 class ContainerInfraError(RuntimeError):
     """Container operation failed due to infrastructure issues (expired credentials,

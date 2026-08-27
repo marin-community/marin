@@ -244,6 +244,8 @@ def _run_pool_worker(worker_id: str, config: ConverterPoolConfig, broker: Infere
         InferenceWorkerMetadata(tensor_parallel_size=1, backend_name=_BACKEND_NAME),
     )
     os.environ.update(_SINGLE_THREAD_ENV)
+    # delete=False because respawned children re-read the payload for the life of the pod; the
+    # supervisor unlinks it on the way out.
     with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as payload_file:
         pickle.dump((worker_id, config.handler_factory, config.model_id, broker), payload_file)
         payload_path = payload_file.name
@@ -256,27 +258,47 @@ def _run_pool_worker(worker_id: str, config: ConverterPoolConfig, broker: Infere
             stderr=sys.stderr,
         )
 
-    children = {slot: spawn(slot) for slot in range(config.processes_per_instance)}
-    logger.info("Pool worker %s started %d converter processes", worker_id, len(children))
-    while True:
-        time.sleep(_SUPERVISE_POLL_SECONDS)
-        respawned = _respawn_dead(children, spawn)
-        if respawned:
-            logger.warning("Pool worker %s respawned converter slots %s", worker_id, sorted(respawned))
+    try:
+        children = {slot: spawn(slot) for slot in range(config.processes_per_instance)}
+        logger.info("Pool worker %s started %d converter processes", worker_id, len(children))
+        respawn_at: dict[int, float] = {}
+        while True:
+            time.sleep(_SUPERVISE_POLL_SECONDS)
+            respawned = _respawn_dead(children, spawn, respawn_at)
+            if respawned:
+                logger.warning("Pool worker %s respawned converter slots %s", worker_id, sorted(respawned))
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(payload_path)
 
 
-def _respawn_dead(children: dict[int, subprocess.Popen], spawn: Callable[[int], subprocess.Popen]) -> list[int]:
-    """Replace dead converter processes, returning the slots that were respawned.
+def _respawn_dead(
+    children: dict[int, subprocess.Popen],
+    spawn: Callable[[int], subprocess.Popen],
+    respawn_at: dict[int, float],
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> list[int]:
+    """Replace dead converter processes whose respawn delay has elapsed, returning respawned slots.
+
+    ``respawn_at`` carries each dead slot's earliest respawn time across scans: a slot becomes
+    eligible ``_RESPAWN_DELAY_SECONDS`` after it is first observed dead, so a correlated crash of
+    many slots waits the delay once rather than once per slot, and the scan never blocks.
 
     The in-flight lease of a dead converter is not recovered here: it either got an explicit error
     response before the crash, or it expires on the broker and is re-delivered to another converter.
     """
+    now = clock()
     respawned = []
     for slot, process in children.items():
         if process.poll() is None:
             continue
-        logger.warning("Converter process slot=%d died with exit code %s", slot, process.returncode)
-        time.sleep(_RESPAWN_DELAY_SECONDS)
+        if slot not in respawn_at:
+            logger.warning("Converter process slot=%d died with exit code %s", slot, process.returncode)
+            respawn_at[slot] = now + _RESPAWN_DELAY_SECONDS
+        if now < respawn_at[slot]:
+            continue
+        del respawn_at[slot]
         children[slot] = spawn(slot)
         respawned.append(slot)
     return respawned

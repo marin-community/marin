@@ -22,9 +22,7 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.reader import CompositeReader
-from fsspec.core import url_to_fs
-from marin.evaluation.samples import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
@@ -32,6 +30,8 @@ from marin.evaluation.samples import (
     primary_metric,
     sample_from_archive_row,
 )
+from finestore.reader import CompositeReader
+from fsspec.core import url_to_fs
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem import StoragePath
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+from finestore.eval import export_lm_eval_samples
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -21,7 +22,6 @@ from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
-from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 

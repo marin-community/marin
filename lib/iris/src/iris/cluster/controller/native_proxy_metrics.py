@@ -161,7 +161,8 @@ class NativeProxyTelemetry:
             stop.set()
         thread.join(timeout=5.0)
 
-    def publish_once(self) -> None:
+    def flush(self) -> None:
+        """Publish one aggregate snapshot for every attached proxy."""
         with self._lock:
             rpc_snapshots: list[dict] = [json.loads(proxy.rpc_metrics_json) for proxy in self._proxies]
             proxy_snapshots: list[dict] = [json.loads(proxy.proxy_metrics_json) for proxy in self._proxies]
@@ -171,7 +172,7 @@ class NativeProxyTelemetry:
     def _run(self, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
-                self.publish_once()
+                self.flush()
             except Exception:
                 # Native metrics remain best-effort and must not affect controller service.
                 try:
@@ -257,3 +258,8 @@ def install_native_proxy_metrics(proxy: NativeProxy) -> NativeProxyTelemetry:
 def uninstall_native_proxy_metrics(proxy: NativeProxy) -> None:
     """Stop exposing a native proxy after its controller shuts down."""
     _PUBLISHER.detach(proxy)
+
+
+def flush_native_proxy_metrics() -> None:
+    """Publish the current process-wide native proxy telemetry snapshot."""
+    _PUBLISHER.flush()
