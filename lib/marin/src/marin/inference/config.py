@@ -70,11 +70,7 @@ def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
     """Load optional additions for the standard contract."""
     if path is None:
         return frozenset()
-    try:
-        additions = _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
-    except OSError as exc:
-        raise ValueError(f"Cannot read vLLM metrics config {path}: {exc}") from exc
-    return additions
+    return _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
 
 
 class VllmLauncherType(StrEnum):

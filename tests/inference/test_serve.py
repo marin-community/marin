@@ -611,7 +611,8 @@ def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch,
     )
 
     assert result.exit_code != 0
-    assert "vLLM metrics config" in result.output
+    assert isinstance(result.exception, ValueError)
+    assert "vLLM metrics config" in str(result.exception)
     client.submit.assert_not_called()
     assert services == []
 

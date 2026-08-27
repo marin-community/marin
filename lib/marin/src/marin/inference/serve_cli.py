@@ -123,10 +123,7 @@ def local(
         chat_template_content=Path(chat_template).read_text() if chat_template else None,
     )
     if backend == "vllm":
-        try:
-            extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from exc
+        extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
         engine = VllmEngineConfig(
             launcher=launcher_type,
             source=source,

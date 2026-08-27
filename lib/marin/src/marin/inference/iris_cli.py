@@ -471,10 +471,7 @@ def main(
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
 
-    try:
-        extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
 
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
