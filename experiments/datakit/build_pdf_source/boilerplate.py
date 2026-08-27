@@ -25,9 +25,10 @@ Two guards keep content from being mistaken for chrome:
 * table rows are never candidates. A table repeated across pages is content, and its header row
   looks exactly like a running header after digits are folded.
 
-This module deliberately imports nothing from :mod:`experiments.datakit.build_pdf_source.docling_extract`.
-It works on text plus page offsets, which is what the OCR route produces too, so both routes strip
-boilerplate with the same code and the same knobs.
+This module deliberately imports nothing from either extraction route. It works on page text alone,
+which is what pdf-inspector and the vision model both produce, so the two routes strip boilerplate
+with the same code and the same knobs and a document's furniture is gone before its text is hashed
+into ``id`` whichever route read it.
 """
 
 import logging

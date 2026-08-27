@@ -1,133 +1,354 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behaviour of the PDF routing step.
+"""Behaviour of router v2: the two gates, the score, the render policy, and the feature contract.
 
-The contracts worth pinning here are the ones whose breakage is silent: the driver must be able to
-build the step without the ``datakit`` extra, every row must carry every declared column whatever
-happened to the PDF, and the booster must refuse to score a feature vector it was not trained on.
-A router that quietly scores the wrong columns produces a plausible probability for every document
-and misroutes the whole corpus.
+Every decision this module makes is silent when it is wrong. A gate that stops firing routes 12.4%
+of the corpus on a transcription that does not exist. A feature list that drifts from the booster's
+scores a bare float matrix by position and returns confident nonsense. A render policy that does not
+reach the request sends 16,384 tokens of pixels under a 2,048-token declaration and has the server
+throw them away. So each is asserted against a case with a known answer, and the booster itself is
+replaced by a stand-in whose ranking is trivially known -- what is under test is the routing, not
+XGBoost.
 """
 
+import json
+
 import numpy as np
+import polars as pl
 import pyarrow as pa
-import pyarrow.parquet as pq
-import pymupdf
 import pytest
 
 from experiments.datakit.build_pdf_source import classify
-from experiments.datakit.build_pdf_source.quality import route_features
-from experiments.datakit.build_pdf_source.quality.route_feature_names import FEATURE_NAMES
+from experiments.datakit.build_pdf_source.classify import (
+    DECIDED_BY_SCORE,
+    ESCALATION_THRESHOLD,
+    GATE_NO_TEXT,
+    GATE_UNRENDERABLE,
+    gate,
+    render_budget,
+    route_batch,
+    router_threshold,
+)
+from experiments.datakit.build_pdf_source.extract_inspector import SIGNAL_COLUMNS
+from experiments.datakit.build_pdf_source.ocr_extract.render import (
+    DEFAULT_LEGIBILITY_FLOOR_DPI,
+    DEFAULT_MAX_VISUAL_TOKENS,
+    RAISED_MAX_VISUAL_TOKENS,
+)
+from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
+
+_WARC = "crawl-data/CC-MAIN-0001/warc/x.warc.gz"
+_MODEL_DIR = "s3://bucket/staged/pdf_route_v2"
+_OUTPUT_NAMES = tuple(
+    name.removeprefix("inspector_output_") for name in SIGNAL_COLUMNS if name.startswith("inspector_output_")
+)
 
 
-def pdf_bytes(*, pages: int = 1, text: str = "Alpha beta gamma delta epsilon zeta eta theta. " * 12) -> bytes:
-    document = pymupdf.open()
-    for _ in range(pages):
-        page = document.new_page(width=612, height=792)
-        page.insert_textbox(pymupdf.Rect(72, 72, 540, 720), text, fontsize=11)
-    return document.tobytes()
-
-
-def source_row(payload: bytes, offset: int = 1) -> dict:
-    return {
-        "pdf": payload,
-        "warc_filename": "CC-SUPPLEMENTAL-2026-22-00000.warc.gz",
+def _signals(offset: int, **overrides) -> dict:
+    """One routable document's signal row: everything present, nothing remarkable."""
+    row = {
+        "warc_filename": _WARC,
         "warc_record_offset": offset,
-        "content_digest": f"sha1:{offset:040d}",
+        "content_digest": f"sha1:{offset}",
         "url": f"https://example.org/{offset}.pdf",
+        "num_pages": 4,
+        "pdf_bytes": 120_000,
+        "mean_render_dpi": 149.5,
+        "pages_below_legibility_floor": 0,
+        "inspector_pdf_type": "text_based",
+        "inspector_confidence": 0.9,
+        "inspector_page_count": 4,
+        "inspector_has_title": True,
+        "inspector_ocr_reasons": "{}",
+        "inspector_detect_pages_needing_ocr": 0,
+        "inspector_extract_is_complex_layout": False,
+        "inspector_extract_pages_needing_ocr": 0,
+        "inspector_extract_pages_with_tables": 1,
+        "inspector_extract_pages_with_columns": 0,
+        "inspector_extracted_pages": 4,
+        "inspector_markdown_chars": 8_000,
+        "inspector_error": None,
+        **{f"inspector_output_{name}": 0.1 for name in _OUTPUT_NAMES},
     }
+    return row | overrides
 
 
-def test_a_document_that_cannot_be_parsed_still_produces_a_complete_row():
-    """An unreadable PDF is data, not a pipeline failure, and lands on neither route."""
-    rows = list(classify.classify_batch(pa.RecordBatch.from_pylist([source_row(b"not a pdf at all")]), "unused"))
-
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["needs_ocr"] is None
-    assert row["docling_confidence"] is None
-    assert row["classification_error"]
-    # The declared schema is what an extraction step reads back; a partial row breaks that read.
-    pa.Table.from_pylist(rows, schema=classify._OUTPUT_SCHEMA)
+def _batch(rows: list[dict]) -> pa.RecordBatch:
+    frame = pl.DataFrame([{name: row[name] for name in SIGNAL_COLUMNS} for row in rows])
+    return frame.to_arrow().to_batches()[0]
 
 
-def test_an_encrypted_document_is_reported_rather_than_routed():
-    document = pymupdf.open()
-    document.new_page()
-    encrypted = document.tobytes(encryption=pymupdf.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="user")
+class _ScriptedBooster:
+    """A booster that returns a prepared score per row, in order.
 
-    rows = list(classify.classify_batch(pa.RecordBatch.from_pylist([source_row(encrypted)]), "unused"))
-
-    assert rows[0]["needs_ocr"] is None
-    assert "encrypted" in rows[0]["classification_error"]
-
-
-def test_the_sampling_seed_is_keyed_on_content_digest_where_present():
-    """Identical PDFs must sample identical pages wherever in the crawl they appear."""
-    seed = classify._document_seed("sha1:abc", "file.warc.gz", 42)
-    assert seed == classify._document_seed("sha1:abc", "different.warc.gz", 99)
-
-
-def test_documents_without_a_content_digest_still_get_a_stable_seed():
-    first = classify._document_seed("", "file.warc.gz", 42)
-    second = classify._document_seed("", "file.warc.gz", 42)
-    other = classify._document_seed("", "file.warc.gz", 43)
-
-    assert first == second
-    assert first != other
-
-
-def test_a_document_produces_exactly_the_features_the_booster_expects():
-    """The invariant that silently misroutes the whole corpus if it breaks.
-
-    :func:`classify.classify_batch` builds each model row as ``[vector[name] for name in
-    FEATURE_NAMES]``, so a signal renamed or dropped in ``route_features`` without the names module
-    following would either raise deep in a map task or, worse, line the columns up against the
-    wrong trained features and return a confident probability for every document.
-
-    Deliberately checked without XGBoost: on macOS, importing ``faiss`` (which the ``datakit`` extra
-    pulls in and other tests in this directory load) and then calling into XGBoost's OpenMP runtime
-    segfaults the process. Linux workers are unaffected, so the runtime guard in
-    :func:`classify.load_booster` still covers the real failure, but a test that crashes its xdist
-    worker is worse than no test.
+    The threshold is a quantile of a real model's output over a real corpus and means nothing on
+    three fixture rows, so the ranking is supplied rather than learned. What is being tested is that
+    a score at or above the threshold escalates and one below it does not.
     """
-    with pymupdf.open(stream=pdf_bytes(pages=3), filetype="pdf") as document:
-        signals = route_features.signals_for_routing(document, seed=1234)
-    vector = signals.feature_vector()
 
-    assert tuple(vector) == FEATURE_NAMES
-    assert all(isinstance(value, float) for value in vector.values())
-    assert np.isfinite(np.asarray([vector[name] for name in FEATURE_NAMES], dtype=np.float32)).all()
+    def __init__(self, scores: list[float]) -> None:
+        self.scores = scores
+        self.matrices: list[np.ndarray] = []
+        self.loads = 0
+
+    def inplace_predict(self, matrix, validate_features=True):
+        self.matrices.append(matrix)
+        return np.asarray(self.scores[: len(matrix)], dtype=np.float32)
 
 
-def test_routing_keys_separates_the_two_routes_and_drops_unreadable_documents(tmp_path):
-    table = pa.Table.from_pylist(
-        [
-            {"warc_filename": "a.warc.gz", "warc_record_offset": 1, "needs_ocr": True},
-            {"warc_filename": "a.warc.gz", "warc_record_offset": 2, "needs_ocr": False},
-            {"warc_filename": "a.warc.gz", "warc_record_offset": 3, "needs_ocr": None},
-        ],
-        schema=pa.schema(
-            [
-                pa.field("warc_filename", pa.string()),
-                pa.field("warc_record_offset", pa.int64()),
-                pa.field("needs_ocr", pa.bool_()),
-            ]
-        ),
+@pytest.fixture
+def route(monkeypatch):
+    """Run ``route_batch`` against a scripted ranking, with the real gates and real feature frame."""
+
+    def run(rows: list[dict], scores: list[float] | None = None) -> tuple[list[dict], _ScriptedBooster]:
+        booster = _ScriptedBooster(scores if scores is not None else [])
+
+        def load(_model_dir):
+            booster.loads += 1
+            return booster, ESCALATION_THRESHOLD
+
+        monkeypatch.setattr(classify, "load_router", load)
+        records = list(route_batch(_batch(rows), model_dir=_MODEL_DIR, floor_dpi=DEFAULT_LEGIBILITY_FLOOR_DPI))
+        return records, booster
+
+    return run
+
+
+# --- the feature contract ------------------------------------------------------------------------
+
+
+def test_the_shipped_contract_is_forty_three_free_features_at_the_price_of_one_library_call():
+    """`free + detect`: the paid PyMuPDF pass measured worse on all five splits and is deleted."""
+    assert len(contract.ROUTER_FEATURES) == 43
+    assert contract.cost_of(contract.FREE_GROUPS) == 0.0
+    assert contract.ROUTER_CORE_HOURS == pytest.approx(contract.INSPECTOR_DETECT_CORE_HOURS)
+    assert contract.PAID_GROUPS == ("inspector_detect",)
+
+
+def test_the_retired_pass_keeps_its_price_so_reintroducing_it_has_a_number_to_clear():
+    """3.40 core-h/M over 56M crawl pages is the 190 crawl core-hours deleting it saved."""
+    retired = contract.ROUTE_FEATURES_CORE_HOURS + contract.INCUMBENT_FEATURES_CORE_HOURS
+    assert retired == pytest.approx(3.40)
+    assert retired * contract.CRAWL_PAGES / 1e6 == pytest.approx(190.4, abs=0.5)
+
+
+def test_feature_groups_do_not_overlap_and_columns_survive_selection():
+    """A column claimed by two groups would be double-counted in the gain split that prices them."""
+    seen: set[str] = set()
+    for group in contract.GROUPS:
+        assert not seen & set(group.columns), f"{group.name} re-declares a column another group owns"
+        seen.update(group.columns)
+
+    assert len(contract.columns_for(contract.ALL_GROUPS)) == len(seen)
+    assert contract.ROUTER_FEATURES == tuple(contract.columns_for(contract.ALL_GROUPS))
+
+
+def test_the_legibility_arithmetic_tracks_the_budget_it_is_asked_about():
+    """DPI scales with the square root of the visual-token budget, so raising it rescues pages."""
+    frame = pl.DataFrame({"mean_render_dpi": [40.0, 80.0, 146.0]})
+
+    at_default = frame.select(contract.legible_at_budget(DEFAULT_MAX_VISUAL_TOKENS))
+    at_four_x = frame.select(contract.legible_at_budget(4 * DEFAULT_MAX_VISUAL_TOKENS))
+
+    assert at_default.to_series().to_list() == [False, False, True]
+    assert at_four_x.to_series().to_list() == [False, True, True], "80 DPI doubles to 160 at 4x the budget"
+
+
+# --- the gates -------------------------------------------------------------------------------------
+
+
+def test_a_document_with_no_extracted_text_is_gated_rather_than_scored(route):
+    """Validated at an escalation rate of 1.000 over 2,054 labelled documents, and 12.4% of the
+    corpus. The model was neither trained nor calibrated on them, so a score would be an
+    extrapolation presented as a probability."""
+    records, booster = route([_signals(1, inspector_markdown_chars=0)])
+
+    (record,) = records
+    assert record["needs_ocr"] is True
+    assert record["route_reason"] == GATE_NO_TEXT
+    assert record["escalation_score"] is None
+    assert booster.matrices == [], "the gated row never reached the model"
+
+
+def test_a_failed_extraction_is_gated_by_the_same_rule_as_an_empty_one():
+    """269 of the 12,396 no-text documents are library refusals rather than scans; same decision."""
+    assert gate(_signals(1, inspector_markdown_chars=None)) == GATE_NO_TEXT
+
+
+def test_a_document_nothing_can_render_is_kept_rather_than_escalated(route):
+    """The VLM route rasterises through the library the geometry pass used, so escalating a document
+    it cannot open spends a routing slot on a page that never reaches the model."""
+    records, booster = route([_signals(1, mean_render_dpi=None, pages_below_legibility_floor=None, num_pages=0)])
+
+    (record,) = records
+    assert record["needs_ocr"] is False
+    assert record["route_reason"] == GATE_UNRENDERABLE
+    assert booster.matrices == []
+
+
+def test_the_no_text_gate_wins_over_the_unrenderable_one():
+    """A document that is both has nothing to keep, so it goes to the route that might read it."""
+    assert gate(_signals(1, inspector_markdown_chars=0, mean_render_dpi=None)) == GATE_NO_TEXT
+
+
+def test_the_legibility_floor_is_not_a_gate(route):
+    """Router v1 skipped below-floor documents; the judges escalated 79.0% of them (n=558). The
+    score decides them like anything else and only the render budget changes."""
+    records, _ = route([_signals(1, mean_render_dpi=36.5, pages_below_legibility_floor=4)], scores=[0.0])
+
+    (record,) = records
+    assert record["route_reason"] == DECIDED_BY_SCORE
+    assert record["needs_ocr"] is False
+
+
+# --- the score --------------------------------------------------------------------------------------
+
+
+def test_the_threshold_is_inclusive_at_its_own_value(route):
+    """The calibration is a quantile, so the document exactly at the cut belongs above it."""
+    records, _ = route(
+        [_signals(1), _signals(2), _signals(3)],
+        scores=[ESCALATION_THRESHOLD - 1e-6, ESCALATION_THRESHOLD, ESCALATION_THRESHOLD + 1e-6],
     )
-    pq.write_table(table, tmp_path / "part-00000.parquet")
 
-    assert classify.routing_keys(str(tmp_path), needs_ocr=True) == frozenset({("a.warc.gz", 1)})
-    assert classify.routing_keys(str(tmp_path), needs_ocr=False) == frozenset({("a.warc.gz", 2)})
-
-
-def test_routing_keys_refuses_an_empty_directory(tmp_path):
-    """Silently returning no keys would route the whole corpus one way."""
-    with pytest.raises(RuntimeError, match="No routing table"):
-        classify.routing_keys(str(tmp_path), needs_ocr=True)
+    assert [record["needs_ocr"] for record in records] == [False, True, True]
+    assert [record["route_reason"] for record in records] == [DECIDED_BY_SCORE] * 3
 
 
-def test_the_shipped_threshold_sits_inside_the_probability_range():
-    """A threshold outside (0, 1) would send every document one way regardless of the model."""
-    assert 0.0 < classify.DOCLING_CONFIDENCE_THRESHOLD < 1.0
+def test_scores_are_matched_back_to_the_rows_they_came_from(route):
+    """Gated rows are dropped from the matrix, so the prediction vector is shorter than the batch and
+    a positional mistake here would route documents on each other's scores."""
+    rows = [_signals(1, inspector_markdown_chars=0), _signals(2), _signals(3, mean_render_dpi=None), _signals(4)]
+
+    records, booster = route(rows, scores=[0.9, 0.1])
+
+    assert [record["warc_record_offset"] for record in records] == [1, 2, 3, 4]
+    assert [record["escalation_score"] for record in records] == [None, pytest.approx(0.9), None, pytest.approx(0.1)]
+    assert [record["needs_ocr"] for record in records] == [True, True, False, False]
+    assert booster.matrices[0].shape == (2, len(contract.ROUTER_FEATURES))
+
+
+def test_the_matrix_is_built_in_the_contract_order(route):
+    """XGBoost scores a bare float matrix by position; a reordered column is silent nonsense."""
+    row = _signals(1, pdf_bytes=987_654, num_pages=7)
+
+    _, booster = route([row], scores=[0.5])
+
+    (matrix,) = booster.matrices
+    position = contract.ROUTER_FEATURES.index("pdf_bytes")
+    assert matrix[0][position] == pytest.approx(987_654.0)
+    assert matrix[0][contract.ROUTER_FEATURES.index("num_pages")] == pytest.approx(7.0)
+    assert matrix.dtype == np.float32
+
+
+def test_a_batch_of_nothing_but_gated_documents_never_loads_the_model(route):
+    """Loading the booster on a shard that cannot use it is a per-task cost for no decision."""
+    records, booster = route([_signals(1, inspector_markdown_chars=0), _signals(2, inspector_markdown_chars=0)])
+
+    assert [record["needs_ocr"] for record in records] == [True, True]
+    assert booster.loads == 0
+    assert booster.matrices == []
+
+
+# --- the render policy ------------------------------------------------------------------------------
+
+
+def test_an_escalated_document_below_the_floor_is_flagged_for_the_raised_budget(route):
+    """1,890 of 2,234 documents rescued for +0.29% GPU crawl-wide, against +53% to raise it globally."""
+    records, _ = route([_signals(1, mean_render_dpi=36.5, pages_below_legibility_floor=4)], scores=[0.99])
+
+    (record,) = records
+    assert record["needs_ocr"] is True
+    assert record["render_visual_tokens"] == RAISED_MAX_VISUAL_TOKENS
+
+
+def test_a_kept_document_below_the_floor_is_not_flagged(route):
+    """The policy is a render policy: it only means anything for a document that will be rendered."""
+    records, _ = route([_signals(1, mean_render_dpi=36.5, pages_below_legibility_floor=4)], scores=[0.0])
+
+    (record,) = records
+    assert record["needs_ocr"] is False
+    assert record["render_visual_tokens"] == DEFAULT_MAX_VISUAL_TOKENS
+
+
+def test_a_legible_escalation_keeps_the_default_budget(route):
+    records, _ = route([_signals(1)], scores=[0.99])
+
+    assert records[0]["render_visual_tokens"] == DEFAULT_MAX_VISUAL_TOKENS
+
+
+@pytest.mark.parametrize(
+    ("dpi", "expected"),
+    [
+        (None, DEFAULT_MAX_VISUAL_TOKENS),
+        (0.0, RAISED_MAX_VISUAL_TOKENS),
+        (DEFAULT_LEGIBILITY_FLOOR_DPI - 0.1, RAISED_MAX_VISUAL_TOKENS),
+        (DEFAULT_LEGIBILITY_FLOOR_DPI, DEFAULT_MAX_VISUAL_TOKENS),
+    ],
+)
+def test_the_render_budget_turns_on_the_floor_and_nothing_else(dpi, expected):
+    assert render_budget(dpi, DEFAULT_LEGIBILITY_FLOOR_DPI) == expected
+
+
+# --- the routing table -------------------------------------------------------------------------------
+
+
+def test_every_routed_record_satisfies_the_declared_schema(route):
+    """A record that does not fit fails only at write time, a whole shard later."""
+    rows = [_signals(1), _signals(2, inspector_markdown_chars=0), _signals(3, mean_render_dpi=None)]
+
+    records, _ = route(rows, scores=[0.99])
+
+    assert pa.RecordBatch.from_pylist(records, schema=classify.ROUTING_SCHEMA).num_rows == 3
+
+
+def test_the_routing_table_records_the_gates_own_inputs(route):
+    """A routing decision that cannot be re-derived from the table cannot be audited."""
+    records, _ = route([_signals(1, inspector_markdown_chars=0, mean_render_dpi=36.5)])
+
+    (record,) = records
+    assert record["inspector_markdown_chars"] == 0
+    assert record["mean_render_dpi"] == pytest.approx(36.5)
+    assert record["num_pages"] == 4
+
+
+# --- the pinned artifact ------------------------------------------------------------------------------
+
+
+def _sidecar(features, threshold=ESCALATION_THRESHOLD) -> dict:
+    return json.loads(json.dumps({"features": list(features), "escalation_threshold": threshold}))
+
+
+def test_the_shipped_sidecar_and_this_module_agree():
+    """The happy path, which is the one that has to keep working: the pinned artifact's own
+    calibration, its feature list, and the contract this pipeline builds its matrix from."""
+    assert router_threshold(contract.ROUTER_FEATURES, _sidecar(contract.ROUTER_FEATURES)) == ESCALATION_THRESHOLD
+
+
+def test_a_booster_whose_feature_order_moved_is_refused():
+    """It would score confident nonsense rather than fail: the matrix is positional."""
+    shuffled = list(contract.ROUTER_FEATURES)
+    shuffled[0], shuffled[1] = shuffled[1], shuffled[0]
+
+    with pytest.raises(ValueError, match="different order or set"):
+        router_threshold(tuple(shuffled), _sidecar(shuffled))
+
+
+def test_a_booster_with_no_declared_features_is_refused():
+    """A model saved without ``feature_names`` carries no contract at all to check against."""
+    with pytest.raises(ValueError, match="different order or set"):
+        router_threshold((), _sidecar(contract.ROUTER_FEATURES))
+
+
+def test_a_sidecar_calibrating_a_different_feature_set_is_refused():
+    """The threshold is a quantile of one model's output; another model's is a different number."""
+    with pytest.raises(ValueError, match="calibrates a different feature set"):
+        router_threshold(contract.ROUTER_FEATURES, _sidecar(list(contract.ROUTER_FEATURES)[:-1]))
+
+
+def test_a_sidecar_threshold_that_disagrees_with_the_step_is_refused():
+    """The step hash is keyed on the constant, so a silent sidecar move would route at a budget the
+    run's own identity does not describe."""
+    with pytest.raises(ValueError, match="but this step is keyed on"):
+        router_threshold(contract.ROUTER_FEATURES, _sidecar(contract.ROUTER_FEATURES, threshold=0.5))

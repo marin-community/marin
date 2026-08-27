@@ -12,7 +12,16 @@ That trade has a failure mode worth measuring: a large-format page is quietly re
 of a Letter page's resolution rather than costing more. :func:`effective_dpi` records what each page
 actually got, and the extraction step carries the per-document summary through to its output, so a
 corpus can be audited for pages that were rendered below legibility instead of the fact being
-invisible.
+invisible. :func:`render_geometry` computes the same summary *before* anything is rendered, from
+page rectangles alone, because the router both scores on it and uses it to choose between
+:data:`DEFAULT_MAX_VISUAL_TOKENS` and :data:`RAISED_MAX_VISUAL_TOKENS` for the document.
+
+This module is where the rasteriser lives, and it is deliberately the only place it lives: the
+router reads its geometry through :func:`render_geometry` and the OCR route reads its pixels through
+:func:`iter_rendered_pages`, so replacing MuPDF moves both at once and touches nothing else in the
+pipeline. That swap is a decided but ungated change -- ``pdfium-evaluation.md`` adopts PDFium on
+licensing grounds with the quality objection retired, conditional on subprocess-isolating the
+rasteriser against an unexplained abort that is still being investigated.
 
 The budget is 2048 tokens (~2.07 MP, ~146 DPI median on this crawl). The throughput sweep behind
 that choice is in ``experiments/datakit/build_pdf_source/ocr-budget-sweep.md``: below 2048 quality is surrendered
@@ -30,7 +39,7 @@ two functions is arithmetic and is always importable.
 import base64
 import logging
 import math
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -49,6 +58,17 @@ MAX_PIXELS = 16_777_216
 VISUAL_TOKEN_PIXELS = RESIZE_FACTOR * RESIZE_FACTOR
 
 DEFAULT_MAX_VISUAL_TOKENS = 2048
+# The budget a document flagged by the router's render policy is rendered at instead. 16384 tokens
+# is 16,777,216 pixels, exactly MAX_PIXELS, so it is the largest budget this path can express.
+#
+# It is targeted, never global. The flagged documents are large-format scans whose pages sit at a
+# median 51.6 DPI at the default budget; 0.0% of their pages reach the 300-DPI upscale cap at any
+# budget, which is why the published sweep's reason for stopping at 8192 does not apply to them.
+# Raising the budget for them alone rescues 1,890 of 2,234 for x1.0029 GPU crawl-wide; raising it
+# for every page costs x1.530 to rescue 0.47% of them (`pdf-router-v2.md`, "The legibility floor:
+# render it bigger"). The throughput at this budget is extrapolated from the sweep's curve rather
+# than measured, and the report names that as the number to confirm before shipping.
+RAISED_MAX_VISUAL_TOKENS = 16_384
 # Ceiling on upscaling a small page to fill the budget. Past ~300 DPI there is no more glyph detail
 # to recover from a scan, only tokens to burn on it.
 DEFAULT_MAX_RENDER_DPI = 300.0
@@ -92,6 +112,25 @@ class RenderedPage:
     dpi: float
 
 
+@dataclass(frozen=True)
+class RenderGeometry:
+    """What a render budget would resolve a document to, computed without rendering anything.
+
+    The router needs this before it decides anything, on every document rather than on the escalated
+    subset, for two purposes: ``mean_dpi`` and the legible fraction derived from ``pages_below_floor``
+    are two of the 43 features the score reads, and ``mean_dpi`` is the trigger for the render policy
+    that picks between :data:`DEFAULT_MAX_VISUAL_TOKENS` and :data:`RAISED_MAX_VISUAL_TOKENS`.
+
+    It is the same arithmetic :func:`iter_rendered_pages` applies, over page rectangles alone -- a
+    page-tree walk with no content stream decoded and no pixel produced -- so what the router reads
+    is what the feed path will do, and swapping the rasteriser moves both together.
+    """
+
+    pages: int
+    mean_dpi: float
+    pages_below_floor: int
+
+
 def smart_resize(height: int, width: int, factor: int, min_pixels: int, max_pixels: int) -> tuple[int, int]:
     """Qwen-VL input sizing, ported from ``qwen_vl_utils.vision_process.smart_resize``.
 
@@ -133,6 +172,51 @@ def effective_dpi(pixels: int, width: float, height: float) -> float:
     """
     points_area = width * height
     return 72.0 * math.sqrt(pixels / points_area) if points_area > 0 else 0.0
+
+
+def render_geometry(page_rectangles: Iterable[tuple[float, float]], options: RenderOptions) -> RenderGeometry:
+    """Summarize what ``options`` would resolve a document's pages to, from their sizes in points.
+
+    Pure arithmetic over ``(width, height)`` pairs, so it is importable and testable without a PDF
+    library and is the half of the geometry pass that survives a rasteriser swap untouched.
+
+    Every page the document declares is measured, not the first :attr:`RenderOptions.max_pages` of
+    them: this describes the document's shape, which is what the router's features mean, while the
+    page budget's truncation is a property of one render and is recorded separately by the OCR route
+    as ``pages_unrendered``. Degenerate pages -- the sub-point rectangles
+    :func:`iter_rendered_pages` refuses -- are excluded from the mean rather than counted as 0 DPI,
+    which would drag a legible document under the floor on the strength of one broken page.
+    """
+    dpis = [
+        effective_dpi(math.prod(target_dimensions(width, height, options)), width, height)
+        for width, height in page_rectangles
+        if width >= 1 and height >= 1
+    ]
+    if not dpis:
+        return RenderGeometry(pages=0, mean_dpi=0.0, pages_below_floor=0)
+    return RenderGeometry(
+        pages=len(dpis),
+        mean_dpi=sum(dpis) / len(dpis),
+        pages_below_floor=sum(1 for dpi in dpis if dpi < options.legibility_floor_dpi),
+    )
+
+
+def page_rectangles(document: "pymupdf.Document") -> list[tuple[float, float]]:  # noqa: F821
+    """Every page's ``(width, height)`` in points.
+
+    A page whose rectangle cannot be read at all is skipped rather than guessed at; MuPDF fails
+    arbitrarily deep on crawl input and one unreadable page is not a reason to lose a document's
+    geometry. This is the only PyMuPDF call the geometry pass makes.
+    """
+    sizes: list[tuple[float, float]] = []
+    for page_index in range(len(document)):
+        try:
+            rect = document[page_index].rect
+        except Exception:
+            logger.debug("Could not read the rectangle of page %d", page_index, exc_info=True)
+            continue
+        sizes.append((rect.width, rect.height))
+    return sizes
 
 
 @contextmanager

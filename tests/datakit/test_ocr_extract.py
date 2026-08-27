@@ -6,15 +6,15 @@
 import threading
 
 import pyarrow as pa
-import pymupdf
 import pytest
 
-from experiments.datakit.build_pdf_source import extract, extract_ocr
+from experiments.datakit.build_pdf_source import extract_inspector, extract_ocr
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract_ocr import OcrStatus, ocr_batch
 from experiments.datakit.build_pdf_source.ocr_extract.client import OcrEndpoint, PageOcr, unwrap_markdown_fence
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
     MAX_PIXELS,
+    RAISED_MAX_VISUAL_TOKENS,
     VISUAL_TOKEN_PIXELS,
     RenderOptions,
     effective_dpi,
@@ -22,6 +22,11 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     open_pdf,
     target_dimensions,
 )
+
+# PyMuPDF ships only in marin-core's ``pdf`` extra, which the workspace root does not install, and
+# these fixtures author real PDFs with it so that rendering is exercised rather than mocked. The
+# modules above are importable without it: they defer the import to the functions that rasterise.
+pymupdf = pytest.importorskip("pymupdf")
 
 # US Letter and ISO A0, in points. A0 is the case the visual-token budget handles badly on purpose:
 # it costs the model the same as a Letter page and therefore gets far less resolution.
@@ -90,14 +95,16 @@ def run_batch(monkeypatch, endpoint):
     page ordering, boilerplate removal and record assembly all run for real.
     """
 
-    def run(rows, respond, *, keys=None, render_options=None, boilerplate=None, loop=None):
+    def run(rows, respond, *, keys=None, raised_keys=frozenset(), render_options=None, boilerplate=None, loop=None):
         monkeypatch.setattr(extract_ocr, "ocr_page", respond)
         return list(
             ocr_batch(
                 _batch(rows),
                 keys=keys if keys is not None else _keys(*(row["warc_record_offset"] for row in rows)),
+                raised_keys=raised_keys,
                 endpoint=endpoint,
                 render_options=render_options or RenderOptions(),
+                raised_render_options=RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS),
                 boilerplate=boilerplate or extract_ocr.BOILERPLATE_OPTIONS,
                 loop=loop or extract_ocr.LOOP_OPTIONS,
             )
@@ -275,6 +282,58 @@ def test_large_format_pages_are_counted_against_the_legibility_floor(run_batch):
     assert record["mean_render_dpi"] < RenderOptions().legibility_floor_dpi
 
 
+def _budget_recorder(seen: list[tuple[int, int]]):
+    """A responder that records what each page was rendered at and what the request declared."""
+
+    def respond(endpoint, _connections, page) -> PageOcr:
+        seen.append((page.pixels, endpoint.max_visual_tokens))
+        return PageOcr(text=f"body {_word(page.page_index)}", completion_tokens=1)
+
+    return respond
+
+
+def test_the_render_policy_lifts_a_flagged_document_over_the_legibility_floor(run_batch):
+    """The policy's entire purpose: the same sheet, read at a resolution the model can use.
+
+    An A0 page renders at ~36 DPI under the default budget, well under the 100-DPI floor, and at
+    ~104 DPI at 16,384 visual tokens. Nothing else about the document changes.
+    """
+    default_pages: list[tuple[int, int]] = []
+    raised_pages: list[tuple[int, int]] = []
+
+    (baseline,) = run_batch([_row(0, _pdf(1, size=_A0))], _budget_recorder(default_pages))
+    (rescued,) = run_batch([_row(0, _pdf(1, size=_A0))], _budget_recorder(raised_pages), raised_keys=_keys(0))
+
+    assert baseline["mean_render_dpi"] < 100 <= rescued["mean_render_dpi"]
+    assert baseline["pages_below_legibility_floor"] == 1
+    assert rescued["pages_below_legibility_floor"] == 0
+    assert raised_pages[0][0] == pytest.approx(8 * default_pages[0][0], rel=0.02), "8x the budget, 8x the pixels"
+
+
+def test_a_raised_render_declares_its_own_budget_to_the_endpoint(run_batch):
+    """The request restates the budget as ``max_pixels``; leaving it stale undoes the whole policy.
+
+    The server runs its own ``smart_resize`` against that declaration, so a 16,384-token render sent
+    under a 2,048-token cap would be shrunk straight back to where it started and the extra GPU
+    would buy nothing at all.
+    """
+    seen: list[tuple[int, int]] = []
+
+    run_batch([_row(0, _pdf(1, size=_A0)), _row(1, _pdf(1, size=_A0))], _budget_recorder(seen), raised_keys=_keys(1))
+
+    declared = [tokens for _pixels, tokens in seen]
+    assert declared == [2048, RAISED_MAX_VISUAL_TOKENS]
+
+
+def test_a_document_the_policy_did_not_flag_keeps_the_default_budget(run_batch):
+    """The policy is targeted: applied corpus-wide this budget costs x1.53 GPU instead of x1.0029."""
+    seen: list[tuple[int, int]] = []
+
+    run_batch([_row(0, _pdf(2))], _budget_recorder(seen), raised_keys=_keys(7))
+
+    assert {tokens for _pixels, tokens in seen} == {2048}
+
+
 def test_completion_tokens_are_summed_over_the_document(run_batch):
     (record,) = run_batch([_row(0, _pdf(4))], _page_text)
     assert record["completion_tokens"] == 40
@@ -286,9 +345,9 @@ def test_completion_tokens_are_summed_over_the_document(run_batch):
 def test_both_extraction_routes_share_a_column_prefix():
     """The two routes are concatenated downstream, so the shared columns must line up exactly."""
     shared = [(field.name, field.type) for field in PDF_DOCUMENT_FIELDS]
-    docling = [(field.name, field.type) for field in extract.OUTPUT_SCHEMA]
+    inspector = [(field.name, field.type) for field in extract_inspector.OUTPUT_SCHEMA]
     ocr = [(field.name, field.type) for field in extract_ocr.OUTPUT_SCHEMA]
-    assert docling == shared
+    assert inspector[: len(shared)] == shared
     assert ocr[: len(shared)] == shared
 
 

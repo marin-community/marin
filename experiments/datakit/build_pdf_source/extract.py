@@ -1,42 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The text route's shared extraction contract: columns, schema, and post-extraction options.
+"""What both extraction routes agree on: the columns they read, the post-processing, the reducer.
 
-The conversion itself runs on the converter fleet (:mod:`~experiments.datakit.build_pdf_source
-.extract_fleet`); this module holds what any docling transport must agree on so the output stays
-byte-identical whichever transport produced it:
+A PDF leaves this pipeline through pdf-inspector on CPU
+(:mod:`~experiments.datakit.build_pdf_source.extract_inspector`) or through a vision model on GPU
+(:mod:`~experiments.datakit.build_pdf_source.extract_ocr`). The two share an input -- the fetch
+step's Parquet shards -- and a post-processing pass, and this module holds both so the parts of a
+stored record that ought to be route-independent cannot drift apart:
 
 * the columns read from the fetch artifact (:data:`SOURCE_COLUMNS`),
-* the stored record's schema (:data:`OUTPUT_SCHEMA` -- the shared document record, nothing
-  route-specific; see :mod:`~experiments.datakit.build_pdf_source.document_record`),
 * the boilerplate pass applied before the text is hashed into ``id``
-  (:data:`BOILERPLATE_OPTIONS`), and the picture-alpha filter (:data:`PICTURE_ALPHA_RATIO`),
+  (:data:`BOILERPLATE_OPTIONS`),
 * the normalize reducer that deliberately keeps duplicates (:func:`keep_all`).
 
-An earlier in-task extraction step (docling converter built inside each Zephyr map task, PyMuPDF
-tables, 600s document budget) lived here; the fleet superseded it with the measured TableFormer
-and 45-minute-budget decisions recorded in :mod:`~experiments.datakit.build_pdf_source.extract_fleet`.
+The record's *schema* lives in :mod:`~experiments.datakit.build_pdf_source.document_record`; each
+route appends its own diagnostic columns after those fields and
+:mod:`~experiments.datakit.build_pdf_source.combine_routes` carries both sets through.
+
+Two earlier occupants of this module are gone with the route they served: a Docling converter built
+inside each Zephyr map task, and the fleet transport that superseded it. Docling cost 278 CPU
+core-hours per million pages against pdf-inspector's 2.1 -- 132x -- for corpus-wide quality parity,
+and this cluster is CPU-constrained (``pdf-inspector-evaluation.md``, ``pdf-router-v2.md``).
 """
 
 from collections.abc import Iterator
 
-import pyarrow as pa
 from marin.datakit.normalize import MainOutput
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions
-from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 
-PICTURE_ALPHA_RATIO = 0.4
 # Running headers and footers are stripped before the text is stored, so the id is computed over
 # the text a consumer actually reads. See :mod:`experiments.datakit.build_pdf_source.boilerplate`.
 BOILERPLATE_OPTIONS = BoilerplateOptions()
 
 SOURCE_COLUMNS = ["pdf", "warc_filename", "warc_record_offset", "content_digest", "url"]
-
-# This route adds nothing of its own beyond the fleet's provenance column: everything docling
-# reports about a document is already part of the record both routes share.
-OUTPUT_SCHEMA = pa.schema(PDF_DOCUMENT_FIELDS)
 
 
 def keep_all(_key: str, records: Iterator[dict]) -> Iterator[MainOutput]:

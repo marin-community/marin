@@ -41,7 +41,7 @@ from rigging.log_setup import configure_logging
 from experiments.datakit.build_pdf_source.classify import classify_step, model_step
 from experiments.datakit.build_pdf_source.combine_routes import COMBINED_SCHEMA, combine_step
 from experiments.datakit.build_pdf_source.dedup import dedup_steps
-from experiments.datakit.build_pdf_source.extract_fleet import fleet_extract_step
+from experiments.datakit.build_pdf_source.extract_inspector import inspector_extract_step
 from experiments.datakit.build_pdf_source.extract_ocr import ocr_extract_step
 from experiments.datakit.build_pdf_source.fetch import fetch_step
 from experiments.datakit.build_pdf_source.fuzzy_dedup import fuzzy_steps
@@ -59,13 +59,18 @@ MARIN_PREFIX_ENV = "MARIN_PREFIX"
 def build_pdf_source_steps() -> list[StepSpec]:
     """Return every step from the fetch plan through to the final labeled dataset.
 
-    The classifier splits the corpus in two and the two extraction steps are independent from
-    there on: ``fleet_extract_step`` runs the text-extractable route through the persistent
-    docling converter fleet on CPUs, and ``ocr_extract_step`` runs the rest through a vision model
-    on GPUs. ``combine_step`` unions the two back into one corpus, tagged with the router's
-    decision. (The fleet's FP32 torch arms do not consume the INT8 OpenVINO layout graph;
-    :mod:`~experiments.datakit.build_pdf_source.layout_model` remains as the utility that rebuilds it if a
-    VNNI backend is reintroduced.)
+    **Extraction comes before routing, and that is the shape of the DAG.** ``inspector_extract_step``
+    reads the embedded text layer of every fetched PDF on CPU, at 2.1 core-hours per million pages;
+    ``classify_step`` then routes on what that extraction reported and produced, escalating the
+    documents a judge would prefer the vision model on; ``ocr_extract_step`` re-reads that subset
+    from rendered pages on GPUs. Running the cheap extractor unconditionally and deciding afterwards
+    costs less than deciding first -- the router pass it replaces was 3.4 CPU core-hours per million
+    pages, against 0.12 for signals pdf-inspector reports for free -- and it lets the router observe
+    garbling, structure and text volume in real output instead of predicting them from font tables
+    (``experiments/datakit/build_pdf_source/pdf-router-v2.md``).
+
+    The consequence is that the two routes overlap rather than partition, so ``combine_step`` takes
+    the routing table as well as both extractions and keeps exactly one reading of each document.
 
     From there the chain is single-corpus: exact dedup + decontamination (:mod:`dedup`), quality
     scoring and gating (:mod:`quality_label`), fuzzy dedup with quality-based canonical election
@@ -74,12 +79,12 @@ def build_pdf_source_steps() -> list[StepSpec]:
     """
     plan = plan_step()
     fetch = fetch_step(plan)
-    ocr_router = model_step()
-    classify = classify_step(fetch, ocr_router)
-    text_extraction = fleet_extract_step(fetch, classify)
+    text_extraction = inspector_extract_step(fetch)
+    router = model_step()
+    classify = classify_step(text_extraction, router)
     ocr_extraction = ocr_extract_step(fetch, classify)
 
-    combined = combine_step(text_extraction, ocr_extraction)
+    combined = combine_step(text_extraction, ocr_extraction, classify)
     dedup = dedup_steps(combined, COMBINED_SCHEMA)
     clean = dedup[-1]
 
@@ -95,9 +100,9 @@ def build_pdf_source_steps() -> list[StepSpec]:
     return [
         plan,
         fetch,
-        ocr_router,
-        classify,
         text_extraction,
+        router,
+        classify,
         ocr_extraction,
         combined,
         *dedup,

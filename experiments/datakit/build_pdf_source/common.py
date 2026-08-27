@@ -144,25 +144,8 @@ class StagedModelData(BaseModel):
 
 
 class PdfClassificationData(BaseModel):
-    """Outcome of the classify step: one row per PDF, routing it to OCR or to text extraction."""
+    """Outcome of the routing step: one row per extracted PDF, saying whether the VLM re-reads it."""
 
     version: str = "v1"
     main_output_dir: str
     counters: dict[str, int | float]
-
-
-class LayoutModelData(BaseModel):
-    """Outcome of the layout model step: an INT8 OpenVINO build of docling's layout model.
-
-    ``label_map`` travels with the graph because the compiled IR carries class indices and no
-    names; reading it from the source repository at inference time would let the two drift.
-    """
-
-    version: str = "v1"
-    model_path: str
-    source_repo: str
-    source_revision: str
-    label_map: dict[int, str]
-    calibration_images: int
-    fp32_megabytes: float
-    int8_megabytes: float

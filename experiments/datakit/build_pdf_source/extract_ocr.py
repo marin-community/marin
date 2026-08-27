@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Step 6: OCR the PDFs the router could not read embedded text from.
+"""Step 5: re-read the escalated PDFs with a vision model, from rendered pages.
 
-This is the expensive route. In the 10% sample it is 101,332 of 315,776 classified documents and
-2.0M of 5.6M pages, and every one of those pages goes through a vision model instead of a text
-parser. At the measured 71 pages/s per GB200 node that is about 8 node-hours for the sample.
+This is the expensive route, and under router v2 it is also the majority one: a blind judge shown
+the rendered page prefers this transcription to pdf-inspector's on 0.762 of documents and 0.768 of
+pages, so the router's job is to find the quarter that does not rather than to ration a scarce
+resource. The shipped operating point escalates 93.0% of corpus pages
+(``pdf-router-v2.md``). Every escalated page goes through a vision model instead of a text parser;
+at the measured 71 pages/s per GB200 node that is about 8 node-hours for the 10% sample.
 
 **The senders are thin, and that is the design.** A Zephyr map task reads its own Parquet shard,
 renders pages, posts them, and writes documents; the model, the batching, and the queueing live
@@ -23,7 +26,7 @@ waiting rather than alternating between them, and :func:`sender_fleet_size` prov
 tasks that their combined offered rate meets the engines' throughput with the fleet's in-flight
 budget as a floor.
 
-The output is the same :class:`~marin.datakit.normalize.NormalizedData` shape the docling route
+The output is the same :class:`~marin.datakit.normalize.NormalizedData` shape the pdf-inspector route
 produces, over the same shared columns, so a consumer joins the two routes without knowing which
 extractor produced a document. Running headers and footers are stripped by the same
 :mod:`~experiments.datakit.build_pdf_source.boilerplate` pass, before the text is hashed into ``id``.
@@ -35,7 +38,7 @@ import threading
 from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import cache, partial
 from hashlib import sha256
@@ -59,7 +62,7 @@ from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
-from experiments.datakit.build_pdf_source.classify import routing_keys
+from experiments.datakit.build_pdf_source.classify import raised_render_keys, routing_keys
 from experiments.datakit.build_pdf_source.common import FOCUS_CRAWL, PdfClassificationData, PdfSourceData
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
 from experiments.datakit.build_pdf_source.extract import keep_all
@@ -73,11 +76,21 @@ from experiments.datakit.build_pdf_source.ocr_extract.client import (
     ocr_page,
 )
 from experiments.datakit.build_pdf_source.ocr_extract.fleet import MODEL, build_inference_config
-from experiments.datakit.build_pdf_source.ocr_extract.render import RenderOptions, iter_rendered_pages, open_pdf
+from experiments.datakit.build_pdf_source.ocr_extract.render import (
+    RAISED_MAX_VISUAL_TOKENS,
+    RenderOptions,
+    iter_rendered_pages,
+    open_pdf,
+)
 
 logger = logging.getLogger(__name__)
 
 RENDER_OPTIONS = RenderOptions()
+# The router's render policy, for the documents whose pages fall below the legibility floor at the
+# default budget. It is a per-document choice rather than a fleet setting: applied to the whole
+# corpus this budget costs x1.530 GPU, applied to the 1.63% of documents that need it, x1.0029
+# (``pdf-router-v2.md``, "The legibility floor: render it bigger").
+RAISED_RENDER_OPTIONS = RenderOptions(max_visual_tokens=RAISED_MAX_VISUAL_TOKENS)
 BOILERPLATE_OPTIONS = BoilerplateOptions()
 LOOP_OPTIONS = LoopOptions()
 
@@ -361,8 +374,10 @@ class _Document:
 def ocr_batch(
     batch: pa.RecordBatch,
     keys: frozenset[tuple[str, int]] | None,
+    raised_keys: frozenset[tuple[str, int]],
     endpoint: OcrEndpoint,
     render_options: RenderOptions,
+    raised_render_options: RenderOptions,
     boilerplate: BoilerplateOptions,
     loop: LoopOptions,
 ) -> Iterator[dict]:
@@ -380,7 +395,15 @@ def ocr_batch(
 
     ``keys`` is the OCR route's key set, or ``None`` to OCR every document in the shard -- the
     all-routes comparison run, where the point is reading the same documents both extractors read.
+
+    ``raised_keys`` is the router's render policy: the documents whose pages fall below the
+    legibility floor at the default budget are rendered at
+    :data:`~experiments.datakit.build_pdf_source.ocr_extract.render.RAISED_MAX_VISUAL_TOKENS`. The
+    endpoint is rebuilt for them as well as the render options, because the request restates the
+    budget as ``max_pixels`` so the server's own resize cannot undo it -- sending a 16,384-token
+    render under a 2,048-token declaration would have the server shrink it straight back.
     """
+    raised_endpoint = replace(endpoint, max_visual_tokens=raised_render_options.max_visual_tokens)
     pool = _request_pool(_REQUEST_THREADS)
     inflight: deque[tuple[_Document, Future[PageOcr]]] = deque()
     documents: deque[_Document] = deque()
@@ -396,17 +419,24 @@ def ocr_batch(
                 yield record
 
     for row in batch.to_pylist():
-        if keys is not None and (row["warc_filename"], row["warc_record_offset"]) not in keys:
-            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/skipped_text_route", 1)
+        key = (row["warc_filename"], row["warc_record_offset"])
+        if keys is not None and key not in keys:
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/skipped_inspector_route", 1)
             continue
+
+        options, page_endpoint = (
+            (raised_render_options, raised_endpoint) if key in raised_keys else (render_options, endpoint)
+        )
+        if key in raised_keys:
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/raised_render_budget", 1)
 
         try:
             with open_pdf(row["pdf"]) as pdf:
                 document = _Document(row=row, declared_pages=len(pdf))
                 documents.append(document)
                 try:
-                    for page in iter_rendered_pages(pdf, render_options):
-                        inflight.append((document, pool.submit(ocr_page, endpoint, _REQUEST_THREADS, page)))
+                    for page in iter_rendered_pages(pdf, options):
+                        inflight.append((document, pool.submit(ocr_page, page_endpoint, _REQUEST_THREADS, page)))
                         document.submitted += 1
                         document.dpis.append(page.dpi)
                         while len(inflight) >= _PAGES_IN_FLIGHT:
@@ -463,11 +493,13 @@ def ocr_pdf_text(
     partition_index, partition_count = partition
     source = read_artifact(source_output_path, PdfSourceData)
     keys = None
+    raised_keys: frozenset[tuple[str, int]] = frozenset()
     if ocr_route_only:
         if classification_output_path is None:
             raise ValueError("ocr_route_only requires classification_output_path")
         classification = read_artifact(classification_output_path, PdfClassificationData)
         keys = routing_keys(classification.main_output_dir, needs_ocr=True)
+        raised_keys = raised_render_keys(classification.main_output_dir)
 
     shards = sorted(str(shard) for shard in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     shards = shards[partition_index::partition_count]
@@ -518,8 +550,10 @@ def ocr_pdf_text(
                         partial(
                             ocr_batch,
                             keys=keys,
+                            raised_keys=raised_keys,
                             endpoint=endpoint,
                             render_options=RENDER_OPTIONS,
+                            raised_render_options=RAISED_RENDER_OPTIONS,
                             boilerplate=BOILERPLATE_OPTIONS,
                             loop=LOOP_OPTIONS,
                         )
@@ -582,6 +616,9 @@ def ocr_extract_step(source: StepSpec, classification: StepSpec) -> StepSpec:
             "prompt_digest": sha256(PROMPT_DOC2MD.encode("utf-8")).hexdigest()[:16],
             "max_tokens": DEFAULT_MAX_TOKENS,
             "max_visual_tokens": RENDER_OPTIONS.max_visual_tokens,
+            # The render policy changes what the flagged documents are read from, so it re-keys the
+            # step exactly as the default budget does.
+            "raised_max_visual_tokens": RAISED_RENDER_OPTIONS.max_visual_tokens,
             "max_render_dpi": RENDER_OPTIONS.max_render_dpi,
             "max_pages": RENDER_OPTIONS.max_pages,
             "boilerplate_min_pages": BOILERPLATE_OPTIONS.min_pages,

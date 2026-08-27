@@ -3,8 +3,12 @@
 
 """Measure how far Docling's reading of a document is from the VLM's.
 
-This is the target side of the routing problem: :mod:`route_features` proposes cheap signals, and
-these numbers are what those signals have to predict. They are a *proxy* for the routing label, not
+Retired with router v1, and kept as the metric behind the numbers its report quotes. This was the
+target side of the routing problem: v1's PyMuPDF feature pass proposed cheap signals and these
+numbers were what those signals had to predict. Router v2 replaced the whole construction -- both
+the Docling route and this agreement target, whose central weakness is stated below and was
+confirmed by adjudication (``pdf-router-v2.md``, "The old label did not rank quality"). They are a
+*proxy* for the routing label, not
 the label itself -- two extractions can disagree without either being wrong, and the direction that
 matters is decided by adjudication rather than by any number here. What these metrics do is make
 the disagreement measurable and sortable, so adjudication can be spent where it is informative.
