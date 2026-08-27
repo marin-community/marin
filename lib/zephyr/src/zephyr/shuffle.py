@@ -3,12 +3,12 @@
 
 """Scatter/shuffle support for Zephyr pipelines.
 
-Each source-shard's scatter output is a set of zstd-compressed Parquet files,
-one combined file per flush (``c{chunk:04d}.parquet``) containing all target
-shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``. A msgpack sidecar
-records each file's Arrow schema plus exact per-target-shard payload bytes and
-row counts. Reducers use the sidecar schema instead of opening every Parquet
-footer before planning the merge.
+Each source-shard's scatter output is a set of zstd-compressed Parquet files.
+A flush writes one file per target-shard range, sorted by
+``(_SHARD_COL, _SORT_KEY_COL)``. A msgpack sidecar records each file's Arrow
+schema and target range plus exact per-target-shard payload bytes and row
+counts. Reducers use it to select one range file per mapper flush without
+opening unrelated Parquet footers.
 
 On the read side, each reducer uses DataFusion predicate pushdown to scan only
 its target shard. Row-group statistics skip non-matching groups via byte-range
@@ -20,7 +20,7 @@ the same filesystem as the stage.
 
 Write-side memory is bounded by buffer size: when the sum of Arrow table
 buffers exceeds ``_SCATTER_FLUSH_MEMORY_FRACTION`` of available task memory,
-all buffers are flushed together into one combined file.
+all buffers are flushed as bounded target-range files.
 
 Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
 in ``_items_to_table``; ``__zephyr_shard__`` is stripped on read,
@@ -104,6 +104,11 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # row group per target gives ideal predicate pruning, but makes every reducer
 # read multi-megabyte footers from every mapper chunk before it can read data.
 _SCATTER_MAX_ROW_GROUPS_PER_CHUNK = 512
+# Split a flush into target-shard ranges. DataFusion's sort keeps several
+# copies of its input columns, so bounding each sort is substantially cheaper
+# than sorting the whole multiplexed buffer. Each reducer still opens one file
+# per mapper flush because sidecars identify the range that contains it.
+_SCATTER_FILE_PARTITIONS = 8
 
 # Internal routing columns injected by _items_to_table.
 _SHARD_COL = "__zephyr_shard__"
@@ -117,7 +122,7 @@ _PAYLOAD_ROWS_COL = f"{_PAYLOAD_BYTES_COL}_count"
 _PARQUET_WRITE_OPTIONS = DataFrameWriteOptions(single_file_output=True)
 
 # Python items consumed before creating an Arrow table.
-_TABLE_ROW_COUNT = 1000
+_TABLE_ROW_COUNT = 10_000
 # Preserve the prior 12% effective flush point. A scatter flush has reached
 # 2.27x the buffered size at peak RSS: https://echo.oa.dev/wiki/68.
 _SCATTER_FLUSH_MEMORY_FRACTION = 0.12
@@ -178,6 +183,62 @@ def _columns_to_table(
         raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
+def _file_partition_count(num_output_shards: int) -> int:
+    if num_output_shards <= 0:
+        raise ValueError(f"num_output_shards must be positive, got {num_output_shards}")
+    return min(num_output_shards, _SCATTER_FILE_PARTITIONS)
+
+
+def _file_partition(shard: int, num_output_shards: int, num_file_partitions: int) -> int:
+    return min(num_file_partitions - 1, shard * num_file_partitions // num_output_shards)
+
+
+def _file_partition_bounds(partition: int, num_output_shards: int, num_file_partitions: int) -> tuple[int, int]:
+    shard_start = (partition * num_output_shards + num_file_partitions - 1) // num_file_partitions
+    shard_end = ((partition + 1) * num_output_shards + num_file_partitions - 1) // num_file_partitions
+    return shard_start, shard_end
+
+
+def _items_to_partitioned_tables(
+    items: list[Any],
+    key_fn: Callable,
+    sort_fn: Callable | None,
+    num_output_shards: int,
+    num_file_partitions: int,
+) -> list[tuple[int, pa.Table]]:
+    """Convert Python items directly into target-range Arrow tables."""
+    columns: list[tuple[list[Any], list[int], list[bytes], list[Any]]] = [
+        ([], [], [], []) for _ in range(num_file_partitions)
+    ]
+    for item in items:
+        key = key_fn(item)
+        try:
+            key_bytes = encode_key(key)
+        except TypeError as err:
+            raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
+        shard = hash_encoded_key(key_bytes) % num_output_shards
+        partition = _file_partition(shard, num_output_shards, num_file_partitions)
+        partition_items, shards, keys, sort_values = columns[partition]
+        partition_items.append(item)
+        shards.append(shard)
+        keys.append(key_bytes)
+        sort_values.append(sort_fn(item) if sort_fn is not None else None)
+
+    return [
+        (
+            partition,
+            _columns_to_table(
+                [cloudpickle.dumps(item) for item in partition_items],
+                shards,
+                keys,
+                sort_values,
+            ),
+        )
+        for partition, (partition_items, shards, keys, sort_values) in enumerate(columns)
+        if partition_items
+    ]
+
+
 def _items_to_table(
     items: list[Any],
     key_fn: Callable,
@@ -228,20 +289,34 @@ class _ChunkFile:
 
     path: str
     schema: pa.Schema
+    shard_start: int
+    shard_end: int
 
     _path_field: ClassVar[str] = "path"
     _schema_field: ClassVar[str] = "schema"
+    _shard_start_field: ClassVar[str] = "shard_start"
+    _shard_end_field: ClassVar[str] = "shard_end"
 
-    def to_metadata(self) -> dict[str, str | bytes]:
+    def to_metadata(self) -> dict[str, str | bytes | int]:
         return {
             self._path_field: self.path,
             self._schema_field: self.schema.serialize().to_pybytes(),
+            self._shard_start_field: self.shard_start,
+            self._shard_end_field: self.shard_end,
         }
+
+    def contains(self, target_shard: int) -> bool:
+        return self.shard_start <= target_shard < self.shard_end
 
     @classmethod
     def from_metadata(cls, metadata: dict[str, Any]) -> "_ChunkFile":
         schema = pa.ipc.read_schema(pa.BufferReader(metadata[cls._schema_field]))
-        return cls(path=str(metadata[cls._path_field]), schema=schema)
+        return cls(
+            path=str(metadata[cls._path_field]),
+            schema=schema,
+            shard_start=int(metadata[cls._shard_start_field]),
+            shard_end=int(metadata[cls._shard_end_field]),
+        )
 
 
 @dataclass(frozen=True)
@@ -449,7 +524,7 @@ class ScatterReader:
         ):
             sidecars = _Sidecar.read_all(scatter_paths)
             for sidecar in sidecars:
-                chunk_files.extend(sidecar.files)
+                chunk_files.extend(file for file in sidecar.files if file.contains(target_shard))
                 shard_payload_bytes += sidecar.target_bytes(target_shard)
                 shard_payload_rows += sidecar.target_rows(target_shard)
 
@@ -581,6 +656,7 @@ class ScatterWriter:
         data_path: str,
         key_fn: Callable,
         source_shard: int,
+        num_output_shards: int,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
     ) -> None:
@@ -589,12 +665,15 @@ class ScatterWriter:
         self._sort_fn = sort_fn
 
         self._source_shard = source_shard
+        self._num_output_shards = num_output_shards
+        self._num_file_partitions = _file_partition_count(num_output_shards)
         self._combiner_fn = combiner_fn
         self._memory_available_bytes = _task_memory_bytes()
         self._flush_threshold_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_MEMORY_FRACTION)
 
-        # Buffered Arrow tables, combined into one file per flush.
-        self._tables: list[pa.Table] = []
+        # Buffered Arrow tables, grouped by target range and combined into one
+        # file per range per flush.
+        self._partition_tables: list[list[pa.Table]] = [[] for _ in range(self._num_file_partitions)]
         self._chunk_files: list[_ChunkFile] = []
         # Exact per-target payload sizes and row counts are recorded in the
         # sidecar for reducer planning.
@@ -603,6 +682,7 @@ class ScatterWriter:
         self._total_bytes_written: int = 0
         self._total_rows_written: int = 0
         self._n_chunks_written = 0
+        self._n_flushes = 0
         # Throttles the per-flush progress log so high-fanout workloads don't log too often
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
         # Running Arrow buffer-size total of unflushed tables; reset to 0 on flush.
@@ -612,96 +692,113 @@ class ScatterWriter:
         self._result: ListShard | None = None
 
     def _flush(self) -> None:
-        """Flush the accumulated buffer into one combined Parquet file sorted by [_SHARD_COL, _SORT_KEY_COL]."""
-        if not self._tables:
+        """Flush target-range buffers into sorted Parquet files."""
+        if not any(self._partition_tables):
             return
 
-        buffer = pa.concat_tables(self._tables, promote_options="permissive")
-        self._tables = []
+        partition_tables = self._partition_tables
+        self._partition_tables = [[] for _ in range(self._num_file_partitions)]
         self._buffer_estimated_bytes = 0
+        total_flushed_bytes = 0
+        files_written = 0
 
-        if self._combiner_fn is not None:
-            by_shard: defaultdict[int, list[Any]] = defaultdict(list)
-            for shard_val, payload in zip(
-                buffer[_SHARD_COL].to_pylist(),
-                buffer[_PAYLOAD_COL].to_pylist(),
-                strict=True,
-            ):
-                by_shard[int(shard_val)].append(cloudpickle.loads(payload))
-
-            tables: list[pa.Table] = []
-            for shard_val, rows in by_shard.items():
-                rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
-                if not rows:
-                    continue
-                table = _items_to_table(rows, self._key_fn, self._sort_fn, num_output_shards=0)
-                shard_index = table.schema.get_field_index(_SHARD_COL)
-                table = table.set_column(
-                    shard_index,
-                    _SHARD_COL,
-                    pa.array([shard_val] * len(table), type=pa.int32()),
-                )
-                tables.append(table)
+        for partition, tables in enumerate(partition_tables):
             if not tables:
-                return
+                continue
             buffer = pa.concat_tables(tables, promote_options="permissive")
+            tables.clear()
+            if self._num_file_partitions > 1:
+                buffer = buffer.combine_chunks()
 
-        flushed_bytes = int(buffer.nbytes)
-        self._total_bytes_written += flushed_bytes
-        self._total_rows_written += len(buffer)
-        shard_sizes = (
-            pa.table(
-                {
-                    _SHARD_COL: buffer[_SHARD_COL],
-                    _PAYLOAD_BYTES_COL: pc.binary_length(buffer[_PAYLOAD_COL]),
-                }
+            if self._combiner_fn is not None:
+                by_shard: defaultdict[int, list[Any]] = defaultdict(list)
+                for shard_val, payload in zip(
+                    buffer[_SHARD_COL].to_pylist(),
+                    buffer[_PAYLOAD_COL].to_pylist(),
+                    strict=True,
+                ):
+                    by_shard[int(shard_val)].append(cloudpickle.loads(payload))
+
+                combined_tables: list[pa.Table] = []
+                for shard_val, rows in by_shard.items():
+                    rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
+                    if not rows:
+                        continue
+                    table = _items_to_table(rows, self._key_fn, self._sort_fn, num_output_shards=0)
+                    shard_index = table.schema.get_field_index(_SHARD_COL)
+                    combined_tables.append(
+                        table.set_column(
+                            shard_index,
+                            _SHARD_COL,
+                            pa.array([shard_val] * len(table), type=pa.int32()),
+                        )
+                    )
+                if not combined_tables:
+                    continue
+                buffer = pa.concat_tables(combined_tables, promote_options="permissive")
+
+            flushed_bytes = int(buffer.nbytes)
+            total_flushed_bytes += flushed_bytes
+            self._total_bytes_written += flushed_bytes
+            self._total_rows_written += len(buffer)
+            shard_sizes = (
+                pa.table(
+                    {
+                        _SHARD_COL: buffer[_SHARD_COL],
+                        _PAYLOAD_BYTES_COL: pc.binary_length(buffer[_PAYLOAD_COL]),
+                    }
+                )
+                .group_by(_SHARD_COL, use_threads=False)
+                .aggregate([(_PAYLOAD_BYTES_COL, "sum"), (_PAYLOAD_BYTES_COL, "count")])
             )
-            .group_by(_SHARD_COL, use_threads=False)
-            .aggregate([(_PAYLOAD_BYTES_COL, "sum"), (_PAYLOAD_BYTES_COL, "count")])
-        )
-        for row in shard_sizes.to_pylist():
-            self._shard_bytes[int(row[_SHARD_COL])] += int(row[_PAYLOAD_BYTES_SUM_COL])
-            self._shard_rows[int(row[_SHARD_COL])] += int(row[_PAYLOAD_ROWS_COL])
+            for row in shard_sizes.to_pylist():
+                self._shard_bytes[int(row[_SHARD_COL])] += int(row[_PAYLOAD_BYTES_SUM_COL])
+                self._shard_rows[int(row[_SHARD_COL])] += int(row[_PAYLOAD_ROWS_COL])
 
-        # Keep target shards local to as few row groups as practical so DataFusion
-        # predicate pushdown can skip unrelated data. Cap the group count because
-        # every reducer must read every chunk footer before applying that filter.
-        num_targets = int(pc.count_distinct(buffer[_SHARD_COL]).as_py())
-        num_row_groups = min(num_targets, _SCATTER_MAX_ROW_GROUPS_PER_CHUNK)
-        row_count = len(buffer)
-        row_group_size = max(1, math.ceil(row_count / num_row_groups))
-        chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
-        schema = buffer.schema
-        sort_context = datafusion_context(memory_limit_bytes=self._memory_available_bytes, target_partitions=1)
-        register_object_stores(sort_context, [chunk_path])
-        sorted_frame = sort_context.from_arrow(buffer).sort(_SHARD_COL, _SORT_KEY_COL)
-        del buffer
-        sorted_frame.write_parquet_with_options(
-            chunk_path,
-            ParquetWriterOptions(
-                compression="zstd(1)",
-                max_row_group_size=row_group_size,
-            ),
-            _PARQUET_WRITE_OPTIONS,
-        )
-
-        self._chunk_files.append(_ChunkFile(path=chunk_path, schema=schema))
-        self._n_chunks_written += 1
-
-        if self._progress_log_limiter.should_run():
-            logger.info(
-                "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items, %d targets)",
-                self._source_shard,
-                self._n_chunks_written,
-                row_count,
-                num_targets,
+            num_targets = int(pc.count_distinct(buffer[_SHARD_COL]).as_py())
+            num_row_groups = min(num_targets, _SCATTER_MAX_ROW_GROUPS_PER_CHUNK)
+            row_count = len(buffer)
+            row_group_size = max(1, math.ceil(row_count / num_row_groups))
+            chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
+            schema = buffer.schema
+            sort_context = datafusion_context(memory_limit_bytes=self._memory_available_bytes, target_partitions=1)
+            register_object_stores(sort_context, [chunk_path])
+            sorted_frame = sort_context.from_arrow(buffer).sort(_SHARD_COL, _SORT_KEY_COL)
+            del buffer
+            sorted_frame.write_parquet_with_options(
+                chunk_path,
+                ParquetWriterOptions(
+                    compression="zstd(1)",
+                    max_row_group_size=row_group_size,
+                ),
+                _PARQUET_WRITE_OPTIONS,
             )
 
-        if flushed_bytes >= _GC_FLUSH_SIZE_THRESHOLD_BYTES:
+            shard_start, shard_end = _file_partition_bounds(
+                partition, self._num_output_shards, self._num_file_partitions
+            )
+            self._chunk_files.append(
+                _ChunkFile(path=chunk_path, schema=schema, shard_start=shard_start, shard_end=shard_end)
+            )
+            self._n_chunks_written += 1
+            files_written += 1
+
+            if self._progress_log_limiter.should_run():
+                logger.info(
+                    "[shard %d] Wrote %d scatter files so far (latest file: %d items, %d targets)",
+                    self._source_shard,
+                    self._n_chunks_written,
+                    row_count,
+                    num_targets,
+                )
+
+        if files_written:
+            self._n_flushes += 1
+        if total_flushed_bytes >= _GC_FLUSH_SIZE_THRESHOLD_BYTES:
             gc.collect()
 
     def write(self, table: pa.Table) -> None:
-        """Buffer an Arrow table, flushing on memory pressure.
+        """Partition and buffer an Arrow table, flushing on memory pressure.
 
         The table must contain ``_PAYLOAD_COL``, ``_SHARD_COL`` (int32), and
         ``_SORT_KEY_COL`` columns as produced by ``_items_to_table``.
@@ -709,8 +806,33 @@ class ScatterWriter:
         if len(table) == 0:
             return
 
-        self._tables.append(table)
-        self._buffer_estimated_bytes += int(table.nbytes)
+        if self._num_file_partitions == 1:
+            self.write_partitioned([(0, table)])
+            return
+
+        partitioned: list[tuple[int, pa.Table]] = []
+        for partition in range(self._num_file_partitions):
+            shard_start, shard_end = _file_partition_bounds(
+                partition, self._num_output_shards, self._num_file_partitions
+            )
+            mask = pc.and_(
+                pc.greater_equal(table[_SHARD_COL], shard_start),
+                pc.less(table[_SHARD_COL], shard_end),
+            )
+            partition_table = table.filter(mask)
+            if len(partition_table):
+                partitioned.append((partition, partition_table))
+        self.write_partitioned(partitioned)
+
+    def write_partitioned(self, tables: list[tuple[int, pa.Table]]) -> None:
+        """Buffer tables already routed to target-range file partitions."""
+        for partition, table in tables:
+            if not 0 <= partition < self._num_file_partitions:
+                raise ValueError(f"file partition {partition} is out of range")
+            if len(table) == 0:
+                continue
+            self._partition_tables[partition].append(table)
+            self._buffer_estimated_bytes += int(table.nbytes)
 
         if self._buffer_estimated_bytes > self._flush_threshold_bytes:
             logger.info(
@@ -729,7 +851,7 @@ class ScatterWriter:
         """
         if self._result is not None:
             return self._result
-        pre_close_flushes = self._n_chunks_written
+        pre_close_flushes = self._n_flushes
         with log_time(f"Flushing remaining buffer for {self._data_path}"):
             self._flush()
 
@@ -737,8 +859,8 @@ class ScatterWriter:
             "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total",
             self._source_shard,
             pre_close_flushes,
-            self._n_chunks_written - pre_close_flushes,
-            self._n_chunks_written,
+            self._n_flushes - pre_close_flushes,
+            self._n_flushes,
         )
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
@@ -795,15 +917,33 @@ def _write_scatter(
         data_path=data_path,
         key_fn=key_fn,
         source_shard=source_shard,
+        num_output_shards=num_output_shards,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
+        num_file_partitions = _file_partition_count(num_output_shards)
         pending: list[Any] = []
         for item in items:
             pending.append(item)
             if len(pending) >= _TABLE_ROW_COUNT:
-                writer.write(_items_to_table(pending, key_fn, sort_fn, num_output_shards))
+                writer.write_partitioned(
+                    _items_to_partitioned_tables(
+                        pending,
+                        key_fn,
+                        sort_fn,
+                        num_output_shards,
+                        num_file_partitions,
+                    )
+                )
                 pending.clear()
         if pending:
-            writer.write(_items_to_table(pending, key_fn, sort_fn, num_output_shards))
+            writer.write_partitioned(
+                _items_to_partitioned_tables(
+                    pending,
+                    key_fn,
+                    sort_fn,
+                    num_output_shards,
+                    num_file_partitions,
+                )
+            )
         return writer.close()

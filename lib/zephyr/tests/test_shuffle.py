@@ -31,7 +31,6 @@ from zephyr.shuffle import (
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
-    _ChunkFile,
     _items_to_table,
     _merge_sorted_frames,
     _Sidecar,
@@ -198,7 +197,7 @@ def test_merge_sorted_chunks_basic(tmp_path):
     ]
     # Force two chunks by writing twice
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, num_output_shards=1)
     writer.write(_items_to_table(items[:2], _key, None, 1))
     writer.write(_items_to_table(items[2:], _key, None, 1))
     scatter_paths = list(writer.close())
@@ -218,7 +217,9 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     ]
     # Write as two separate chunks
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, sort_fn=lambda x: x["ts"])
+    writer = ScatterWriter(
+        data_path=data_path, key_fn=_key, source_shard=0, num_output_shards=1, sort_fn=lambda x: x["ts"]
+    )
     writer.write(_items_to_table([items[0]], _key, lambda x: x["ts"], 1))
     writer.write(_items_to_table([items[1]], _key, lambda x: x["ts"], 1))
     scatter_paths = list(writer.close())
@@ -242,7 +243,7 @@ def test_scatter_sort_fn_null_batch_then_concrete(tmp_path):
         return x.get("priority")  # returns None when key absent
 
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, sort_fn=sort_fn)
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, num_output_shards=1, sort_fn=sort_fn)
 
     # All-None sort values → _SORT_KEY_COL.sort_value: Null
     table_null = _items_to_table([{"k": "a", "v": 0}, {"k": "a", "v": 1}], _key, sort_fn, 1)
@@ -273,12 +274,12 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
         return x.get("priority")
 
     data_path_0 = str(tmp_path / "shard-0000/scatter/")
-    writer_0 = ScatterWriter(data_path=data_path_0, key_fn=_key, source_shard=0, sort_fn=sort_fn)
+    writer_0 = ScatterWriter(data_path=data_path_0, key_fn=_key, source_shard=0, num_output_shards=1, sort_fn=sort_fn)
     writer_0.write(_items_to_table([{"k": "a", "v": 0}, {"k": "a", "v": 1}], _key, sort_fn, 1))
     paths_0 = list(writer_0.close())
 
     data_path_1 = str(tmp_path / "shard-0001/scatter/")
-    writer_1 = ScatterWriter(data_path=data_path_1, key_fn=_key, source_shard=1, sort_fn=sort_fn)
+    writer_1 = ScatterWriter(data_path=data_path_1, key_fn=_key, source_shard=1, num_output_shards=1, sort_fn=sort_fn)
     writer_1.write(
         _items_to_table([{"k": "a", "v": 2, "priority": 5}, {"k": "a", "v": 3, "priority": 3}], _key, sort_fn, 1)
     )
@@ -300,7 +301,9 @@ def test_scatter_with_combiner(tmp_path):
         yield {"k": key, "v": sum(i["v"] for i in items)}
 
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, combiner_fn=sum_combiner)
+    writer = ScatterWriter(
+        data_path=data_path, key_fn=_key, source_shard=0, num_output_shards=1, combiner_fn=sum_combiner
+    )
     writer.write(_items_to_table(items, _key, None, 1))
     scatter_paths = list(writer.close())
 
@@ -315,7 +318,7 @@ def test_merge_sorted_chunks_external_runs_use_gcs_urls(tmp_path, monkeypatch):
     scatter_paths = []
     for i in range(10):
         data_path = str(tmp_path / f"shard-{i:04d}/scatter/")
-        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=i)
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=i, num_output_shards=1)
         writer.write(_items_to_table([items[i]], _key, None, 1))
         scatter_paths.extend(writer.close())
 
@@ -464,19 +467,15 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
             ),
         }
     )
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, num_output_shards=num_targets)
     writer.write(table)
-    writer.close()
+    scatter_paths = list(writer.close())
 
-    parquet = pq.ParquetFile(f"{data_path}c0000.parquet")
+    parquet = pq.ParquetFile(f"{data_path}c0004.parquet")
     assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader(
-        chunk_files=[_ChunkFile(path=f"{data_path}c0000.parquet", schema=table.schema)],
-        target_shard=513,
-        avg_item_bytes=1,
-        shard_payload_bytes=len(cloudpickle.dumps({"k": 513})),
-    )
+    reader = ScatterReader.from_sidecars(scatter_paths, target_shard=513)
+    assert reader.total_chunks == 1
     assert _read_shard(reader) == [{"k": 513}]
 
 
@@ -503,7 +502,7 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
                 gpu_count=0,
                 tpu_count=0,
             )
-            writer = ScatterWriter(data_path=str(tmp_path / "scatter"), key_fn=_key, source_shard=0)
+            writer = ScatterWriter(data_path=str(tmp_path / "scatter"), key_fn=_key, source_shard=0, num_output_shards=1)
             writer.write(table)
             writer.write(table)
             scatter_paths = list(writer.close())
@@ -641,7 +640,7 @@ def test_merge_sorted_frames_across_source_shards(tmp_path):
     for shard_idx, items in [(0, [{"k": 3, "v": "a"}, {"k": 1, "v": "b"}]), (1, [{"k": 2, "v": "c"}])]:
         data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
         paths.append(data_path)
-        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx, num_output_shards=1)
         writer.write(_items_to_table(items, _key, None, 1))
         writer.close()
 
@@ -688,7 +687,7 @@ def test_sidecar_reads_build_one_client(tmp_path):
     paths = []
     for shard_idx in range(8):
         data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
-        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx, num_output_shards=1)
         writer.write(_items_to_table([{"k": shard_idx}], _key, None, 1))
         writer.close()
         paths.append(f"counting://{data_path}")
