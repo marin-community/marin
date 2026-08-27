@@ -21,21 +21,6 @@ class ServeBackend(StrEnum):
     LEVANTER = "levanter"
 
 
-_NATIVE_VLLM_TOPOLOGY_OPTIONS = (
-    "--tensor-parallel-size",
-    "--pipeline-parallel-size",
-    "--data-parallel-size",
-    "--data-parallel-size-local",
-    "--data-parallel-start-rank",
-    "--nnodes",
-    "--node-rank",
-    "--master-addr",
-    "--master-port",
-    "--device-ids",
-    "--headless",
-)
-
-
 @dataclass(frozen=True)
 class ResourceHint:
     """Serving resources required by a model.
@@ -91,7 +76,6 @@ class ServeConfig:
 
     backend: ServeBackend = ServeBackend.VLLM
     tensor_parallel_size: int | None = None
-    pipeline_parallel_size: int | None = None
     data_parallel_size: int | None = None
     max_model_len: int | None = None
     max_num_batched_tokens: int | None = None
@@ -105,28 +89,6 @@ class ServeConfig:
     vllm_extra_args: tuple[str, ...] = ()
     chat_template: str | None = None
     auto_overrides: bool = True
-
-    def __post_init__(self) -> None:
-        for name in ("tensor_parallel_size", "pipeline_parallel_size", "data_parallel_size"):
-            value = getattr(self, name)
-            if value is not None and value <= 0:
-                raise ValueError(f"{name} must be positive")
-        if self.pipeline_parallel_size is None:
-            return
-        if self.backend is not ServeBackend.VLLM:
-            raise ValueError("pipeline_parallel_size is only supported by the vLLM backend")
-        if self.tensor_parallel_size != 1:
-            raise ValueError("pipeline-parallel vLLM serving requires tensor_parallel_size=1")
-        if self.data_parallel_size is None:
-            raise ValueError("pipeline-parallel vLLM serving requires data_parallel_size")
-        duplicates = [
-            option for option in _NATIVE_VLLM_TOPOLOGY_OPTIONS if has_vllm_option(self.vllm_extra_args, option)
-        ]
-        if duplicates:
-            raise ValueError(
-                "pipeline-parallel vLLM topology is owned by Marin; remove these vllm_extra_args: "
-                + ", ".join(duplicates)
-            )
 
 
 @dataclass(frozen=True)
@@ -196,7 +158,7 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
         if not has_vllm_option(explicit, option):
             derived.extend((option, *values))
 
-    if serve.data_parallel_size is not None and serve.pipeline_parallel_size is None:
+    if serve.data_parallel_size is not None:
         add("--data-parallel-size", str(serve.data_parallel_size))
     if serve.hf_overrides is not None:
         add("--hf-overrides", serve.hf_overrides)

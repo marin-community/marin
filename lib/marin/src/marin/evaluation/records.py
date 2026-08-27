@@ -74,7 +74,6 @@ class ModelServeConfig(BaseModel):
 
     backend: str
     tensor_parallel_size: int | None
-    pipeline_parallel_size: int | None = None
     data_parallel_size: int | None
     max_model_len: int | None
     max_num_batched_tokens: int | None

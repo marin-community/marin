@@ -66,32 +66,6 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
 
 
-def test_load_model_config_round_trips_native_vllm_topology(tmp_path):
-    config = load_model_config(
-        _write(
-            tmp_path,
-            "grug.yaml",
-            textwrap.dedent(
-                """
-                name: grug
-                location: s3://bucket/grug/
-                serve:
-                  tensor_parallel_size: 1
-                  pipeline_parallel_size: 2
-                  data_parallel_size: 8
-                  vllm_batch_invariant: true
-                  vllm_use_flashinfer_sampler: false
-                """
-            ),
-        )
-    )
-
-    assert config.serve.pipeline_parallel_size == 2
-    assert config.serve.data_parallel_size == 8
-    assert config.serve.vllm_batch_invariant is True
-    assert config.serve.vllm_use_flashinfer_sampler is False
-
-
 def test_load_model_config_rejects_name_with_job_path_separator(tmp_path):
     body = "name: Qwen/Qwen3-8B\nlocation: Qwen/Qwen3-8B\n"
 
@@ -156,30 +130,6 @@ def test_serve_config_vllm_args_explicit_flag_wins_over_typed_knob():
     assert args[args.index("--data-parallel-size") + 1] == "4"
 
 
-def test_pipeline_parallel_config_leaves_all_topology_to_the_iris_launch():
-    serve = ServeConfig(
-        tensor_parallel_size=1,
-        pipeline_parallel_size=2,
-        data_parallel_size=8,
-        vllm_extra_args=("--enable-expert-parallel",),
-    )
-
-    args = serve_config_vllm_args(serve)
-
-    assert "--data-parallel-size" not in args
-    assert args == ("--enable-expert-parallel",)
-
-
-def test_pipeline_parallel_config_rejects_duplicate_topology_flags():
-    with pytest.raises(ValueError, match="topology is owned by Marin"):
-        ServeConfig(
-            tensor_parallel_size=1,
-            pipeline_parallel_size=2,
-            data_parallel_size=8,
-            vllm_extra_args=("--pipeline-parallel-size=2",),
-        )
-
-
 def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     # Regression for the Qwen3-32B catalog failure: the lowering path rendered --swap-space (which the
     # CUDA vLLM fork rejects) and a second --trust-remote-code (the native server already passes one).
@@ -210,23 +160,14 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
-def test_pipeline_parallel_gpu_lowering_emits_one_whole_node_per_stage():
-    model = ModelConfig(
-        name="grug-dummy",
-        location="s3://marin-us-east-02a/marin/exports/grug-dummy/",
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
-        serve=ServeConfig(
-            tensor_parallel_size=1,
-            pipeline_parallel_size=2,
-            data_parallel_size=8,
-            max_model_len=4096,
-            vllm_batch_invariant=True,
-            vllm_use_flashinfer_sampler=False,
-            vllm_extra_args=("--enable-expert-parallel",),
-            auto_overrides=False,
-        ),
+def test_rav_ladder_d1536_catalog_settings_reach_the_ordinary_worker():
+    model = models()["rav-ladder-d1536"]
+    choice = AcceleratorChoice(
+        platform=Platform.GPU,
+        gpu_type="H100",
+        gpu_count=8,
+        target_cluster="cw-us-east-02a",
     )
-    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
 
     lowered = inference_config_for_model(
         model,
@@ -235,38 +176,11 @@ def test_pipeline_parallel_gpu_lowering_emits_one_whole_node_per_stage():
         priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
-    assert lowered.iris.worker_resources.replicas == 2
-    assert lowered.iris.worker_resources.device.chip_count() == 8
-    assert lowered.model.tensor_parallel_size == 1
-    assert lowered.model.pipeline_parallel_size == 2
-    assert lowered.model.data_parallel_size == 8
-    assert "--pipeline-parallel-size" not in lowered.engine.extra_args
-    assert "--data-parallel-size" not in lowered.engine.extra_args
-    assert "--enable-expert-parallel" in lowered.engine.extra_args
+    assert lowered.iris.worker_resources.replicas == 1
     assert lowered.iris.worker_environment.env_vars["VLLM_BATCH_INVARIANT"] == "1"
     assert lowered.iris.worker_environment.env_vars["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-
-
-def test_pipeline_parallel_gpu_lowering_requires_node_local_data_parallelism():
-    model = ModelConfig(
-        name="bad-topology",
-        location="org/model",
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="32g"),
-        serve=ServeConfig(
-            tensor_parallel_size=1,
-            pipeline_parallel_size=2,
-            data_parallel_size=4,
-            auto_overrides=False,
-        ),
-    )
-
-    with pytest.raises(ValueError, match="per-task GPU count"):
-        inference_config_for_model(
-            model,
-            AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8),
-            env_vars={},
-            priority=job_pb2.PRIORITY_BAND_INHERIT,
-        )
+    assert lowered.engine.extra_args[lowered.engine.extra_args.index("--data-parallel-size") + 1] == "8"
+    assert lowered.engine.extra_args[lowered.engine.extra_args.index("--max-logprobs") + 1] == "64"
 
 
 def _gib(memory: str) -> int:

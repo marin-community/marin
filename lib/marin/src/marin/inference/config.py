@@ -46,8 +46,6 @@ class ServedModelConfig:
     dtype: str = "bfloat16"
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
-    pipeline_parallel_size: int | None = None
-    data_parallel_size: int | None = None
     chat_template_content: str | None = None
 
     def __post_init__(self) -> None:
@@ -59,15 +57,6 @@ class ServedModelConfig:
             raise ValueError("max_model_len must be positive")
         if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
             raise ValueError("tensor_parallel_size must be positive")
-        if self.pipeline_parallel_size is not None and self.pipeline_parallel_size <= 0:
-            raise ValueError("pipeline_parallel_size must be positive")
-        if self.data_parallel_size is not None and self.data_parallel_size <= 0:
-            raise ValueError("data_parallel_size must be positive")
-        if self.pipeline_parallel_size is not None:
-            if self.tensor_parallel_size != 1:
-                raise ValueError("pipeline-parallel vLLM serving requires tensor_parallel_size=1")
-            if self.data_parallel_size is None:
-                raise ValueError("pipeline-parallel vLLM serving requires data_parallel_size")
 
     @property
     def model_id(self) -> str:
@@ -225,6 +214,8 @@ class IrisConfig:
         # marker before concrete resources are restored at execution time.
         if not isinstance(self.worker_resources, ResourceConfig):
             return
+        if self.worker_resources.replicas != 1:
+            raise ValueError("Each inference instance must use exactly one Iris task")
         device = self.worker_resources.device
         if isinstance(device, CpuConfig):
             raise ValueError("Inference workers require an accelerator")
@@ -246,20 +237,3 @@ class RemoteInferenceConfig:
     def __post_init__(self) -> None:
         if self.instances <= 0:
             raise ValueError("instances must be positive")
-        pipeline_parallel_size = self.model.pipeline_parallel_size
-        if pipeline_parallel_size is not None:
-            if not isinstance(self.engine, VllmEngineConfig):
-                raise ValueError("pipeline-parallel inference requires the vLLM backend")
-            if self.instances != 1 or self.broker is not None:
-                raise ValueError("pipeline-parallel inference supports one direct instance without a broker")
-
-        # Lazy artifact fingerprinting substitutes a symbolic runtime-resource
-        # marker before concrete resources are restored at execution time.
-        resources = self.iris.worker_resources
-        if not isinstance(resources, ResourceConfig):
-            return
-        expected_replicas = pipeline_parallel_size or 1
-        if resources.replicas != expected_replicas:
-            raise ValueError(f"inference topology requires {expected_replicas} Iris task(s), got {resources.replicas}")
-        if pipeline_parallel_size is not None and isinstance(resources.device, TpuConfig):
-            raise ValueError("pipeline-parallel inference requires GPU workers")

@@ -4,12 +4,10 @@
 """Start inference workers through Iris."""
 
 import contextlib
-import json
 import logging
-import subprocess
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import cast
@@ -37,12 +35,6 @@ from marin.inference.config import (
     VllmEngineConfig,
 )
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
-from marin.inference.iris_vllm import (
-    iris_vllm_followers,
-    iris_vllm_launch,
-    notify_iris_vllm_stopped,
-    wait_for_iris_vllm_shutdown,
-)
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -66,32 +58,6 @@ _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
-
-
-def _log_gpu_memory_snapshot() -> None:
-    """Log one parseable HBM snapshot after the leader server is ready."""
-    command = (
-        "nvidia-smi",
-        "--query-gpu=index,memory.used,memory.total",
-        "--format=csv,noheader,nounits",
-    )
-    try:
-        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=15)
-        devices: list[dict[str, int]] = []
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                continue
-            values = tuple(int(value.strip()) for value in line.split(","))
-            if len(values) != 3:
-                raise ValueError(f"expected 3 columns, got {len(values)}")
-            index, used_mib, total_mib = values
-            devices.append({"gpu": index, "used_mib": used_mib, "total_mib": total_mib})
-        if not devices:
-            raise ValueError("nvidia-smi returned no devices")
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        logger.warning("Could not record vLLM leader GPU memory snapshot: %s", exc)
-        return
-    logger.info("vLLM leader GPU memory snapshot: %s", json.dumps(devices, sort_keys=True))
 
 
 class RemoteInferenceStartupError(RuntimeError):
@@ -245,22 +211,9 @@ def _prepared_local_inference(
     model: ServedModelConfig,
     engine: VllmEngineConfig | LevanterEngineConfig,
     iris: IrisConfig,
-    *,
-    vllm_extra_args: Sequence[str] = (),
-    vllm_subprocess_env: Mapping[str, str] | None = None,
-    wait_until_ready: bool = True,
-    render_tensor_parallel_size: bool = True,
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
-    with local_inference(
-        resolved_model,
-        engine,
-        num_chips=num_chips,
-        vllm_extra_args=vllm_extra_args,
-        vllm_subprocess_env=vllm_subprocess_env,
-        wait_until_ready=wait_until_ready,
-        render_tensor_parallel_size=render_tensor_parallel_size,
-    ) as session:
+    with local_inference(resolved_model, engine, num_chips=num_chips) as session:
         yield session
 
 
@@ -380,65 +333,11 @@ def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) 
         time.sleep(_TIMEOUT_POLL_SECONDS)
 
 
-def _run_native_vllm_service(service: IrisServiceConfig) -> None:
-    """Run one task in a catalog-declared native vLLM PP/DP gang."""
-    if not isinstance(service.engine, VllmEngineConfig):
-        raise ValueError("pipeline-parallel inference requires the vLLM backend")
-    pipeline_parallel_size = service.model.pipeline_parallel_size
-    data_parallel_size = service.model.data_parallel_size
-    if pipeline_parallel_size is None or data_parallel_size is None:
-        raise ValueError("native vLLM serving requires explicit pipeline and data parallel sizes")
-
-    with iris_vllm_launch(
-        pipeline_parallel_size=pipeline_parallel_size,
-        data_parallel_size=data_parallel_size,
-    ) as launch:
-        logger.info(
-            "vLLM requested topology: tasks=%d GPUs/task=%d DP=%d EP=%d PP=%d TP=1 task=%d",
-            pipeline_parallel_size,
-            data_parallel_size,
-            data_parallel_size,
-            data_parallel_size,
-            pipeline_parallel_size,
-            launch.task_index,
-        )
-        with _prepared_local_inference(
-            service.model,
-            service.engine,
-            service.iris,
-            vllm_extra_args=launch.extra_cli_args,
-            vllm_subprocess_env=launch.subprocess_env,
-            wait_until_ready=launch.is_leader,
-            render_tensor_parallel_size=False,
-        ) as local_session:
-            if not launch.is_leader:
-                wait_for_iris_vllm_shutdown(launch, local_session.check_alive)
-            else:
-                _log_gpu_memory_snapshot()
-                tensor_parallel_size = cast(int, service.model.tensor_parallel_size)
-                with iris_vllm_followers(launch):
-                    with _register_dashboard(
-                        service,
-                        local_session.model,
-                        tensor_parallel_size=tensor_parallel_size,
-                        backend_name=local_session.backend_name,
-                        streaming=True,
-                    ):
-                        _block_until_timeout(local_session.check_alive, service.timeout_hours)
-        if not launch.is_leader:
-            notify_iris_vllm_stopped(launch)
-
-
 def run_iris_service(service: IrisServiceConfig) -> None:
     """Run a long-lived direct or brokered Iris endpoint."""
 
     configure_logging()
     broker = _broker_config(service.instances, service.broker)
-    if service.model.pipeline_parallel_size is not None:
-        if broker is not None:
-            raise ValueError("pipeline-parallel inference supports one direct instance without a broker")
-        _run_native_vllm_service(service)
-        return
     if broker is None:
         with _prepared_local_inference(service.model, service.engine, service.iris) as local_session:
             tensor_parallel_size = cast(int, local_session.tensor_parallel_size)

@@ -12,7 +12,6 @@ resource_hint:
 
 serve:
   tensor_parallel_size: 1
-  pipeline_parallel_size: 1
   data_parallel_size: 8
   max_model_len: 4096
   max_num_batched_tokens: 4096

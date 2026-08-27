@@ -20,7 +20,7 @@ from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunCon
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
 from marin.evaluation.runner import (
     Evaluation,
@@ -182,22 +182,9 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
             name="model",
             location="org/model",
             tokenizer="tokenizer",
-            resource_hint=ResourceHint(gpu={"H100": 8}),
-            serve=ServeConfig(
-                tensor_parallel_size=1,
-                pipeline_parallel_size=1,
-                data_parallel_size=8,
-                vllm_batch_invariant=True,
-                vllm_use_flashinfer_sampler=False,
-                auto_overrides=False,
-            ),
+            resource_hint=ResourceHint(hbm_gb=3),
         ),
-        accelerator=AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type="H100",
-            gpu_count=8,
-            target_cluster="cw-us-east-02a",
-        ),
+        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         capability_origin="https://iris.example",
         api_model="model",
