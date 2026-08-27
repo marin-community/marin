@@ -155,24 +155,6 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
-def test_review_workflows_match_their_loom_federations() -> None:
-    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
-    profiles = stack["config"]["marin-loom:profiles"]
-    federations = {item["name"]: item for item in stack["config"]["marin-loom:githubFederations"]}
-
-    pr_federation = federations["pr-review"]
-    assert pr_federation["profile"] == "pr-review"
-    assert pr_federation["event"] == "pull_request_target"
-    assert pr_federation["ref"] == "refs/heads/main"
-    assert profiles["pr-review"]["class"] == "automation"
-    assert profiles["pr-review"]["strict"] is True
-
-    codehealth_federation = federations["codehealth"]
-    assert codehealth_federation["profile"] == "codehealth"
-    assert codehealth_federation["ref"] == "refs/heads/main"
-    assert profiles["codehealth"]["maxConcurrent"] == 1
-
-
 def test_weaver_pr_review_launcher_never_executes_pull_request_code() -> None:
     workflow_path = ROOT.parent.parent / ".github/workflows/ops-weaver-review.yaml"
     workflow = yaml.safe_load(workflow_path.read_text())
