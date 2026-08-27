@@ -22,6 +22,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
@@ -103,6 +105,7 @@ class ContainerConfig:
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
     ports: dict[str, int] = field(default_factory=dict)
+    health_check_json: str = ""
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -284,9 +287,10 @@ class DiscoveredContainer:
     phase: ExecutionStage
     running: bool
     exit_code: int | None
-    started_at: str  # ISO 8601 timestamp from Docker
+    started_at: Timestamp | None
     workdir_host_path: str  # host path of the /app mount
     ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
+    health_check_json: str = ""
 
 
 class ContainerRuntime(Protocol):

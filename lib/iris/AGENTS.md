@@ -75,7 +75,8 @@ dataclasses at the usage boundary when a caller needs a typed shape.
 
 ## Code Conventions
 
-- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
+- Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP. A task health probe may use the
+  standard-library HTTP client for a loopback-only `GET /healthz`. This exception does not apply to remote APIs.
 - After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
 - Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
 - Dashboards must be a thin UI over the RPC API, not a second implementation path.

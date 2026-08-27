@@ -37,6 +37,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.health import IrisTaskHealthCheck
 from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -693,6 +694,7 @@ class FrayIrisClient:
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
+                health_check=IrisTaskHealthCheck.from_request(request.health_check),
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

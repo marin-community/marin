@@ -321,6 +321,28 @@ def _parse_docker_log_line(line: str) -> tuple[datetime, str]:
     return datetime.now(UTC), line
 
 
+def _parse_docker_timestamp(value: str) -> Timestamp | None:
+    """Parse a Docker RFC3339 timestamp at the runtime boundary."""
+    if not value:
+        return None
+    text = value.replace("Z", "+00:00")
+    if "." in text:
+        head, _, tail = text.partition(".")
+        fraction = tail
+        offset = ""
+        for separator in ("+", "-"):
+            if separator in tail:
+                fraction, _, suffix = tail.partition(separator)
+                offset = separator + suffix
+                break
+        text = f"{head}.{fraction[:6]}{offset}"
+    try:
+        return Timestamp.from_seconds(datetime.fromisoformat(text).timestamp())
+    except ValueError:
+        logger.warning("Docker returned an invalid container start timestamp: %r", value)
+        return None
+
+
 def _parse_memory_size(size_str: str) -> int:
     """Parse memory size string like '123.4MiB' to MB."""
     size_str = size_str.strip()
@@ -730,6 +752,8 @@ exec {quoted_cmd}
         # and can be double-allocated to a new task).
         if config.ports:
             cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
+        if config.health_check_json:
+            cmd.extend(["--label", f"iris.health_check={config.health_check_json}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -1087,9 +1111,10 @@ class DockerRuntime:
                     phase=ExecutionStage(labels.get("iris.phase", "run")),
                     running=state.get("Running", False),
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
-                    started_at=state.get("StartedAt", ""),
+                    started_at=_parse_docker_timestamp(state.get("StartedAt", "")),
                     workdir_host_path=workdir_host_path,
                     ports=json.loads(labels.get("iris.ports", "{}")),
+                    health_check_json=labels.get("iris.health_check", ""),
                 )
             )
 

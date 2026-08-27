@@ -62,6 +62,10 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
     request.coscheduling.group_by = "tpu-name"
     request.scheduling_timeout.milliseconds = 60_000
     request.timeout.milliseconds = 3_600_000
+    request.health_check.startup_timeout.milliseconds = 1_800_000
+    request.health_check.period.milliseconds = 10_000
+    request.health_check.request_timeout.milliseconds = 3_000
+    request.health_check.failure_threshold = 13
     request.federation.requester_id = "parent"
     return request
 

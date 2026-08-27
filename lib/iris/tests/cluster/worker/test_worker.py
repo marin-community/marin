@@ -17,6 +17,7 @@ import pytest
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from google.protobuf import json_format
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
@@ -39,6 +40,7 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.runtime.health_probe import ProbeResult
 from iris.test_util import wait_for_condition
 from iris.testing.worker import (
     FakeContainerHandle,
@@ -47,7 +49,7 @@ from iris.testing.worker import (
     create_run_task_request,
 )
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Duration
+from rigging.timing import Duration, Timestamp
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -231,6 +233,83 @@ def test_task_with_ports(mock_worker):
     assert task.ports["http"] != task.ports["grpc"]
 
     task.thread.join(timeout=15.0)
+
+
+def test_worker_fails_a_live_task_after_consecutive_health_failures(
+    mock_bundle_store, mock_runtime, tmp_path, monkeypatch
+):
+    handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100)
+    mock_runtime.create_container = Mock(return_value=handle)
+    results = iter(
+        [
+            ProbeResult(True, "HTTP 200"),
+            ProbeResult(False, "health endpoint returned HTTP 503"),
+            ProbeResult(False, "health endpoint returned HTTP 503"),
+        ]
+    )
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_http_health", lambda _port, _timeout: next(results))
+    worker = Worker(
+        WorkerConfig(
+            port=0,
+            port_range=(50000, 50100),
+            poll_interval=Duration.from_seconds(0.01),
+            cache_dir=tmp_path / "cache",
+            default_task_image="mock-image",
+        ),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+    )
+    request = create_run_task_request(ports=["healthz"])
+    request.health_check.startup_timeout.milliseconds = 30_000
+    request.health_check.period.milliseconds = 2_000
+    request.health_check.request_timeout.milliseconds = 1_000
+    request.health_check.failure_threshold = 2
+
+    task_id = worker.submit_task(request)
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=7.0)
+
+    assert task.status == job_pb2.TASK_STATE_FAILED
+    assert task.error == "Task health check failed 2 consecutive times: health endpoint returned HTTP 503"
+    assert handle.stop_calls[-1] == {"force": True}
+
+
+def test_worker_keeps_a_normal_exit_that_races_a_health_failure(mock_bundle_store, mock_runtime, tmp_path, monkeypatch):
+    handle = create_mock_container_handle(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=handle)
+    results = iter([ProbeResult(True, "HTTP 200"), ProbeResult(False, "health endpoint returned HTTP 503")])
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_http_health", lambda _port, _timeout: next(results))
+    worker = Worker(
+        WorkerConfig(
+            port=0,
+            port_range=(50000, 50100),
+            poll_interval=Duration.from_seconds(0.01),
+            cache_dir=tmp_path / "cache",
+            default_task_image="mock-image",
+        ),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+    )
+    request = create_run_task_request(ports=["healthz"])
+    request.health_check.startup_timeout.milliseconds = 30_000
+    request.health_check.period.milliseconds = 2_000
+    request.health_check.request_timeout.milliseconds = 1_000
+    request.health_check.failure_threshold = 1
+
+    task_id = worker.submit_task(request)
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=5.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
 
 
 def test_task_failure_on_nonzero_exit(mock_worker, mock_runtime):
@@ -1182,6 +1261,8 @@ def _make_discovered_container(
     running: bool = True,
     workdir_host_path: str = "/tmp/workdirs/test",
     ports: dict[str, int] | None = None,
+    health_check_json: str = "",
+    started_at: Timestamp | None = None,
 ) -> DiscoveredContainer:
     return DiscoveredContainer(
         container_id="abc123def456",
@@ -1193,9 +1274,10 @@ def _make_discovered_container(
         phase=phase,
         running=running,
         exit_code=None if running else 0,
-        started_at="2025-01-01T00:00:00Z",
+        started_at=started_at or Timestamp.from_seconds(1_735_689_600),
         workdir_host_path=workdir_host_path,
         ports=ports or {},
+        health_check_json=health_check_json,
     )
 
 
@@ -1210,6 +1292,78 @@ def test_adopt_creates_task_in_running_state(mock_worker, mock_runtime):
     task = mock_worker.get_task(container.task_id, container.attempt_id)
     assert task is not None
     assert task.status == job_pb2.TASK_STATE_RUNNING
+
+
+def test_adopt_restores_the_task_health_contract(mock_worker, mock_runtime):
+    health = job_pb2.TaskHealthCheck(failure_threshold=3)
+    health.startup_timeout.milliseconds = 30_000
+    health.period.milliseconds = 5_000
+    health.request_timeout.milliseconds = 1_000
+    container = _make_discovered_container(
+        ports={"healthz": 50042},
+        health_check_json=json_format.MessageToJson(health, preserving_proto_field_name=True),
+    )
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    assert mock_worker.adopt_running_containers() == 1
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.request.health_check == health
+    assert task.ports == {"healthz": 50042}
+
+
+def test_adopt_rejects_health_check_without_a_container_start_time(mock_worker, mock_runtime):
+    health = job_pb2.TaskHealthCheck(failure_threshold=3)
+    health.startup_timeout.milliseconds = 30_000
+    health.period.milliseconds = 5_000
+    health.request_timeout.milliseconds = 1_000
+    container = replace(
+        _make_discovered_container(
+            ports={"healthz": 50042},
+            health_check_json=json_format.MessageToJson(health, preserving_proto_field_name=True),
+        ),
+        started_at=None,
+    )
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    with pytest.raises(RuntimeError, match="container start time"):
+        mock_worker.adopt_running_containers()
+
+
+def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker, mock_runtime, monkeypatch):
+    started_at = Timestamp.from_seconds(1_735_689_600)
+    now = started_at.add(Duration.from_seconds(20))
+    monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: now))
+    health = job_pb2.TaskHealthCheck(failure_threshold=1)
+    health.startup_timeout.milliseconds = 30_000
+    health.period.milliseconds = 5_000
+    health.request_timeout.milliseconds = 1_000
+    container = _make_discovered_container(
+        ports={"healthz": 50042},
+        health_check_json=json_format.MessageToJson(health, preserving_proto_field_name=True),
+        started_at=started_at,
+    )
+    probe_finished = threading.Event()
+
+    def unhealthy_probe(port, timeout):
+        probe_finished.set()
+        return ProbeResult(False, "still starting")
+
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.probe_http_health", unhealthy_probe)
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_runtime.adopt_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000,
+        )
+    )
+
+    assert mock_worker.adopt_running_containers() == 1
+    assert probe_finished.wait(timeout=1)
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.status == job_pb2.TASK_STATE_RUNNING
+
+    mock_worker.stop()
 
 
 def test_adopt_skips_build_phase_containers(mock_worker, mock_runtime):

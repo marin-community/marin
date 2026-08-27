@@ -56,6 +56,7 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
+from iris.cluster.health import NOOP_IRIS_TASK_HEALTH_CHECK, IrisTaskHealthCheck
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -931,6 +932,7 @@ class IrisClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
+        health_check: IrisTaskHealthCheck = NOOP_IRIS_TASK_HEALTH_CHECK,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -960,6 +962,7 @@ class IrisClient:
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
                 admin role at submission when auth is enabled.
+            health_check: Application health policy for each task attempt. The default disables health checks.
 
         Returns:
             Job handle for the submitted job
@@ -1068,6 +1071,7 @@ class IrisClient:
                 priority_band=priority_band,
                 container_profile=container_profile,
                 submit_argv=submit_argv,
+                health_check=health_check,
             )
         except ConnectError as e:
             if e.code == Code.ALREADY_EXISTS:

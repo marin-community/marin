@@ -21,6 +21,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.health import NOOP_IRIS_TASK_HEALTH_CHECK, IrisTaskHealthCheck
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.runtime.env import with_slice_topology_env
@@ -168,6 +169,7 @@ class RemoteClusterClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
+        health_check: IrisTaskHealthCheck = NOOP_IRIS_TASK_HEALTH_CHECK,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -214,6 +216,7 @@ class RemoteClusterClient:
             request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
+        health_check.apply_to(request.health_check)
 
         launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 

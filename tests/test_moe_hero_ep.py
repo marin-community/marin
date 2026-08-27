@@ -19,6 +19,7 @@ import optax
 import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
@@ -199,11 +200,21 @@ def test_expert_bank_override_must_support_three_waves():
         launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
-def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    progress_watchdog=ProgressWatchdogConfig(),
+):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
-            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            trainer=SimpleNamespace(
+                id="test-run",
+                watch=WatchConfig(interval=watch_interval),
+                progress_watchdog=progress_watchdog,
+            ),
             watch_mode=watch_mode,
         ),
         resources=object(),
@@ -211,6 +222,24 @@ def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLI
         max_retries_failure=0,
         max_task_failures=10,
     )
+
+
+@pytest.mark.parametrize(
+    ("progress_watchdog", "expected_health"),
+    [
+        (ProgressWatchdogConfig(), None),
+        (ProgressWatchdogConfig(startup_timeout=timedelta(hours=1)), train.HERO_EP_TASK_HEALTH),
+    ],
+)
+def test_run_grug_enables_task_health_only_with_an_armed_watchdog(monkeypatch, progress_watchdog, expected_health):
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+    config = _runtime_env_config(progress_watchdog=progress_watchdog)
+
+    with patch.object(train, "dispatch_grug_training_run") as dispatch:
+        train.run_grug(config)
+
+    assert dispatch.call_args.kwargs["health_check"] == expected_health
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
