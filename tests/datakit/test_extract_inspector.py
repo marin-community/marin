@@ -25,9 +25,12 @@ from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FI
 from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS
 from experiments.datakit.build_pdf_source.extract_inspector import (
     INSPECTOR_FIELDS,
+    OP_EXTRACT,
+    OP_GEOMETRY,
     OUTPUT_SCHEMA,
     SIGNAL_COLUMNS,
     InspectorStatus,
+    document_geometry,
     extract_document,
     output_statistics,
 )
@@ -264,32 +267,42 @@ def test_output_length_is_measured_per_source_page_not_per_extracted_page():
 # a row or a lost shard. The child is a stub whose behaviour the test chooses.
 
 _STUB_WORKER = '''
-"""A stand-in for the pdf-inspector worker, speaking the same length-prefixed protocol."""
+"""A stand-in for the extraction worker, speaking the same length-prefixed protocol.
+
+``STUB_MODE`` names the operation the stub misbehaves on, so a test can hang or kill the child on
+the rasteriser's round trip while the extractor's still answers.
+"""
 import json
 import os
 import sys
 import time
 
-mode = os.environ["STUB_MODE"]
+mode, bad_op = os.environ["STUB_MODE"].split(":")
 marker = os.environ["STUB_MARKER"]
 stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 while True:
     header = stdin.readline()
     if not header:
         break
-    size = json.loads(header)["size"]
+    request = json.loads(header)
+    size = request["size"]
     payload = b""
     while len(payload) < size:
         chunk = stdin.read(size - len(payload))
         if not chunk:
             sys.exit(3)
         payload += chunk
-    if mode == "hang":
-        time.sleep(60)
-    if mode == "die_once" and not os.path.exists(marker):
-        open(marker, "w").close()
-        os._exit(9)
-    stdout.write(json.dumps({"pages": [payload.decode()], "inspector_extracted_pages": 1}).encode() + b"\\n")
+    if request["op"] == bad_op:
+        if mode == "hang":
+            time.sleep(60)
+        if mode == "die_once" and not os.path.exists(marker):
+            open(marker, "w").close()
+            os._exit(9)
+    if request["op"] == "geometry":
+        reply = {"page_rectangles": [[612.0, 792.0]]}
+    else:
+        reply = {"pages": [payload.decode()], "inspector_extracted_pages": 1}
+    stdout.write(json.dumps(reply).encode() + b"\\n")
     stdout.flush()
 '''
 
@@ -298,7 +311,7 @@ while True:
 def stub_worker(monkeypatch, tmp_path):
     """Point :class:`InspectorWorker` at a stub child whose behaviour the test picks."""
 
-    def build(mode: str, deadline: float = 5.0):
+    def build(mode: str = "echo:none", deadline: float = 5.0):
         (tmp_path / "inspector_stub_worker.py").write_text(_STUB_WORKER)
         monkeypatch.setenv("PYTHONPATH", str(tmp_path))
         monkeypatch.setenv("STUB_MODE", mode)
@@ -311,22 +324,23 @@ def stub_worker(monkeypatch, tmp_path):
 
 def test_a_document_round_trips_through_the_child_process(stub_worker):
     """The framing has to survive arbitrary PDF bytes, including a newline in the payload."""
-    worker = stub_worker("echo")
+    worker = stub_worker()
     try:
-        assert worker.call(b"%PDF-1.7\nbody")["pages"] == ["%PDF-1.7\nbody"]
-        assert worker.call(b"second")["pages"] == ["second"]
-        assert worker.spawns == 1, "one child serves the whole shard"
+        assert worker.call(OP_EXTRACT, b"%PDF-1.7\nbody")["pages"] == ["%PDF-1.7\nbody"]
+        assert worker.call(OP_EXTRACT, b"second")["pages"] == ["second"]
+        assert worker.call(OP_GEOMETRY, b"second")["page_rectangles"] == [[612.0, 792.0]]
+        assert worker.spawns == 1, "one child serves every document the process reads"
     finally:
         worker.stop()
 
 
 def test_a_document_that_never_returns_is_bounded_from_outside_the_library(stub_worker):
-    """The reason the child exists. ``extract_pages_markdown_bytes`` has no deadline, page cap or
-    byte cap of its own, and 17 documents in 100,000 run past 30 seconds; in-process one of those
-    holds the map task until its heartbeat expires and the retry lands on the same document."""
-    worker = stub_worker("hang", deadline=0.5)
+    """The reason the extractor is out of process. It has no deadline, page cap or byte cap of its
+    own, and 17 documents in 100,000 run past 30 seconds; in-process one of those holds the map task
+    until its heartbeat expires and the retry lands on the same document."""
+    worker = stub_worker(f"hang:{OP_EXTRACT}", deadline=0.5)
     try:
-        reply = worker.call(b"a document that hangs")
+        reply = worker.call(OP_EXTRACT, b"a document that hangs")
 
         assert "no reply within" in reply["extract_error"]
         assert worker.spawns == 2, "the hung child is replaced rather than reused"
@@ -335,24 +349,40 @@ def test_a_document_that_never_returns_is_bounded_from_outside_the_library(stub_
 
 
 def test_a_child_that_dies_costs_one_document_rather_than_the_shard(stub_worker):
-    """A stack overflow in the crate is a SIGSEGV no ``except`` can catch. The document becomes a
-    row saying so, and the next document is served by a fresh child."""
-    worker = stub_worker("die_once")
+    """A stack overflow in the crate is a SIGSEGV no ``except`` can catch, and the rasteriser has a
+    deterministic one on ~1 crawl document in 100,000. Zephyr restarts a shard from row zero with no
+    poison-pill detection, so in-process that document fails the stage permanently."""
+    worker = stub_worker(f"die_once:{OP_GEOMETRY}")
     try:
-        reply = worker.call(b"the document that kills it")
-        assert "worker exited with 9" in reply["extract_error"]
+        reply = worker.call(OP_GEOMETRY, b"the document that kills the rasteriser")
+        assert "worker exited with 9" in reply["geometry_error"]
 
-        assert worker.call(b"the next one")["pages"] == ["the next one"]
+        assert worker.call(OP_EXTRACT, b"the next one")["pages"] == ["the next one"]
         assert worker.spawns == 2
     finally:
         worker.stop()
 
 
+def test_a_rasteriser_that_dies_does_not_cost_the_extraction(stub_worker):
+    """Each library gets its own round trip precisely so one cannot take the other's result down."""
+    worker = stub_worker(f"die_once:{OP_GEOMETRY}")
+    try:
+        extracted = worker.call(OP_EXTRACT, b"real text")
+        geometry = document_geometry(worker.call(OP_GEOMETRY, b"real text"), RenderOptions())
+    finally:
+        worker.stop()
+
+    record = extract_document(_ROW, extracted, geometry, BOILERPLATE_OPTIONS)
+    assert record["extraction_status"] == str(InspectorStatus.SUCCESS)
+    assert record["text"] == "real text\n"
+    assert record["mean_render_dpi"] is None, "and the router keeps it, because nothing can render it"
+
+
 def test_a_dead_child_becomes_a_failed_row_with_its_provenance_intact(stub_worker):
     """The row is what the router gates on, so it has to survive the death that produced it."""
-    worker = stub_worker("die_once")
+    worker = stub_worker(f"die_once:{OP_EXTRACT}")
     try:
-        record = extract_document(_ROW, worker.call(_ROW["pdf"]), _GEOMETRY, BOILERPLATE_OPTIONS)
+        record = extract_document(_ROW, worker.call(OP_EXTRACT, _ROW["pdf"]), _GEOMETRY, BOILERPLATE_OPTIONS)
     finally:
         worker.stop()
 
@@ -360,6 +390,18 @@ def test_a_dead_child_becomes_a_failed_row_with_its_provenance_intact(stub_worke
     assert record["url"] == _ROW["url"]
     assert record["inspector_markdown_chars"] is None
     assert pa.RecordBatch.from_pylist([record], schema=OUTPUT_SCHEMA).num_rows == 1
+
+
+def test_geometry_comes_back_as_the_router_reads_it(stub_worker):
+    """The rectangles cross the pipe; the arithmetic that prices them stays in the parent."""
+    worker = stub_worker()
+    try:
+        geometry = document_geometry(worker.call(OP_GEOMETRY, b"a letter page"), RenderOptions())
+    finally:
+        worker.stop()
+
+    assert geometry.pages == 1
+    assert geometry.mean_dpi == pytest.approx(149.47, abs=0.1)
 
 
 # --- render geometry, which the router scores on and the render policy triggers off ---------------

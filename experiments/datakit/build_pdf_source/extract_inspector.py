@@ -26,18 +26,30 @@ the router's single most decisive input. Every one of the 2,054 labelled such do
 escalated by the judge, an escalation rate of 1.000, so the gate keeps them out of the corpus and
 they never reach the score (``pdf-router-v2.md``, "One gate is arithmetic").
 
-**The library runs in a subprocess, and the reason is the deadline rather than the crash.** Stage 0
-of the evaluation found no panic and no worker death in 100,000 crawl PDFs on either architecture,
-so isolation is not being bought against memory unsafety. What it is bought against is that
-``extract_pages_markdown_bytes`` has no page cap, byte cap or deadline of its own and 17 documents
-in 100,000 ran past 30 seconds -- 1.77x slower at 1.17.0 than at 1.14.1, with a p99 ratio of 10.5x.
-In-process, one of those holds a Zephyr map task until its heartbeat expires, the task retries onto
-the same document, and the shard is lost to a document that is 0.017% of the corpus. Out of process
-it is a killed child and a row that says so. The residual crash risk rides along for free: three
-unbounded-depth recursions over nested Form XObjects remain in the crate, and a stack overflow there
-is a ``SIGSEGV`` no ``except`` can catch.
+**Nothing opens a PDF in the map task.** Both native libraries this step touches run in a child
+process the task is willing to lose, for reasons that are measured rather than precautionary and
+that differ between them.
 
-``pdf_inspector`` is imported inside :func:`worker_main` alone, and PyMuPDF inside
+pdf-inspector itself is bought isolation for its *deadline*, not for a crash: no panic and no worker
+death in 100,000 crawl PDFs on either architecture, but ``extract_pages_markdown_bytes`` has no page
+cap, byte cap or deadline of its own and 17 of those documents ran past 30 seconds -- 1.77x slower at
+1.17.0 than at 1.14.1, with a p99 ratio of 10.5x. In-process one of those holds a Zephyr map task
+until its heartbeat expires, the task retries onto the same document, and the shard is lost. The
+residual crash risk rides along for free: three unbounded-depth recursions over nested Form XObjects
+remain in the crate, and a stack overflow there is a ``SIGSEGV`` no ``except`` can catch.
+
+The rasteriser is bought isolation for exactly the crash. Rendering every page of the 100,000
+document sample through MuPDF found one abort -- a ``SIGSEGV`` on page 48 of a 58-page document,
+deterministic across re-renders into fresh processes -- against zero in 3,577,944 PDFium page
+renders. Zephyr gives a shard three attempts, restarts it from row zero and has no poison-pill
+detection, so a deterministic abort exhausts the budget and fails the stage permanently; at ~1 in
+100,000 documents that is ~10 blocking documents crawl-wide. This step reads page geometry from
+every fetched document, so it would meet all of them.
+
+Each library gets its own round trip and therefore its own deadline, so a document that hangs one
+does not cost the other's result.
+
+``pdf_inspector`` and PyMuPDF are both imported inside the child alone -- the latter through
 :mod:`~experiments.datakit.build_pdf_source.ocr_extract.render`'s own deferred imports. Both live in
 marin-core's ``pdf`` extra, which the Zephyr workers get through ``pip_dependency_groups`` and the
 entrypoint job does not -- its ``uv sync`` carries no extras. Since
@@ -96,6 +108,13 @@ LIBRARY_VERSION = "1.17.0"
 
 MODULE_NAME = "experiments.datakit.build_pdf_source.extract_inspector"
 WORKER_FLAG = "--worker"
+
+# The two things the child is asked to do, each in its own round trip so that one hanging or dying
+# does not cost the other's result. They are separate for a measured reason on each side: the
+# library's own p99 latency ratio is 10.5x and it has no deadline, and the rasteriser has a
+# deterministic SIGSEGV on ~1 crawl document in 100,000.
+OP_EXTRACT = "extract"
+OP_GEOMETRY = "geometry"
 
 # The deadline the evaluation measured against: 17 of 100,000 documents exceeded it on
 # ``extract_pages_markdown_bytes`` alone. ``detect_pdf_bytes`` runs inside the same deadline and
@@ -330,43 +349,64 @@ def read_exactly(stream, size: int) -> bytes:
     return bytes(buffer)
 
 
-def worker_main() -> None:
-    """Serve length-prefixed PDFs from stdin until the driver closes it.
+def _extract_reply(payload: bytes) -> dict:
+    """Both pdf-inspector calls against one document, each allowed to fail on its own.
 
-    The two library calls are attempted independently so that one failing does not cost the other's
-    signals: ``detect_pdf_bytes`` refusing a document the extraction reads fine would otherwise
-    discard the extraction as well.
+    ``detect_pdf_bytes`` refusing a document the extraction reads fine must not discard the
+    extraction, and the reverse is worth the same care, so neither failure aborts the other.
 
     ``BaseException`` and not ``Exception``: PyO3 derives ``PanicException`` from the former, and a
     panic reported as a worker death would turn a catchable failure into a respawn.
     """
-    import faulthandler  # noqa: PLC0415 - only the disposable child needs a fault handler
-
     import pdf_inspector  # noqa: PLC0415 - the whole point is to import it out of process
+
+    reply: dict = {}
+    for name, call, flatten in (
+        ("detect", pdf_inspector.detect_pdf_bytes, _detect_signals),
+        ("extract", pdf_inspector.extract_pages_markdown_bytes, _extract_signals),
+    ):
+        try:
+            reply.update(flatten(call(payload)))
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as error:
+            reply[f"{name}_error"] = f"{type(error).__name__}: {error}"[:500]
+    return reply
+
+
+def _geometry_reply(payload: bytes) -> dict:
+    """Every page's size in points, read by the rasteriser and measured by nobody yet.
+
+    The rectangles cross the pipe rather than the DPIs, so the arithmetic that turns them into the
+    router's features stays in the parent where it is testable without a PDF library.
+    """
+    try:
+        with open_pdf(payload) as document:
+            return {"page_rectangles": page_rectangles(document)}
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as error:
+        return {"geometry_error": f"{type(error).__name__}: {error}"[:500]}
+
+
+def worker_main() -> None:
+    """Serve length-prefixed PDFs from stdin until the driver closes it."""
+    import faulthandler  # noqa: PLC0415 - only the disposable child needs a fault handler
 
     installed = version("pdf-inspector")
     if installed != LIBRARY_VERSION:
         raise RuntimeError(f"this step is pinned to pdf-inspector {LIBRARY_VERSION}; {installed} is installed")
     faulthandler.enable()
 
+    handlers = {OP_EXTRACT: _extract_reply, OP_GEOMETRY: _geometry_reply}
     stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
     while True:
         header = stdin.readline()
         if not header:
             return
-        payload = read_exactly(stdin, json.loads(header)["size"])
-        reply: dict = {}
-        for name, call, flatten in (
-            ("detect", pdf_inspector.detect_pdf_bytes, _detect_signals),
-            ("extract", pdf_inspector.extract_pages_markdown_bytes, _extract_signals),
-        ):
-            try:
-                reply.update(flatten(call(payload)))
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as error:
-                reply[f"{name}_error"] = f"{type(error).__name__}: {error}"[:500]
-        stdout.write(json.dumps(reply).encode() + b"\n")
+        request = json.loads(header)
+        payload = read_exactly(stdin, request["size"])
+        stdout.write(json.dumps(handlers[request["op"]](payload)).encode() + b"\n")
         stdout.flush()
 
 
@@ -431,16 +471,16 @@ class InspectorWorker:
             if b"\n" in buffer:
                 return buffer.split(b"\n", 1)[0].decode()
 
-    def call(self, pdf: bytes) -> dict:
-        """Run one document through the worker, replacing it if it does not come back.
+    def call(self, op: str, pdf: bytes) -> dict:
+        """Run one operation on one document, replacing the child if it does not come back.
 
-        Returns the worker's reply, or a dict carrying ``extract_error`` when the child died or ran
-        past its deadline -- which the caller records as a failed extraction rather than raising,
+        Returns the worker's reply, or a dict carrying ``<op>_error`` when the child died or ran
+        past its deadline -- which the caller records against the document rather than raising,
         because on a crawl corpus that is data.
         """
         deadline = time.monotonic() + self._deadline
         try:
-            self._process.stdin.write(json.dumps({"size": len(pdf)}).encode() + b"\n")
+            self._process.stdin.write(json.dumps({"op": op, "size": len(pdf)}).encode() + b"\n")
             self._process.stdin.write(pdf)
             self._process.stdin.flush()
             line = self._read_reply(deadline)
@@ -456,11 +496,12 @@ class InspectorWorker:
         # longer usable: a worker mid-document cannot be handed the next one.
         died = self._process.poll() is not None
         reason = failure or (self._death() if died else f"no reply within {self._deadline:.0f}s")
-        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/{'worker_died' if died else 'deadline_exceeded'}", 1)
+        outcome = "worker_died" if died else "deadline_exceeded"
+        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/{outcome}/{op}", 1)
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/worker_respawned", 1)
         self.stop()
         self.start()
-        return {"extract_error": reason}
+        return {f"{op}_error": reason}
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +509,7 @@ class InspectorWorker:
 # ---------------------------------------------------------------------------
 
 
-def document_geometry(pdf: bytes, options: RenderOptions) -> RenderGeometry | None:
+def document_geometry(reply: dict, options: RenderOptions) -> RenderGeometry | None:
     """What the render budget would resolve this document to, or ``None`` if nothing can render it.
 
     A PDF the rasteriser cannot open, or one with no page it will accept, is not an error here. It is
@@ -477,17 +518,11 @@ def document_geometry(pdf: bytes, options: RenderOptions) -> RenderGeometry | No
     pdf-inspector managed instead. ``None`` and not a zero geometry, because a mean DPI of 0.0 reads
     as "renders far below the legibility floor", which is a different document.
     """
-    try:
-        with open_pdf(pdf) as document:
-            measured = render_geometry(page_rectangles(document), options)
-    except ImportError:
-        # The worker venv is missing the ``pdf`` extra. That is a deployment fault, not a document.
-        raise
-    except Exception as error:
+    if "geometry_error" in reply:
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/geometry_failed", 1)
-        counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/geometry_failed/{type(error).__name__}", 1)
-        logger.debug("Could not measure render geometry: %s", error, exc_info=True)
+        logger.debug("Could not measure render geometry: %s", reply["geometry_error"])
         return None
+    measured = render_geometry(reply.get("page_rectangles") or (), options)
     return measured if measured.pages else None
 
 
@@ -501,9 +536,7 @@ def _error_summary(reply: dict) -> str | None:
     return "; ".join(f"{name}: {reply[key]}" for name, key in failures if key in reply) or None
 
 
-def extract_document(
-    row: dict, reply: dict, geometry: RenderGeometry | None, boilerplate: BoilerplateOptions
-) -> dict:
+def extract_document(row: dict, reply: dict, geometry: RenderGeometry | None, boilerplate: BoilerplateOptions) -> dict:
     """Assemble one stored row from the library's reply and the document's geometry.
 
     The row is always complete: identity and provenance are present whatever happened, and the
@@ -587,11 +620,17 @@ def extract_batch(
     render_options: RenderOptions,
     boilerplate: BoilerplateOptions,
 ) -> Iterator[dict]:
-    """Extract one Parquet row group: geometry in this process, the library in the child."""
+    """Extract one Parquet row group. Every line that opens a PDF runs in the child, not here.
+
+    Two round trips per document rather than one, so that the rasteriser and the extractor get their
+    own deadline and their own chance to die: neither of them can then cost the other's result. The
+    extra cost is a second pipe write of the document's bytes against ~140 ms of parsing.
+    """
     worker = inspector_worker(CALL_DEADLINE)
     for row in batch.to_pylist():
-        geometry = document_geometry(row["pdf"], render_options)
-        yield extract_document(row, worker.call(row["pdf"]), geometry, boilerplate)
+        extracted = worker.call(OP_EXTRACT, row["pdf"])
+        geometry = document_geometry(worker.call(OP_GEOMETRY, row["pdf"]), render_options)
+        yield extract_document(row, extracted, geometry, boilerplate)
 
 
 def extract_pdf_text(output_path: str, source_output_path: str) -> NormalizedData:
@@ -611,7 +650,9 @@ def extract_pdf_text(output_path: str, source_output_path: str) -> NormalizedDat
     if not shards:
         raise RuntimeError(f"No fetched PDFs under {source.main_output_dir}")
     raw_dir = prefix_join(output_path, "raw")
-    logger.info("Extracting %d shards from %s with pdf-inspector %s", len(shards), source.main_output_dir, LIBRARY_VERSION)
+    logger.info(
+        "Extracting %d shards from %s with pdf-inspector %s", len(shards), source.main_output_dir, LIBRARY_VERSION
+    )
 
     tallies: dict[str, int | float] = {}
     with ZephyrContext(
