@@ -47,14 +47,6 @@ _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
 
 
-def _split_gate_up_weights(w_gate_up: jax.Array) -> tuple[jax.Array, jax.Array]:
-    return grug_moe.split_moe_w13_output(
-        w_gate_up,
-        intermediate_dim=w_gate_up.shape[-1] // 2,
-        interleaved=False,
-    )
-
-
 def _make_dense_mesh() -> Mesh:
     devices = jax.devices()
     if not devices:
@@ -284,7 +276,7 @@ def test_moe_mlp_runs_without_ep_axis():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=None,
@@ -295,7 +287,7 @@ def test_moe_mlp_runs_without_ep_axis():
 
         jit_fn = jax.jit(
             lambda x, sel, cw, up_gate, down: moe_mlp(
-                x, sel, cw, *_split_gate_up_weights(up_gate), down, activation=ActivationFunctionEnum.silu, mesh=None
+                x, sel, cw, up_gate, down, activation=ActivationFunctionEnum.silu, mesh=None
             )
         )
         out_jit = jit_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
@@ -312,9 +304,8 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
         topk=2,
     )
 
-    w_gate, w_up = _split_gate_up_weights(w_up_gate)
-    y_default = moe_mlp(x, selected_experts, combine_weights, w_gate, w_up, w_down, mesh=None)
-    y_ring = moe_mlp(x, selected_experts, combine_weights, w_gate, w_up, w_down, implementation="ring", mesh=None)
+    y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
+    y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
@@ -472,7 +463,7 @@ def test_moe_mlp_sonic_backend_reports_missing_optional_dependencies():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             mesh=None,
             implementation="sonic",
@@ -548,7 +539,7 @@ def test_moe_mlp_sonic_matches_jax_gather_reference_on_gpu():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             activation=ActivationFunctionEnum.silu,
             implementation="sonic",
@@ -628,7 +619,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 x,
                 sel,
                 cw,
-                *_split_gate_up_weights(up_gate),
+                up_gate,
                 down,
                 activation=ActivationFunctionEnum.silu,
                 implementation=implementation,
@@ -749,7 +740,11 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            *grug_moe.split_moe_w13_output(
+                w_up_gate,
+                intermediate_dim=w_down.shape[1],
+                interleaved=False,
+            ),
             w_down,
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
@@ -842,7 +837,11 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            *grug_moe.split_moe_w13_output(
+                w_up_gate,
+                intermediate_dim=w_down.shape[1],
+                interleaved=False,
+            ),
             w_down,
             activation_fn=jax.nn.silu,
             num_experts=num_experts,
@@ -930,13 +929,11 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
             extra["pooled_transport_capacity_factor"] = 4.0
 
         def backend_output(x, w_up_gate, w_down):
-            w_gate, w_up = jnp.split(w_up_gate, 2, axis=-1)
             return moe_mlp(
                 x,
                 selected_experts,
                 combine_weights,
-                w_gate,
-                w_up,
+                w_up_gate,
                 w_down,
                 activation=jax.nn.silu,
                 implementation=implementation,
@@ -1175,7 +1172,7 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             implementation=implementation,
             mesh=mesh,
@@ -1235,7 +1232,7 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=None,
@@ -1247,7 +1244,7 @@ def test_moe_mlp_runs_with_ep_axis_when_available():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             activation=ActivationFunctionEnum.silu,
             implementation="ragged_all_to_all",
@@ -1277,7 +1274,7 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
         x,
         selected_experts,
         combine_weights,
-        *_split_gate_up_weights(w_up_gate),
+        w_up_gate,
         w_down,
         activation=ActivationFunctionEnum.silu,
         mesh=None,
@@ -1286,7 +1283,7 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
         x,
         selected_experts,
         combine_weights,
-        *_split_gate_up_weights(w_up_gate),
+        w_up_gate,
         w_down,
         activation=lambda t: jax.nn.silu(t),
         mesh=None,
@@ -1327,7 +1324,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             implementation="ring",
             mesh=None,
@@ -1372,7 +1369,7 @@ def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
             x,
             selected_experts,
             combine_weights,
-            *_split_gate_up_weights(w_up_gate),
+            w_up_gate,
             w_down,
             implementation="ragged_all_to_all",
             mesh=None,
