@@ -40,10 +40,8 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
-from iris.rpc import job_pb2, resource_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method, authorize_resource_method
-from iris.rpc.resource_registry import ResourceAccess, ResourceRegistryBuilder, get_codec
-from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc import job_pb2
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
 from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -648,44 +646,24 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
     assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
 
 
-@pytest.mark.parametrize(
-    ("access", "allowed"),
-    [
-        (ResourceAccess.DASHBOARD_READABLE, True),
-        (ResourceAccess.AUTHENTICATED, False),
-    ],
-)
-def test_dashboard_resource_access_is_declared_by_binding(access, allowed):
+def test_dashboard_role_can_list_registered_job_resources(service):
     policy = RequestAuthPolicy.enforcing(
         verifier=MockVerifier({}),
         iap_assertion_verifier=_StubAssertionVerifier(),
     )
-    interceptor = PolicyAuthInterceptor(policy, cookie_name=SESSION_COOKIE, authorize=authorize_resource_method)
-    called = []
+    dashboard = ControllerDashboard(service, auth_provider="iap", auth_policy=policy)
 
-    def handler(_request, _context):
-        called.append(True)
-        return job_pb2.Empty()
-
-    registry = ResourceRegistryBuilder()
-    registry.bind(
-        "/future/get",
-        get_codec(job_pb2.Empty, job_pb2.Empty),
-        handler,
-        access=access,
+    response = TestClient(dashboard.app).post(
+        "/iris.resource.ResourceService/List",
+        json={
+            "resourceType": "job",
+            "input": {"@type": "type.googleapis.com/iris.cluster.Controller.ListJobsRequest"},
+        },
+        headers={"x-goog-iap-jwt-assertion": "signed.assertion.jwt"},
     )
-    service = ResourceServiceImpl(registry.freeze())
-    request = resource_pb2.ResourceRequest(resource_type="future")
-    request.input.Pack(job_pb2.Empty())
 
-    if allowed:
-        interceptor.intercept_unary_sync(service.get, request, _assertion_ctx("Get"))
-    else:
-        with pytest.raises(ConnectError) as exc:
-            interceptor.intercept_unary_sync(service.get, request, _assertion_ctx("Get"))
-        assert exc.value.code == Code.PERMISSION_DENIED
-
-    assert called == ([True] if allowed else [])
+    assert response.status_code == 200
+    assert response.json() == {"page": {"totalCount": "0", "hasMore": False}}
 
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():

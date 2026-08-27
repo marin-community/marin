@@ -24,11 +24,6 @@ class ResourceVerb(StrEnum):
     BATCH_GET = "batch-get"
 
 
-class ResourceAccess(StrEnum):
-    AUTHENTICATED = "authenticated"
-    DASHBOARD_READABLE = "dashboard-readable"
-
-
 Request = TypeVar("Request", bound=Message)
 Response = TypeVar("Response", bound=Message)
 Handler = Callable[[Message, RequestContext], Message]
@@ -65,7 +60,7 @@ class ResourceCodec(Generic[Request, Response]):
 class ResourceBinding:
     codec: ResourceCodec
     handler: Handler
-    access: ResourceAccess
+    dashboard_readable: bool
 
     def invoke(self, payload: AnyMessage, context: RequestContext) -> Message:
         request = self.codec.decode(payload)
@@ -127,7 +122,7 @@ class ResourceRegistryBuilder:
         codec: ResourceCodec[Request, Response],
         handler: Callable[[Request, RequestContext], Response],
         *,
-        access: ResourceAccess,
+        dashboard_readable: bool,
     ) -> None:
         resource_type, verb = _parse_path(path)
         if codec.verb is not verb:
@@ -138,7 +133,7 @@ class ResourceRegistryBuilder:
         self._bindings[key] = ResourceBinding(
             codec=codec,
             handler=cast(Handler, handler),
-            access=access,
+            dashboard_readable=dashboard_readable,
         )
 
     def freeze(self) -> "ResourceRegistry":

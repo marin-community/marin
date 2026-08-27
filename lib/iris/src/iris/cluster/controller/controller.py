@@ -13,7 +13,7 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -121,18 +121,14 @@ from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
-    JOB_RESOURCE_TYPE,
-    TASK_RESOURCE_TYPE,
     JobName,
     PendingTask,
     UserBudgetDefaults,
     WorkerId,
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import SESSION_COOKIE
-from iris.rpc.resource_registry import ResourceAccess, ResourceRegistryBuilder, batch_get_codec, get_codec, list_codec
-from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -148,75 +144,6 @@ _RPC_HANDLER_THREADS = 64
 _CONTROLLER_KEEPALIVE = 120
 _PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 _SYNCHRONOUS_PHASE_INTERVAL = 0.0
-
-
-def _resource_service(service: ControllerServiceImpl) -> ResourceServiceImpl:
-    registry = ResourceRegistryBuilder()
-    registry.bind(
-        f"/{JOB_RESOURCE_TYPE}/get",
-        get_codec(
-            controller_pb2.Controller.GetJobStatusRequest,
-            controller_pb2.Controller.GetJobStatusResponse,
-        ),
-        service.get_job_status,
-        access=ResourceAccess.DASHBOARD_READABLE,
-    )
-    registry.bind(
-        f"/{JOB_RESOURCE_TYPE}/list",
-        list_codec(
-            controller_pb2.Controller.ListJobsRequest,
-            controller_pb2.Controller.ListJobsResponse,
-            resources=lambda response: response.jobs,
-            page=lambda response: resource_pb2.PageInfo(
-                total_count=response.total_count,
-                has_more=response.has_more,
-            ),
-        ),
-        service.list_jobs,
-        access=ResourceAccess.DASHBOARD_READABLE,
-    )
-    registry.bind(
-        f"/{JOB_RESOURCE_TYPE}/batch-get",
-        batch_get_codec(
-            controller_pb2.Controller.GetJobStateRequest,
-            controller_pb2.Controller.GetJobStateResponse,
-            resources=_job_state_snapshots,
-        ),
-        service.get_job_state,
-        access=ResourceAccess.DASHBOARD_READABLE,
-    )
-    registry.bind(
-        f"/{TASK_RESOURCE_TYPE}/get",
-        get_codec(
-            controller_pb2.Controller.GetTaskStatusRequest,
-            controller_pb2.Controller.GetTaskStatusResponse,
-        ),
-        service.get_task_status,
-        access=ResourceAccess.DASHBOARD_READABLE,
-    )
-    registry.bind(
-        f"/{TASK_RESOURCE_TYPE}/list",
-        list_codec(
-            controller_pb2.Controller.ListTasksRequest,
-            controller_pb2.Controller.ListTasksResponse,
-            resources=lambda response: response.tasks,
-            page=lambda response: resource_pb2.PageInfo(total_count=len(response.tasks)),
-        ),
-        service.list_tasks,
-        access=ResourceAccess.DASHBOARD_READABLE,
-    )
-    return ResourceServiceImpl(registry.freeze())
-
-
-def _job_state_snapshots(
-    request: controller_pb2.Controller.GetJobStateRequest,
-    response: controller_pb2.Controller.GetJobStateResponse,
-) -> Iterable[job_pb2.JobStateSnapshot]:
-    return (
-        job_pb2.JobStateSnapshot(job_id=job_id, state=response.states[job_id])
-        for job_id in request.job_ids
-        if job_id in response.states
-    )
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -593,7 +520,6 @@ class Controller:
                 parent_origin=config.federation_public_parent,
             ),
         )
-        self._resource_service = _resource_service(self._service)
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
         # Present only when this controller has peers and a signing key to mint with.
@@ -613,7 +539,6 @@ class Controller:
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
-            resource_service=self._resource_service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,

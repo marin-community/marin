@@ -11,7 +11,7 @@ aggregated from task states.
 import json
 import logging
 import secrets
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol, TypeVar
@@ -110,7 +110,7 @@ from iris.cluster.types import (
     is_federated,
     is_job_finished,
 )
-from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2, resource_pb2, vm_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     ADMIN_PRIORITY_BAND_VALUES,
@@ -121,6 +121,13 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
+from iris.rpc.resource_registry import (
+    ResourceRegistry,
+    ResourceRegistryBuilder,
+    batch_get_codec,
+    get_codec,
+    list_codec,
+)
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 from iris.version import client_revision_date
 
@@ -128,6 +135,75 @@ logger = logging.getLogger(__name__)
 
 # Return type of a proxied on-demand RPC (a unary controller response).
 _T = TypeVar("_T")
+
+
+def _build_resource_registry(service: "ControllerServiceImpl") -> ResourceRegistry:
+    registry = ResourceRegistryBuilder()
+    registry.bind(
+        "/job/get",
+        get_codec(
+            controller_pb2.Controller.GetJobStatusRequest,
+            controller_pb2.Controller.GetJobStatusResponse,
+        ),
+        service.get_job_status,
+        dashboard_readable=True,
+    )
+    registry.bind(
+        "/job/list",
+        list_codec(
+            controller_pb2.Controller.ListJobsRequest,
+            controller_pb2.Controller.ListJobsResponse,
+            resources=lambda response: response.jobs,
+            page=lambda response: resource_pb2.PageInfo(
+                total_count=response.total_count,
+                has_more=response.has_more,
+            ),
+        ),
+        service.list_jobs,
+        dashboard_readable=True,
+    )
+    registry.bind(
+        "/job/batch-get",
+        batch_get_codec(
+            controller_pb2.Controller.GetJobStateRequest,
+            controller_pb2.Controller.GetJobStateResponse,
+            resources=_job_state_snapshots,
+        ),
+        service.get_job_state,
+        dashboard_readable=True,
+    )
+    registry.bind(
+        "/task/get",
+        get_codec(
+            controller_pb2.Controller.GetTaskStatusRequest,
+            controller_pb2.Controller.GetTaskStatusResponse,
+        ),
+        service.get_task_status,
+        dashboard_readable=True,
+    )
+    registry.bind(
+        "/task/list",
+        list_codec(
+            controller_pb2.Controller.ListTasksRequest,
+            controller_pb2.Controller.ListTasksResponse,
+            resources=lambda response: response.tasks,
+            page=lambda response: resource_pb2.PageInfo(total_count=len(response.tasks)),
+        ),
+        service.list_tasks,
+        dashboard_readable=True,
+    )
+    return registry.freeze()
+
+
+def _job_state_snapshots(
+    request: controller_pb2.Controller.GetJobStateRequest,
+    response: controller_pb2.Controller.GetJobStateResponse,
+) -> Iterable[job_pb2.JobStateSnapshot]:
+    return (
+        job_pb2.JobStateSnapshot(job_id=job_id, state=response.states[job_id])
+        for job_id in request.job_ids
+        if job_id in response.states
+    )
 
 
 def submitting_user_for_root(
@@ -1197,6 +1273,7 @@ class ControllerServiceImpl:
                 storage_policy=TASK_EVENT_STORAGE_POLICY,
             )
         )
+        self._resource_registry = _build_resource_registry(self)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
@@ -2608,6 +2685,10 @@ class ControllerServiceImpl:
     def endpoint_service(self) -> EndpointServiceImpl:
         """The leased endpoint registry these RPCs delegate to (shared with the dashboard)."""
         return self._endpoint_service
+
+    @property
+    def resource_registry(self) -> ResourceRegistry:
+        return self._resource_registry
 
     # --- Autoscaler ---
 

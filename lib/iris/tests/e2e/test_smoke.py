@@ -18,6 +18,7 @@ import pytest
 from finelog.client import FlushResult, LogClient
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from google.protobuf.message import Message
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.config import (
     IrisClusterConfig,
@@ -33,9 +34,8 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE, TASK_EVENT_STORAGE_POLICY, TaskEventRow
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.resource_client import ResourceClient
 from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.testing.e2e import (
     DEFAULT_CONFIG,
@@ -306,33 +306,49 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 def test_resource_reads_return_workload_snapshots(smoke_cluster):
     job = smoke_cluster.submit(TestJobs.quick, "smoke-resource-read")
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-    resources = ResourceClient(ResourceServiceClientSync(address=smoke_cluster.url, timeout_ms=30_000))
+    resources = ResourceServiceClientSync(address=smoke_cluster.url, timeout_ms=30_000)
     try:
+        job_request = controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire())
+        legacy_job = smoke_cluster.controller_client.get_job_status(job_request)
         job_response = resources.get(
-            "job",
-            controller_pb2.Controller.GetJobStatusRequest(job_id=job.job_id.to_wire()),
-            controller_pb2.Controller.GetJobStatusResponse,
+            _resource_request("job", job_request),
         )
-        tasks, page = resources.list(
-            "task",
-            controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire()),
-            job_pb2.TaskStatus,
+        generic_job = controller_pb2.Controller.GetJobStatusResponse()
+        assert job_response.resource.body.Unpack(generic_job)
+
+        task_request = controller_pb2.Controller.ListTasksRequest(job_id=job.job_id.to_wire())
+        legacy_tasks = smoke_cluster.controller_client.list_tasks(task_request)
+        task_response = resources.list(
+            _resource_request("task", task_request),
         )
-        states = resources.batch_get(
-            "job",
-            controller_pb2.Controller.GetJobStateRequest(job_ids=[job.job_id.to_wire()]),
-            job_pb2.JobStateSnapshot,
+        generic_tasks = [job_pb2.TaskStatus() for _ in task_response.resources]
+        assert all(
+            resource.body.Unpack(task) for resource, task in zip(task_response.resources, generic_tasks, strict=True)
+        )
+
+        state_request = controller_pb2.Controller.GetJobStateRequest(job_ids=[job.job_id.to_wire()])
+        legacy_states = smoke_cluster.controller_client.get_job_state(state_request)
+        state_response = resources.batch_get(
+            _resource_request("job", state_request),
+        )
+        generic_states = [job_pb2.JobStateSnapshot() for _ in state_response.resources]
+        assert all(
+            resource.body.Unpack(state) for resource, state in zip(state_response.resources, generic_states, strict=True)
         )
     finally:
         resources.close()
 
-    assert job_response.job.state == job_pb2.JOB_STATE_SUCCEEDED
-    assert [(task.task_id, task.state) for task in tasks] == [
-        (job.job_id.task(0).to_wire(), job_pb2.TASK_STATE_SUCCEEDED)
-    ]
-    assert page.total_count == 1
-    assert not page.has_more
-    assert [(state.job_id, state.state) for state in states] == [(job.job_id.to_wire(), job_pb2.JOB_STATE_SUCCEEDED)]
+    assert generic_job == legacy_job
+    assert generic_tasks == list(legacy_tasks.tasks)
+    assert task_response.page.total_count == len(legacy_tasks.tasks)
+    assert not task_response.page.has_more
+    assert {state.job_id: state.state for state in generic_states} == dict(legacy_states.states)
+
+
+def _resource_request(resource_type: str, message: Message) -> resource_pb2.ResourceRequest:
+    request = resource_pb2.ResourceRequest(resource_type=resource_type)
+    request.input.Pack(message)
+    return request
 
 
 # ============================================================================

@@ -54,5 +54,5 @@ class ResourceServiceImpl:
         if not resource_type:
             raise ConnectError(Code.INVALID_ARGUMENT, "resource_type is required")
         binding = self._registry.require(resource_type, verb)
-        authorize_resource_access(binding.access, resource_type, verb)
+        authorize_resource_access(binding.dashboard_readable, resource_type, verb)
         return binding.invoke(payload, context)
