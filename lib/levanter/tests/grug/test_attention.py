@@ -127,9 +127,9 @@ def test_real_tpu_splash_attention_matches_reference():
     )
     sharding = NamedSharding(mesh, P(None, None, "model", None))
     q_key, k_key, v_key = jax.random.split(jax.random.PRNGKey(0), 3)
-    q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.bfloat16) * 0.02, sharding)
-    k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.bfloat16) * 0.02, sharding)
-    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.bfloat16) * 0.02, sharding)
+    q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+    k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
     mask = AttentionMask.causal()
 
     with jax.set_mesh(mesh):
