@@ -35,7 +35,7 @@ EXPRESSION_UID = "__expr__"
 # Grafana's built-in fan-out datasource: the panel's targets each name a real one.
 MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
-STORAGE_ALERT_FRACTION = 0.8
+STORAGE_QUOTA_EXCEEDED_FRACTION = 1.0
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -259,15 +259,15 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert 'FROM "storage.usage"' in sql
     assert "metric IN ('used_bytes', 'quota_bytes')" in sql
     assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
-    assert "ORDER BY observed_at DESC, seq DESC" in sql
-    assert "observed_at >= CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
+    assert "ORDER BY collected_at DESC, seq DESC" in sql
+    assert "collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'" in sql
     assert "SUM(value_bytes) AS usage_bytes" in sql
     assert "MAX(value_bytes) AS quota_bytes" in sql
     assert "usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value" in sql
     assert {column["selector"] for column in source["model"]["columns"]} == {"region", "value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {
         "type": "gt",
-        "params": [STORAGE_ALERT_FRACTION],
+        "params": [STORAGE_QUOTA_EXCEEDED_FRACTION],
     }
 
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
@@ -277,7 +277,7 @@ def test_coreweave_storage_capacity_pages_critical_ops():
     assert "mute_time_intervals" not in route
 
 
-def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
+def test_coreweave_storage_alert_notifies_slack_when_collection_is_missing_for_24_hours():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-telemetry-stale"]
     source, threshold = rule["data"]
     sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
@@ -286,15 +286,9 @@ def test_coreweave_storage_alert_notifies_slack_when_a_known_series_is_stale():
     assert rule["noDataState"] == "OK"
     assert rule["labels"] == {"severity": "warning", "notification": "slack"}
     assert 'FROM "storage.usage"' in sql
-    assert "PARTITION BY provider, metric, zone, bucket, storage_class" in sql
-    assert "COALESCE(bucket, storage_class) AS detail" in sql
-    assert "observed_at < CURRENT_TIMESTAMP - INTERVAL '3 hours'" in sql
-    assert {column["selector"] for column in source["model"]["columns"]} == {
-        "region",
-        "metric",
-        "detail",
-        "value",
-    }
+    assert "MAX(collected_at) AS latest_collected_at" in sql
+    assert "latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '24 hours'" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {"value"}
     assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [0]}
 
 
