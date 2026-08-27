@@ -1215,8 +1215,8 @@ def segmented_flash_attention_backward_sm90_launcher(
 
     FlashAttentionBackwardSm90 = flash_bwd_sm90_module.FlashAttentionBackwardSm90
     BlockSparseTensors = block_sparsity_module.BlockSparseTensors
+    AuxData = utils_module.AuxData
     _patch_jax_array_list_tvm_ffi_converter()
-    _allow_tuple_aux_tensors_for_nested_sm90(FlashAttentionBackwardSm90)
 
     @cute.jit
     def _grug_segment_mask_mod(
@@ -1364,7 +1364,7 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_tensors=(lower_bounds, valid),
+                aux_data=AuxData(tensors=(lower_bounds, valid)),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )
@@ -1487,26 +1487,6 @@ def flash_attention_backward_postprocess_launcher(
         postprocess(accum, out, softmax_scale, None, None, stream)
 
     return _launch_flash_attention_backward_postprocess
-
-
-def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
-    """Let nested CuTe JIT calls pass aux tensors after list literals become tuples."""
-    # The installed upstream SM90 kernel annotates aux_tensors as a CuTe list
-    # type. CUTLASS JAX lowers Python list literals through TVM-FFI as tuples,
-    # then the nested CuTe JIT type-checks that value against the annotation and
-    # rejects the Grug lower_bounds/valid pair before codegen. Relaxing only this
-    # annotation keeps upstream's kernel body intact while allowing the two aux
-    # arrays to flow through the nested mask_mod call.
-    patched = False
-    for method_name in ("__call__", "kernel"):
-        method = getattr(backward_cls, method_name, None)
-        for target in (method, getattr(method, "__wrapped__", None)):
-            annotations = getattr(target, "__annotations__", None)
-            if annotations is not None and "aux_tensors" in annotations:
-                annotations["aux_tensors"] = Any
-                patched = True
-    if not patched:
-        raise RuntimeError("Installed SM90 backward kernel no longer exposes an aux_tensors annotation to patch.")
 
 
 def _patch_jax_array_list_tvm_ffi_converter() -> None:
