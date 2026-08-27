@@ -112,7 +112,7 @@ def _quack_grouped_gemm_available() -> bool:
         import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
         from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
 
-        _cudnn_modules()
+        _ = _cudnn_modules()  # check if compatible cudnn is available
     except (ImportError, AttributeError) as exc:
         logger.warning(
             "SM100 GPU present but the QuACK/cuDNN grouped-GEMM kernels did not import (%s). "
