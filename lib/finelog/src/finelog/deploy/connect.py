@@ -3,16 +3,12 @@
 
 """Open a :class:`LogClient` against a named deployment.
 
-Resolves the deployment's config and picks the transport it declares: the
-Iris IAP proxy when the config sets ``client_url``, otherwise an SSH or
-Kubernetes tunnel to the server's port. Callers name a deployment
-(``marin``, ``cw-us-east-08a``) rather than assembling a URL.
+A config with ``client_url`` reaches the server through the Iris IAP proxy;
+without one, through an SSH or Kubernetes tunnel to its port.
 
-Both IAP identities work without configuration: the desktop OAuth refresh
-token cached by ``iris --cluster <name> login``, and, when no login is cached,
-an ID token minted from ambient service-account credentials -- the unattended
-path used by CI. :func:`rigging.credentials.iap_provider_for` picks between
-them.
+:func:`rigging.credentials.iap_provider_for` supplies the IAP token: the
+desktop token cached by ``iris --cluster <name> login``, or one minted from
+ambient service-account credentials when no login is cached.
 """
 
 import logging
@@ -28,9 +24,8 @@ from finelog.deploy.config import FinelogConfig, tunnel_target_for
 
 logger = logging.getLogger(__name__)
 
-# Sits just past the server's own 10s query deadline so a long query is ended by
-# the server, which reports why, rather than by a client-side timeout that
-# reports only that time ran out.
+# Longer than the server's own 10s query deadline, so a slow query fails with
+# the server's reason instead of a bare client-side timeout.
 DEFAULT_REQUEST_TIMEOUT = 15.0
 DEFAULT_TUNNEL_TIMEOUT = 60.0
 
@@ -56,8 +51,6 @@ def open_client(
                 client.close()
         return
 
-    # `client_url` carries no audience, so the scheme leaves edge auth to us and
-    # the credential store decides between the human and machine identities.
     client = connect(
         cfg.client_url,
         lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors, timeout_ms=timeout_ms),

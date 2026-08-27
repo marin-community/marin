@@ -42,8 +42,8 @@ FINDINGS_NAMESPACE = f"{NAMESPACE_PREFIX}.findings"
 HUMAN_COMMENTS_NAMESPACE = f"{NAMESPACE_PREFIX}.human_comments"
 PR_REVIEW_OUTCOMES_NAMESPACE = f"{NAMESPACE_PREFIX}.pr_review_outcomes"
 
-# These tables are small (low thousands of rows a month) and their value is
-# historical, so cap bytes rather than age and let compaction keep everything.
+# A few thousand rows a month, all of it worth keeping, so the policy caps
+# bytes and never ages a row out.
 TABLE_MAX_BYTES = 512 * 1024 * 1024
 STORAGE_POLICY = StoragePolicy(max_bytes=TABLE_MAX_BYTES)
 

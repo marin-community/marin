@@ -62,8 +62,7 @@ import click
 from finelog.client import LogClient
 from pydantic import BaseModel, Field, TypeAdapter
 
-# Sibling module: the canonical row types for every table this tool reads and
-# writes, shared with log_stats.py so the layouts cannot drift.
+# Sibling module: the row types for every table this tool reads and writes.
 from review_tables import (
     DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
@@ -578,9 +577,8 @@ def query_rows(client: LogClient, sql: str, namespace: str) -> list[dict]:
     """Run `sql` over `namespace` and return rows with tz-aware timestamps.
 
     An unregistered namespace is the normal state before the first write and
-    returns no rows. Checking registration keeps that case distinct from a
-    query that fails against a namespace which does exist, so a column or
-    schema mismatch surfaces instead of rendering an empty report.
+    reads as empty. A query error against a registered namespace propagates, so
+    a schema mismatch is never rendered as an empty report.
     """
     if row_count(client, namespace) is None:
         logger.info("namespace %s does not exist yet; treating as empty", namespace)
@@ -1244,11 +1242,8 @@ def aggregate(
         click.echo(json.dumps(payload, default=str, indent=2))
         return
 
-    # The tables are append-only. A rolling window re-emits rows for PRs seen
-    # on an earlier run; those supersede rather than replace, and every reader
-    # collapses to the newest row per key (LATEST_*_SQL). Cached comments are
-    # re-emitted with their stored verdict, so a repeat run is a no-op in
-    # substance even though it adds rows.
+    # Rows for a PR seen on an earlier run are appended again with their cached
+    # verdicts; LATEST_*_SQL is what collapses them on read.
     with open_tables_client(deployment) as client:
         append_rows(client, HUMAN_COMMENTS_NAMESPACE, HumanComment, human_rows)
         append_rows(client, PR_REVIEW_OUTCOMES_NAMESPACE, PrReviewOutcome, pr_rows)

@@ -99,7 +99,7 @@ def _moment(value: Any) -> dt.datetime | None:
 
 
 def _required_moment(value: Any) -> dt.datetime:
-    """A row with no usable timestamp cannot be placed in an append-only table."""
+    """Parse a timestamp cell, raising when it holds none."""
     moment = _moment(value)
     if moment is None:
         raise ValueError(f"row has no parseable timestamp: {value!r}")

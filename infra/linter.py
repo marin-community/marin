@@ -354,10 +354,8 @@ def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
         if log_dir is not None:
             stats_log = (log_dir / "stats.log").open("wb")
         proc = subprocess.Popen(
-            # --no-sync: this is a detached process at the end of a run, and a
-            # bare `uv run` would resolve the root workspace and start
-            # installing its full dependency graph. CI prepares the environment
-            # ahead of the review; locally it is already synced.
+            # --no-sync: a bare `uv run` re-resolves the root workspace and
+            # can start installing into it from this detached process.
             ["uv", "run", "--quiet", "--no-sync", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,

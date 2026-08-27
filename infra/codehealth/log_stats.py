@@ -54,7 +54,7 @@ from review_tables import (
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 LINT_DIR = ROOT_DIR / "infra" / "lint"
 
-# The whole point is to not delay the dev; give up rather than retry forever.
+# Bounds the detached writer so a wedged connection does not leave it running.
 FLUSH_TIMEOUT = 30.0
 
 
@@ -85,9 +85,8 @@ def _parse_ts(value: str | None) -> dt.datetime:
 def fill_defaults(event: dict) -> dict:
     """Populate environment-derived fields the caller didn't supply.
 
-    Callers (``linter.py``, ``/review-pr``) specify only what is specific to
-    their invocation; everything inferable from local git state is filled in
-    here. Existing values are never overwritten.
+    Callers (``linter.py``, ``/review-pr``) send only what is specific to their
+    invocation. Existing values are never overwritten.
     """
     event.setdefault("invocation_id", str(uuid.uuid4()))
     event.setdefault("ts", dt.datetime.now(dt.UTC).isoformat())
