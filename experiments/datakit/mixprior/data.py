@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from marin.profiling.trace_summary import sha256_for_path
 
 PHASE_COUNT = 2
 MIXTURE_IDENTITY_DECIMALS = 12
@@ -44,6 +45,18 @@ class ContentRecord(TypedDict):
     cells: list[str]
     matrix: list[list[float]]
     provenance: dict[str, Any]
+
+
+class SwarmProvenanceRecord(TypedDict):
+    store_uri: str
+    store_artifact_uri: str
+    training_recipe: str
+    tokenizer: str
+    evaluation_suite: str
+    model_active_parameters: int
+    model_total_parameters: int
+    physical_training_tokens: int
+    simulated_training_tokens: int
 
 
 class SwarmObservations(NamedTuple):
@@ -129,8 +142,7 @@ class Swarm:
 
 
 def sha256(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+    return sha256_for_path(path)
 
 
 def canonical_mixture_rows(weights: np.ndarray) -> np.ndarray:

@@ -28,7 +28,7 @@ from experiments.datakit.mixprior.surrogate import (
     prepare_training_data,
 )
 
-HARM_CURVATURE_INITIAL = np.asarray((0.01, 0.015), dtype=np.float64)
+HARM_CURVATURE_INITIAL = (0.01, 0.015)
 PHASE_DIAGONAL_INITIAL = 0.25
 RESIDUAL_OUTPUTSCALE_INITIAL = 0.25
 LENGTHSCALE_PRIOR_LOG_SD = 1.0
@@ -50,6 +50,22 @@ class QuadraticExposureLayout(NamedTuple):
     phase_exposure_content: tuple[slice, ...]
     quadratic_exposure: slice
     feature_count: int
+
+
+class QuadraticParameters(NamedTuple):
+    constant: jax.Array
+    harm_curvature: jax.Array
+    content_lengthscale: jax.Array
+    phase_factor: jax.Array
+    phase_diagonal: jax.Array
+    residual_lengthscale: jax.Array
+    residual_outputscale: jax.Array
+
+
+class TrainingConditioning(NamedTuple):
+    cholesky: jax.Array
+    residual: jax.Array
+    alpha: jax.Array
 
 
 def quadratic_exposure_layout(content_dim: int) -> QuadraticExposureLayout:
@@ -96,21 +112,21 @@ def _inverse_positive(value: np.ndarray | float) -> np.ndarray:
     return np.log(np.expm1(value))
 
 
-def quadratic_parameter_values(parameters: jax.Array) -> dict[str, jax.Array]:
-    return {
-        "constant": parameters[CONSTANT_INDEX],
-        "harm_curvature": _positive(parameters[HARM_CURVATURE_SLICE]),
-        "content_lengthscale": _positive(parameters[CONTENT_LENGTHSCALE_INDEX]),
-        "phase_factor": parameters[PHASE_FACTOR_SLICE],
-        "phase_diagonal": _positive(parameters[PHASE_DIAGONAL_SLICE]),
-        "residual_lengthscale": _positive(parameters[RESIDUAL_LENGTHSCALE_INDEX]),
-        "residual_outputscale": _positive(parameters[RESIDUAL_OUTPUTSCALE_INDEX]),
-    }
+def quadratic_parameter_values(parameters: jax.Array) -> QuadraticParameters:
+    return QuadraticParameters(
+        parameters[CONSTANT_INDEX],
+        _positive(parameters[HARM_CURVATURE_SLICE]),
+        _positive(parameters[CONTENT_LENGTHSCALE_INDEX]),
+        parameters[PHASE_FACTOR_SLICE],
+        _positive(parameters[PHASE_DIAGONAL_SLICE]),
+        _positive(parameters[RESIDUAL_LENGTHSCALE_INDEX]),
+        _positive(parameters[RESIDUAL_OUTPUTSCALE_INDEX]),
+    )
 
 
 def initial_parameters(initial_lengthscale: float) -> np.ndarray:
     parameters = np.zeros(PARAMETER_COUNT, dtype=np.float64)
-    parameters[HARM_CURVATURE_SLICE] = _inverse_positive(HARM_CURVATURE_INITIAL)
+    parameters[HARM_CURVATURE_SLICE] = _inverse_positive(np.asarray(HARM_CURVATURE_INITIAL))
     parameters[CONTENT_LENGTHSCALE_INDEX] = _inverse_positive(initial_lengthscale)
     parameters[PHASE_FACTOR_SLICE] = 1.0
     parameters[PHASE_DIAGONAL_SLICE] = _inverse_positive(PHASE_DIAGONAL_INITIAL)
@@ -125,7 +141,7 @@ def draw_initial_parameters(initial_lengthscale: float, seed: int) -> np.ndarray
     parameters[CONSTANT_INDEX] = rng.normal()
     parameters[HARM_CURVATURE_SLICE] = _inverse_positive(
         rng.lognormal(
-            np.log(HARM_CURVATURE_INITIAL) + HARM_CURVATURE_PRIOR_LOG_SD**2,
+            np.log(np.asarray(HARM_CURVATURE_INITIAL)) + HARM_CURVATURE_PRIOR_LOG_SD**2,
             HARM_CURVATURE_PRIOR_LOG_SD,
         )
     )
@@ -163,7 +179,7 @@ def quadratic_exposure_mean(parameters: jax.Array, features: jax.Array) -> jax.A
     values = quadratic_parameter_values(parameters)
     feature_count = features.shape[-1] - 1
     quadratic = features[..., feature_count - PHASE_COUNT : feature_count]
-    return values["constant"] - quadratic @ values["harm_curvature"]
+    return values.constant - quadratic @ values.harm_curvature
 
 
 def _squared_distance(first: jax.Array, second: jax.Array) -> jax.Array:
@@ -182,8 +198,8 @@ def quadratic_exposure_covariance(parameters: jax.Array, first: jax.Array, secon
     values = quadratic_parameter_values(parameters)
     feature_count = first.shape[-1] - 1
     phase_width = (feature_count - PHASE_COUNT) // PHASE_COUNT
-    phase_covariance = jnp.outer(values["phase_factor"], values["phase_factor"])
-    phase_covariance += jnp.diag(values["phase_diagonal"])
+    phase_covariance = jnp.outer(values.phase_factor, values.phase_factor)
+    phase_covariance += jnp.diag(values.phase_diagonal)
 
     shared = jnp.zeros((len(first), len(second)), dtype=first.dtype)
     for first_phase in range(PHASE_COUNT):
@@ -193,15 +209,15 @@ def quadratic_exposure_covariance(parameters: jax.Array, first: jax.Array, secon
             shared += phase_covariance[first_phase, second_phase] * _matern52(
                 first[:, first_slice],
                 second[:, second_slice],
-                values["content_lengthscale"],
+                values.content_lengthscale,
             )
 
     response_slice = slice(0, PHASE_COUNT * phase_width)
     same_swarm = first[:, feature_count, None] == second[None, :, feature_count]
-    residual = values["residual_outputscale"] * _matern52(
+    residual = values.residual_outputscale * _matern52(
         first[:, response_slice],
         second[:, response_slice],
-        values["residual_lengthscale"],
+        values.residual_lengthscale,
     )
     return shared + residual * same_swarm
 
@@ -215,24 +231,24 @@ def quadratic_log_prior(parameters: jax.Array, initial_lengthscale: float) -> ja
     values = quadratic_parameter_values(parameters)
     log_probability = jnp.sum(
         _lognormal_log_probability(
-            values["harm_curvature"],
+            values.harm_curvature,
             jnp.log(jnp.asarray(HARM_CURVATURE_INITIAL)) + HARM_CURVATURE_PRIOR_LOG_SD**2,
             HARM_CURVATURE_PRIOR_LOG_SD,
         )
     )
     log_probability += _lognormal_log_probability(
-        values["content_lengthscale"],
+        values.content_lengthscale,
         jnp.log(jnp.asarray(initial_lengthscale)),
         LENGTHSCALE_PRIOR_LOG_SD,
     )
-    log_probability += jnp.sum(-0.5 * jnp.square(values["phase_factor"] - 1.0))
+    log_probability += jnp.sum(-0.5 * jnp.square(values.phase_factor - 1.0))
     log_probability += _lognormal_log_probability(
-        values["residual_lengthscale"],
+        values.residual_lengthscale,
         jnp.log(jnp.asarray(initial_lengthscale)) + LENGTHSCALE_PRIOR_LOG_SD**2,
         LENGTHSCALE_PRIOR_LOG_SD,
     )
     log_probability += _lognormal_log_probability(
-        values["residual_outputscale"],
+        values.residual_outputscale,
         jnp.log(jnp.asarray(RESIDUAL_OUTPUTSCALE_INITIAL)) + LENGTHSCALE_PRIOR_LOG_SD**2,
         LENGTHSCALE_PRIOR_LOG_SD,
     )
@@ -246,28 +262,24 @@ def negative_log_posterior(
     train_Yvar: jax.Array,
     initial_lengthscale: float,
 ) -> jax.Array:
-    covariance = quadratic_exposure_covariance(parameters, train_X, train_X)
-    covariance += jnp.diag(train_Yvar + GP_JITTER)
-    cholesky = jnp.linalg.cholesky(covariance)
-    residual = train_Y - quadratic_exposure_mean(parameters, train_X)
-    alpha = cho_solve((cholesky, True), residual)
-    negative_log_likelihood = 0.5 * residual @ alpha
-    negative_log_likelihood += jnp.sum(jnp.log(jnp.diag(cholesky)))
+    conditioning = _training_conditioning(parameters, train_X, train_Y, train_Yvar)
+    negative_log_likelihood = 0.5 * conditioning.residual @ conditioning.alpha
+    negative_log_likelihood += jnp.sum(jnp.log(jnp.diag(conditioning.cholesky)))
     negative_log_likelihood += 0.5 * len(train_X) * math.log(2.0 * math.pi)
     return negative_log_likelihood - quadratic_log_prior(parameters, initial_lengthscale)
 
 
-def _factor_training_covariance(
+def _training_conditioning(
     parameters: jax.Array,
     train_X: jax.Array,
     train_Y: jax.Array,
     train_Yvar: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
+) -> TrainingConditioning:
     covariance = quadratic_exposure_covariance(parameters, train_X, train_X)
     covariance += jnp.diag(train_Yvar + GP_JITTER)
     cholesky = jnp.linalg.cholesky(covariance)
     residual = train_Y - quadratic_exposure_mean(parameters, train_X)
-    return cholesky, cho_solve((cholesky, True), residual)
+    return TrainingConditioning(cholesky, residual, cho_solve((cholesky, True), residual))
 
 
 @jax.jit
@@ -362,6 +374,7 @@ class FittedQuadraticExposureGP:
     outcome_scales: dict[str, SwarmOutcomeScale]
     model_metadata: ModelMetadata
 
+    @jax.enable_x64()
     def candidate_array(self, swarm: Swarm, weights: np.ndarray) -> jax.Array:
         if swarm.swarm_id not in self.swarm_indices:
             raise ValueError(f"Swarm {swarm.swarm_id!r} was not included when this model was fit")
@@ -370,6 +383,7 @@ class FittedQuadraticExposureGP:
         values = np.concatenate([features, swarm_column], axis=1)
         return jax.device_put(values, self.parameters.device)
 
+    @jax.enable_x64()
     def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
         mean, variance = _posterior_marginals(
             self.parameters,
@@ -384,6 +398,7 @@ class FittedQuadraticExposureGP:
             latent_variance=scale.scale**2 * np.asarray(variance),
         )
 
+    @jax.enable_x64()
     def noisy_expected_improvement(
         self,
         swarm: Swarm,
@@ -407,7 +422,6 @@ class FittedQuadraticExposureGP:
 
 
 def quadratic_model_metadata(
-    campaign: Campaign,
     training: TrainingData,
     parameters: jax.Array,
     initial_lengthscale: float,
@@ -415,19 +429,19 @@ def quadratic_model_metadata(
     device: jax.Device,
 ) -> ModelMetadata:
     values = quadratic_parameter_values(parameters)
-    phase_factor = values["phase_factor"]
-    phase_covariance = jnp.outer(phase_factor, phase_factor) + jnp.diag(values["phase_diagonal"])
+    phase_factor = values.phase_factor
+    phase_covariance = jnp.outer(phase_factor, phase_factor) + jnp.diag(values.phase_diagonal)
     return {
         "kind": "quadratic_exposure_transfer_gp",
         "device": str(device),
         "details": {
             "backend": "compiled vanilla JAX",
             "mean": "learned phase-specific quadratic penalty on token-mass-weighted epochs",
-            "harm_curvature_initial": HARM_CURVATURE_INITIAL.tolist(),
-            "harm_curvature": np.asarray(values["harm_curvature"]).tolist(),
+            "harm_curvature_initial": list(HARM_CURVATURE_INITIAL),
+            "harm_curvature": np.asarray(values.harm_curvature).tolist(),
             "covariance": "phase-linked content response plus same-swarm Matern-5/2 residual",
             "initial_lengthscale": initial_lengthscale,
-            "content_lengthscale": float(values["content_lengthscale"]),
+            "content_lengthscale": float(values.content_lengthscale),
             "phase_covariance": np.asarray(phase_covariance).tolist(),
             "outcome_transform": "per-swarm affine standardization",
             "hyperparameter_inference": "lowest-negative-log-posterior JAX BFGS fit from three fixed starts",
@@ -438,6 +452,7 @@ def quadratic_model_metadata(
     }
 
 
+@jax.enable_x64()
 def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> FittedQuadraticExposureGP:
     training = prepare_training_data(campaign, quadratic_exposure_features)
     train_X = jax.device_put(training.features, device)
@@ -454,7 +469,7 @@ def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> Fitt
     )
     fit = fit_map_restarts(objective, quadratic_initializations(initial_lengthscale), device)
     parameters = jax.device_put(fit.parameters, device)
-    cholesky, alpha = jax.jit(_factor_training_covariance)(
+    conditioning = jax.jit(_training_conditioning)(
         parameters,
         train_X,
         train_Y,
@@ -463,12 +478,11 @@ def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> Fitt
     return FittedQuadraticExposureGP(
         parameters=parameters,
         train_X=train_X,
-        cholesky=cholesky,
-        alpha=alpha,
+        cholesky=conditioning.cholesky,
+        alpha=conditioning.alpha,
         swarm_indices=training.swarm_indices,
         outcome_scales=training.outcome_scales,
         model_metadata=quadratic_model_metadata(
-            campaign,
             training,
             parameters,
             initial_lengthscale,

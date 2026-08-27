@@ -58,6 +58,7 @@ AcquisitionScorer = Callable[
     [JaxMixturePredictor, Swarm, np.ndarray, int | None, np.ndarray | None],
     AcquiredCandidate,
 ]
+PoolChunkScorer = Callable[[np.ndarray, int], np.ndarray]
 
 
 class Acquisition(NamedTuple):
@@ -266,13 +267,11 @@ def acquire_posterior_mean(
     weights: np.ndarray,
 ) -> AcquiredCandidate:
     """Maximize the PosteriorMean acquisition function over a candidate set."""
-    values = []
-    for start in range(0, len(weights), ACQUISITION_CHUNK_SIZE):
-        stop = min(start + ACQUISITION_CHUNK_SIZE, len(weights))
-        values.append(model.predict(target, weights[start:stop]).mean)
-        if stop == len(weights) or stop % PROGRESS_ROWS == 0:
-            logger.info("Scored %s/%s pool rows", f"{stop:,}", f"{len(weights):,}")
-    acquisition_values = np.concatenate(values)
+    acquisition_values = _score_candidate_pool(
+        weights,
+        lambda rows, _start: model.predict(target, rows).mean,
+        "posterior mean",
+    )
     pool_index = int(np.argmax(acquisition_values))
     return AcquiredCandidate(
         pool_index=pool_index,
@@ -292,23 +291,29 @@ def acquire_noisy_expected_improvement(
     reference_weights = target.data.weights
     if pending_weights is not None:
         reference_weights = np.concatenate([reference_weights, pending_weights])
+    acquisition_values = _score_candidate_pool(
+        weights,
+        lambda rows, start: model.noisy_expected_improvement(
+            target,
+            rows,
+            reference_weights,
+            sample_count=NOISY_EI_SAMPLES,
+            seed=seed + start,
+        ),
+        "noisy EI",
+    )
+    pool_index = int(np.argmax(acquisition_values))
+    return AcquiredCandidate(pool_index, float(acquisition_values[pool_index]), acquisition_values)
+
+
+def _score_candidate_pool(weights: np.ndarray, scorer: PoolChunkScorer, name: str) -> np.ndarray:
     values = []
     for start in range(0, len(weights), ACQUISITION_CHUNK_SIZE):
         stop = min(start + ACQUISITION_CHUNK_SIZE, len(weights))
-        values.append(
-            model.noisy_expected_improvement(
-                target,
-                weights[start:stop],
-                reference_weights,
-                sample_count=NOISY_EI_SAMPLES,
-                seed=seed + start,
-            )
-        )
+        values.append(scorer(weights[start:stop], start))
         if stop == len(weights) or stop % PROGRESS_ROWS == 0:
-            logger.info("Scored %s/%s pool rows with noisy EI", f"{stop:,}", f"{len(weights):,}")
-    acquisition_values = np.concatenate(values)
-    pool_index = int(np.argmax(acquisition_values))
-    return AcquiredCandidate(pool_index, float(acquisition_values[pool_index]), acquisition_values)
+            logger.info("Scored %s/%s pool rows with %s", f"{stop:,}", f"{len(weights):,}", name)
+    return np.concatenate(values)
 
 
 def _posterior_mean_score(

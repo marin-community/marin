@@ -29,7 +29,7 @@ from experiments.datakit.mixprior.surrogate import PredictiveMoments
 
 
 class ConstantPredictor:
-    def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
+    def predict(self, _swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
         return PredictiveMoments(mean=np.zeros(len(weights)), latent_variance=np.full(len(weights), 0.1))
 
 

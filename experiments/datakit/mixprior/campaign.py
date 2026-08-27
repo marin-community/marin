@@ -23,6 +23,7 @@ from experiments.datakit.mixprior.data import (
     ObservationArtifactReference,
     Swarm,
     SwarmProvenance,
+    SwarmProvenanceRecord,
     load_observations,
     read_record,
     sha256,
@@ -68,22 +69,13 @@ class ContentBasisManifest(TypedDict):
     lookup: ArtifactReference
 
 
-class SwarmManifest(TypedDict):
+class SwarmManifest(SwarmProvenanceRecord):
     schema_version: int
     swarm_id: str
     observations: ObservationArtifactReference
     buckets: ArtifactReference
     content: ArtifactReference
     phase_budgets: list[float]
-    store_uri: str
-    store_artifact_uri: str
-    training_recipe: str
-    tokenizer: str
-    evaluation_suite: str
-    model_active_parameters: int
-    model_total_parameters: int
-    physical_training_tokens: int
-    simulated_training_tokens: int
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,7 @@ def test_quadratic_exposure_features_ignore_component_order(tiny_campaign: Campa
     )
 
 
+@jax.enable_x64()
 def test_quadratic_mean_uses_epoch_exposure() -> None:
     layout = quadratic_exposure_layout(content_dim=1)
     inputs = np.zeros((3, layout.feature_count + 1), dtype=np.float64)
@@ -71,6 +72,7 @@ def test_quadratic_mean_uses_epoch_exposure() -> None:
     assert np.allclose(values, expected)
 
 
+@jax.enable_x64()
 def test_quadratic_covariance_is_psd_with_finite_gradients(tiny_campaign: Campaign) -> None:
     features = quadratic_exposure_features(tiny_campaign.target, tiny_campaign.target.data.weights)
     inputs = jnp.asarray(np.concatenate([features, np.zeros((len(features), 1))], axis=1))
@@ -86,6 +88,7 @@ def test_quadratic_covariance_is_psd_with_finite_gradients(tiny_campaign: Campai
     assert np.isfinite(gradient).all()
 
 
+@jax.enable_x64()
 def test_negative_log_posterior_compiles_to_same_value(tiny_campaign: Campaign) -> None:
     target_features = quadratic_exposure_features(tiny_campaign.target, tiny_campaign.target.data.weights)
     source_features = quadratic_exposure_features(tiny_campaign.sources[0], tiny_campaign.sources[0].data.weights)

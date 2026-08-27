@@ -5,12 +5,12 @@
 
 from __future__ import annotations
 
-import posixpath
 import re
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 from huggingface_hub import HfFileSystem
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.mixprior.campaign import (
     CAMPAIGN_MANIFEST,
@@ -75,7 +75,7 @@ def _download_reference(
     destination: Path,
 ) -> None:
     relative = destination.relative_to(campaign_directory).as_posix()
-    _download(filesystem, posixpath.join(campaign_root_uri, relative), destination)
+    _download(filesystem, prefix_join(campaign_root_uri, relative), destination)
     if sha256(destination) != reference["sha256"]:
         raise ValueError(f"Downloaded artifact hash mismatch: {destination}")
 

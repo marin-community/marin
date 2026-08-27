@@ -20,8 +20,6 @@ from experiments.datakit.mixprior.data import Swarm
 FIT_STEP_LIMIT = 1_000
 logger = logging.getLogger(__name__)
 
-jax.config.update("jax_enable_x64", True)
-
 
 class ModelMetadata(TypedDict):
     kind: str
@@ -164,6 +162,7 @@ def assemble_training_data(rows: list[SwarmTrainingRows]) -> TrainingData:
     )
 
 
+@jax.enable_x64()
 def fit_map_restarts(
     objective: Callable[[jax.Array], jax.Array],
     initializations: tuple[MapInitialization, ...],
