@@ -527,7 +527,7 @@ def mrcr_datasets(
         ),
     )
     processed = ExecutorStep(
-        name="processed/openai/mrcr-paired",
+        name="processed/openai/mrcr-oracle4",
         fn=remote(transform_mrcr, resources=ResourceConfig.with_cpu(cpu=8, ram="32g", disk="10g")),
         config=MrcrTransformConfig(
             input_path=raw.as_input_name(),  # type: ignore[arg-type]
