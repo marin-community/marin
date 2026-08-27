@@ -32,7 +32,7 @@ pdf-inspector :data:`INSPECTOR_CORE_HOURS`, and the VLM's feed path -- render, P
 :data:`VLM_FEED_CORE_HOURS` on top of :data:`VLM_GPU_HOURS` of GPU. The GPU number is carried so a
 spend can be quoted in both, not because it is the axis being optimized.
 
-**Nothing here imports PyMuPDF, and nothing here computes a feature from a page.** A group is a
+**Nothing here opens a PDF, and nothing here computes a feature from a page.** A group is a
 declaration: column names, a source, and a price. :func:`with_derived` turns the columns
 :mod:`~experiments.datakit.build_pdf_source.extract_inspector` stores into the columns the model was
 trained on, and that is the only computation in the module -- so replacing the producer of a group
@@ -71,7 +71,9 @@ INCUMBENT_FEATURES_CORE_HOURS = 1.54
 # even though it is nearly so; it reports pdf_type, confidence and per-page OCR reasons that the
 # extraction does not.
 INSPECTOR_DETECT_CORE_HOURS = 0.12
-# Feeding the VLM: PyMuPDF render, PNG encode and base64 for every escalated page.
+# Feeding the VLM: rasterise, PNG encode and base64 for every escalated page. Measured over the
+# PyMuPDF renderer and Pillow's default compression, both of which the feed has since replaced with
+# faster ones (PDFium, `PNG_COMPRESS_LEVEL`), so it is an upper bound on what the feed costs now.
 VLM_FEED_CORE_HOURS = 17.8
 # Serving those pages, from the full-node brokered measurement in `ocr-budget-sweep.md`
 # (~71 pages/s per 4 GB200s at the 2048-token budget).

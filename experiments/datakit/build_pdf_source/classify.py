@@ -74,6 +74,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
+from experiments.datakit.build_pdf_source import route_v2_features as contract
 from experiments.datakit.build_pdf_source.common import PdfClassificationData, StagedModelData
 from experiments.datakit.build_pdf_source.extract_inspector import SIGNAL_COLUMNS
 from experiments.datakit.build_pdf_source.ocr_extract.render import (
@@ -81,14 +82,14 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     DEFAULT_MAX_VISUAL_TOKENS,
     RAISED_MAX_VISUAL_TOKENS,
 )
-from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
 
 logger = logging.getLogger(__name__)
 
-# The shipped booster and the sidecar that calibrates it, fit by `quality/fit_route_v2.py` on the
-# preference label and staged content-addressed. Both are pinned: the booster decides the ranking
-# and the sidecar decides where the cut falls, so a run's decisions are only attributable if both
-# are. Regenerate with that module, not by editing these.
+# The shipped booster and the sidecar that calibrates it, fit on the preference label by
+# `quality/fit_route_v2.py` on the `mark/pdf_processing` campaign branch and staged
+# content-addressed. Both are pinned: the booster decides the ranking and the sidecar decides where
+# the cut falls, so a run's decisions are only attributable if both are. Regenerate with that
+# module, not by editing these.
 MODEL_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/model/pdf_route_v2"
 ROUTE_MODEL_SOURCE = f"{MODEL_PREFIX}/route_v2_classifier.ubj"
 ROUTE_MODEL_SHA256 = "5edde108ec41c50680f34802a09a368309e7d8c68c470f7a922a04d5a78f37c6"

@@ -20,6 +20,7 @@ import pyarrow as pa
 import pytest
 
 from experiments.datakit.build_pdf_source import classify
+from experiments.datakit.build_pdf_source import route_v2_features as contract
 from experiments.datakit.build_pdf_source.classify import (
     DECIDED_BY_SCORE,
     ESCALATION_THRESHOLD,
@@ -36,7 +37,6 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     DEFAULT_MAX_VISUAL_TOKENS,
     RAISED_MAX_VISUAL_TOKENS,
 )
-from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
 
 _WARC = "crawl-data/CC-MAIN-0001/warc/x.warc.gz"
 _MODEL_DIR = "s3://bucket/staged/pdf_route_v2"

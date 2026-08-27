@@ -3,10 +3,10 @@
 
 """The record both PDF extraction routes produce.
 
-A PDF leaves this pipeline through one of two extractors -- docling for documents with usable
-embedded text, a vision model for the rest -- and a consumer should not have to know which one
-produced a document. These fields are the part of the output that is the same either way, so the
-two routes concatenate.
+A PDF leaves this pipeline through one of two extractors -- pdf-inspector, which reads every fetched
+document's text layer on CPU, or a vision model on GPU for the subset the router escalates -- and a
+consumer should not have to know which one produced a document. These fields are the part of the
+output that is the same either way, so the two routes concatenate.
 
 ``id`` and ``text`` come first because that is the contract every datakit consumer reads; the rest
 is the provenance a PDF carries, and the extraction outcome. Each route appends its own columns
@@ -15,8 +15,9 @@ after these.
 
 import pyarrow as pa
 
-# Both routes write ``extraction_status``, but the vocabularies are their own: docling reports its
-# ``ConversionStatus``, OCR reports :class:`~experiments.datakit.build_pdf_source.extract_ocr.OcrStatus`.
+# Both routes write ``extraction_status``, but the vocabularies are their own: pdf-inspector reports
+# :class:`~experiments.datakit.build_pdf_source.extract_inspector.InspectorStatus`, OCR reports
+# :class:`~experiments.datakit.build_pdf_source.extract_ocr.OcrStatus`.
 # The column is shared so a consumer can filter on it uniformly, not so the values can be compared.
 PDF_DOCUMENT_FIELDS: tuple[pa.Field, ...] = (
     pa.field("id", pa.string(), nullable=False),

@@ -21,6 +21,7 @@ import pytest
 from marin.datakit.normalize import generate_id
 
 from experiments.datakit.build_pdf_source import extract_inspector
+from experiments.datakit.build_pdf_source import route_v2_features as contract
 from experiments.datakit.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS
 from experiments.datakit.build_pdf_source.extract import BOILERPLATE_OPTIONS
 from experiments.datakit.build_pdf_source.extract_inspector import (
@@ -40,7 +41,6 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     RenderOptions,
     render_geometry,
 )
-from experiments.datakit.build_pdf_source.quality import route_v2_features as contract
 
 # US Letter and ISO A0, in points. A0 is the case the visual-token budget handles badly on purpose:
 # it costs the model the same as a Letter page and therefore gets far less resolution.

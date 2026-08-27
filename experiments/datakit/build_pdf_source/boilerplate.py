@@ -48,10 +48,11 @@ _DIGIT_FOLD = str.maketrans("0123456789", "0000000000")
 _DROPPED_WHITESPACE = str.maketrans("", "", " \t\r ")  # noqa: RUF001 -- the last entry is U+00A0, which PDFs emit
 
 # A line belonging to a table, which is content even when it repeats. The two routes write tables
-# three different ways -- the tagged form the docling serializer emits, a bare Markdown row, and the
-# HTML the OCR prompt asks the model for -- so all three are recognised here. A false positive costs
-# only that one line's exemption from stripping, which is the safe direction to be wrong in.
-_TABLE_MARKERS = ("<docling_table>", "</docling_table>", "<table", "</table>", "<tr", "<td", "<th")
+# two ways -- the HTML the OCR prompt asks the model for, matched by these markers, and a bare
+# Markdown row, matched by the pipe test in :func:`_line_key` -- so both are recognised. A false
+# positive costs only that one line's exemption from stripping, which is the safe direction to be
+# wrong in.
+_TABLE_MARKERS = ("<table", "</table>", "<tr", "<td", "<th")
 
 
 @dataclass(frozen=True)
