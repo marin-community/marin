@@ -31,11 +31,11 @@ from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper,
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.config import (
+    STANDARD_VLLM_METRIC_FAMILIES,
     VLLM_METRIC_PREFIX,
     WORKER_PYTHON_VERSION,
     InferenceModelConfig,
     VllmCompilationCacheMode,
-    standard_vllm_metric_families,
 )
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_release import (
@@ -715,7 +715,7 @@ class VllmEnvironment:
         extra_args: list[str] | None = None,
         launcher: VllmLauncher | None = None,
         compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
-        metric_families: tuple[str, ...] | None = None,
+        extra_metric_families: frozenset[str] = frozenset(),
         wait_for_ready: bool = True,
     ) -> None:
         validate_vllm_mode_env()
@@ -728,7 +728,7 @@ class VllmEnvironment:
         # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or PreinstalledVllm()
         self.compilation_cache_mode = compilation_cache_mode
-        self.metric_families = metric_families or standard_vllm_metric_families()
+        self.extra_metric_families = extra_metric_families
         self._ready_on_enter = wait_for_ready
 
         self.vllm_server: VllmServerHandle | None = None
@@ -790,7 +790,7 @@ class VllmEnvironment:
                 handle,
                 host=self.host,
                 launcher=self.launcher,
-                metric_families=self.metric_families,
+                extra_metric_families=self.extra_metric_families,
             )
             self.model_id = _get_first_model_id(self.vllm_server.server_url)
         except Exception:
@@ -1097,7 +1097,7 @@ def _configure_vllm_telemetry(
     *,
     host: str,
     launcher: VllmLauncher,
-    metric_families: tuple[str, ...],
+    extra_metric_families: frozenset[str],
 ) -> VllmServerHandle:
     """Attach telemetry collectors after a native vLLM server is ready."""
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
@@ -1115,7 +1115,7 @@ def _configure_vllm_telemetry(
         processor=functools.partial(
             prefixed_metric_snapshots,
             metric_prefix=VLLM_METRIC_PREFIX,
-            family_names=frozenset(metric_families),
+            family_names=STANDARD_VLLM_METRIC_FAMILIES | extra_metric_families,
         ),
         publisher=RejectOversizedMetricSnapshotPublisher(
             max_records=_VLLM_METRIC_SAMPLE_LIMIT,

@@ -37,7 +37,6 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
-    standard_vllm_metric_families,
 )
 from marin.inference.dashboard_server import (
     DASHBOARD_HTML,
@@ -597,9 +596,7 @@ def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypa
 
     assert result.exit_code == 0, result.output
     client.submit.assert_called_once()
-    assert services[0].engine.metric_families == tuple(
-        sorted((*standard_vllm_metric_families(), "vllm:custom_scheduler_pressure"))
-    )
+    assert services[0].engine.extra_metric_families == frozenset({"vllm:custom_scheduler_pressure"})
 
 
 def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch, tmp_path):

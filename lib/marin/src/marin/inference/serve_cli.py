@@ -124,7 +124,7 @@ def local(
     )
     if backend == "vllm":
         try:
-            metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
+            extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
         engine = VllmEngineConfig(
@@ -134,7 +134,7 @@ def local(
             startup_timeout_seconds=startup_timeout,
             max_num_batched_tokens=max_num_batched_tokens,
             extra_args=vllm_args,
-            metric_families=metric_families,
+            extra_metric_families=extra_metric_families,
         )
     else:
         engine = LevanterEngineConfig(

@@ -7,7 +7,6 @@ These dataclasses are safe to construct in CPU coordinators and CLI processes.
 Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
-import importlib.resources
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -25,17 +24,39 @@ WORKER_PYTHON_VERSION = "3.12"
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 VLLM_METRIC_PREFIX = "vllm:"
 
+# This standard set includes families consumed by Marin's inference dashboards or needed for
+# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
+# preemption. Selection is made per complete Prometheus family and was sized against Marin's
+# pinned GPU and TPU vLLM definitions using representative label cardinalities. Add a family
+# only for a concrete consumer, and recheck that the complete selected scrape fits the limit.
+STANDARD_VLLM_METRIC_FAMILIES = frozenset(
+    {
+        "vllm:e2e_request_latency_seconds",
+        "vllm:generation_tokens",
+        "vllm:inter_token_latency_seconds",
+        "vllm:kv_cache_usage_perc",
+        "vllm:num_preemptions",
+        "vllm:num_requests_running",
+        "vllm:num_requests_waiting",
+        "vllm:prompt_tokens",
+        "vllm:request_queue_time_seconds",
+        "vllm:request_success",
+        "vllm:request_time_per_output_token_seconds",
+        "vllm:time_to_first_token_seconds",
+    }
+)
 
-def _normalize_vllm_metric_families(families: object, *, source: str) -> tuple[str, ...]:
-    if not isinstance(families, (list, tuple)) or not all(isinstance(family, str) for family in families):
+
+def _normalize_vllm_metric_families(families: object, *, source: str) -> frozenset[str]:
+    if not isinstance(families, (list, tuple, frozenset)) or not all(isinstance(family, str) for family in families):
         raise ValueError(f"Invalid vLLM metrics config {source}: every family must be a string")
     invalid = [family for family in families if not family.startswith(VLLM_METRIC_PREFIX)]
     if invalid:
         raise ValueError(f"Invalid vLLM metrics config {source}: every family must start with 'vllm:'")
-    return tuple(sorted(set(families)))
+    return frozenset(families)
 
 
-def _parse_vllm_metric_families(contents: bytes, *, source: str) -> tuple[str, ...]:
+def _parse_vllm_metric_families(contents: bytes, *, source: str) -> frozenset[str]:
     try:
         document = tomllib.loads(contents.decode())
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
@@ -45,21 +66,10 @@ def _parse_vllm_metric_families(contents: bytes, *, source: str) -> tuple[str, .
     return _normalize_vllm_metric_families(document["families"], source=source)
 
 
-_STANDARD_VLLM_METRIC_FAMILIES = _parse_vllm_metric_families(
-    importlib.resources.files(__package__).joinpath("vllm_metric_families.toml").read_bytes(),
-    source="the packaged standard",
-)
-
-
-def standard_vllm_metric_families() -> tuple[str, ...]:
-    """Return the immutable standard vLLM telemetry family contract."""
-    return _STANDARD_VLLM_METRIC_FAMILIES
-
-
-def load_vllm_metric_family_additions(path: Path | None) -> tuple[str, ...]:
+def load_vllm_metric_family_additions(path: Path | None) -> frozenset[str]:
     """Load optional additions for the standard contract."""
     if path is None:
-        return ()
+        return frozenset()
     try:
         additions = _parse_vllm_metric_families(StoragePath(str(path)).read_bytes(), source=str(path))
     except OSError as exc:
@@ -129,7 +139,7 @@ class VllmEngineConfig:
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
-    metric_families: tuple[str, ...] = _STANDARD_VLLM_METRIC_FAMILIES
+    extra_metric_families: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -140,15 +150,11 @@ class VllmEngineConfig:
             raise ValueError("max_num_seqs must be positive")
         if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
-        families = _normalize_vllm_metric_families(
-            self.metric_families,
-            source="VllmEngineConfig.metric_families",
+        extra_metric_families = _normalize_vllm_metric_families(
+            self.extra_metric_families,
+            source="VllmEngineConfig.extra_metric_families",
         )
-        object.__setattr__(
-            self,
-            "metric_families",
-            tuple(sorted(set(_STANDARD_VLLM_METRIC_FAMILIES).union(families))),
-        )
+        object.__setattr__(self, "extra_metric_families", extra_metric_families)
 
 
 @dataclass(frozen=True)

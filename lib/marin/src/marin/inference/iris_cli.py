@@ -472,7 +472,7 @@ def main(
         raise click.ClickException("--proxy-timeout must be positive.")
 
     try:
-        metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
+        extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -491,7 +491,7 @@ def main(
             # --wait-timeout for a slow-booting model actually takes effect.
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
-            metric_families=metric_families,
+            extra_metric_families=extra_metric_families,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,
