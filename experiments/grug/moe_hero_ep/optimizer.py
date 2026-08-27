@@ -73,7 +73,9 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-        axes = tuple(range(1, param.ndim))
+        # A stacked parameter has leading layer/expert dimensions; each matrix
+        # must keep its own Frobenius radius rather than sharing one across experts.
+        axes = (-2, -1)
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)

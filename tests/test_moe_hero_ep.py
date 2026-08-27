@@ -24,9 +24,24 @@ from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, optimizer, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+
+
+def test_muonh_preserves_each_expert_matrix_frobenius_norm():
+    params = jnp.array(
+        [[[[3.0, 4.0], [0.0, 0.0]], [[0.0, 1.0], [0.0, 0.0]]]],
+    )
+    direction_updates = jnp.ones_like(params)
+
+    updates = optimizer._scale_invariant_hyperball_updates(params, direction_updates, learning_rate=0.1)
+    updated_params = params + updates
+
+    np.testing.assert_allclose(
+        jnp.linalg.norm(updated_params, axis=(-2, -1)),
+        jnp.linalg.norm(params, axis=(-2, -1)),
+    )
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
