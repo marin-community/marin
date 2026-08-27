@@ -296,6 +296,31 @@ def _git(args: list[str]) -> str | None:
         return None
 
 
+# A CI runner checks out the synthetic pull-request merge ref, so local git
+# state describes the merge commit rather than the branch under review. The
+# harness supplies the real identity through the environment; a developer's
+# machine has none of these set and falls back to local git.
+REVIEW_TRIGGER_ENV = "MARIN_REVIEW_TRIGGER"
+REVIEW_PR_NUMBER_ENV = "MARIN_REVIEW_PR_NUMBER"
+REVIEW_HEAD_SHA_ENV = "MARIN_REVIEW_HEAD_SHA"
+
+
+def _review_trigger() -> str:
+    return os.environ.get(REVIEW_TRIGGER_ENV) or "local"
+
+
+def _review_pr_number() -> int | None:
+    raw = (os.environ.get(REVIEW_PR_NUMBER_ENV) or "").strip()
+    if not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def _review_head_sha() -> str | None:
+    """The reviewed commit: the harness-supplied head SHA, else local HEAD."""
+    return (os.environ.get(REVIEW_HEAD_SHA_ENV) or "").strip() or _git(["rev-parse", "HEAD"])
+
+
 def _lint_catalog_sha() -> str | None:
     """Fingerprint the multi-file lint catalog: sha1 over the sorted lane files.
 
@@ -327,7 +352,11 @@ def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
         if log_dir is not None:
             stats_log = (log_dir / "stats.log").open("wb")
         proc = subprocess.Popen(
-            ["uv", "run", "--quiet", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
+            # --no-sync: this is a detached process at the end of a run, and a
+            # bare `uv run` would resolve the root workspace and start
+            # installing its full dependency graph. CI prepares the environment
+            # ahead of the review; locally it is already synced.
+            ["uv", "run", "--quiet", "--no-sync", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=stats_log or subprocess.DEVNULL,
@@ -735,12 +764,12 @@ def _ship_review_event(
             "tool": "pre-commit-review",
             "invocation": {
                 "variant": mode,
-                "trigger": "local",
+                "trigger": _review_trigger(),
                 "agent_cli": agent_cmd[0],
                 "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"]),
                 "merge_base_sha": merge_base,
-                "head_sha": _git(["rev-parse", "HEAD"]),
-                "pr_number": None,
+                "head_sha": _review_head_sha(),
+                "pr_number": _review_pr_number(),
                 "marin_user": _git(["config", "user.email"]),
                 "lint_catalog_sha": _lint_catalog_sha(),
                 "diff_files": diff_files,

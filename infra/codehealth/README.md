@@ -50,6 +50,13 @@ not fail silently: a failed write exits non-zero and explains itself on stderr,
 which `linter.py` keeps as `stats.log` in the run's log directory. Set
 `MARIN_REVIEW_STATS=0` to skip recording.
 
+A CI runner checks out the synthetic pull-request merge ref, so local git state
+describes the merge commit rather than the branch under review, and a row built
+from it cannot be joined to its pull request. The harness supplies the real
+identity to `linter.py` through `MARIN_REVIEW_TRIGGER`, `MARIN_REVIEW_PR_NUMBER`,
+and `MARIN_REVIEW_HEAD_SHA`. Unset, they fall back to `local` and local git,
+which is correct on a developer's machine.
+
 `review.py aggregate` classifies reviewer comments on recently-merged pull
 requests and appends the two comment tables; `review.py report` renders all four
 into a markdown digest. Both need `gh auth login`, and `aggregate` also needs a
