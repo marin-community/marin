@@ -5,8 +5,8 @@
 
 The hero host OOM appears after hours of training. Checkpoint, evaluation, watch, and data-loader
 hooks run on multi-thousand-step cadences, so a rack run takes a day to produce a few samples.
-The default run puts the same hooks on a one-step cadence. A longer profiled run can instead use
-the real Harrier mixture and a wider hook interval while keeping the same small model.
+This run puts the same hooks on a one-step cadence on up to two GB200 trays, so 100 steps exercise
+100 checkpoints, tagged evaluations, and dropless evaluations.
 
 The shape is downsized but the memory-relevant machinery is the hero's: MuonH optimizer state
 offloaded to pinned host memory, FP32 pinned-host master parameters, and the pooled-wave transport.
@@ -15,7 +15,6 @@ Those decide what the checkpoint path has to move through host memory, which is 
 Checkpoints go to a one-day temporary prefix, never to the hero's own checkpoint root.
 
     uv run experiments/grug/moe_hero_ep/memory_soak.py --run-id soak-1 --version dev --run
-
 """
 
 import dataclasses
@@ -42,11 +41,6 @@ from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
-    HARRIER_MIX_2026_08_18_STORE,
-    HARRIER_MIX_2026_08_18_TAG,
-    harrier_mix_2026_08_18_data_config,
-)
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_GPUS_PER_NODE,
@@ -56,10 +50,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
-    HERO_TENSORSTORE_CACHE_BYTES,
-    HERO_WATCH_INTERVAL,
     HeroThroughputResult,
-    validation_datasets,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
@@ -75,7 +66,6 @@ from experiments.grug.moe_hero_ep.train import (
     MasterParamMode,
     TrainingDataMode,
     WatchMode,
-    _compute_flops,
     run_grug,
 )
 
@@ -136,19 +126,15 @@ def build_memory_soak_run(
     seq_len: int = DEFAULT_SEQ_LEN,
     num_steps: int = DEFAULT_STEPS,
     eval_batches: int = DEFAULT_EVAL_BATCHES,
-    hook_interval: int = 1,
-    training_data_mode: TrainingDataMode = TrainingDataMode.SYNTHETIC,
     expert_axis: int = DEFAULT_EXPERT_AXIS,
     dp_replicas: int = DEFAULT_DP_REPLICAS,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build a small run with the hero's checkpoint, evaluation, and offload paths."""
+    """Build a short synthetic run with checkpoints and evaluators on every step."""
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in SOAK_SHAPES:
         raise ValueError(f"size must be one of {sorted(SOAK_SHAPES)}, got {size!r}")
-    if hook_interval <= 0:
-        raise ValueError("hook_interval must be positive")
     if num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={num_experts} must divide the expert axis {expert_axis}")
     devices = expert_axis * dp_replicas
@@ -181,10 +167,6 @@ def build_memory_soak_run(
     local_experts = num_experts // expert_axis
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(f"local expert count={local_experts} must divide num_expert_waves={model.num_expert_waves}")
-    training_data_mode = TrainingDataMode(training_data_mode)
-    validation = validation_datasets() if training_data_mode is TrainingDataMode.MIXTURE else []
-    flops_per_example, _ = _compute_flops(model_config=model)
-    experiment_flops = flops_per_example * batch_size * SOAK_SCHEDULE_STEPS
     if devices == 1:
         # MuonH's Newton--Schulz contraction expects a nontrivial model axis. Adam keeps the
         # single-device soak on the same training/checkpoint path without introducing a fake axis.
@@ -205,7 +187,7 @@ def build_memory_soak_run(
         # memory, which is the path under suspicion, so a soak without them tests something else.
         offload_opt_state=True,
         master_param_mode=MasterParamMode.FP32_PINNED_HOST,
-        training_data_mode=training_data_mode,
+        training_data_mode=TrainingDataMode.SYNTHETIC,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
         expert_axis_size=expert_axis,
@@ -236,22 +218,12 @@ def build_memory_soak_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
-                tags=[
-                    "grug",
-                    "moe",
-                    "hero",
-                    "ep",
-                    "memory-soak",
-                    "gb200",
-                    f"shape-{size}",
-                    f"data-{training_data_mode.value}",
-                    *([HARRIER_MIX_2026_08_18_TAG] if training_data_mode is TrainingDataMode.MIXTURE else []),
-                ],
+                tags=["grug", "moe", "hero", "ep", "memory-soak", "gb200", f"shape-{size}"],
                 group="moe-hero-ep-memory-soak",
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=HERO_WATCH_INTERVAL if training_data_mode is TrainingDataMode.MIXTURE else 1),
+            watch=WatchConfig(interval=1),
             # Size-one axes can carry distinct explicit PartitionSpecs even though they map to
             # the same single device, which makes elementwise operations reject their operands.
             use_explicit_mesh_axes=devices > 1,
@@ -269,40 +241,27 @@ def build_memory_soak_run(
                     "checkpoints",
                 ),
                 temporary_base_path=None,
-                save_interval=EVERY_STEP if hook_interval == 1 else timedelta(days=1),
-                keep=None if hook_interval == 1 else [{"every": hook_interval}],
+                save_interval=EVERY_STEP,
+                keep=None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        if training_data_mode is TrainingDataMode.SYNTHETIC:
-            data = _synthetic_data_config(
-                seq_len=seq_len,
-                vocab_size=model.vocab_size,
-                eval_examples=eval_batches * devices,
-            )
-        else:
-            data = harrier_mix_2026_08_18_data_config(
-                ctx=ctx,
-                total_steps=SOAK_SCHEDULE_STEPS,
-                batch_size=batch_size,
-                max_seq_len=model.max_seq_len,
-                experiment_flops=experiment_flops,
-                validation=validation,
-            )
+        data = _synthetic_data_config(
+            seq_len=seq_len,
+            vocab_size=model.vocab_size,
+            eval_examples=eval_batches * devices,
+        )
         return GrugRunConfig(
             model=model,
             data=data,
             resources=ctx.runtime_arg("train_resources"),
-            tensorstore_cache_bytes=(
-                HERO_TENSORSTORE_CACHE_BYTES if training_data_mode is TrainingDataMode.MIXTURE else None
-            ),
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(
                 eval_batch_size=devices,
-                steps_per_eval=hook_interval,
+                steps_per_eval=1,
                 max_eval_batches=eval_batches,
                 eval_current=True,
                 eval_ema=False,
@@ -320,7 +279,7 @@ def build_memory_soak_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(HARRIER_MIX_2026_08_18_STORE, *validation) if training_data_mode is TrainingDataMode.MIXTURE else (),
+        deps=(),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -370,21 +329,6 @@ def build_memory_soak_run(
     help="Batches per tagged eval set. These exercise evaluator memory.",
 )
 @click.option(
-    "--hook-interval",
-    type=click.IntRange(min=1),
-    default=1,
-    show_default=True,
-    help="Run checkpointing and both evaluators every N steps.",
-)
-@click.option(
-    "--training-data",
-    "training_data_mode",
-    type=click.Choice([mode.value for mode in TrainingDataMode]),
-    default=TrainingDataMode.SYNTHETIC.value,
-    show_default=True,
-    help="Use generated tokens or the real Harrier mixture and Paloma validation data.",
-)
-@click.option(
     "--expert-axis",
     type=click.IntRange(min=1),
     default=DEFAULT_EXPERT_AXIS,
@@ -411,8 +355,6 @@ def main(
     seq_len: int,
     num_steps: int,
     eval_batches: int,
-    hook_interval: int,
-    training_data_mode: str,
     expert_axis: int,
     dp_replicas: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -424,8 +366,6 @@ def main(
         seq_len=seq_len,
         num_steps=num_steps,
         eval_batches=eval_batches,
-        hook_interval=hook_interval,
-        training_data_mode=TrainingDataMode(training_data_mode),
         expert_axis=expert_axis,
         dp_replicas=dp_replicas,
     )
