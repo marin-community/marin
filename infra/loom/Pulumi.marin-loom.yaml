@@ -84,6 +84,54 @@ config:
       mcpAccess:
         mode: all
         groups: []
+    pr-review:
+      agent: codex
+      description: Review trusted Marin pull requests from immutable head commits
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 4
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/pr-review/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
+    codehealth:
+      agent: codex
+      description: Aggregate Marin pull-request review data and publish reports
+      model: gpt-5.6-sol
+      effort: high
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 100
+      prelude: weaver
+      instructionsFile: profiles/codehealth/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess:
+        mode: all
+        groups: []
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
@@ -135,6 +183,19 @@ config:
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry
+      ref: refs/heads/main
+    - name: pr-review
+      repositoryId: "775839592"
+      workflowRef: marin-community/marin/.github/workflows/ops-weaver-review.yaml@refs/heads/main
+      profile: pr-review
+      serviceTag: pr-review
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: codehealth
+      repositoryId: "775839592"
+      workflowRef: marin-community/marin/.github/workflows/ops-codehealth-review.yaml@refs/heads/main
+      profile: codehealth
+      serviceTag: codehealth
       ref: refs/heads/main
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

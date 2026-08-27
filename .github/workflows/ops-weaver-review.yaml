@@ -1,0 +1,69 @@
+name: "Ops - Weaver Review"
+
+# This workflow runs from the trusted default branch and never checks out or
+# executes pull-request code. The Weaver session starts from the immutable head
+# SHA after Loom verifies this workflow's OIDC identity.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  LOOM_URL: ${{ vars.LOOM_URL || 'https://loom.oa.dev' }}
+
+jobs:
+  review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - name: Launch Weaver review
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LOOM_PROFILE: ${{ vars.LOOM_PR_REVIEW_PROFILE }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$LOOM_PROFILE" ]]; then
+            echo "::error::Set LOOM_PR_REVIEW_PROFILE to the profile bound to this workflow's Loom federation."
+            exit 1
+          fi
+
+          audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
+          oidc=$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
+          loom_token=$(curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/auth/federate" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+
+          goal="Review pull request #${PR_NUMBER} at head ${HEAD_SHA}. Remain read-only except for GitHub review comments. Run the review-pr skill with --comment, then run the lint-review skill with --comment. Report both results in the session result."
+          curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/runs" \
+            -H "Authorization: Bearer $loom_token" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+              --arg profile "$LOOM_PROFILE" \
+              --arg key "pr-review:${PR_NUMBER}:${HEAD_SHA}" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg title "Review PR #${PR_NUMBER}" \
+              --arg goal "$goal" \
+              --arg base "$HEAD_SHA" \
+              --argjson issue "$PR_NUMBER" \
+              '{profile: $profile, idempotency_key: $key, source: "actions",
+                session: {repo: $repo, title: $title, goal: $goal, base: $base,
+                  github_issue: $issue}}')" \
+            "$LOOM_URL/api/runs"

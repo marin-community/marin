@@ -1,0 +1,65 @@
+name: "Ops - Code-health Review Data"
+
+on:
+  schedule:
+    - cron: "23 7 * * 0,2-6"
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      report:
+        description: "also publish the rolling 30-day report"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: codehealth-review-data
+  cancel-in-progress: false
+
+env:
+  LOOM_URL: ${{ vars.LOOM_URL || 'https://loom.oa.dev' }}
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - name: Launch Weaver aggregation
+        env:
+          LOOM_PROFILE: ${{ vars.LOOM_CODEHEALTH_PROFILE }}
+          REPORT: ${{ github.event_name == 'schedule' && github.event.schedule == '23 7 * * 1' || inputs.report }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$LOOM_PROFILE" ]]; then
+            echo "::error::Set LOOM_CODEHEALTH_PROFILE to the profile bound to this workflow's Loom federation."
+            exit 1
+          fi
+
+          audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
+          oidc=$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
+          loom_token=$(curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/auth/federate" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+
+          goal="From the repository root, run 'uv run python -m infra.codehealth.review aggregate --days 7' and require every GitHub fetch, Codex classification batch, and Finelog flush to succeed."
+          if [[ "$REPORT" == "true" ]]; then
+            goal+=" Then run 'uv run python -m infra.codehealth.review report --days 30' and include the gist URL in the session result."
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/runs" \
+            -H "Authorization: Bearer $loom_token" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+              --arg profile "$LOOM_PROFILE" \
+              --arg key "codehealth:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg title "Aggregate code-health review data" \
+              --arg goal "$goal" \
+              '{profile: $profile, idempotency_key: $key, source: "actions",
+                session: {repo: $repo, title: $title, goal: $goal}}')" \
+            "$LOOM_URL/api/runs"

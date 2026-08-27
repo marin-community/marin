@@ -57,10 +57,27 @@ identity to `linter.py` through `MARIN_REVIEW_TRIGGER`, `MARIN_REVIEW_PR_NUMBER`
 and `MARIN_REVIEW_HEAD_SHA`. Unset, they fall back to `local` and local git,
 which is correct on a developer's machine.
 
-`review.py aggregate` classifies reviewer comments on recently-merged pull
-requests and appends the two comment tables; `review.py report` renders all four
-into a markdown digest. Both need `gh auth login`, and `aggregate` also needs a
-logged-in `claude` CLI for the classifier.
+`review.py aggregate` classifies comments from human reviewers on recently
+merged pull requests. Bot comments and agent-authored comments carrying Marin's
+required `🤖` prefix are excluded. The command appends the two comment tables;
+`review.py report` renders all four
+into a markdown digest. Inline comments carry their GitHub diff hunk into the
+classifier. Review summaries and issue comments receive a bounded view of the
+pull request's changed-file patches. Both commands need `gh auth login`, and
+`aggregate` also needs a logged-in `codex` CLI.
+
+`Ops - Code-health Review Data` launches the aggregator through Loom every day.
+The Monday run also publishes the rolling 30-day gist. GitHub Actions exchanges
+OIDC for a short-lived Loom token; the repository stores no Weaver credential.
+The `codehealth` Loom profile owns Finelog access and treats skipped batches,
+GitHub fetch failures, and flush failures as run failures.
+
+Run either command from the repository root:
+
+```bash
+uv run python -m infra.codehealth.review aggregate --days 7
+uv run python -m infra.codehealth.review report --days 30
+```
 
 ## Access
 

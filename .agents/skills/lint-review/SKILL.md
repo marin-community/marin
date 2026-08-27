@@ -36,7 +36,7 @@ unforgivable error; so is fabricating one.
 2. **Run the review.** From the repo root:
 
    ```bash
-   ./infra/pre-commit.py --review
+   ./infra/pre-commit.py --review --agent-command='codex exec'
    ```
 
    The command writes its raw per-arm prompts/outputs and the
