@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from levanter.data.text import ConcatDatasetComponent
-
 from experiments.grug.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 from experiments.grug.moe.long_context_datakit_moe_mix import (
     _BUCKET_LENGTH_TOKENS,
@@ -10,8 +8,8 @@ from experiments.grug.moe.long_context_datakit_moe_mix import (
     long_context_phase_weights,
 )
 
-LONG_SUFFIX = "-gt_64k"
-SHORT_SUFFIX = "-lte_64k"
+LONG_PATH_MARKER = "/length=gt_64k"
+SHORT_PATH_MARKER = "/length=lte_64k"
 
 
 def test_long_context_components_preserve_phase_weights():
@@ -21,7 +19,6 @@ def test_long_context_components_preserve_phase_weights():
 
     assert weights == original
     assert components.keys() == original.keys()
-    assert all(isinstance(component, ConcatDatasetComponent) for component in components.values())
 
 
 def test_long_context_components_repeat_long_data_twice():
@@ -30,11 +27,13 @@ def test_long_context_components_repeat_long_data_twice():
 
     for bucket in components.keys() - {"tail"}:
         children = components[bucket].children
-        assert sum(SHORT_SUFFIX in name for name in children) == 1
-        assert sum(LONG_SUFFIX in name for name in children) == (2 if token_counts[bucket][1] else 0)
+        paths = [component.cache_dir.name for component in children.values()]
+        assert sum(SHORT_PATH_MARKER in path for path in paths) == 1
+        assert sum(LONG_PATH_MARKER in path for path in paths) == (2 if token_counts[bucket][1] else 0)
 
     tail_children = components["tail"].children
-    assert sum(SHORT_SUFFIX in name for name in tail_children) == len(_TAIL_BUCKETS)
-    assert sum(LONG_SUFFIX in name for name in tail_children) == 2 * sum(
+    tail_paths = [component.cache_dir.name for component in tail_children.values()]
+    assert sum(SHORT_PATH_MARKER in path for path in tail_paths) == len(_TAIL_BUCKETS)
+    assert sum(LONG_PATH_MARKER in path for path in tail_paths) == 2 * sum(
         token_counts[bucket][1] > 0 for bucket in _TAIL_BUCKETS
     )

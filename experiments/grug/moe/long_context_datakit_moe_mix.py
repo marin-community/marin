@@ -3,10 +3,11 @@
 
 """Configurable long-context weighting for the June TPU 67B second phase."""
 
+import dataclasses
 import math
 
 from levanter.data.text import ConcatDatasetComponent, DatasetComponent, TextLmDatasetFormat
-from marin.execution.types import InputName
+from marin.execution.types import ExecutorStep, InputName
 
 from experiments.grug.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 
@@ -15,6 +16,8 @@ LONG_CONTEXT_SKEW = 2
 
 _LTE_64K = "lte_64k"
 _GT_64K = "gt_64k"
+_PHASE_INDEX = 1
+_TAIL_COMPONENT = "tail"
 
 _BUCKET_LENGTH_TOKENS: tuple[tuple[str, int, int], ...] = (
     ("c00q0", 46_647_598, 42_509_355),
@@ -254,27 +257,56 @@ def long_context_datakit_components(skew: int) -> dict[str, ConcatDatasetCompone
     if skew < 1:
         raise ValueError("long-context skew must be a positive integer")
 
-    phase_weights = _phase_weights(1)
+    phase_weights = _phase_weights(_PHASE_INDEX)
     components = {
         bucket: ConcatDatasetComponent(children=_skewed_children((bucket,), skew), tags=[bucket])
         for bucket in phase_weights
-        if bucket != "tail"
+        if bucket != _TAIL_COMPONENT
     }
-    components["tail"] = ConcatDatasetComponent(
+    components[_TAIL_COMPONENT] = ConcatDatasetComponent(
         children=_skewed_children(_TAIL_BUCKETS, skew),
-        tags=["tail"],
+        tags=[_TAIL_COMPONENT],
     )
     return components
 
 
 def long_context_phase_weights() -> dict[str, float]:
     """Return the unchanged second-phase quality-by-domain weights."""
-    return _phase_weights(1)
+    return _phase_weights(_PHASE_INDEX)
+
+
+def long_context_treatment_step(base_step: ExecutorStep, *, run_id: str) -> ExecutorStep:
+    base_config = base_step.config
+    original_train_weights = _phase_weights(_PHASE_INDEX)
+    validation_components = {
+        name: component for name, component in base_config.data.components.items() if name not in original_train_weights
+    }
+    validation_weights = {name: 0.0 for name in validation_components}
+    data = dataclasses.replace(
+        base_config.data,
+        components={**long_context_datakit_components(LONG_CONTEXT_SKEW), **validation_components},
+        train_weights=[(0, {**long_context_phase_weights(), **validation_weights})],
+    )
+    tracker = dataclasses.replace(
+        base_config.tracker,
+        tags=[*base_config.tracker.tags, "long_context_store", f"long_context_skew_{LONG_CONTEXT_SKEW:g}"],
+    )
+    config = dataclasses.replace(base_config, data=data, run_id=run_id, tracker=tracker)
+    qk_mult = base_config.model.value.qk_mult
+    return dataclasses.replace(
+        base_step,
+        name=f"grug/{run_id}",
+        config=config,
+        description=(
+            f"Treatment twin of the qk={qk_mult:g} 262K context-extension run. "
+            f"Uses a {LONG_CONTEXT_SKEW:g}x long-document skew within each phase-1 domain-by-quality bucket."
+        ),
+    )
 
 
 def _validate_mixture() -> None:
     buckets = {bucket for bucket, _, _ in _BUCKET_LENGTH_TOKENS}
-    phase_buckets = set(_phase_weights(1)) - {"tail"}
+    phase_buckets = set(_phase_weights(_PHASE_INDEX)) - {_TAIL_COMPONENT}
     if len(buckets) != len(_BUCKET_LENGTH_TOKENS) or buckets != phase_buckets | set(_TAIL_BUCKETS):
         raise ValueError("token counts do not match the second-phase quality-by-domain buckets")
     if not math.isclose(sum(long_context_phase_weights().values()), 1.0, abs_tol=1e-12):
