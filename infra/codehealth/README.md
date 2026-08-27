@@ -67,10 +67,11 @@ pull request's changed-file patches. Both commands need `gh auth login`, and
 `aggregate` also needs a logged-in `codex` CLI.
 
 `Ops - Code-health Review Data` launches the aggregator through Loom every day.
-The Monday run also publishes the rolling 30-day gist. GitHub Actions exchanges
-OIDC for a short-lived Loom token; the repository stores no Weaver credential.
-The `codehealth` Loom profile owns Finelog access and treats skipped batches,
-GitHub fetch failures, and flush failures as run failures.
+GitHub Actions exchanges OIDC for a short-lived Loom token; the repository
+stores no Weaver credential. The `codehealth` Loom profile owns Finelog access
+and treats skipped batches, GitHub fetch failures, and flush failures as run
+failures. Scheduled publication belongs to the refinement job that consumes
+these rows; `report` remains available for an operator with gist credentials.
 
 Run either command from the repository root:
 

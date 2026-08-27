@@ -110,7 +110,7 @@ config:
         groups: []
     codehealth:
       agent: codex
-      description: Aggregate Marin pull-request review data and publish reports
+      description: Aggregate Marin pull-request review data
       model: gpt-5.6-sol
       effort: high
       protocol: acp

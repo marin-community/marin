@@ -2,15 +2,8 @@ name: "Ops - Code-health Review Data"
 
 on:
   schedule:
-    - cron: "23 7 * * 0,2-6"
-    - cron: "23 7 * * 1"
+    - cron: "23 7 * * *"
   workflow_dispatch:
-    inputs:
-      report:
-        description: "also publish the rolling 30-day report"
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: codehealth-review-data
@@ -34,22 +27,6 @@ jobs:
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
 
-      - name: Build aggregation goal
-        id: goal
-        env:
-          REPORT: ${{ github.event_name == 'schedule' && github.event.schedule == '23 7 * * 1' || inputs.report }}
-        run: |
-          set -euo pipefail
-          goal="From the repository root, run 'uv run python -m infra.codehealth.review aggregate --days 7' and require every GitHub fetch, Codex classification batch, and Finelog flush to succeed."
-          if [[ "$REPORT" == "true" ]]; then
-            goal+=" Then run 'uv run python -m infra.codehealth.review report --days 30' and include the gist URL in the session result."
-          fi
-          {
-            echo 'value<<EOF'
-            echo "$goal"
-            echo EOF
-          } >> "$GITHUB_OUTPUT"
-
       - name: Launch Weaver aggregation
         uses: ./.github/actions/launch-loom-run
         with:
@@ -57,4 +34,8 @@ jobs:
           profile: ${{ vars.LOOM_CODEHEALTH_PROFILE }}
           idempotency-key: codehealth:${{ github.run_id }}:${{ github.run_attempt }}
           title: Aggregate code-health review data
-          goal: ${{ steps.goal.outputs.value }}
+          goal: >-
+            From the repository root, run 'uv run python -m
+            infra.codehealth.review aggregate --days 7' and require every
+            GitHub fetch, Codex classification batch, and Finelog flush to
+            succeed.
