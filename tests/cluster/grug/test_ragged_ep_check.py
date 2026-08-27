@@ -8,12 +8,18 @@ transport's offset arithmetic or expert kernels earns one only after this passes
 run carries the hero's ragged XLA flags, so it covers the device-initiated kernel the hero uses;
 ``--transport-kernel`` selects otherwise and the verdict records which one ran.
 
-Nothing invokes this on a schedule. All-to-all is GPU-only so it cannot run in CPU CI, and the
-repository has no marker, fixture, or workflow for a test that needs particular accelerators
-(#8704) -- ``tests/cluster/`` covers submitting a job to a standing cluster but names only the
-TPU and H100 peers. So this is launched by hand, and it lives beside the other remote harnesses
-in this directory rather than under ``tests/``. It belongs in ``tests/cluster/`` once #8704 adds
-a GB200 lane and a cost tier.
+All-to-all is GPU-only, so this cannot run in CPU CI. It carries the ``cluster`` marker and is
+deselected by default; submit it from the repository root with::
+
+    uv run pytest tests/cluster/grug/test_ragged_ep_check.py \\
+      -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
+
+Nothing runs it on a schedule. #8605 deleted the Marin Cluster Smoke workflow after 38 scheduled
+runs in a row timed out, so no workflow runs the ``cluster`` marker at all; #8704 tracks giving
+accelerator tests a runner again. Until then this is launched by hand, from here.
+
+PYTEST_DONT_REWRITE: the step dispatches serialized remote functions that must not depend on
+pytest.
 
 A. Ground truth. At a capacity factor high enough that nothing is dropped, every token reaches
    every expert it selected, so the transport computes exactly the dense MoE. The gate compares
@@ -37,10 +43,10 @@ import math
 import os
 from enum import StrEnum
 
-import click
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from fray.types import ANY_REGION, ResourceConfig
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -49,14 +55,15 @@ from levanter.grug._moe.ep_ragged_all_to_all import _EXPERT_CHUNKS, _quack_group
 from levanter.grug.grug_moe import moe_mlp
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
-from marin.experiment.cli import build_options
+from marin.execution.step_runner import StepRunner
 from marin.experiment.namespacing import user_namespaced_name
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.train import RAGGED_REQUIRED_XLA_FLAGS
+from tests.cluster.conftest import MARIN_GB200_CLUSTER
 
 logger = logging.getLogger(__name__)
 
@@ -129,10 +136,19 @@ def _transport_flags(kernel: TransportKernel) -> tuple[str, ...]:
     return RAGGED_REQUIRED_XLA_FLAGS if kernel is TransportKernel.DEVICE else ()
 
 
-# TODO(https://github.com/marin-community/marin/issues/8704): move this to `tests/cluster/` once a
-# GB200 fixture and a cost tier exist. Today nothing selects it, so the gate below runs only when
-# someone launches it by hand.
-BENCHMARK_RESOURCES = ResourceConfig.with_gpu("GB200", count=4, cpu=16, ram="256g", disk="128g", regions=[ANY_REGION])
+PENDING_TIMEOUT = 30 * 60.0
+RUNTIME_TIMEOUT = 30 * 60.0
+pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT)]
+
+BENCHMARK_RESOURCES = ResourceConfig.with_gpu(
+    "GB200",
+    count=4,
+    cpu=16,
+    ram="256g",
+    disk="128g",
+    regions=[ANY_REGION],
+    target_cluster=MARIN_GB200_CLUSTER,
+)
 
 
 class GradDiff(BaseModel):
@@ -457,21 +473,11 @@ def build_benchmark(
     )
 
 
-@click.command()
-@click.option(
-    "--transport-kernel",
-    type=click.Choice([kernel.value for kernel in TransportKernel]),
-    default=TransportKernel.DEVICE.value,
-    show_default=True,
-    help=(
-        "Ragged all-to-all kernel to validate. The default matches the hero and needs the pinned "
-        "jax/XLA build; 'stock' drops the flags so the run works on an image without it."
-    ),
-)
-@build_options
-def main(transport_kernel: str) -> ArtifactStep[RaggedEpResult]:
-    return build_benchmark(transport_kernel=TransportKernel(transport_kernel))
+def test_the_ragged_ep_transport_matches_a_dense_reference(iris_client) -> None:
+    """Submit the 4-GPU gate and require the job to succeed.
 
-
-if __name__ == "__main__":
-    main()
+    ``run_benchmark`` raises when either half of the verdict fails, so a returning job is the
+    assertion. ``iris_client`` binds the marin hub as the current Fray client; the resources carry
+    ``target_cluster``, so the hub federates the work to the GB200 peer.
+    """
+    StepRunner().run([lower(build_benchmark(version="dev"))])

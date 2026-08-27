@@ -15,6 +15,8 @@ the test starts itself (those are the Iris smokes in `iris-smoke-*.yaml`, marker
 
 - `marin` — the GCP cluster (TPU pools). IAP-fronted, reached over HTTPS.
 - `cw-us-east-02a` — the CoreWeave cluster (H100). Kube-fronted, reached via kubeconfig.
+- `cw-us-east-08a` — the CoreWeave GB200 cluster (NVL72 racks). Federated from the `marin`
+  hub the same way, via `target_cluster=MARIN_GB200_CLUSTER`.
 
 ## Fixtures (`conftest.py`)
 
@@ -23,6 +25,10 @@ the test starts itself (those are the Iris smokes in `iris-smoke-*.yaml`, marker
 - `marin_gpu_client` — opens `cw-us-east-02a` (GPU).
 - `run_test_job` — submits a `JobRequest`, bounds its queue/runtime waits, and
   terminates it on interruption. Used by the vLLM e2es.
+
+No workflow runs the `cluster` marker today: #8605 deleted Marin Cluster Smoke after 38
+consecutive scheduled runs timed out. Everything here is launched by hand until #8704
+gives accelerator tests a runner again.
 
 `iris_client` and `marin_gpu_client` build on `open_cluster_client(name)`, which skips
 when no credential reaches the cluster: a missing kubeconfig (`ConfigException`,

@@ -96,8 +96,8 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 # The ragged transport runs on the device-initiated kernel and nothing else. Engagement needs both:
 # the kernel switch, and symmetric-buffer registration for the ragged op's operands. The scoped list
 # registers only those buffers, so every other collective keeps NCCL's host-launched kernels. Both
-# require the pinned jax/XLA build -- jaxlib vintages predating the flags abort at import on unknown
-# XLA_FLAGS entries. `ragged_ep_check.py` mirrors these; keep the two in step.
+# require jax 0.11.1 -- older jaxlibs abort at import on unknown XLA_FLAGS entries. The 4-GPU gate
+# in `tests/cluster/grug/` imports this tuple, so both run the transport the hero runs.
 RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
