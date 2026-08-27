@@ -315,18 +315,14 @@ def reference_attention(
     *,
     logits_dtype: jnp.dtype | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Reference attention whose output sharding follows ``q``.
-
-    jax 0.11.1 explicit-sharding mode refuses to infer layouts for the two
-    contractions here (``align_kv_heads`` drops the head-axis sharding, and a
-    sharded ``head_dim`` makes the score contraction ambiguous). Rather than
-    re-deriving jax's inference per einsum, run the math under Auto axes so the
-    compiler picks intermediate layouts, and pin only the output to ``q``'s
-    sharding.
-    """
+    """Reference attention whose output sharding follows ``q``."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
+    # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
+    # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
+    # score contraction ambiguous), so run the math under Auto axes and pin only the
+    # output to q's sharding.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
