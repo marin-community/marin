@@ -24,7 +24,7 @@ from rigging.credentials import iap_provider_for
 from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
-from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
+from finelog.deploy.config import FinelogConfig, tunnel_target_for
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +69,3 @@ def open_client(
     finally:
         client.close()
         disconnect(client)
-
-
-@contextmanager
-def open_named_client(
-    name: str,
-    *,
-    tunnel_timeout: float = DEFAULT_TUNNEL_TIMEOUT,
-    request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
-) -> Generator[LogClient, None, None]:
-    """Load the config for deployment ``name`` and yield a client for it."""
-    with open_client(
-        load_finelog_config(name),
-        name,
-        tunnel_timeout=tunnel_timeout,
-        request_timeout=request_timeout,
-    ) as client:
-        yield client

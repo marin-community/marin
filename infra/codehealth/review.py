@@ -75,6 +75,7 @@ from review_tables import (
     PrReviewOutcome,
     append_rows,
     open_tables_client,
+    parse_utc,
     row_count,
 )
 
@@ -391,13 +392,9 @@ def _gh_paginated(args: list[str]) -> list:
     return out
 
 
-def _parse_github_timestamp(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _optional_github_timestamp(value: str | None) -> dt.datetime | None:
     """Parse a GitHub timestamp that an unmerged PR leaves unset."""
-    return _parse_github_timestamp(value) if value else None
+    return parse_utc(value) if value else None
 
 
 def _pr_from_rest_pull(pull: dict) -> dict:
@@ -432,14 +429,14 @@ def list_merged_prs(repo: str, days: int, limit: int | None) -> list[dict]:
             merged_at = pull.get("merged_at")
             if merged_at is None:
                 continue
-            if _parse_github_timestamp(merged_at) < since:
+            if parse_utc(merged_at) < since:
                 continue
             prs.append(_pr_from_rest_pull(pull))
             if limit is not None and len(prs) >= limit:
                 break
 
         last_updated_at = pulls[-1].get("updated_at")
-        if last_updated_at is not None and _parse_github_timestamp(last_updated_at) < since:
+        if last_updated_at is not None and parse_utc(last_updated_at) < since:
             break
         page += 1
 

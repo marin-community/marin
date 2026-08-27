@@ -48,6 +48,7 @@ from review_tables import (
     Invocation,
     append_rows,
     open_tables_client,
+    parse_utc,
 )
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -77,11 +78,8 @@ def _lint_catalog_sha() -> str | None:
 
 
 def _parse_ts(value: str | None) -> dt.datetime:
-    """Parse an event timestamp, defaulting to now. Always tz-aware UTC."""
-    if not value:
-        return dt.datetime.now(dt.UTC)
-    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+    """Parse an event timestamp, defaulting to now."""
+    return parse_utc(value) if value else dt.datetime.now(dt.UTC)
 
 
 def fill_defaults(event: dict) -> dict:

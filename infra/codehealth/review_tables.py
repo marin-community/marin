@@ -28,7 +28,8 @@ from dataclasses import dataclass
 from typing import ClassVar, TypeVar
 
 from finelog.client import FlushResult, LogClient, StoragePolicy
-from finelog.deploy.connect import open_named_client
+from finelog.deploy.config import load_finelog_config
+from finelog.deploy.connect import open_client
 
 RowT = TypeVar("RowT")
 
@@ -147,18 +148,24 @@ class PrReviewOutcome:
     overlap_count: int | None
 
 
+def parse_utc(text: str) -> dt.datetime:
+    """Parse an ISO-8601 timestamp, stamping UTC when it carries no offset."""
+    parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+
+
 @contextmanager
 def open_tables_client(deployment: str, finelog_url: str | None = None) -> Iterator[LogClient]:
     """Yield a client for these tables.
 
-    ``finelog_url`` bypasses deployment resolution and connects to an address
-    directly, which is how tests reach an embedded server.
+    ``finelog_url`` connects to that address and skips deployment resolution
+    and its IAP handshake.
     """
     if finelog_url:
         with closing(LogClient.connect(finelog_url)) as client:
             yield client
         return
-    with open_named_client(deployment) as client:
+    with open_client(load_finelog_config(deployment), deployment) as client:
         yield client
 
 

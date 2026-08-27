@@ -36,6 +36,7 @@ from review_tables import (
     PrReviewOutcome,
     append_rows,
     open_tables_client,
+    parse_utc,
 )
 
 logger = logging.getLogger("codehealth.backfill")
@@ -94,10 +95,7 @@ def _flag(value: Any) -> bool | None:
 def _moment(value: Any) -> dt.datetime | None:
     """Parse an ISO-8601 cell into a tz-aware UTC datetime."""
     text = _text(value)
-    if text is None:
-        return None
-    parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+    return parse_utc(text) if text is not None else None
 
 
 def _required_moment(value: Any) -> dt.datetime:
