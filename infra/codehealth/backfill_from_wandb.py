@@ -25,6 +25,7 @@ from typing import Any
 
 import click
 from review_tables import (
+    DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
     HUMAN_COMMENTS_NAMESPACE,
     INVOCATIONS_NAMESPACE,
@@ -207,7 +208,7 @@ def read_wandb_table(entity: str, project: str, run_id: str, key: str) -> list[d
 
 
 @click.command(help=__doc__)
-@click.option("--deployment", default="marin", show_default=True, help="Finelog deployment to write to.")
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to write to.")
 @click.option("--finelog-url", default=None, help="Connect directly to this Finelog URL instead of a deployment.")
 @click.option("--iap-audience", default=None, help="IAP client id for unattended auth.")
 @click.option("--entity", default=WANDB_ENTITY, show_default=True)

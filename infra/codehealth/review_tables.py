@@ -14,7 +14,8 @@ Four append-only namespaces under ``codehealth.autolint``:
 
 Both comment tables are rewritten per PR by re-running the aggregator, so a
 reader takes the highest ``seq`` per natural key rather than assuming one row.
-See :func:`latest_by` in ``review.py``.
+``review.py`` exposes that as ``LATEST_HUMAN_COMMENTS_SQL`` and
+``LATEST_PR_OUTCOMES_SQL``.
 
 Every row type declares a ``key_column``. The server's fallback for an
 undeclared key is a column literally named ``timestamp_ms``, which none of
@@ -24,13 +25,17 @@ declared timestamp.
 
 import datetime as dt
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 
 from finelog.client import FlushResult, LogClient, StoragePolicy
 from finelog.deploy.connect import open_named_client
+
+RowT = TypeVar("RowT")
+
+DEFAULT_DEPLOYMENT = "marin"
 
 NAMESPACE_PREFIX = "codehealth.autolint"
 
@@ -172,7 +177,7 @@ def open_tables_client(
         yield client
 
 
-def _row_count(client: LogClient, namespace: str) -> int | None:
+def row_count(client: LogClient, namespace: str) -> int | None:
     """Current row count for ``namespace``, or None if it is not registered."""
     for info in client.list_namespaces():
         if info.namespace == namespace:
@@ -183,19 +188,16 @@ def _row_count(client: LogClient, namespace: str) -> int | None:
 def append_rows(
     client: LogClient,
     namespace: str,
-    row_type: type,
-    rows: list,
+    row_type: type[RowT],
+    rows: Sequence[RowT],
     *,
     flush_timeout: float = DEFAULT_FLUSH_TIMEOUT,
 ) -> int:
-    """Append ``rows`` and confirm the server actually stored them.
+    """Append ``rows`` and confirm the server stored them.
 
-    ``Table.flush`` reports that the client queue drained, not that the server
-    accepted the batch: a rejected registration or a non-retryable send is
-    logged by the flush thread and the rows are dropped. Comparing the
-    namespace row count across the write turns that silent drop into an error
-    at the call site. Concurrent writers can only inflate the delta, so the
-    check is a floor.
+    ``Table.flush`` reports only that the client queue drained, so this
+    compares the namespace row count across the write. Concurrent writers can
+    only inflate the delta, making the check a floor.
 
     Returns:
         The namespace row count after the write.
@@ -205,9 +207,9 @@ def append_rows(
             or fewer rows landed than were written.
     """
     if not rows:
-        return _row_count(client, namespace) or 0
+        return row_count(client, namespace) or 0
 
-    before = _row_count(client, namespace) or 0
+    before = row_count(client, namespace) or 0
     table = client.get_table(namespace, row_type, storage_policy=STORAGE_POLICY)
     for start in range(0, len(rows), WRITE_CHUNK):
         table.write(rows[start : start + WRITE_CHUNK])
@@ -215,7 +217,7 @@ def append_rows(
         if result is not FlushResult.SUCCEEDED:
             raise RuntimeError(f"{namespace}: flush did not complete within {flush_timeout:.0f}s: {result}")
 
-    after = _row_count(client, namespace)
+    after = row_count(client, namespace)
     if after is None:
         raise RuntimeError(f"{namespace}: not registered after writing {len(rows)} rows; the server rejected the schema")
     if after - before < len(rows):

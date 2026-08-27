@@ -27,8 +27,8 @@ Two subcommands:
        - catchable_generous — a modern LLM running on the diff alone would
                               plausibly flag it with high confidence.
      Strict ⊆ generous by construction (the prompt enforces it).
-  4. Pull the bot's own findings for the PR's head_sha from the existing
-     `findings` artifact written by `infra/codehealth/log_stats.py`.
+  4. Pull the bot's own findings for the PR's head_sha from the `findings`
+     namespace written by `infra/codehealth/log_stats.py`.
   5. Append two tables alongside the invocations and findings that
      `infra/codehealth/log_stats.py` writes:
        - human_comments      — one row per classified comment.
@@ -59,12 +59,13 @@ from pathlib import Path
 from typing import Literal, get_args
 
 import click
-from finelog.client import LogClient, NamespaceNotFoundError, SchemaValidationError
+from finelog.client import LogClient
 from pydantic import BaseModel, Field, TypeAdapter
 
 # Sibling module: the canonical row types for every table this tool reads and
 # writes, shared with log_stats.py so the layouts cannot drift.
 from review_tables import (
+    DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
     HUMAN_COMMENTS_NAMESPACE,
     INVOCATIONS_NAMESPACE,
@@ -74,11 +75,11 @@ from review_tables import (
     PrReviewOutcome,
     append_rows,
     open_tables_client,
+    row_count,
 )
 
 logger = logging.getLogger("codehealth.review")
 
-DEFAULT_DEPLOYMENT = "marin"
 DEFAULT_REPO = "marin-community/marin"
 # Classifier backend: a headless Claude Code session (`claude -p`). The model is
 # a CLI alias (`sonnet`, `opus`, `haiku`) or a full model id. `sonnet` balances
@@ -576,18 +577,18 @@ def _as_utc(value):
     return value
 
 
-def query_rows(client: LogClient, sql: str) -> list[dict]:
-    """Run `sql` and return rows as dicts with tz-aware timestamps.
+def query_rows(client: LogClient, sql: str, namespace: str) -> list[dict]:
+    """Run `sql` over `namespace` and return rows with tz-aware timestamps.
 
-    A namespace that has never been written does not exist yet, which is the
-    normal state on a first run and not an error.
+    An unregistered namespace is the normal state before the first write and
+    returns no rows. Checking registration keeps that case distinct from a
+    query that fails against a namespace which does exist, so a column or
+    schema mismatch surfaces instead of rendering an empty report.
     """
-    try:
-        table = client.query(sql)
-    except (NamespaceNotFoundError, SchemaValidationError) as exc:
-        logger.warning("query returned no table (%s); treating as empty", exc)
+    if row_count(client, namespace) is None:
+        logger.info("namespace %s does not exist yet; treating as empty", namespace)
         return []
-    return [{k: _as_utc(v) for k, v in row.items()} for row in table.to_pylist()]
+    return [{k: _as_utc(v) for k, v in row.items()} for row in client.query(sql).to_pylist()]
 
 
 def load_findings_for_shas(client: LogClient, shas: set[str]) -> dict[str, list[dict]]:
@@ -601,6 +602,7 @@ def load_findings_for_shas(client: LogClient, shas: set[str]) -> dict[str, list[
         client,
         f"SELECT head_sha, file, line, code, confidence, message "
         f'FROM "{FINDINGS_NAMESPACE}" WHERE head_sha IN ({in_list})',
+        FINDINGS_NAMESPACE,
     )
     for r in rows:
         if r["head_sha"] in by_sha:
@@ -705,16 +707,13 @@ def _in_window(row: dict, key: str, start: dt.datetime) -> bool:
 
 def _group_by_isoweek(rows: list[dict], ts_key: str) -> dict[tuple[int, int], list[dict]]:
     """Bucket rows by the ISO (year, week) of `row[ts_key]`. Rows with a missing
-    or unparseable timestamp are dropped; callers sort the keys for display."""
+    timestamp are dropped; callers sort the keys for display."""
     weeks: dict[tuple[int, int], list[dict]] = {}
     for row in rows:
         ts = row.get(ts_key)
         if not ts:
             continue
-        try:
-            y, w, _ = ts.isocalendar()
-        except ValueError:
-            continue
+        y, w, _ = ts.isocalendar()
         weeks.setdefault((y, w), []).append(row)
     return weeks
 
@@ -1157,7 +1156,7 @@ def aggregate(
     else:
         with open_tables_client(deployment) as client:
             findings_by_sha = load_findings_for_shas(client, all_shas)
-            existing_human_rows = query_rows(client, LATEST_HUMAN_COMMENTS_SQL)
+            existing_human_rows = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
     cache = {} if refresh else build_classification_cache(existing_human_rows)
 
     # Flatten every human comment across all PRs. Reuse a cached classification
@@ -1282,10 +1281,10 @@ def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool, d
     start = now - dt.timedelta(days=days)
 
     with open_tables_client(deployment) as client:
-        outcomes = query_rows(client, LATEST_PR_OUTCOMES_SQL)
-        comments = query_rows(client, LATEST_HUMAN_COMMENTS_SQL)
-        invocations = query_rows(client, f'SELECT * FROM "{INVOCATIONS_NAMESPACE}"')
-        findings = query_rows(client, f'SELECT * FROM "{FINDINGS_NAMESPACE}"')
+        outcomes = query_rows(client, LATEST_PR_OUTCOMES_SQL, PR_REVIEW_OUTCOMES_NAMESPACE)
+        comments = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
+        invocations = query_rows(client, f'SELECT * FROM "{INVOCATIONS_NAMESPACE}"', INVOCATIONS_NAMESPACE)
+        findings = query_rows(client, f'SELECT * FROM "{FINDINGS_NAMESPACE}"', FINDINGS_NAMESPACE)
 
     markdown = build_report(outcomes, comments, invocations, findings, repo=repo, start=start, now=now, days=days)
 

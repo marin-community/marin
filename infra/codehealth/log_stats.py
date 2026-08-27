@@ -48,6 +48,7 @@ from finelog.client import LogClient
 
 # Run as a script, so its own directory is sys.path[0] and siblings import bare.
 from review_tables import (
+    DEFAULT_DEPLOYMENT,
     FINDINGS_NAMESPACE,
     IAP_AUDIENCE_ENV,
     INVOCATIONS_NAMESPACE,
@@ -60,7 +61,6 @@ from review_tables import (
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 LINT_DIR = ROOT_DIR / "infra" / "lint"
 
-DEFAULT_DEPLOYMENT = "marin"
 # The whole point is to not delay the dev; give up rather than retry forever.
 FLUSH_TIMEOUT = 30.0
 

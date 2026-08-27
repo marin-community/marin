@@ -115,6 +115,11 @@ def test_append_rows_raises_when_the_server_rejects_the_schema(client):
         )
 
 
+def test_query_rows_is_empty_before_the_first_write(client):
+    """A namespace that does not exist yet reads as empty, not as an error."""
+    assert query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE) == []
+
+
 def test_reader_takes_the_newest_row_per_comment(client):
     """Re-running the aggregator supersedes a PR's rows rather than duplicating them."""
     base = dict(
@@ -141,7 +146,7 @@ def test_reader_takes_the_newest_row_per_comment(client):
     append_rows(client, HUMAN_COMMENTS_NAMESPACE, HumanComment, [second])
 
     assert client.query(f'SELECT count(*) AS n FROM "{HUMAN_COMMENTS_NAMESPACE}"').to_pylist()[0]["n"] == 2
-    latest = query_rows(client, LATEST_HUMAN_COMMENTS_SQL)
+    latest = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
     assert [(r["comment_id"], r["comment_class"], r["catchable_generous"]) for r in latest] == [(55, "lint", True)]
     # query_rows normalizes finelog's naive timestamps so window filters work.
     assert latest[0]["ts"].tzinfo is not None
