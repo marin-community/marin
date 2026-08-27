@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, groupby
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -111,12 +111,11 @@ class VerifiedFuzzyDupsPerSource(BaseModel):
     source_tag: str
 
 
-class VerifiedFuzzyDupsAttrData(BaseModel):
-    """Sparse, co-partitioned markers for verified fuzzy duplicates."""
+class VerifiedFuzzyDupsArtifact(BaseModel):
+    """Source mapping and counters shared by verified-marker producers."""
 
-    version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
-    verification: FuzzyVerificationParams
-    local_representatives: LocalRepresentativeParams
+    producer: Literal["pipeline", "cluster"] = "pipeline"
+    version: str
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
 
@@ -127,6 +126,21 @@ class VerifiedFuzzyDupsAttrData(BaseModel):
         if entry is None:
             raise KeyError(f"Verified fuzzy duplicate attributes have no entry for source_key={source_key!r}")
         return entry.attr_dir
+
+
+class VerifiedFuzzyDupsAttrData(VerifiedFuzzyDupsArtifact):
+    """Sparse markers from the pipeline fuzzy-duplicate verifier."""
+
+    producer: Literal["pipeline", "cluster"] = "pipeline"
+    version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
+    verification: FuzzyVerificationParams
+    local_representatives: LocalRepresentativeParams
+
+    @model_validator(mode="after")
+    def _pipeline_producer(self) -> "VerifiedFuzzyDupsAttrData":
+        if self.producer != "pipeline":
+            raise ValueError("Pipeline verified-marker artifacts require producer='pipeline'")
+        return self
 
 
 @dataclass(frozen=True)
@@ -166,7 +180,7 @@ class FuzzyVerificationStoreConfig:
             raise ValueError("lookup_batch_size must be at least 1")
 
 
-_VERIFIED_DUPLICATE_SCHEMA = pa.schema(
+VERIFIED_FUZZY_DUPLICATE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
         pa.field("dup_doc", pa.bool_(), nullable=False),
@@ -676,9 +690,9 @@ def _write_verified_shard(file_idx: int, records: Iterator[dict[str, Any]]) -> d
             if record["kind"] == "sentinel":
                 continue
             verified += 1
-            yield {field.name: record[field.name] for field in _VERIFIED_DUPLICATE_SCHEMA}
+            yield {field.name: record[field.name] for field in VERIFIED_FUZZY_DUPLICATE_SCHEMA}
 
-    result = write_parquet_file(output_rows(), shard.output_path, schema=_VERIFIED_DUPLICATE_SCHEMA)
+    result = write_parquet_file(output_rows(), shard.output_path, schema=VERIFIED_FUZZY_DUPLICATE_SCHEMA)
     return {**result, "file_idx": file_idx, "verified_duplicates": verified}
 
 

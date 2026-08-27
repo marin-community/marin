@@ -41,7 +41,7 @@ from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    VerifiedFuzzyDupsAttrData,
+    VerifiedFuzzyDupsArtifact,
     VerifiedFuzzyDupsPerSource,
 )
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
@@ -629,7 +629,7 @@ def build_clustered_store(
     cluster_assign: dict[str, AssignmentAttrData],
     quality: dict[str, QualityScores],
     exact_dedup: GlobalExactDedupData,
-    dedup: VerifiedFuzzyDupsAttrData,
+    dedup: VerifiedFuzzyDupsArtifact,
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
