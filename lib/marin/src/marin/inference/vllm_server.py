@@ -103,8 +103,8 @@ _LINUX_PROC_ROOT = "/proc"
 _HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
-# The complete standard contract is 1,024 samples at the observed ordinary eight-engine
-# cardinality. Keep optional additions bounded by the same post-selection envelope.
+# The representative eight-engine standard contract contains 1,024 samples. Keep
+# optional additions bounded by the same post-selection envelope.
 _VLLM_METRIC_SAMPLE_LIMIT = 2048
 
 
