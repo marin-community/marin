@@ -67,14 +67,27 @@
   },
   "links": [
     {
+      "linkRef": "fleet_accelerators"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Node details",
       "type": "link",
-      "url": "/d/marin-accel"
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
     },
     {
       "asDropdown": false,
@@ -97,14 +110,10 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health"
+    },
+    {
+      "linkRef": "cluster_capacity"
     },
     {
       "asDropdown": false,
@@ -112,9 +121,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -125,6 +134,16 @@
       "title": "Inference",
       "type": "link",
       "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Storage",
+      "type": "link",
+      "url": "/d/marin-storage"
     },
     {
       "asDropdown": false,
@@ -227,7 +246,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT SUM(value) / 1000.0 AS value FROM ( SELECT value, ROW_NUMBER() OVER (PARTITION BY \"cluster\", json_get(attributes_json, 'gpu_uuid') ORDER BY timestamp_ms DESC) AS rn FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) WHERE rn = 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT SUM(value) / 1000.0 AS value FROM ( SELECT value, ROW_NUMBER() OVER (PARTITION BY \"cluster\", json_get(attributes_json, 'gpu_uuid') ORDER BY timestamp_ms DESC) AS rn FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) WHERE rn = 1"
               },
               {
                 "key": "from",

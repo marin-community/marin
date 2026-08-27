@@ -48,7 +48,7 @@ def test_dashboard_corpus_renders_nested_sql_targets_with_fixed_inputs(tmp_path:
         start_ms=1_000,
         end_ms=5_000,
         interval_ms=250,
-        clusters=("marin", "quoted'cluster"),
+        variables={"cluster": ("marin", "quoted'cluster")},
     )
 
     assert corpus.uid == "test-dashboard"
@@ -69,7 +69,7 @@ def test_render_sql_rejects_macros_the_harness_does_not_model() -> None:
             start_ms=1,
             end_ms=2,
             interval_ms=1,
-            clusters=("marin",),
+            variables={"cluster": ("marin",)},
         )
 
 
@@ -81,7 +81,7 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         start_ms=1_000,
         end_ms=5_000,
         interval_ms=250,
-        clusters=("marin",),
+        variables={"cluster": ("marin",)},
     )
 
     assert {query.name for query in corpus.queries} == {
@@ -89,6 +89,7 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         "gpu_power",
         "gpu_power_by_device_model",
         "gpu_power_by_training_run",
+        "gpu_temperature_distribution",
         "gpus_reporting_a_hardware_fault",
         "hbm_in_use_by_cluster",
         "hottest_gpu",
@@ -96,24 +97,25 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         "mean_utilization",
         "nodes_reporting",
         "peak_gpu_temperature_by_cluster",
+        "sm_utilization_by_gpu",
         "telemetry_freshness",
         "tensor_core_activity_by_cluster",
     }
 
 
 @pytest.mark.parametrize(
-    ("start_ms", "end_ms", "interval_ms", "clusters", "message"),
+    ("start_ms", "end_ms", "interval_ms", "variables", "message"),
     [
-        (2, 2, 1, ("marin",), "start_ms"),
-        (1, 2, 0, ("marin",), "interval_ms"),
-        (1, 2, 1, (), "cluster"),
+        (2, 2, 1, {"cluster": ("marin",)}, "start_ms"),
+        (1, 2, 0, {"cluster": ("marin",)}, "interval_ms"),
+        (1, 2, 1, {"cluster": ()}, "cluster"),
     ],
 )
 def test_render_sql_rejects_invalid_fixed_inputs(
     start_ms: int,
     end_ms: int,
     interval_ms: int,
-    clusters: tuple[str, ...],
+    variables: dict[str, tuple[str, ...]],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
@@ -122,5 +124,40 @@ def test_render_sql_rejects_invalid_fixed_inputs(
             start_ms=start_ms,
             end_ms=end_ms,
             interval_ms=interval_ms,
-            clusters=clusters,
+            variables=variables,
         )
+
+
+def test_render_sql_resolves_scalar_and_multivalue_dashboard_variables() -> None:
+    rendered = render_sql(
+        "SELECT '${identity_kind}' AS kind FROM telemetry_v1 "
+        "WHERE job_id IN (${job:sqlstring}) AND node_name IN (${node:sqlstring})",
+        start_ms=1,
+        end_ms=2,
+        interval_ms=1,
+        variables={
+            "identity_kind": ("job_id",),
+            "job": ("/job-a", "quoted'job"),
+            "node": ("node-a",),
+        },
+    )
+
+    assert rendered == (
+        "SELECT 'job_id' AS kind FROM telemetry_v1 "
+        "WHERE job_id IN ('/job-a','quoted''job') AND node_name IN ('node-a')"
+    )
+
+
+def test_cluster_capacity_dashboard_exposes_both_finelog_queries() -> None:
+    dashboard = Path(__file__).resolve().parents[3] / "infra/grafana/dashboards/cluster_capacity.json"
+
+    corpus = load_dashboard_corpus(
+        dashboard,
+        start_ms=1_000,
+        end_ms=5_000,
+        interval_ms=250,
+        variables={"cluster": ("marin",)},
+    )
+
+    assert {query.name for query in corpus.queries} == {"cluster_capacity_h", "cluster_capacity_t"}
+    assert {query.target for query in corpus.queries} == {"H", "T"}

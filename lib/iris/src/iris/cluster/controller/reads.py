@@ -25,6 +25,7 @@ from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy.sql.selectable import FromClause
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -51,6 +52,7 @@ from iris.cluster.controller.schema import (
     jobs_table,
     local_tasks,
     slices_table,
+    task_attempt_outputs_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -66,6 +68,7 @@ from iris.cluster.controller.task_state import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
@@ -287,7 +290,6 @@ def _apply_job_filters(
     *,
     depth_filter: int | None,
     parent_filter: str | None,
-    state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
@@ -368,7 +370,6 @@ def list_jobs(
         stmt,
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
@@ -384,7 +385,6 @@ def list_jobs(
         select(func.count()).select_from(jobs_table),
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
@@ -996,11 +996,24 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
     task_attempts_table.c.terminal_reason,
+    task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
 )
+
+ATTEMPTS_WITH_OUTPUT = task_attempts_table.outerjoin(
+    task_attempt_outputs_table,
+    (task_attempt_outputs_table.c.task_id == task_attempts_table.c.task_id)
+    & (task_attempt_outputs_table.c.attempt_id == task_attempts_table.c.attempt_id),
+)
+
+
+def attempt_select(from_clause: FromClause = ATTEMPTS_WITH_OUTPUT):
+    """Select attempt rows with their optional output archive metadata."""
+    return select(*ATTEMPT_COLS).select_from(from_clause)
+
 
 _BULK_GET_CHUNK_SIZE = 450
 
-_BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
+_BULK_GET_ATTEMPTS_STMT = attempt_select().where(
     tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
 )
 
@@ -1084,7 +1097,7 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
     if not task_ids:
         return {}
     rows = tx.execute(
-        select(*ATTEMPT_COLS)
+        attempt_select()
         .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
@@ -1757,6 +1770,7 @@ _EXECUTION_TIMEOUT_STMT = (
         job_config_table.c.timeout_ms.is_not(None),
         job_config_table.c.timeout_ms > 0,
         task_attempts_table.c.started_at_ms.is_not(None),
+        local_tasks.c.status_message.is_distinct_from(TASK_OUTPUT_FINALIZING_STATUS),
     )
 )
 

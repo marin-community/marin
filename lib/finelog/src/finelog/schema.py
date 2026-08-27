@@ -34,6 +34,8 @@ ColumnTypeValue = int
 # form the Rust server declares (entries/key/value field names, a non-null key
 # and a nullable value), so a batch built from it is accepted cast-free.
 MAP_STRING_STRING = pa.map_(pa.string(), pa.string())
+FLOAT64_LIST = pa.list_(pa.float64())
+INT64_LIST = pa.list_(pa.int64())
 
 _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_STRING: pa.string(),
@@ -44,6 +46,8 @@ _ARROW_TYPE_FOR: dict[ColumnTypeValue, pa.DataType] = {
     stats_pb2.COLUMN_TYPE_TIMESTAMP_MS: pa.timestamp("ms"),
     stats_pb2.COLUMN_TYPE_BYTES: pa.binary(),
     stats_pb2.COLUMN_TYPE_MAP: MAP_STRING_STRING,
+    stats_pb2.COLUMN_TYPE_FLOAT64_LIST: FLOAT64_LIST,
+    stats_pb2.COLUMN_TYPE_INT64_LIST: INT64_LIST,
 }
 
 
@@ -104,14 +108,23 @@ class Schema:
         columns: Columns in registered order. Order is preserved on disk so
             COPY projections produce stable column ordering across additive
             evolutions.
-        key_column: Explicit ordering key column name. Empty means the server
-            falls back to ``timestamp_ms``.
+        key_column: Column used for segment min/max metadata and as the default
+            compaction order. Empty means the server uses ``timestamp_ms``.
+        sort_columns: Physical compaction order before the server-assigned
+            ``seq`` tie-breaker. Empty retains the registered policy or uses
+            key-column ordering on first registration.
+        max_row_group_rows: Parquet row-group row ceiling. Zero retains the
+            registered policy or uses the server default on first registration.
+            Explicit values must be 16,384 through 1,048,576; the encoded-byte
+            target may close a group earlier.
     """
 
     columns: tuple[Column, ...]
     key_column: str = ""
     projections: tuple[CoveringProjection, ...] = ()
     grouped_extrema: tuple[GroupedExtrema, ...] = ()
+    sort_columns: tuple[str, ...] = ()
+    max_row_group_rows: int = 0
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -127,10 +140,11 @@ class Schema:
 # the implicit ``seq`` column on top.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        # The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to the
+        # sort's min/max statistics and needs a trigram index of its own.
+        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        # The log message body is substring-searched via contains()/LIKE, so it
-        # carries the trigram index (matches the server's log schema).
+        # Substring-searched via contains()/LIKE.
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
@@ -193,6 +207,8 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
         key_column=msg.key_column,
         projections=projections,
         grouped_extrema=grouped_extrema,
+        sort_columns=tuple(msg.sort_columns),
+        max_row_group_rows=msg.max_row_group_rows,
     )
 
 
@@ -203,7 +219,11 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
     neither declare nor receive them, so they are not part of the wire
     contract.
     """
-    msg = stats_pb2.Schema(key_column=schema.key_column)
+    msg = stats_pb2.Schema(
+        key_column=schema.key_column,
+        sort_columns=schema.sort_columns,
+        max_row_group_rows=schema.max_row_group_rows,
+    )
     for c in schema.columns:
         if c.name == IMPLICIT_SEQ_COLUMN:
             continue

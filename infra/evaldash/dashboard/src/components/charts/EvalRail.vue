@@ -1,17 +1,18 @@
 <script setup lang="ts">
 /**
  * The eval rail: one gauge per benchmark, in a fixed column order shared across the app.
- * Height is the score, the whisker is ±stderr, the warm caret is the fleet best, and a
- * benchmark the model never ran is an explicit dashed slot (not a missing dot). Failed and
- * infra runs render as a coloured status glyph. Two sizes: `sm` is the strip inside a
- * leaderboard row; `lg` is the axed panel on the model page, with a value label, a benchmark
- * name, and — when history is supplied — a score-over-runs sparkline under each gauge.
+ * Height is the score, the whisker spans the 95% interval, the warm caret is the fleet best, and a
+ * benchmark the model never ran is an explicit dashed slot (not a missing dot). A benchmark whose
+ * latest run was rejected — it failed, or graded too few of its items — renders as a coloured status
+ * glyph carrying the reason. Two sizes: `sm` is the strip inside a panel row; `lg` is the axed
+ * panel on the model page, with a value label, a benchmark name, and — when history is supplied — a
+ * score-over-runs sparkline under each gauge.
  */
 import { computed } from 'vue'
-import type { MatrixCell } from '@/types/api'
-import { formatScore, formatStderr } from '@/utils/formatting'
+import { RUN_STATUS, type MissingCell, type PanelCell } from '@/types/api'
+import { formatCoverage, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
-import { type BestCell } from '@/utils/matrix'
+import { type BestCell } from '@/utils/panel'
 import { tip, type TipContent } from '@/composables/tooltip'
 
 interface HistoryPoint {
@@ -25,7 +26,8 @@ const SPARK = { width: 90, height: 26, pad: 3 }
 const props = withDefaults(
   defineProps<{
     tasks: string[]
-    cells: Record<string, MatrixCell>
+    cells: Record<string, PanelCell>
+    missing?: Record<string, MissingCell>
     best: Record<string, BestCell>
     model: string
     size?: 'sm' | 'lg'
@@ -41,8 +43,8 @@ const W = computed(() => (props.size === 'lg' ? 46 : 15))
 
 interface Gauge {
   task: string
-  cell: MatrixCell | null
-  kind: 'score' | 'missing' | 'failed' | 'infra'
+  cell: PanelCell | null
+  kind: 'score' | 'missing' | 'failed' | 'artifact' | 'infra'
   fillH: number
   whiskerBottom: number
   whiskerHeight: number
@@ -55,37 +57,47 @@ interface Gauge {
 const gauges = computed<Gauge[]>(() =>
   props.tasks.map((task) => {
     const cell = props.cells[task] ?? null
+    const gap = props.missing?.[task] ?? null
     const best = props.best[task]
     const bestLine = best
       ? { label: 'fleet best', value: `${formatScore(best.value)}·${best.model}`, tone: 'best' as const }
       : { label: 'fleet best', value: '—', tone: 'muted' as const }
 
     if (!cell) {
-      return {
-        task, cell, kind: 'missing', fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false,
-        color: '', content: { title: task, lines: [{ label: props.model, value: 'not run', tone: 'muted' }, bestLine] },
+      if (!gap) {
+        return {
+          task, cell, kind: 'missing', fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false,
+          color: '', content: { title: task, lines: [{ label: props.model, value: 'not run', tone: 'muted' }, bestLine] },
+        }
       }
-    }
-    if (cell.value === null) {
-      const kind = cell.status === 'infra_failed' ? 'infra' : 'failed'
+      const kind =
+        gap.status === RUN_STATUS.INFRA_FAILED
+          ? 'infra'
+          : gap.status === RUN_STATUS.ARTIFACT_FAILED
+            ? 'artifact'
+            : 'failed'
       return {
         task, cell, kind, fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false, color: '',
-        content: { title: task, lines: [{ label: props.model, value: cell.status.replace('_', ' '), tone: 'muted' }] },
+        content: { title: task, lines: [{ label: props.model, value: gap.reason, tone: 'muted' }] },
       }
     }
     const v = Math.max(0, Math.min(1, cell.value))
     const fillH = Math.max(3, v * H.value)
-    const stderrHeight = cell.stderr ? cell.stderr * H.value : 0
+    const whiskerBottom = Math.max(0, cell.low) * H.value
+    const whiskerHeight = Math.max(0, Math.min(1, cell.high) - Math.max(0, cell.low)) * H.value
     const bestY = best ? Math.max(0, Math.min(1, best.value)) * H.value : 0
     const isBest = best?.model === props.model
+    const coverage = formatCoverage(cell.coverage)
     return {
-      task, cell, kind: 'score', fillH, whiskerBottom: fillH - stderrHeight, whiskerHeight: stderrHeight * 2, bestY, isBest,
+      task, cell, kind: 'score', fillH, whiskerBottom, whiskerHeight, bestY, isBest,
       color: scoreColor(v),
       content: {
         title: task,
         lines: [
-          { label: props.model, value: `${formatScore(cell.value)} ${formatStderr(cell.value, cell.stderr)}`.trim() },
-          { label: 'metric', value: cell.metric ?? '—', tone: 'muted' },
+          { label: props.model, value: formatScore(cell.value) },
+          { label: '95% interval', value: formatInterval(cell.low, cell.high) },
+          { label: 'metric', value: `${cell.metric} · ${cell.n_scored} items`, tone: 'muted' },
+          { label: 'coverage', value: coverage || 'not reported', tone: 'muted' },
           isBest
             ? { label: 'fleet best', value: 'this model', tone: 'best' }
             : bestLine,
@@ -123,7 +135,7 @@ function sparkLine(points: HistoryPoint[]): string {
         class="relative rounded"
         :style="{ width: `${W}px`, height: `${H}px` }"
         :class="[
-          g.kind === 'failed' ? 'bg-status-danger-bg' : g.kind === 'infra' ? 'bg-status-warning-bg' : 'bg-surface-sunken',
+          g.kind === 'failed' ? 'bg-status-danger-bg' : g.kind === 'infra' || g.kind === 'artifact' ? 'bg-status-warning-bg' : 'bg-surface-sunken',
           g.kind === 'score' ? 'cursor-pointer hover:outline hover:outline-2 hover:outline-offset-1 hover:outline-accent-border' : '',
           g.kind === 'missing' ? 'border border-dashed border-surface-border bg-transparent' : '',
         ]"
@@ -136,7 +148,7 @@ function sparkLine(points: HistoryPoint[]): string {
           class="absolute inset-x-0 bottom-0 rounded-b"
           :style="{ height: `${g.fillH}px`, background: g.color }"
         />
-        <!-- stderr whisker -->
+        <!-- 95% interval whisker -->
         <div
           v-if="g.kind === 'score' && g.whiskerHeight > 0"
           class="absolute left-1/2 -translate-x-1/2 w-[1.5px] opacity-50"
@@ -152,7 +164,7 @@ function sparkLine(points: HistoryPoint[]): string {
         />
         <!-- status glyph -->
         <div
-          v-if="g.kind === 'failed' || g.kind === 'infra'"
+          v-if="g.kind === 'failed' || g.kind === 'artifact' || g.kind === 'infra'"
           class="absolute inset-0 flex items-center justify-center font-mono font-bold"
           :class="g.kind === 'failed' ? 'text-status-danger' : 'text-status-warning'"
           :style="{ fontSize: size === 'lg' ? '14px' : '11px' }"
@@ -172,7 +184,7 @@ function sparkLine(points: HistoryPoint[]): string {
       <template v-if="size === 'lg'">
         <div class="font-mono text-lg font-semibold" :class="{ 'text-text-muted': g.kind !== 'score' }">
           <template v-if="g.kind === 'score' && g.cell">
-            {{ formatScore(g.cell.value) }}<span class="text-[11px] font-normal text-text-muted"> {{ formatStderr(g.cell.value, g.cell.stderr) }}</span>
+            {{ formatScore(g.cell.value) }}<span class="block text-[10px] font-normal text-text-muted">{{ formatInterval(g.cell.low, g.cell.high) }}</span>
           </template>
           <template v-else>—</template>
         </div>

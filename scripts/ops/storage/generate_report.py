@@ -9,18 +9,18 @@ orchestrator opens a tunnel to the named Iris cluster and submits each compute
 stage as an Iris job using the Python client (no subprocess into the iris CLI),
 then publishes the result locally.
 
-  1. Scan stage    — Iris coordinator + N worker replicas walk every GCS
+  1. Scan stage: Iris coordinator + N worker replicas walk every bucket
                      prefix and write consolidated parquet segments to
                      STAGING_DIR (delegates to ``run_distributed`` in
-                     ``scan_gcs.py``).
-  2. Dedup stage   — Iris coordinator job runs a Zephyr ``group_by`` to
+                     ``scan_fs.py``).
+  2. Dedup stage: Iris coordinator job runs a Zephyr ``group_by`` to
                      collapse the raw parquets into one row per (bucket, name)
                      under STAGING_DIR/deduped. Pipeline construction lives
                      in this file (see ``_dedup_stage``).
-  3. Report stage  — Iris coordinator job reads the deduped parquets, builds a
+  3. Report stage: Iris coordinator job reads the deduped parquets, builds a
                      DuckDB rollup + week-over-week diff (see ``render_report``)
                      and writes ``report.md`` back into STAGING_DIR.
-  4. Publish       — Local: fetch ``report.md``, optionally push a gist
+  4. Publish: fetch ``report.md`` locally, optionally push a gist
                      (``--gist public|secret|none``) and/or post a summary with
                      the biggest increases/decreases to Discord (``--discord``).
 
@@ -49,12 +49,12 @@ from pathlib import Path
 import click
 from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.render_report import (
@@ -69,7 +69,7 @@ from scripts.ops.storage.render_report import (
     snapshot_path,
     write_snapshot,
 )
-from scripts.ops.storage.scan_gcs import run_distributed
+from scripts.ops.storage.scan_fs import run_distributed
 
 DEFAULT_STAGING_DIR = "gs://marin-us-central2/tmp/storage-scan"
 # Stable location for week-over-week snapshots, independent of the (often
@@ -95,7 +95,6 @@ def _scan_stage(staging_dir: str, workers: int) -> None:
     run_distributed(
         buckets=MARIN_BUCKETS,
         num_workers=workers,
-        project=None,
         staging_dir=staging_dir,
     )
 

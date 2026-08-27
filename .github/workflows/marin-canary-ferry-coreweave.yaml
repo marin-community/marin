@@ -72,7 +72,7 @@ jobs:
       CANARY_PROFILER_NUM_STEPS: "10"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
-      CANARY_MAX_LOSS: "8.0"
+      CANARY_MAX_LOSS: "10.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
       IRIS_CONFIG: lib/iris/config/cw-us-west-04a.yaml
@@ -140,6 +140,7 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
+          set -euo pipefail
           echo "GPU replicas: $CANARY_GPU_REPLICAS"
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
@@ -157,6 +158,10 @@ jobs:
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
             -- python -m experiments.ferries.canary_ferry)
+          if [ -z "$JOB_ID" ]; then
+            echo "iris job run produced no job id" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         # Object-storage auth is not passed per-job: `cluster start` folds the

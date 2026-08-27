@@ -17,7 +17,7 @@
 //! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
@@ -32,6 +32,7 @@ use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::index_cache::IndexCache;
 
 /// A live namespace as one DataFusion table.
@@ -47,7 +48,13 @@ pub struct NamespaceProvider {
     /// segment's typed index bundle. Empty for the typed-empty
     /// (no-segments) case.
     segment_paths: Vec<String>,
+    segment_key_column: Option<String>,
+    segment_key_bounds: BTreeMap<String, (i64, i64)>,
+    partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
+    segment_partitions: BTreeMap<String, SegmentPartition>,
     index_cache: Arc<IndexCache>,
+    exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
+    segment_indexes_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -102,6 +109,65 @@ impl NamespaceProvider {
         &self.index_cache
     }
 
+    fn listing_table(schema: SchemaRef, segment_paths: &[String]) -> DFResult<Arc<ListingTable>> {
+        let urls: Vec<ListingTableUrl> = segment_paths
+            .iter()
+            .map(|path| ListingTableUrl::parse(format!("file://{path}")))
+            .collect::<DFResult<Vec<_>>>()?;
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+        let config = ListingTableConfig::new_with_multi_paths(urls)
+            .with_listing_options(options)
+            .with_schema(schema);
+        Ok(Arc::new(ListingTable::try_new(config)?))
+    }
+
+    fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
+        let ranges = crate::query::predicate::int_column_ranges(filters);
+        let key_range = self
+            .segment_key_column
+            .as_ref()
+            .and_then(|column| ranges.get(column).map(|range| (column, range)));
+        let exact_values = crate::query::exact_prune::values_by_column(filters);
+        let partition_candidates = self
+            .partition_policy
+            .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
+        let paths = self
+            .segment_paths
+            .iter()
+            .filter(|path| {
+                let key_matches = key_range.is_none_or(|(_, range)| {
+                    self.segment_key_bounds
+                        .get(path.as_str())
+                        .is_none_or(|&(minimum, maximum)| {
+                            minimum > maximum || range.overlaps(minimum, maximum)
+                        })
+                });
+                let partition_matches = partition_candidates.as_ref().is_none_or(|candidates| {
+                    let Some(policy) = self.partition_policy else {
+                        return true;
+                    };
+                    self.segment_partitions
+                        .get(path.as_str())
+                        .is_none_or(|partition| {
+                            !policy.is_current_partition(partition)
+                                || candidates.contains(partition)
+                        })
+                });
+                key_matches && partition_matches
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if paths.len() != self.segment_paths.len() {
+            tracing::debug!(
+                segments_total = self.segment_paths.len(),
+                segments_selected = paths.len(),
+                "scoped segment planning to key range and physical partitions"
+            );
+        }
+        paths
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -121,26 +187,71 @@ impl NamespaceProvider {
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
+                segment_key_column: None,
+                segment_key_bounds: BTreeMap::new(),
+                partition_policy: None,
+                segment_partitions: BTreeMap::new(),
                 index_cache,
+                exact_postings_policy: None,
+                segment_indexes_enabled: true,
             });
         }
 
-        let urls: Vec<ListingTableUrl> = segment_paths
-            .iter()
-            .map(|p| ListingTableUrl::parse(format!("file://{p}")))
-            .collect::<DFResult<Vec<_>>>()?;
-        let opts =
-            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
-        let cfg = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(opts)
-            .with_schema(Arc::clone(&schema));
-        let listing = ListingTable::try_new(cfg)?;
+        let listing = Self::listing_table(Arc::clone(&schema), segment_paths)?;
         Ok(NamespaceProvider {
             schema,
-            inner: Inner::Listing(Arc::new(listing)),
+            inner: Inner::Listing(listing),
             segment_paths: segment_paths.to_vec(),
+            segment_key_column: None,
+            segment_key_bounds: BTreeMap::new(),
+            partition_policy: None,
+            segment_partitions: BTreeMap::new(),
             index_cache,
+            exact_postings_policy: None,
+            segment_indexes_enabled: true,
         })
+    }
+
+    /// Attach exact Int64 key bounds captured with the segment path snapshot.
+    /// Paths missing from `bounds` remain queryable for scan safety.
+    pub fn with_segment_key_bounds(
+        mut self,
+        key_column: impl Into<String>,
+        bounds: BTreeMap<String, (i64, i64)>,
+    ) -> Self {
+        self.segment_key_column = Some(key_column.into());
+        self.segment_key_bounds = bounds;
+        self
+    }
+
+    /// Attach hidden physical partitions captured with the path snapshot.
+    pub fn with_segment_partitions(
+        mut self,
+        policy: Option<&'static dyn PhysicalPartitionPolicy>,
+        partitions: BTreeMap<String, SegmentPartition>,
+    ) -> Self {
+        self.partition_policy = policy;
+        self.segment_partitions = partitions;
+        self
+    }
+
+    /// Supply the registered values for which segment indexes may contain exact postings.
+    pub fn with_exact_postings_policy(mut self, mut policy: BTreeMap<String, Vec<String>>) -> Self {
+        for values in policy.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+        self.exact_postings_policy = Some(policy);
+        self
+    }
+
+    /// Enable or disable every derived segment index for this provider.
+    ///
+    /// Source Parquet remains authoritative. A disabled managed policy ignores
+    /// any derived files that an older schema left beside its segments.
+    pub fn with_segment_indexes_enabled(mut self, enabled: bool) -> Self {
+        self.segment_indexes_enabled = enabled;
+        self
     }
 }
 
@@ -176,12 +287,35 @@ impl TableProvider for NamespaceProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         match &self.inner {
             Inner::Listing(t) => {
+                let segment_paths = self.segment_paths_for_filters(filters);
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
-                let plan = t.scan(state, projection, filters, limit).await?;
+                let plan = if segment_paths.len() == self.segment_paths.len() {
+                    t.scan(state, projection, filters, limit).await?
+                } else if segment_paths.is_empty() {
+                    MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                } else {
+                    Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
+                        .scan(state, projection, filters, limit)
+                        .await?
+                };
+                if !self.segment_indexes_enabled {
+                    return Ok(plan);
+                }
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
-                let exact = crate::query::exact_prune::values_by_column(filters);
+                let mut exact = crate::query::exact_prune::values_by_column(filters);
+                if let Some(policy) = &self.exact_postings_policy {
+                    exact.retain(|column, values| {
+                        policy.get(column).is_some_and(|indexed| {
+                            values
+                                .iter()
+                                .all(|value| indexed.binary_search(value).is_ok())
+                        })
+                    });
+                }
                 if needles.is_empty() && exact.is_empty() {
                     return Ok(plan);
                 }
@@ -211,7 +345,6 @@ impl TableProvider for NamespaceProvider {
                 );
                 // Bundle + footer reads are blocking, so run pruning off the
                 // async worker.
-                let segment_paths = self.segment_paths.clone();
                 let index_cache = Arc::clone(&self.index_cache);
                 tokio::task::spawn_blocking(move || {
                     let plan = crate::query::trigram_prune::apply_with_needles(
@@ -243,6 +376,8 @@ impl TableProvider for NamespaceProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::os::unix::fs::FileExt;
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
@@ -251,12 +386,16 @@ mod tests {
     use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::datasource::physical_plan::FileScanConfig;
     use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::execution::FunctionRegistry;
+    use datafusion::logical_expr::{col, expr::ScalarFunction, lit};
     use datafusion::prelude::SessionContext;
 
     use super::*;
+    use crate::levanter_metrics_policy::LEVANTER_RUN_PARTITION_POLICY;
+    use crate::partition_policy::PhysicalPartitionPolicy;
     use crate::store::segment::write_segment_to_dir;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
@@ -290,6 +429,53 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn exact_run_id_prunes_current_partitions_but_keeps_transition_files() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("run_id", DataType::Utf8, false),
+        ]));
+        let paths = vec![
+            "/tmp/current-run-a.parquet".to_string(),
+            "/tmp/current-run-b.parquet".to_string(),
+            "/tmp/unpartitioned.parquet".to_string(),
+            "/tmp/old-spec.parquet".to_string(),
+        ];
+        let partition_for = |run_id: &str| {
+            LEVANTER_RUN_PARTITION_POLICY
+                .partitions_for_exact_values(&HashMap::from([(
+                    "run_id".to_string(),
+                    vec![run_id.to_string()],
+                )]))
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        let mut old_spec = partition_for("run-a");
+        old_spec.spec_id = 0;
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_partitions(
+            Some(&LEVANTER_RUN_PARTITION_POLICY),
+            BTreeMap::from([
+                (paths[0].clone(), partition_for("run-a")),
+                (paths[1].clone(), partition_for("run-b")),
+                (paths[3].clone(), old_spec),
+            ]),
+        );
+
+        assert_eq!(
+            provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
+            vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
+        );
+        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
     }
 
     #[tokio::test]
@@ -448,6 +634,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn key_range_excludes_disjoint_segments_before_projection_planning() {
+        let dir = tempdir("key_range_projection");
+        let old = worker_batch(1, vec!["w-2"], vec![10]);
+        let recent = worker_batch(2, vec!["w-2"], vec![110]);
+        let unknown = worker_batch(3, vec!["w-2"], vec![120]);
+        let (old_path, _) = write_segment_to_dir(&dir, 1, 1, &old).unwrap();
+        let (recent_path, _) = write_segment_to_dir(&dir, 1, 2, &recent).unwrap();
+        let (unknown_path, _) = write_segment_to_dir(&dir, 1, 3, &unknown).unwrap();
+        let index_config = crate::store::segment_index::SegmentIndexConfig::from_policies(
+            Vec::<String>::new(),
+            &[crate::store::exact::ExactIndexConfig {
+                column: "worker_id".to_string(),
+                exact_values: vec!["w-2".to_string()],
+                value_counts: false,
+            }],
+            &[crate::store::schema::CoveringProjection::new(
+                "workers",
+                "worker_id",
+                ["w-2"],
+                ["seq", "worker_id", "mem_bytes"],
+            )],
+            None,
+        );
+        for (path, batch) in [
+            (&old_path, &old),
+            (&recent_path, &recent),
+            (&unknown_path, &unknown),
+        ] {
+            crate::store::segment_index::write_segment_index(
+                path,
+                std::slice::from_ref(batch),
+                &index_config,
+            )
+            .unwrap();
+        }
+        let paths = [&old_path, &recent_path, &unknown_path]
+            .map(|path| path.to_string_lossy().into_owned());
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_key_bounds(
+            "mem_bytes",
+            BTreeMap::from([(paths[0].clone(), (10, 10)), (paths[1].clone(), (110, 110))]),
+        );
+        let filters = [
+            col("worker_id").eq(lit("w-2")),
+            col("mem_bytes").gt_eq(lit(100_i64)),
+            col("mem_bytes").lt(lit(200_i64)),
+        ];
+        let ctx = SessionContext::new();
+        let plan = provider
+            .scan(&ctx.state(), None, &filters, None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let locations: Vec<&str> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        let old_projection = crate::store::exact::named_projection_path(&old_path, "workers");
+        let old_projection = old_projection.file_name().unwrap().to_str().unwrap();
+        assert_eq!(locations.len(), 2);
+        assert!(locations
+            .iter()
+            .all(|location| location.ends_with(".fidx.workers.parquet")));
+        assert!(locations
+            .iter()
+            .all(|location| !location.ends_with(old_projection)));
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql(
+                "SELECT mem_bytes FROM workers WHERE worker_id = 'w-2' \
+                 AND mem_bytes >= 100 AND mem_bytes < 200 ORDER BY mem_bytes",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![110, 120]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn missing_projection_falls_back_only_for_that_segment() {
         let dir = tempdir("exact_projection_fallback");
         let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
@@ -533,6 +830,182 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_column_strings(&batches), vec!["w-2", "w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn uncovered_exact_value_does_not_read_postings_payload() {
+        let dir = tempdir("uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap();
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "header coverage should reject the predicate before reading the corrupt payload"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn registered_policy_skips_uncovered_legacy_postings_payload() {
+        let dir = tempdir("legacy_uncovered_exact_value");
+        let batch = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+
+        let bundle_path = crate::store::index_bundle::bundle_path(&path);
+        let header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let postings = header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        let payload =
+            crate::store::index_bundle::read_section(&bundle_path, &header, postings.id.as_str())
+                .unwrap();
+        let legacy_bundle = crate::store::index_bundle::serialize(
+            &header.binding,
+            &[crate::store::index_bundle::SectionInput {
+                id: postings.id.clone(),
+                kind: postings.kind,
+                method_version: 1,
+                exactness: postings.exactness,
+                coverage: Vec::new(),
+                payload,
+            }],
+        )
+        .unwrap();
+        std::fs::write(&bundle_path, legacy_bundle).unwrap();
+        let legacy_header = crate::store::index_bundle::read_header(&bundle_path).unwrap();
+        let legacy_postings = legacy_header
+            .sections
+            .iter()
+            .find(|section| section.kind == crate::store::index_bundle::SectionKind::ExactPostings)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&bundle_path)
+            .unwrap()
+            .write_all_at(&[0xff], legacy_postings.offset)
+            .unwrap();
+
+        let cache = crate::query::index_cache::test_index_cache();
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &[path.to_string_lossy().into_owned()],
+            Arc::clone(&cache),
+        )
+        .unwrap()
+        .with_exact_postings_policy(BTreeMap::from([(
+            "worker_id".to_string(),
+            vec!["w-2".to_string()],
+        )]));
+        let plan = provider
+            .scan(
+                &SessionContext::new().state(),
+                None,
+                &[col("worker_id").eq(lit("w-missing"))],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cache.corruption_counts().sections,
+            0,
+            "the registered policy should reject the predicate before reading legacy postings"
+        );
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -715,19 +1188,29 @@ mod tests {
         ]))
     }
 
-    /// Write one segment whose `data` column is a full span of `filler` followed
-    /// by `rg1`, then build its trigram section — so source span 0 lacks the
-    /// needle and span 1 carries it. Returns the segment path.
-    fn write_two_span_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
-        let n0 = SIDECAR_SPAN_ROWS;
-        let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
-        data.extend(rg1.iter().map(|s| s.to_string()));
-        let n = data.len() as i64;
+    /// Write one segment whose `column` ("key" or "data") is a full span of
+    /// `filler` followed by `span1`, so source span 0 lacks the needle and span 1
+    /// carries it. The other string column is constant, which makes any prune
+    /// attributable to `column`. Returns the segment path.
+    fn write_two_span_log_segment(
+        dir: &std::path::Path,
+        column: &str,
+        filler: &str,
+        span1: &[&str],
+    ) -> String {
+        let mut varying: Vec<String> = (0..SIDECAR_SPAN_ROWS).map(|_| filler.to_string()).collect();
+        varying.extend(span1.iter().map(|s| s.to_string()));
+        let n = varying.len();
+        let (keys, data) = match column {
+            "key" => (varying, vec!["idle heartbeat ok".to_string(); n]),
+            "data" => (vec!["/system/controller".to_string(); n], varying),
+            other => panic!("unsupported varying column {other:?}"),
+        };
         let batch = RecordBatch::try_new(
             log_arrow(),
             vec![
-                Arc::new(Int64Array::from_iter_values(1..=n)),
-                Arc::new(StringArray::from(vec!["/system/controller"; data.len()])),
+                Arc::new(Int64Array::from_iter_values(1..=n as i64)),
+                Arc::new(StringArray::from(keys)),
                 Arc::new(StringArray::from(data)),
             ],
         )
@@ -737,7 +1220,7 @@ mod tests {
             &path,
             &[batch],
             &crate::store::segment_index::SegmentIndexConfig::from_policies(
-                ["data"],
+                ["key", "data"],
                 &[],
                 &[],
                 Some("key".to_string()),
@@ -747,13 +1230,54 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// Assert the scan injected a trigram access plan selecting exactly
+    /// `span1_rows`. These segments fit one byte-sized row group, so the prune
+    /// lands as a row selection inside it, not a skipped row group.
+    fn assert_prunes_to_span1(
+        plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        span1_rows: usize,
+    ) {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
+
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached to the partitioned file");
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    span1_rows,
+                    "only the needle's span may be selected"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked, 1,
+            "exactly one partitioned file with an access plan"
+        );
+    }
+
     /// Whether any expression in `plan` casts the `data` column. Walks the tree
     /// rather than the rendered text, which qualifies column names inconsistently
     /// across plan stages and would make a substring check pass vacuously.
     fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
-        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-        use datafusion::logical_expr::Expr;
-
         let mut found = false;
         plan.apply(|node| {
             for e in node.expressions() {
@@ -780,7 +1304,8 @@ mod tests {
         // planner cast the whole column ahead of the predicate — materializing
         // every value precisely to throw most of them away.
         let dir = tempdir("no_cast");
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["needle here"; 4]);
         let provider = NamespaceProvider::build(
             log_arrow(),
             std::slice::from_ref(&path),
@@ -835,12 +1360,6 @@ mod tests {
 
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion::logical_expr::{col, lit};
-        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
-
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
         let needle = "Bootstrap completed for TPU-xyz";
@@ -851,7 +1370,7 @@ mod tests {
             "another Bootstrap completed for TPU-xyz here",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
@@ -889,10 +1408,7 @@ mod tests {
         // 2) Evidence of pruning: the injected access plan skips row group 0 and
         //    keeps row group 1.
         let state = ctx.state();
-        let udf = {
-            use datafusion::execution::FunctionRegistry;
-            ctx.udf("contains").unwrap()
-        };
+        let udf = ctx.udf("contains").unwrap();
         let filter =
             Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
         let probe = NamespaceProvider::build(
@@ -902,41 +1418,47 @@ mod tests {
         )
         .unwrap();
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
-        let exec = plan
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn disabled_segment_indexes_ignore_existing_bundle() {
+        let dir = tempdir("disabled_segment_indexes");
+        let needle = "Bootstrap completed for TPU-xyz";
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["Bootstrap completed for TPU-xyz"],
+        );
+        let ctx = crate::query::make_ctx();
+        let udf = ctx.udf("contains").unwrap();
+        let filter =
+            Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col("data"), lit(needle)]));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .with_segment_indexes_enabled(false)
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        let config = plan
             .as_any()
             .downcast_ref::<DataSourceExec>()
-            .expect("scan returns a parquet DataSourceExec");
-        let cfg = exec
+            .expect("scan returns a parquet DataSourceExec")
             .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached to the partitioned file");
-                // The needle is confined to the second span. These narrow rows
-                // fit one byte-sized row group, so the prune expresses that as a
-                // row selection inside it rather than a skipped row group.
-                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
-                    panic!("expected one row group carrying a row selection: {ap:?}");
-                };
-                assert_eq!(
-                    selection.row_count(),
-                    rg1_rows,
-                    "only the needle's span may be selected"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(
-            checked, 1,
-            "exactly one partitioned file with an access plan"
-        );
+        assert!(config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .all(|file| file.extensions.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -946,10 +1468,6 @@ mod tests {
         // expression survives the simplifier as `Expr::Like` and the prune
         // extracts the framed substring. Asserts both the matching rows and the
         // injected skip of the needle-free row group 0.
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
-
         let dir = tempdir("like_prune");
         let needle = "Bootstrap completed for TPU-xyz";
         let rg1 = vec![
@@ -958,7 +1476,7 @@ mod tests {
             "idle heartbeat ok",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(
@@ -1006,37 +1524,118 @@ mod tests {
         )
         .await
         .unwrap();
-        let cfg = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("a parquet DataSourceExec")
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached for the LIKE query");
-                // The needle is confined to the second span. These narrow rows
-                // fit one byte-sized row group, so the prune expresses that as a
-                // row selection inside it rather than a skipped row group.
-                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
-                    panic!("expected one row group carrying a row selection: {ap:?}");
-                };
-                assert_eq!(
-                    selection.row_count(),
-                    rg1_rows,
-                    "only the needle's span may be selected"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 1);
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn regex_query_returns_matches_and_prunes_row_groups() {
+        let dir = tempdir("regex_prune");
+        let pattern = r"Bootstrap.*TPU-[a-z]+";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "Bootstrap stopped for GPU-xyz",
+        ];
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
+
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE regexp_matches(data, '{pattern}') ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()]
+        );
+
+        let udf = ctx.udf("regexp_matches").unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit(pattern)],
+        ));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn key_substring_query_prunes_row_groups() {
+        // The job sits mid-key, so the `(key, seq)` sort and its min/max
+        // statistics cannot bound it. Only the key's trigram section prunes.
+        let dir = tempdir("key_substring_prune");
+        let filler_key = "/power/other-run-coord/other-run/0:0";
+        let span1_key = "/power/hs-final2-adoptedbatch-coord/grug-train/3:0";
+        let span1_rows = 5;
+        let path =
+            write_two_span_log_segment(&dir, "key", filler_key, &vec![span1_key; span1_rows]);
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(
+                NamespaceProvider::build(
+                    log_arrow(),
+                    std::slice::from_ref(&path),
+                    crate::query::index_cache::test_index_cache(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql("SELECT key FROM \"log\" WHERE key LIKE '%final2-adoptedbatch%' ORDER BY seq")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec![span1_key.to_string(); span1_rows],
+            "the key substring query must return exactly the matching job's rows"
+        );
+
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(
+            &ctx.state(),
+            None,
+            std::slice::from_ref(&col("key").like(lit("%final2-adoptedbatch%"))),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, span1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1044,11 +1643,9 @@ mod tests {
     async fn non_contains_query_leaves_plan_unchanged() {
         // A query with no contains() filter must not be rewritten — the hot path
         // pays nothing. The returned plan is the untouched ListingTable scan.
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion::logical_expr::{col, lit};
-
         let dir = tempdir("no_contains");
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["one match here"]);
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(
             log_arrow(),

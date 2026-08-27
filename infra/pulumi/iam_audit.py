@@ -31,6 +31,7 @@ from iac.gcp.iam_config import (
     write_iam_config,
 )
 from iac.gcp.iam_kms import PROJECT, crypto_key_id, decrypt_member, encrypt_email
+from iac.gcp.iam_targets import global_iam_args
 
 _NONDETERMINISM_WARNING = (
     "NOTE: GCP KMS encryption is non-deterministic. Re-encrypting changes the "
@@ -120,23 +121,27 @@ def _audit_principals(path: Path) -> tuple[AuditPrincipal, ...]:
 
 def _iter_grants(config: GcpIamConfig) -> Iterator[tuple[str, str, GcpRoleGrant]]:
     """Yield (container, resource, grant) for every declared role grant."""
-    for grant in config.project_grants:
+    args = global_iam_args(PROJECT, config)
+    for grant in args.project_grants:
         yield "project_grants", PROJECT, grant
     key_id = crypto_key_id(config)
-    for grant in config.kms_grants:
+    for grant in args.kms_grants:
         yield "kms_grants", key_id, grant
-    for secret in config.secrets:
+    for secret in args.secrets:
         for grant in secret.grants:
             yield "secrets", secret.secret, grant
-    for bucket in config.buckets:
+    for bucket in args.buckets:
         for grant in bucket.grants:
             yield "buckets", bucket.bucket, grant
-    for repo in config.artifact_repositories:
+    for repo in args.artifact_repositories:
         for grant in repo.grants:
             yield "artifact_repositories", f"{repo.location}/{repo.repository}", grant
-    for account in config.service_accounts:
+    for account in args.service_accounts:
         for grant in account.grants:
             yield "service_accounts", account.email, grant
+    for service in args.cloud_run_iap:
+        for grant in service.iap_grants:
+            yield "cloud_run_iap", f"{service.location}/{service.service}", grant
 
 
 def decrypt(out_path: Path) -> None:

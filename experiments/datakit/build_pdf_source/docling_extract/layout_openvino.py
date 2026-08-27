@@ -44,7 +44,7 @@ from docling.models.inference_engines.object_detection.base import (
 from docling.models.stages.layout.layout_object_detection_model import (
     LayoutObjectDetectionModel,
 )
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.datakit.build_pdf_source.docling_extract.model_spec import LAYOUT_IMAGE_SIZE  # noqa: F401
 

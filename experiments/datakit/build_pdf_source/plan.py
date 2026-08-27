@@ -27,7 +27,7 @@ import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.datakit.build_pdf_source.common import (

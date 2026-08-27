@@ -11,13 +11,19 @@ network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 
 import pytest
 from iris.cluster.node_agent.kubernetes import (
+    KubeletScrapeError,
     NodeStatsScraper,
+    TaskStatsCollector,
+    kubelet_resource_metrics,
     parse_dcgm,
+    parse_kubelet_resource_metrics,
     parse_node_exporter,
     parse_prometheus,
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
+from iris.test_util import FakeStatsTable
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
@@ -85,6 +91,102 @@ def test_parse_prometheus_handles_labels_values_and_comments():
 
 def test_parse_prometheus_skips_non_finite():
     assert list(parse_prometheus("g 1\nh NaN\ni +Inf\n")) == [("g", {}, 1.0)]
+
+
+def test_parse_kubelet_resource_metrics_selects_container_resources():
+    resources = parse_kubelet_resource_metrics(
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 12.5 123\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824 123\n'
+    )
+
+    assert resources[("pod-a", "task")].cpu_seconds == 12.5
+    assert resources[("pod-a", "task")].memory_bytes == 1024**3
+
+
+def test_task_stats_collector_writes_cpu_memory_and_peak():
+    k8s = InMemoryK8sService(namespace="iris")
+    k8s.seed_resource(
+        K8sResource.PODS,
+        "pod-a",
+        {
+            "metadata": {
+                "name": "pod-a",
+                "labels": {
+                    "iris.managed": "true",
+                    "iris.runtime": "iris-kubernetes",
+                    "iris.attempt_id": "3",
+                },
+                "annotations": {"iris.task_id": "/long/job/path/workers/0"},
+            },
+            "spec": {"nodeName": "node-a"},
+            "status": {"phase": "Running"},
+        },
+    )
+    table = FakeStatsTable()
+    sampled_at = iter((100.0, 110.0))
+    kubelet_text = [
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 10\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824\n'
+    ]
+    collector = TaskStatsCollector(
+        k8s,
+        "node-a",
+        table,
+        clock=lambda: next(sampled_at),
+        read_kubelet_metrics=lambda: kubelet_text[0],
+    )
+
+    collector.collect_once()
+    first = table.writes[-1][0]
+    assert first.task_id == "/long/job/path/workers/0"
+    assert first.attempt_id == 3
+    assert first.cpu_millicores == 0
+    assert first.memory_mb == 1024
+    assert first.memory_peak_mb == 1024
+
+    kubelet_text[0] = (
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 12\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 536870912\n'
+    )
+    collector.collect_once()
+    second = table.writes[-1][0]
+    assert second.cpu_millicores == 200
+    assert second.memory_mb == 512
+    assert second.memory_peak_mb == 1024
+
+
+def test_kubelet_resource_metrics_converts_transport_failure(monkeypatch):
+    """A socket timeout must become KubeletScrapeError, which the collector handles."""
+
+    def timing_out(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(
+        "iris.cluster.node_agent.kubernetes.SERVICE_ACCOUNT_TOKEN_PATH",
+        _FakeTokenPath(),
+    )
+    monkeypatch.setattr("urllib.request.urlopen", timing_out)
+
+    with pytest.raises(KubeletScrapeError, match="scrape failed"):
+        kubelet_resource_metrics()
+
+
+class _FakeTokenPath:
+    def read_text(self) -> str:
+        return "token\n"
+
+
+def test_task_stats_collector_skips_cycle_when_kubelet_scrape_fails():
+    k8s = InMemoryK8sService(namespace="iris")
+    table = FakeStatsTable()
+
+    def unavailable() -> str:
+        raise KubeletScrapeError("connection refused")
+
+    collector = TaskStatsCollector(k8s, "node-a", table, read_kubelet_metrics=unavailable)
+    collector.collect_once()
+
+    assert table.writes == []
 
 
 def test_parse_node_exporter_extracts_host_readings():
@@ -173,6 +275,93 @@ def test_scraper_discovers_dcgm_pods_and_merges_gpu_readings():
     assert metrics.gpu_temp_c == pytest.approx(30.0)
     assert metrics.gpu_power_limit_w == pytest.approx(1400.0)
     assert metrics.mem_total_bytes == 2162529861632
+
+
+def _seed_dcgm_pod(k8s: InMemoryK8sService, name: str, node: str, pod_ip: str | None) -> None:
+    """Seed one dcgm-exporter pod, optionally still waiting on its address."""
+    k8s.seed_namespaced_pod(
+        "cw-exporters",
+        name,
+        {
+            "metadata": {"name": name, "labels": {"app.kubernetes.io/name": "dcgm-exporter"}},
+            "spec": {"nodeName": node},
+            "status": {"podIP": pod_ip} if pod_ip else {},
+        },
+    )
+
+
+_TARGETS = [NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="g83d142")]
+
+
+def test_scraper_only_scrapes_the_exporter_on_its_own_node():
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-own", "g83d142", "10.9.9.9")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-other", "g99", "10.7.7.7")
+    fetched: list[str] = []
+
+    def record(url: str) -> str | None:
+        fetched.append(url)
+        return {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}.get(url)
+
+    scraper = NodeStatsScraper(k8s, fetch=record)
+    metrics = scraper.scrape([NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="g83d142")])["g83d142"]
+
+    assert metrics.gpu_count == 2
+    assert "http://10.7.7.7:9400/metrics" not in fetched
+    # The node filter must reach the apiserver: listing the namespace and discarding
+    # the other nodes' exporters locally is what overloaded the control plane.
+    assert k8s.namespaced_pod_list_selectors == [
+        ("cw-exporters", {"app.kubernetes.io/name": "dcgm-exporter"}, "spec.nodeName=g83d142")
+    ]
+
+
+def test_scraper_rediscovers_an_exporter_that_had_no_address_yet():
+    """A scheduled-but-not-running exporter must not be cached; nothing would evict it."""
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", None)
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+
+    assert scraper.scrape(_TARGETS)["g83d142"].dcgm_available is False
+
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers["http://10.9.9.9:9400/metrics"] = DCGM_TEXT
+
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+
+def test_scraper_rediscovers_when_the_cached_address_stops_serving_this_node():
+    """An address that answers without this node's readings must not stay cached."""
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+    # The exporter restarts at a new address and something else now answers on the old
+    # one. The stale entry can only be evicted by noticing the readings stopped.
+    answers["http://10.9.9.9:9400/metrics"] = 'DCGM_FI_DEV_FB_USED{gpu="0"} not-a-number\n'
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.10")
+    answers["http://10.9.9.10:9400/metrics"] = DCGM_TEXT
+
+    scraper.scrape(_TARGETS)
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+
+def test_scraper_caches_dcgm_discovery_until_a_scrape_fails():
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+    targets = _TARGETS
+
+    # The exporter stops answering at its cached address: that pass drops the entry,
+    # and the next one rediscovers.
+    del answers["http://10.9.9.9:9400/metrics"]
+    scraper.scrape(targets)
+    scraper.scrape(targets)
+    assert k8s.namespaced_pod_calls.count(("list", "cw-exporters")) == 2
 
 
 def test_scraper_missing_exporter_yields_empty_metrics():

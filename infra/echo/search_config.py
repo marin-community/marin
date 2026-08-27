@@ -11,14 +11,16 @@ from typing import Literal
 
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-INFERENCE_THREADS = 1
-INDEXED_REPOSITORY = "marin-community/marin"
-INDEXED_BRANCH = "main"
+INFERENCE_THREADS = 4
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
+SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
 SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
 SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
+SEARCH_FEEDBACK_MIN_GRADE = 0
+SEARCH_FEEDBACK_MAX_GRADE = 10
+SERVER_TIMING_HEADER = "Server-Timing"
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",
@@ -45,12 +47,20 @@ RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2-int8"
 RERANK_MODEL_SOURCE = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANK_MODEL_FILE = "onnx/model_int8.onnx"
 RERANK_MIN_RESULTS_PER_DOMAIN = 20
-RERANK_MAX_CANDIDATES = 20
-RERANK_BATCH_SIZE = 4
+RERANK_MAX_CANDIDATES = 24
+RERANK_BATCH_SIZE = 1
 RERANK_BASE_WEIGHT = 0.2
 RERANK_MODEL_WEIGHT = 0.8
-MIN_RERANK_SCORE = -2.0
-PROSE_FILE_SUFFIXES = (".md", ".rst")
+MIN_RERANK_SCORE_BY_DOMAIN: Mapping[SearchDomain, float] = MappingProxyType(
+    {
+        "wiki": -1.0,
+        "file": -2.0,
+        "discord": -2.0,
+        "pr": -2.0,
+        "issue": -2.0,
+    }
+)
+PROSE_FILE_SUFFIXES = (".md", ".mdx", ".rst")
 IDENTIFIER_QUERY_PATTERN = re.compile(r"[/_.:]|(?:[a-z][A-Z])|(?:^|\s)--?[a-z0-9]")
 QUERY_WORD_PATTERN = re.compile(r"[a-z0-9]+")
 LOG_QUERY_TERMS = frozenset({"log", "logging", "logs"})
@@ -63,6 +73,25 @@ PROSE_QUERY_MIN_WORDS = 3
 
 
 @dataclass(frozen=True)
+class RepositoryTarget:
+    repository: str
+    branch: str
+
+
+REPOSITORY_TARGETS = (
+    RepositoryTarget("marin-community/marin", "main"),
+    RepositoryTarget("marin-community/vllm", "main"),
+    RepositoryTarget("marin-community/tpu-inference", "main"),
+    RepositoryTarget("marin-community/evalchemy", "main"),
+    RepositoryTarget("marin-community/harbor", "main"),
+    RepositoryTarget("marin-community/MarinSkyRL", "main"),
+)
+ALL_REPOSITORIES = "all"
+# Path-only file IDs created before repository federation always referred to Marin.
+LEGACY_REPOSITORY_TARGET = REPOSITORY_TARGETS[0]
+
+
+@dataclass(frozen=True)
 class SearchWeights:
     semantic: float
     lexical: float
@@ -70,6 +99,10 @@ class SearchWeights:
 
 QUERY_SEARCH_WEIGHTS = SearchWeights(semantic=2.0, lexical=1.0)
 IDENTIFIER_SEARCH_WEIGHTS = SearchWeights(semantic=1.0, lexical=2.0)
+
+
+def normalize_query(query: str) -> str:
+    return " ".join(query.casefold().split())
 
 
 def candidate_limit(limit: int) -> int:

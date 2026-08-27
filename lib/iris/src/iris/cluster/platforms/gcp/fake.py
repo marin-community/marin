@@ -40,6 +40,7 @@ from iris.cluster.platforms.types import (
     InfraError,
     Labels,
     QuotaExhaustedError,
+    SliceHandle,
     find_free_port,
 )
 from iris.cluster.runtime.process import ProcessRuntime
@@ -519,6 +520,11 @@ class InMemoryGcpService:
                 default_task_image="process-runtime-unused",
                 poll_interval=Duration.from_seconds(0.1),
                 storage_prefix=self._storage_prefix,
+                task_outputs=(
+                    worker_config.task_outputs.model_copy(deep=True)
+                    if worker_config is not None and worker_config.task_outputs is not None
+                    else None
+                ),
                 auth_token=worker_config.auth_token if worker_config is not None else "",
             )
             worker_threads = self._threads.create_child(f"worker-{worker_id}")
@@ -551,9 +557,9 @@ class InMemoryGcpService:
             _workers=workers,
         )
 
-    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[LocalSliceHandle]:
+    def get_local_slices(self, labels: dict[str, str] | None = None) -> list[SliceHandle]:
         """Return tracked local slices, optionally filtered by labels."""
-        results = list(self._local_slices.values())
+        results: list[SliceHandle] = list(self._local_slices.values())
         if labels:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results

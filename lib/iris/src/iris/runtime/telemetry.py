@@ -5,7 +5,8 @@
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 from rigging import telemetry
 
@@ -19,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 _RESERVED_RESOURCE_ATTRIBUTES = frozenset(
     {
-        "root_run_uid",
         "execution_uid",
         "job_id",
         "task_id",
@@ -35,6 +35,15 @@ _RESERVED_RESOURCE_ATTRIBUTES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class FinelogRuntime:
+    """Resolved Finelog endpoint and canonical identity for an Iris process."""
+
+    endpoint: str
+    resolver: Callable[[str], str]
+    attributes: dict[str, str]
+
+
 def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
     identity = {
         "job_id": str(job_info.job_id),
@@ -43,8 +52,6 @@ def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
     }
     if job_info.worker_id:
         identity["worker"] = job_info.worker_id
-    if job_info.worker_region:
-        identity["region"] = job_info.worker_region
     env_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         if isinstance(process_index, bool) or process_index < 0:
@@ -64,35 +71,34 @@ def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
 
 
 def _execution_uid(job_info: JobInfo) -> str:
+    if job_info.attempt_uid:
+        return f"iris:{job_info.attempt_uid}"
     return f"iris:{job_info.task_id}:attempt:{job_info.attempt_id}"
 
 
 def configure(
     service: str,
     *,
-    root_run_uid: str | None = None,
+    run_id: str | None = None,
     execution_uid: str | None = None,
     process_index: int | None = None,
     attributes: Mapping[str, str] | None = None,
 ) -> None:
     """Configure telemetry once for an owning application running under Iris."""
     try:
-        job_info = get_job_info()
-        ctx = get_iris_ctx()
-        if job_info is None or ctx is None or ctx.client is None:
+        runtime = resolve(
+            run_id=run_id,
+            execution_uid=execution_uid,
+            process_index=process_index,
+            attributes=attributes,
+        )
+        if runtime is None:
             logger.debug("no in-cluster Iris context; leaving %s telemetry inert", service)
             return
-        endpoint = ctx.client.resolve_endpoint(LOG_SERVER_ENDPOINT_NAME).rstrip("/") + TELEMETRY_ENDPOINT_PATH
-        extra = dict(attributes or {})
-        if conflicts := _RESERVED_RESOURCE_ATTRIBUTES.intersection(extra):
-            names = ", ".join(sorted(conflicts))
-            raise ValueError(f"Iris owns canonical telemetry attributes: {names}")
-        resource = _identity(job_info, process_index)
-        resource.update(extra)
-        resource["root_run_uid"] = root_run_uid or str(job_info.job_id)
-        resource["execution_uid"] = execution_uid or _execution_uid(job_info)
+        resource = dict(runtime.attributes)
         if service == "vllm":
-            resource["serving_job_id"] = str(job_info.job_id)
+            resource["serving_job_id"] = resource["job_id"]
+        endpoint = runtime.resolver(runtime.endpoint).rstrip("/") + TELEMETRY_ENDPOINT_PATH
         telemetry.configure(endpoint=endpoint, service=service, attributes=resource)
     except Exception:
         try:
@@ -100,3 +106,30 @@ def configure(
         except Exception:
             pass
         return
+
+
+def resolve(
+    *,
+    run_id: str | None = None,
+    execution_uid: str | None = None,
+    process_index: int | None = None,
+    attributes: Mapping[str, str] | None = None,
+) -> FinelogRuntime | None:
+    """Resolve the direct Finelog route and Iris-owned process identity."""
+    job_info = get_job_info()
+    ctx = get_iris_ctx()
+    if job_info is None or ctx is None or ctx.client is None:
+        return None
+    extra = dict(attributes or {})
+    if conflicts := _RESERVED_RESOURCE_ATTRIBUTES.intersection(extra):
+        names = ", ".join(sorted(conflicts))
+        raise ValueError(f"Iris owns canonical telemetry attributes: {names}")
+    resource = _identity(job_info, process_index)
+    resource.update(extra)
+    resource["run_id"] = run_id or str(job_info.job_id)
+    resource["execution_uid"] = execution_uid or _execution_uid(job_info)
+    return FinelogRuntime(
+        endpoint=LOG_SERVER_ENDPOINT_NAME,
+        resolver=ctx.client.resolve_endpoint,
+        attributes=resource,
+    )

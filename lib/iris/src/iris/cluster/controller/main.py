@@ -38,6 +38,7 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
+from iris.cluster.types import UserBudgetDefaults
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,10 @@ def run_controller_serve(
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,
+        user_budget_defaults=UserBudgetDefaults(
+            budget_limit=cluster_config.user_budget_defaults.budget_limit,
+            max_band=cluster_config.user_budget_defaults.max_band,
+        ),
     )
 
     # Each worker-daemon backend constructs and owns its liveness tracker, sized by
@@ -320,6 +325,7 @@ def run_controller_serve(
         # a full cluster teardown, `iris cluster stop` handles VM cleanup via
         # stop_all(), so the SIGTERM handler never needs to delete VMs itself.
         logger.info("Shutdown signal received")
+        controller.begin_shutdown()
         if not config.dry_run:
             try:
                 path, result = controller.begin_checkpoint()

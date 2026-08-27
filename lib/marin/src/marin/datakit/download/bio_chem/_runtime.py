@@ -16,9 +16,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from rigging.filesystem import open_url
+from rigging.filesystem.factory import open_url
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.execution.step_spec import StepSpec
 from marin.transform.bio_chem.splitters import (

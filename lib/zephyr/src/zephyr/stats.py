@@ -8,12 +8,10 @@ Two namespaces are written:
 - ``zephyr.stage`` — one row per stage at completion, emitted by the
   coordinator. Contains throughput and aggregated resource usage.
 - ``zephyr.worker`` — one row per shard at START, each sample interval
-  (RUNNING), and END, emitted directly by each runner.
+  (RUNNING), and END, emitted by the long-lived worker actor.
 
-Resource counters (cpu, memory) are sampled by runner background threads
-via :func:`zephyr.runners._sample_process_stats` and stored with
-:meth:`~zephyr.runners._InProcessWorkerContext.set_counter`. Counters are also
-sent to the coordinator via heartbeats for aggregation into stage stats.
+Runners sample CPU and memory counters. Worker heartbeats write per-shard rows
+and send aggregated counters to the coordinator for stage stats.
 """
 
 import enum
@@ -26,7 +24,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
-from iris.client import get_iris_ctx
+from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from rigging.timing import RateLimiter
@@ -35,13 +33,14 @@ logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
+WORKER_STATS_INTERVAL = 5.0
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
 """Counter key for items processed"""
 ZEPHYR_STAGE_BYTES_PROCESSED_KEY = "zephyr/bytes_processed"
 """Counter key for bytes processed"""
 
-# Counter keys written by runner sampler threads using set_counter().
+# Counter keys written by runner resource sampling.
 # Read by the coordinator from completed task snapshots for stage stat aggregation.
 ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY = "zephyr/worker/cpu_pct_current"
 """Current CPU percentage"""
@@ -114,7 +113,7 @@ class ZephyrStageStat:
 
 @dataclass
 class ZephyrWorkerStat:
-    """One row per shard per sample interval, written by each runner."""
+    """One row per shard per sample interval, written by its worker actor."""
 
     key_column: ClassVar[str] = "execution_id"
 
@@ -139,8 +138,8 @@ class StatsWriter:
     """Manages finelog connections and emits Zephyr stat rows.
 
     Call ``connect()`` to get a live instance; pass a pre-resolved URL when
-    an Iris context is not available (e.g. in a subprocess).  All emit
-    methods are no-ops when the log client is unavailable.
+    an Iris context is not available. All emit methods are no-ops when the
+    log client is unavailable.
     """
 
     def __init__(self, log_client: LogClient | None) -> None:

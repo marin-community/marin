@@ -621,7 +621,12 @@ exec {quoted_cmd}
             memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
         )
         if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+            return capture_threads(
+                dispatch,
+                pid="1",
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
         elif profile_type.HasField("cpu"):
             return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
@@ -948,12 +953,18 @@ class DockerRuntime:
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
 
-    def resolve_mounts(self, mounts: list[MountSpec], workdir_host_path: Path | None = None) -> list[ResolvedMount]:
+    def resolve_mounts(
+        self,
+        mounts: list[MountSpec],
+        workdir_host_path: Path | None = None,
+        output_host_path: Path | None = None,
+    ) -> list[ResolvedMount]:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
-        (created by task_attempt). CACHE gets shared dirs under cache_dir.
-        TMPFS uses Docker --tmpfs for per-container isolation (no host dir).
+        created by the task attempt. OUTPUT uses its separate attempt-local host
+        path. CACHE gets shared dirs under cache_dir. TMPFS uses Docker --tmpfs
+        for per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -962,6 +973,11 @@ class DockerRuntime:
                 if workdir_host_path is None:
                     raise RuntimeError("WORKDIR mount requires workdir_host_path")
                 result.append(ResolvedMount(str(workdir_host_path), mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.OUTPUT:
+                if output_host_path is None:
+                    raise RuntimeError("OUTPUT mount requires output_host_path")
+                output_host_path.mkdir(parents=True, exist_ok=True)
+                result.append(ResolvedMount(str(output_host_path), mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.TMPFS:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
@@ -977,7 +993,11 @@ class DockerRuntime:
         The handle is not started - call handle.build() then handle.run()
         to execute the container.
         """
-        resolved = self.resolve_mounts(config.mounts, workdir_host_path=config.workdir_host_path)
+        resolved = self.resolve_mounts(
+            config.mounts,
+            workdir_host_path=config.workdir_host_path,
+            output_host_path=config.output_host_path,
+        )
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
         return handle

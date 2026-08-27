@@ -49,10 +49,10 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import split_pages

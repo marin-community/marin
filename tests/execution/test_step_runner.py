@@ -4,7 +4,6 @@
 import contextvars
 import json
 import os
-import threading
 from pathlib import Path
 
 import marin.execution.step_runner as step_runner_module
@@ -611,58 +610,6 @@ def test_runner_prune_cache_vanished_fails(tmp_path: Path, monkeypatch):
     assert executed == []
 
 
-def test_runner_consumes_unbounded_iterator(tmp_path: Path):
-    """The runner must not pre-consume the iterable — it must support unbounded generators.
-
-    The generator yields forever unless ``stop`` is set; we set it from inside
-    a terminal's function after N terminals have executed. A batch-flatten
-    implementation would try to exhaust the generator before running any step
-    and hang (caught by the per-test timeout).
-    """
-
-    stop = threading.Event()
-    executed: list[str] = []
-    lock = threading.Lock()
-    n_terminals = 3
-
-    def on_execute(name: str):
-        def _fn(output_path: str) -> Artifact:
-            with lock:
-                executed.append(name)
-                # Count terminals executed; signal the generator to stop once
-                # we've run enough.
-                terminal_count = sum(1 for e in executed if e.startswith("t_"))
-            if terminal_count >= n_terminals:
-                stop.set()
-            return Artifact(path=output_path)
-
-        return _fn
-
-    dep = StepSpec(
-        name="shared_dep",
-        override_output_path=(tmp_path / "shared_dep").as_posix(),
-        fn=on_execute("dep"),
-    )
-
-    def unbounded_generator():
-        i = 0
-        while not stop.is_set():
-            name = f"t_{i}"
-            yield StepSpec(
-                name=name,
-                override_output_path=(tmp_path / name).as_posix(),
-                deps=[dep],
-                fn=on_execute(name),
-            )
-            i += 1
-
-    StepRunner().run(unbounded_generator())
-
-    assert "dep" in executed
-    terminals = [e for e in executed if e.startswith("t_")]
-    assert len(terminals) >= n_terminals
-
-
 def test_runner_dedups_shared_deps(tmp_path: Path):
     """A dep shared by multiple terminals must be executed exactly once."""
     dep_runs: list[str] = []
@@ -781,12 +728,6 @@ def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
     assert spy.requests[0].environment.extras == expected
 
 
-def _assert_single_submit_env(spy: _SubmitSpy, expected: dict[str, str]) -> None:
-    assert len(spy.requests) == 1
-    for key, value in expected.items():
-        assert spy.requests[0].environment.env_vars[key] == value
-
-
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -858,25 +799,6 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
     )
 
     _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), [])
-
-
-def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fray_client):
-    resources = ResourceConfig.with_tpu("v6e-4")
-
-    @remote(resources=resources, pip_dependency_groups=["vllm"])
-    def my_step(output_path: str) -> Artifact:
-        return Artifact(path=output_path)
-
-    step = StepSpec(
-        name="remote_vllm_tpu_step",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-    )
-
-    spy = _run_step_with_submit_spy(step, fray_client)
-
-    _assert_single_submit_extras(spy, ["vllm"])
-    _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
 
 
 def test_remote_direct_call_uses_device_extra(fray_client):

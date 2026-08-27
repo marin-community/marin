@@ -28,6 +28,8 @@ enum ColumnType {
   COLUMN_TYPE_BYTES = 6;        // pa.binary()
   COLUMN_TYPE_INT32 = 7;        // pa.int32()
   COLUMN_TYPE_MAP = 8;          // pa.map_(pa.string(), pa.string())
+  COLUMN_TYPE_FLOAT64_LIST = 9; // list<float64>
+  COLUMN_TYPE_INT64_LIST = 10;  // list<int64>
 }
 
 // User-facing column index policy. The server compiles these declarations and
@@ -78,20 +80,33 @@ message GroupedExtrema {
 message Schema {
   repeated Column columns = 1;
 
-  // Column to sort by during compaction. Must name an existing column of
-  // type INT64 or TIMESTAMP_MS. If empty, the server requires a column
-  // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
-  // implicitly. A schema with neither is rejected at register time.
+  // Column used for segment min/max metadata and, when sort_columns is empty,
+  // compaction order. Must name an existing scalar column; MAP is unsupported.
+  // If empty, the server requires and uses timestamp_ms.
   string key_column = 2;
 
-  // Independent named projections. Adding one is monotonic on re-register;
-  // changing an existing name's definition is a schema conflict.
+  // Independent named projections. Adding one is monotonic on re-register.
+  // Re-registering a name with a different definition supersedes it, unless the
+  // registered definition already covers the requested one. Each segment keeps
+  // the definition it was built with and stays queryable, so a redefinition
+  // never fails a registration.
   repeated CoveringProjection projections = 3;
 
   // Independent grouped-extrema rollups. Adding one is monotonic on
   // re-register. Finelog interprets only the declared column roles; producers
   // own their semantic meaning.
   repeated GroupedExtrema grouped_extrema = 4;
+
+  // Physical compaction order. When set, Finelog sorts by these columns and
+  // appends the implicit seq column as a deterministic tie-breaker. Empty
+  // retains a registered policy or uses key_column on first registration. The
+  // key_column remains the event/range key used for retention metadata.
+  repeated string sort_columns = 5;
+
+  // Maximum rows per Parquet row group. Zero retains the registered policy or
+  // uses the server default on first registration. Explicit values must be
+  // 16,384 through 1,048,576. The encoded-byte target may close a group earlier.
+  uint32 max_row_group_rows = 6;
 }
 
 // Write batches are Arrow IPC RecordBatches on the wire — columnar, with
@@ -144,7 +159,10 @@ message WriteRowsRequest {
   // Arrow schema must be a subset of (or equal to) the registered schema:
   // every column name must exist in the registry with a matching Arrow
   // type. Missing nullable columns are filled with NULL on append.
-  // Unknown column names raise SchemaValidationError.
+  // Unknown column names raise SchemaValidationError. The one federation
+  // exception is JWT-forwarded telemetry_v1: its server-owned hub schema wins,
+  // and candidate-only nullable columns are discarded while known columns are
+  // appended. Required unknown columns and known-column type conflicts still fail.
   bytes arrow_ipc = 2;
 }
 

@@ -36,6 +36,10 @@ edition = "2021"
 name = "finelog-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "finelog-migrate"
+path = "src/bin/finelog-migrate.rs"
+
 [lib]
 name = "finelog"
 path = "src/lib.rs"
@@ -128,8 +132,10 @@ url = "2"
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
+regex-syntax = "0.8"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of

@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import http.client
 import logging
 import math
+import ssl
 import threading
 import time
 import urllib.request
@@ -17,21 +19,41 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
+from finelog.client import LogClient
+from finelog.client.log_client import Table
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging import telemetry
 
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import (
+    IRIS_ATTEMPT_ID_LABEL,
+    IRIS_KUBERNETES_RUNTIME,
+    IRIS_MANAGED_LABEL,
+    IRIS_RUNTIME_LABEL,
+    IRIS_TASK_CONTAINER_NAME,
+    IRIS_TASK_ID_ANNOTATION,
+    K8sResource,
+    KubectlError,
+)
+from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION_INTERVAL = 30.0
-K8S_API_TIMEOUT = 2.0
+DEFAULT_COLLECTION_INTERVAL = 60.0
+# Generous enough that ordinary apiserver latency, including a control plane under
+# load, does not fail a collection cycle; collection runs once per interval, so a
+# slow call delays one sample rather than overlapping the next.
+K8S_API_TIMEOUT = 15.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
+KUBELET_RESOURCE_METRICS_URL = "https://127.0.0.1:10250/metrics/resource"
+SERVICE_ACCOUNT_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 _K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
 
 # CoreWeave runs both exporters as DaemonSets in this namespace. node-exporter
@@ -73,7 +95,6 @@ _MAX_SCRAPE_WORKERS = 16
 _MAX_SCRAPE_BYTES = 16 << 20
 _MAX_DCGM_SAMPLES = 32_768
 _MAX_DCGM_DEVICES = 256
-_MAX_DCGM_EXPORTERS = 512
 
 # One injectable seam so tests exercise the parsing/aggregation without a network.
 Fetch = Callable[[str], str | None]
@@ -93,6 +114,37 @@ def _http_get(url: str, timeout: float = _SCRAPE_TIMEOUT) -> str | None:
     except Exception as e:
         logger.debug("node-metrics scrape failed for %s: %s", url, e)
         return None
+
+
+# The kubelet's serving certificate is issued by the node rather than the cluster
+# CA, so it does not verify against the service-account CA bundle. The connection
+# is to loopback on the agent's own node and carries no off-host exposure.
+_KUBELET_TLS_CONTEXT = ssl.create_default_context()
+_KUBELET_TLS_CONTEXT.check_hostname = False
+_KUBELET_TLS_CONTEXT.verify_mode = ssl.CERT_NONE
+
+
+class KubeletScrapeError(RuntimeError):
+    """The local kubelet did not return resource metrics."""
+
+
+def kubelet_resource_metrics(timeout: float = _SCRAPE_TIMEOUT) -> str:
+    """Return the local kubelet's ``metrics/resource`` text.
+
+    Reads the kubelet on the agent's own node over loopback, which the host
+    network makes reachable. Authorization uses the pod's service-account token,
+    which the kubelet checks against the ``nodes/metrics`` subresource.
+    """
+    token = SERVICE_ACCOUNT_TOKEN_PATH.read_text().strip()
+    request = urllib.request.Request(KUBELET_RESOURCE_METRICS_URL, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=_KUBELET_TLS_CONTEXT) as resp:
+            body = resp.read(_MAX_SCRAPE_BYTES + 1)
+    except (OSError, http.client.HTTPException) as error:
+        raise KubeletScrapeError(f"kubelet resource-metrics scrape failed: {error}") from error
+    if len(body) > _MAX_SCRAPE_BYTES:
+        raise KubeletScrapeError(f"kubelet resource metrics exceeded {_MAX_SCRAPE_BYTES} bytes")
+    return body.decode("utf-8", errors="replace")
 
 
 def _parse_labels(body: str) -> dict[str, str]:
@@ -174,6 +226,122 @@ def parse_prometheus(text: str) -> Iterator[Sample]:
         yield Sample(name, labels, value)
 
 
+@dataclass
+class ContainerResourceSample:
+    """Kubelet resource counters for one container."""
+
+    cpu_seconds: float | None = None
+    memory_bytes: int | None = None
+
+
+def parse_kubelet_resource_metrics(text: str) -> dict[tuple[str, str], ContainerResourceSample]:
+    """Parse kubelet ``metrics/resource`` text by ``(pod, container)``."""
+    resources: dict[tuple[str, str], ContainerResourceSample] = {}
+    for name, labels, value in parse_prometheus(text):
+        pod = labels.get("pod", "")
+        container = labels.get("container", "")
+        if not pod or not container:
+            continue
+        key = (pod, container)
+        sample = resources.setdefault(key, ContainerResourceSample())
+        if name == "container_cpu_usage_seconds_total":
+            sample.cpu_seconds = value
+        elif name == "container_memory_working_set_bytes":
+            sample.memory_bytes = int(value)
+    return resources
+
+
+class TaskStatsCollector:
+    """Write same-node Iris pod CPU and memory samples to ``iris.task``."""
+
+    def __init__(
+        self,
+        kubectl: K8sService,
+        node_name: str,
+        table: Table,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        read_kubelet_metrics: Callable[[], str] = kubelet_resource_metrics,
+    ) -> None:
+        self._kubectl = kubectl
+        self._node_name = node_name
+        self._table = table
+        self._clock = clock
+        self._read_kubelet_metrics = read_kubelet_metrics
+        self._previous_cpu: dict[str, tuple[float, float]] = {}
+        self._memory_peak: dict[str, int] = {}
+
+    def collect_once(self) -> None:
+        """Collect one task-resource sample for each running pod on this node."""
+        labels = {IRIS_MANAGED_LABEL: "true", IRIS_RUNTIME_LABEL: IRIS_KUBERNETES_RUNTIME}
+        try:
+            pods = self._kubectl.list_json(
+                K8sResource.PODS,
+                labels=labels,
+                field_selector=f"spec.nodeName={self._node_name}",
+            )
+            resources = parse_kubelet_resource_metrics(self._read_kubelet_metrics())
+        except (KubectlError, KubeletScrapeError) as error:
+            logger.warning("task-resource collection failed for node %s: %s", self._node_name, error)
+            return
+
+        sampled_at = self._clock()
+        live_pods = {
+            pod.get("metadata", {}).get("name", "") for pod in pods if pod.get("status", {}).get("phase") == "Running"
+        }
+        rows: list[IrisTaskStat] = []
+        for pod in pods:
+            if pod.get("status", {}).get("phase") != "Running":
+                continue
+            metadata = pod.get("metadata", {})
+            pod_name = metadata.get("name", "")
+            task_id = metadata.get("annotations", {}).get(IRIS_TASK_ID_ANNOTATION, "")
+            attempt = metadata.get("labels", {}).get(IRIS_ATTEMPT_ID_LABEL, "")
+            sample = resources.get((pod_name, IRIS_TASK_CONTAINER_NAME))
+            if not pod_name or not task_id or not attempt or sample is None:
+                continue
+
+            cpu_millicores = self._cpu_millicores(pod_name, sample.cpu_seconds, sampled_at)
+            memory_bytes = sample.memory_bytes or 0
+            memory_peak = max(memory_bytes, self._memory_peak.get(pod_name, 0))
+            self._memory_peak[pod_name] = memory_peak
+            rows.append(
+                build_task_stat(
+                    task_id=task_id,
+                    attempt_id=int(attempt),
+                    worker_id=pod_name,
+                    usage=job_pb2.ResourceUsage(
+                        cpu_millicores=cpu_millicores,
+                        memory_mb=memory_bytes // _MIB,
+                        memory_peak_mb=memory_peak // _MIB,
+                    ),
+                )
+            )
+
+        self._prune(live_pods)
+        if rows:
+            self._table.write(rows)
+
+    def _cpu_millicores(self, pod_name: str, cpu_seconds: float | None, sampled_at: float) -> int:
+        if cpu_seconds is None:
+            return 0
+        previous = self._previous_cpu.get(pod_name)
+        self._previous_cpu[pod_name] = (cpu_seconds, sampled_at)
+        if previous is None:
+            return 0
+        cpu_delta = cpu_seconds - previous[0]
+        time_delta = sampled_at - previous[1]
+        if cpu_delta < 0 or time_delta <= 0:
+            return 0
+        return max(0, round(cpu_delta / time_delta * 1000))
+
+    def _prune(self, live_pods: set[str]) -> None:
+        for pod_name in self._previous_cpu.keys() - live_pods:
+            del self._previous_cpu[pod_name]
+        for pod_name in self._memory_peak.keys() - live_pods:
+            del self._memory_peak[pod_name]
+
+
 def _is_physical_iface(device: str) -> bool:
     return bool(device) and not device.startswith(_VIRTUAL_IFACE_PREFIXES)
 
@@ -195,6 +363,16 @@ class HostSample:
     net_recv_bytes: int
     net_sent_bytes: int
     boot_time_seconds: int | None
+
+
+@dataclass(frozen=True)
+class _DcgmExporter:
+    """One dcgm-exporter pod's scrape address and the identity of what it reports."""
+
+    name: str
+    url: str
+    uid: str
+    node_name: str
 
 
 @dataclass(frozen=True)
@@ -239,8 +417,13 @@ _DCGM_METRICS = {
     ),
     "DCGM_FI_DEV_ROW_REMAP_FAILURE": _DcgmMetricSpec("gpu_row_remap_failures", "{failure}"),
     "DCGM_FI_PROF_GR_ENGINE_ACTIVE": _DcgmMetricSpec("gpu_graphics_engine_active_ratio", "1"),
+    "DCGM_FI_PROF_SM_ACTIVE": _DcgmMetricSpec("gpu_sm_active_ratio", "1"),
     "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE": _DcgmMetricSpec("gpu_tensor_active_ratio", "1"),
     "DCGM_FI_PROF_DRAM_ACTIVE": _DcgmMetricSpec("gpu_dram_active_ratio", "1"),
+    "DCGM_FI_PROF_NVLINK_RX_BYTES": _DcgmMetricSpec("gpu_nvlink_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_NVLINK_TX_BYTES": _DcgmMetricSpec("gpu_nvlink_transmit_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_RX_BYTES": _DcgmMetricSpec("gpu_pcie_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_TX_BYTES": _DcgmMetricSpec("gpu_pcie_transmit_bytes_per_second", "By/s"),
     "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
         "gpu_nvlink_errors",
         "{error}",
@@ -483,6 +666,10 @@ class NodeStatsScraper:
         self._fetch = fetch
         self._max_workers = max_workers
         self._prev_cpu: dict[str, tuple[float, float]] = {}
+        # node name -> its dcgm exporters. The exporter is a DaemonSet pod whose address
+        # moves only when it restarts, so discovery is cached until a pass reads nothing
+        # from that node.
+        self._dcgm_exporters_by_node: dict[str, list[_DcgmExporter]] = {}
 
     def scrape(self, targets: list[NodeTarget]) -> dict[str, NodeMetrics]:
         """Return per-node metrics for ``targets`` (best-effort; missing nodes omitted)."""
@@ -539,42 +726,83 @@ class NodeStatsScraper:
     def _prune_prev(self, live: set[str]) -> None:
         for stale in self._prev_cpu.keys() - live:
             del self._prev_cpu[stale]
+        for stale in self._dcgm_exporters_by_node.keys() - live:
+            del self._dcgm_exporters_by_node[stale]
 
     def _scrape_hosts(self, targets: list[NodeTarget]) -> dict[str, HostSample]:
         urls = {t.name: f"http://{t.internal_ip}:{self._node_port}/metrics" for t in targets if t.internal_ip}
         texts = self._fetch_all(urls)
         return {name: parse_node_exporter(text) for name, text in texts.items()}
 
-    def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
+    def _dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return the scrapeable dcgm exporters on ``node_name``.
+
+        Both selectors are applied server-side. Pods with no ``podIP`` are omitted
+        because they have no address to scrape.
+        """
         try:
-            pods = self._kubectl.list_pods_in_namespace(self._ns)
+            pods = list(
+                self._kubectl.iter_json(
+                    K8sResource.PODS,
+                    namespace=self._ns,
+                    labels={_DCGM_NAME_LABEL: _DCGM_NAME_VALUE},
+                    field_selector=f"spec.nodeName={node_name}",
+                )
+            )
         except Exception as e:
             logger.debug("node-metrics: listing dcgm exporters in %s failed: %s", self._ns, e)
-            return {}
-        dcgm_pods = [
-            pod
-            for pod in pods
-            if pod.get("metadata", {}).get("labels", {}).get(_DCGM_NAME_LABEL) == _DCGM_NAME_VALUE
-            and pod.get("spec", {}).get("nodeName", "") in node_names
-        ]
-        if len(dcgm_pods) > _MAX_DCGM_EXPORTERS:
-            logger.warning("dcgm exporter count exceeded %d", _MAX_DCGM_EXPORTERS)
-        exporters: dict[str, tuple[str, str, str]] = {}
-        for pod in dcgm_pods[:_MAX_DCGM_EXPORTERS]:
+            return []
+        exporters = []
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            name = metadata.get("name", "")
             pod_ip = pod.get("status", {}).get("podIP")
-            name = pod.get("metadata", {}).get("name", "")
-            uid = pod.get("metadata", {}).get("uid", "")
-            node_name = pod.get("spec", {}).get("nodeName", "")
-            if pod_ip and name:
-                exporters[name] = (f"http://{pod_ip}:{self._dcgm_port}/metrics", uid, node_name)
+            if not name or not pod_ip:
+                continue
+            exporters.append(
+                _DcgmExporter(
+                    name=name,
+                    url=f"http://{pod_ip}:{self._dcgm_port}/metrics",
+                    uid=metadata.get("uid", ""),
+                    node_name=pod.get("spec", {}).get("nodeName", node_name),
+                )
+            )
+        return exporters
+
+    def _discover_dcgm_exporters(self, node_name: str) -> list[_DcgmExporter]:
+        """Return ``node_name``'s cached exporters, discovering them when the cache is cold.
+
+        An empty result is not cached, so a node whose exporter has not started yet is
+        retried on the next pass.
+        """
+        cached = self._dcgm_exporters_by_node.get(node_name)
+        if cached:
+            return cached
+        exporters = self._dcgm_exporters(node_name)
+        if exporters:
+            self._dcgm_exporters_by_node[node_name] = exporters
+        return exporters
+
+    def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
+        exporters = {
+            exporter.name: exporter
+            for node_name in sorted(node_names)
+            for exporter in self._discover_dcgm_exporters(node_name)
+        }
         merged: dict[str, GpuSample] = {}
-        urls = {name: endpoint[0] for name, endpoint in exporters.items()}
-        for name, text in self._fetch_all(urls).items():
-            _, uid, node_name = exporters[name]
+        texts = self._fetch_all({exporter.name: exporter.url for exporter in exporters.values()})
+        for name, text in texts.items():
+            exporter = exporters[name]
             try:
-                merged.update(parse_dcgm(text, exporter_uid=uid, node_name=node_name))
+                merged.update(parse_dcgm(text, exporter_uid=exporter.uid, node_name=exporter.node_name))
             except ValueError as error:
                 logger.warning("could not parse dcgm exporter %s: %s", name, error)
+        # Drop the cached address of every node this pass could not read: the exporter
+        # stopped answering, moved, or a recycled pod IP is serving another node's
+        # metrics under its own hostname. Those nodes rediscover on the next pass.
+        for exporter in exporters.values():
+            if exporter.node_name not in merged:
+                self._dcgm_exporters_by_node.pop(exporter.node_name, None)
         return merged
 
     def _fetch_all(self, urls: dict[str, str]) -> dict[str, str]:
@@ -586,7 +814,7 @@ class NodeStatsScraper:
         return {k: body for k, body in zip(keys, bodies, strict=True) if body is not None}
 
 
-def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
+def _log_service_endpoint(cluster_config: IrisClusterConfig) -> str:
     spec = cluster_config.endpoints.get(LOG_SERVER_ENDPOINT_NAME)
     if cluster_config.finelog.config:
         if spec is not None:
@@ -596,7 +824,7 @@ def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
         uri, metadata = spec.uri, dict(spec.metadata)
     else:
         raise ValueError("node telemetry requires an external /system/log-server endpoint")
-    return resolve_endpoint_uri(uri, metadata).rstrip("/") + TELEMETRY_ENDPOINT_PATH
+    return resolve_endpoint_uri(uri, metadata).rstrip("/")
 
 
 def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
@@ -620,28 +848,68 @@ def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
     )
 
 
-def collect_once(scraper: NodeStatsScraper, target: NodeTarget) -> None:
-    """Publish one same-node exporter collection pass."""
+def collect_once(
+    scraper: NodeStatsScraper,
+    target: NodeTarget,
+    task_stats_collector: TaskStatsCollector | None = None,
+) -> None:
+    """Publish one same-node exporter and task-resource collection pass."""
     metrics = scraper.scrape([target])[target.name]
     publish_node_telemetry(target, metrics, time.time())
+    if task_stats_collector is not None:
+        task_stats_collector.collect_once()
     telemetry.record_runtime_health()
 
 
-def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
-    """Collect telemetry until the process receives a shutdown signal."""
-    config = load_config(config_path)
-    endpoint = _telemetry_endpoint(config)
-    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_name: str, stop: threading.Event) -> None:
+    log_service_endpoint = _log_service_endpoint(config)
+    endpoint = log_service_endpoint + TELEMETRY_ENDPOINT_PATH
     target = _node_target(k8s, node_name)
-    telemetry.configure(
-        endpoint=endpoint,
-        service=SERVICE_NAME,
-        attributes={"node_name": target.name, "node_uid": target.node_uid, "role": str(telemetry.TelemetryRole.WORKER)},
-    )
-    scraper = NodeStatsScraper(k8s)
+    log_client = LogClient.connect(log_service_endpoint)
     try:
+        task_stats_collector = TaskStatsCollector(
+            k8s,
+            node_name,
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
+        )
+        telemetry.configure(
+            endpoint=endpoint,
+            service=SERVICE_NAME,
+            attributes={
+                "node_name": target.name,
+                "node_uid": target.node_uid,
+                "role": str(telemetry.TelemetryRole.WORKER),
+            },
+        )
+        scraper = NodeStatsScraper(k8s)
         while not stop.is_set():
-            collect_once(scraper, target)
+            collect_once(scraper, target, task_stats_collector)
             stop.wait(DEFAULT_COLLECTION_INTERVAL)
     finally:
+        log_client.close()
         telemetry.shutdown(5.0)
+
+
+def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
+    """Run configured node maintenance and telemetry until shutdown."""
+    config = load_config(config_path)
+    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+    cache_reclaimer: threading.Thread | None = None
+    if config.kubernetes_provider.cache_max_age is not None:
+        cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
+        cache_reclaimer = threading.Thread(
+            target=run_cache_reclaimer,
+            args=(cache_dir, config.kubernetes_provider.cache_max_age, stop),
+            name="cache-reclaimer",
+            daemon=True,
+        )
+        cache_reclaimer.start()
+    try:
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            _collect_telemetry(config, k8s, node_name, stop)
+        else:
+            stop.wait()
+    finally:
+        stop.set()
+        if cache_reclaimer is not None:
+            cache_reclaimer.join(timeout=10.0)

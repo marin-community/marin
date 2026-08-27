@@ -15,6 +15,7 @@ pub mod debug;
 pub mod diagnostics;
 pub mod forwarded_prefix;
 pub mod forwarding;
+pub mod ingest_health;
 pub mod interceptors;
 pub mod introspection;
 pub mod legacy_path;

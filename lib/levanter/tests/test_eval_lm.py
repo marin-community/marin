@@ -9,13 +9,13 @@ import jax
 import haliax
 
 import levanter.main.eval_lm as eval_lm
-import tiny_test_corpus
+from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 from levanter.trainer_state import TrainerState
-from test_utils import skip_if_no_torch
+from levanter.testing.helpers import skip_if_no_torch
 
 
 def test_eval_lm():
@@ -31,7 +31,7 @@ def test_eval_lm():
 
     with tempfile.TemporaryDirectory() as f:
         try:
-            data_config, _ = tiny_test_corpus.construct_small_data_cache(f)
+            data_config, _ = tiny_corpus.construct_small_data_cache(f)
             tok = data_config.the_tokenizer
             Vocab = haliax.Axis("vocab", len(tok))
             model = LlamaLMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))
@@ -76,7 +76,7 @@ def test_eval_lm_from_hf(local_gpt2_tokenizer_path):
         try:
             # Local tokenizer keeps the data config off the Hub (the cache holds
             # random ids, so the tokenizer is only used for vocab sizing).
-            data_config, _ = tiny_test_corpus.construct_small_data_cache(f, tokenizer=local_gpt2_tokenizer_path)
+            data_config, _ = tiny_corpus.construct_small_data_cache(f, tokenizer=local_gpt2_tokenizer_path)
             tok = data_config.the_tokenizer
             Vocab = haliax.Axis("vocab", len(tok))
             model = LlamaLMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))

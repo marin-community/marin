@@ -10,14 +10,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
-use finelog::store::Store;
+use finelog::store::remote::is_object_store;
+use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
@@ -32,9 +34,21 @@ use tokio::sync::Notify;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum TelemetryMigrationMode {
+    #[default]
+    Normal,
+    DualWrite,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
 struct Args {
+    /// What this process may touch. `shadow` additionally refuses a non-local
+    /// `--remote-log-dir` and any `--forwarding` at startup.
+    #[arg(long, env = "FINELOG_MODE", value_enum, default_value_t = ServeMode::Live)]
+    mode: ServeMode,
+
     /// Port to bind.
     #[arg(long, env = "FINELOG_PORT", default_value_t = 8080)]
     port: u16,
@@ -94,6 +108,16 @@ struct Args {
     /// through a secret; never inline it into a deploy manifest.
     #[arg(long = "signing-key", env = "FINELOG_SIGNING_KEY", default_value = "")]
     signing_key: String,
+
+    /// Transitional hub behavior for the telemetry_v1 migration. `dual-write`
+    /// mirrors legacy root rows while also writing their semantic destination.
+    #[arg(
+        long,
+        env = "FINELOG_TELEMETRY_MIGRATION_MODE",
+        value_enum,
+        default_value_t = TelemetryMigrationMode::Normal
+    )]
+    telemetry_migration_mode: TelemetryMigrationMode,
 }
 
 #[tokio::main]
@@ -107,23 +131,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    let mode = resolve_serve_mode(&args)?;
+
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
+    let store_dir = args.log_dir.clone().map(PathBuf::from);
+    let telemetry_root_write_mode = match args.telemetry_migration_mode {
+        TelemetryMigrationMode::Normal => TelemetryRootWriteMode::SemanticOnly,
+        TelemetryMigrationMode::DualWrite => TelemetryRootWriteMode::MirrorRoot,
+    };
     let store = Arc::new(
-        Store::new(
-            args.log_dir.clone().map(PathBuf::from),
+        Store::new_with_telemetry_root_write_mode(
+            store_dir.clone(),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
+            mode,
+            telemetry_root_write_mode,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
+    if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {
+        let store_dir = store_dir
+            .as_deref()
+            .ok_or("dual-write telemetry migration mode requires a persistent --log-dir")?;
+        let fence = ensure_dual_write_fence(store_dir, store.telemetry_root_max_seq()?)?;
+        tracing::info!(
+            legacy_max_seq = fence.legacy_max_seq,
+            armed_at_ms = fence.armed_at_ms,
+            "telemetry dual-write migration fence active"
+        );
+    }
     // Start each namespace's maintenance task. Each task runs its boot remote
     // reconcile (adopt unknown remote parquet, redundancy-drop covered segments)
     // in the BACKGROUND as its first step, so a large first-time reconcile (e.g.
     // a namespace just self-healed into the catalog, whose thousands of archived
     // segments have never been footer-scanned) never blocks the listener bind
     // below. The server serves — and /health is green — while archived rows are
-    // still being reconciled into the catalog.
+    // still being reconciled into the catalog. A shadow store starts none of it.
     store.bootstrap_maintenance();
     // Auth is ALWAYS enforced (default-deny). No policy → the private
     // allow-localhost default (loopback only); a shared global finelog sets a
@@ -177,8 +221,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("finelog-server draining background tasks");
 
     // Stop the forwarder first: it reads the store, so it must be off the segments
-    // before the namespaces drain. It latches on the watch and interrupts its own
-    // retry backoff, so the join is prompt; the bound is defense in depth.
+    // before the namespaces drain. It observes the latch between bounded outbound
+    // requests and interrupts retry delays; the join timeout is defense in depth.
     if let (Some(stop), Some(task)) = (forward_stop, forward_task) {
         let _ = stop.send(true);
         let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
@@ -203,6 +247,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Resolve the serve mode, refusing a shadow configuration that could reach
+/// production storage.
+///
+/// An operator who rehearses a boot with a deployment's own environment gets a
+/// startup error naming the offending flag, not a rehearsal that writes to the
+/// archive.
+fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
+    if args.mode == ServeMode::Live {
+        return Ok(ServeMode::Live);
+    }
+    if args.log_dir.is_none() {
+        return Err(
+            "shadow mode needs --log-dir: an in-memory store has no boot to rehearse".into(),
+        );
+    }
+    if is_object_store(&args.remote_log_dir) {
+        return Err(format!(
+            "shadow mode refuses the archive {:?}: point --remote-log-dir at a local directory, \
+             or leave it empty",
+            args.remote_log_dir
+        ));
+    }
+    if !args.forwarding.trim().is_empty() {
+        return Err("shadow mode refuses --forwarding: a rehearsal must not write to a hub".into());
+    }
+    Ok(ServeMode::Shadow)
+}
+
+/// Decide the deploy offline: read the registered schemas, run each
+/// server-owned namespace through the real merge, print the decision, and exit
+/// nonzero when one would fail to register.
 /// Build the cross-cluster forwarder, or `None` when forwarding is unconfigured.
 ///
 /// Every way the configuration can be wrong is an error here rather than a silent
@@ -245,5 +320,91 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = sigterm.recv() => tracing::info!("received SIGTERM; shutting down"),
         _ = sigint.recv() => tracing::info!("received SIGINT; shutting down"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(argv: &[&str]) -> Args {
+        let mut full = vec!["finelog-server"];
+        full.extend_from_slice(argv);
+        Args::try_parse_from(full).expect("argv parses")
+    }
+
+    #[test]
+    fn the_default_mode_is_live() {
+        let parsed = args(&["--log-dir", "/tmp/x"]);
+
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Live);
+    }
+
+    #[test]
+    fn live_mode_keeps_the_configured_archive() {
+        let parsed = args(&[
+            "--log-dir",
+            "/tmp/x",
+            "--remote-log-dir",
+            "gs://marin-us-central2/finelog",
+        ]);
+
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Live);
+    }
+
+    #[test]
+    fn shadow_mode_refuses_an_object_store_archive() {
+        for archive in ["gs://marin-us-central2/finelog", "s3://marin-us-east-02a/f"] {
+            let parsed = args(&[
+                "--mode",
+                "shadow",
+                "--log-dir",
+                "/tmp/x",
+                "--remote-log-dir",
+                archive,
+            ]);
+
+            let error = resolve_serve_mode(&parsed).unwrap_err();
+            assert!(error.contains(archive), "{error}");
+        }
+    }
+
+    #[test]
+    fn shadow_mode_refuses_forwarding_to_a_hub() {
+        let parsed = args(&[
+            "--mode",
+            "shadow",
+            "--log-dir",
+            "/tmp/x",
+            "--forwarding",
+            r#"{"target":"https://hub","cluster":"marin"}"#,
+        ]);
+
+        assert!(resolve_serve_mode(&parsed)
+            .unwrap_err()
+            .contains("--forwarding"));
+    }
+
+    #[test]
+    fn shadow_mode_needs_a_local_directory_to_rehearse() {
+        let parsed = args(&["--mode", "shadow"]);
+
+        assert!(resolve_serve_mode(&parsed)
+            .unwrap_err()
+            .contains("--log-dir"));
+    }
+
+    #[test]
+    fn shadow_mode_accepts_a_local_directory_and_a_local_remote() {
+        let parsed = args(&[
+            "--mode",
+            "shadow",
+            "--log-dir",
+            "/tmp/snapshot",
+            "--remote-log-dir",
+            "/tmp/snapshot-archive",
+        ]);
+
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Shadow);
     }
 }

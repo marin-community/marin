@@ -50,7 +50,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
     compute_fuzzy_dups_attrs_step,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)

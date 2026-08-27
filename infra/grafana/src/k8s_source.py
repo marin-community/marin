@@ -8,10 +8,11 @@ GETs and the CW read-role bearer token — no kubernetes client. K8sFleet fans a
 query out across every cluster and stamps a ``cluster`` column, so one response
 covers the fleet.
 
-The pod-level scans (crashloops, pending, termination candidates) cover every namespace except the
-provider-managed prefixes in PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node
-daemons are thousands of pods of someone else's infrastructure, while the
-namespaces we operate hold about a hundred.
+The pod-level scans (crashloops, pending, workload allocations, termination
+candidates) cover every namespace except the provider-managed prefixes in
+PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node daemons are thousands of
+pods of someone else's infrastructure, while the namespaces we operate hold
+about a hundred.
 
 Failure semantics: a cluster that cannot be queried becomes labeled rows inside
 the aggregate response — never an empty result — so healthy clusters keep
@@ -25,11 +26,12 @@ webhook rule — deliberate, because unknown admission state is exactly the
 failure class it watches.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar
@@ -60,18 +62,42 @@ STUCK_TERMINATION_OVERDUE_SECONDS = 120
 
 _GPU_RESOURCE = "nvidia.com/gpu"
 _IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+_IRIS_TASK_RESOURCES_ENV = "IRIS_TASK_RESOURCES"
+_IRIS_MANAGED_LABEL = "iris.managed"
+_IRIS_JOB_ID_LABEL = "iris.job_id"
+_IRIS_TASK_ID_ANNOTATION = "iris.task_id"
+_IRIS_TASK_CONTAINER = "task"
 _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
 _FINELOG_CONTAINER = "finelog"
 _FINELOG_FALLBACK_SERVER = "finelog-mirror"
 
-# CoreWeave physical-topology labels a GPU node carries: which rack it lives in,
-# the rack's full CoreWeave-assigned name, and its instance type.
+# CoreWeave node inventory and physical-topology labels exposed to Grafana.
 _RACK_LABEL = "node.coreweave.cloud/rack"
 _RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
 _INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
+_NODE_POOL_LABEL = "compute.coreweave.com/node-pool"
+_COMPUTE_CLASS_LABEL = "compute.coreweave.com/compute-class"
+_GPU_MODEL_LABEL = "gpu.nvidia.com/model"
+_RACK_SLOT_LABEL = "node.coreweave.cloud/slot"
+_NODE_STATE_LABEL = "node.coreweave.cloud/state"
+_IB_FABRIC_LABEL = "ib.coreweave.cloud/fabric"
+_IB_SPEED_LABEL = "ib.coreweave.cloud/speed.current"
+_GPU_DRIVER_LABEL = "gpu.coreweave.cloud/driver-version"
 _CORDON_REASON_ANNOTATION = "node.coreweave.cloud/cordonReason"
 _KERNEL_DEADLOCK_CONDITION = "KernelDeadlock"
 _PENDING_PHASE_CONDITION = "PendingPhaseState"
+_NODE_POOLS_PATH = "/apis/compute.coreweave.com/v1alpha1/nodepools"
+_NODE_POOL_VALIDATED_CONDITION = "Validated"
+_NODE_POOL_AT_TARGET_CONDITION = "AtTarget"
+_NODE_POOL_CAPACITY_CONDITION = "Capacity"
+_NODE_POOL_QUOTA_CONDITION = "Quota"
+_NODE_POOL_RECONFIGURATION_CONDITION = "NodeReconfigurationRequired"
+_NODE_POOL_PROBLEM_CONDITIONS = (
+    (_NODE_POOL_VALIDATED_CONDITION, True),
+    (_NODE_POOL_CAPACITY_CONDITION, True),
+    (_NODE_POOL_QUOTA_CONDITION, True),
+    (_NODE_POOL_RECONFIGURATION_CONDITION, False),
+)
 
 # gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
 # fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
@@ -142,6 +168,25 @@ class TerminationClass(StrEnum):
     TERMINAL = "terminal"
     UNBOUND = "unbound"
     NODE_CLEANUP = "node_cleanup"
+
+
+@dataclass(frozen=True)
+class WorkloadAllocation:
+    """Current placement and resource request for one Iris task pod."""
+
+    namespace: str
+    pod: str
+    node: str
+    job: str
+    task: str
+    phase: str
+    ready: bool
+    priority_class: str
+    age_seconds: int
+    cpu_request_millicores: int
+    memory_request_bytes: int
+    gpu_request_count: int
+    gpu_variant: str
 
 
 @dataclass(frozen=True)
@@ -433,7 +478,7 @@ class K8sSource:
 
     def finelog_pods(self) -> list[FinelogPod]:
         """Report each finelog Deployment, including a Missing row when it has no pod."""
-        rows = []
+        rows: list[FinelogPod] = []
         for deployment in self._finelog_deployments():
             metadata = deployment.get("metadata") or {}
             namespace = metadata.get("namespace") or "default"
@@ -560,6 +605,43 @@ class K8sSource:
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
         return rows
 
+    def workload_allocations(self) -> list[WorkloadAllocation]:
+        """Live Iris task placement and requested resources, one row per pod."""
+        rows: list[WorkloadAllocation] = []
+        for pod in self._scan_pods("status.phase!=Succeeded,status.phase!=Failed"):
+            metadata = pod.get("metadata") or {}
+            labels = metadata.get("labels") or {}
+            if labels.get(_IRIS_MANAGED_LABEL) != "true":
+                continue
+            status = pod.get("status") or {}
+            phase = status.get("phase") or ""
+            if phase in _TERMINAL_POD_PHASES:
+                continue
+            task = (metadata.get("annotations") or {}).get(_IRIS_TASK_ID_ANNOTATION) or _iris_task_attempt(pod)
+            if not task:
+                continue
+            resources = _iris_task_resources(pod)
+            gpu = (resources.get("device") or {}).get("gpu") or {}
+            spec = pod.get("spec") or {}
+            rows.append(
+                WorkloadAllocation(
+                    namespace=metadata.get("namespace") or "",
+                    pod=metadata.get("name") or "",
+                    node=spec.get("nodeName") or "",
+                    job=_root_job_id(task, labels.get(_IRIS_JOB_ID_LABEL) or ""),
+                    task=task,
+                    phase=phase,
+                    ready=_pod_condition(pod, "Ready").get("status") == "True",
+                    priority_class=spec.get("priorityClassName") or "",
+                    age_seconds=_age_seconds(metadata.get("creationTimestamp")) or 0,
+                    cpu_request_millicores=int(resources.get("cpu_millicores") or 0),
+                    memory_request_bytes=int(resources.get("memory_bytes") or 0),
+                    gpu_request_count=int(gpu.get("count") or 0),
+                    gpu_variant=gpu.get("variant") or "",
+                )
+            )
+        return sorted(rows, key=lambda row: (row.node, row.job, row.task))
+
     def node_architectures(self) -> dict[str, str]:
         architectures = {}
         for node in self._list("/api/v1/nodes"):
@@ -637,7 +719,7 @@ class K8sSource:
                     gpu_count=_pod_gpu_count(pod),
                     task_attempt=_iris_task_attempt(pod),
                     task_label=labels.get("iris.task_id") or "",
-                    job_label=labels.get("iris.job_id") or "",
+                    job_label=labels.get(_IRIS_JOB_ID_LABEL) or "",
                     priority_class=spec.get("priorityClassName") or "",
                     finalizers=",".join(finalizers),
                     classification=_termination_class(pod, overdue_seconds),
@@ -686,12 +768,13 @@ class K8sSource:
         return rows[:_EVENT_LIMIT]
 
     def nodes(self) -> list[dict]:
-        """Node readiness, schedulability, and CoreWeave reboot/deadlock state."""
+        """Node inventory, topology, readiness, and CoreWeave lifecycle state."""
         rows = []
         for node in self._list("/api/v1/nodes"):
             metadata = node.get("metadata") or {}
             annotations = metadata.get("annotations") or {}
             labels = metadata.get("labels") or {}
+            allocatable = (node.get("status") or {}).get("allocatable") or {}
             conditions = {
                 condition.get("type"): condition
                 for condition in (node.get("status") or {}).get("conditions") or []
@@ -703,6 +786,20 @@ class K8sSource:
                 {
                     "node": metadata.get("name", ""),
                     "instance_type": labels.get(_INSTANCE_TYPE_LABEL, ""),
+                    "node_pool": labels.get(_NODE_POOL_LABEL, ""),
+                    "compute_class": labels.get(_COMPUTE_CLASS_LABEL, ""),
+                    "gpu_model": labels.get(_GPU_MODEL_LABEL, ""),
+                    "gpu_capacity": _node_gpu_capacity(node),
+                    "cpu_allocatable": allocatable.get("cpu", ""),
+                    "memory_allocatable": allocatable.get("memory", ""),
+                    "gpu_allocatable": _node_gpu_allocatable(node),
+                    "rack": labels.get(_RACK_LABEL, ""),
+                    "rack_name": labels.get(_RACK_NAME_LABEL, ""),
+                    "rack_slot": labels.get(_RACK_SLOT_LABEL, ""),
+                    "node_state": labels.get(_NODE_STATE_LABEL, ""),
+                    "ib_fabric": labels.get(_IB_FABRIC_LABEL, ""),
+                    "ib_speed": labels.get(_IB_SPEED_LABEL, ""),
+                    "gpu_driver": labels.get(_GPU_DRIVER_LABEL, ""),
                     "ready": _node_ready(node),
                     "unschedulable": bool((node.get("spec") or {}).get("unschedulable")),
                     "cordon_reason": annotations.get(_CORDON_REASON_ANNOTATION, ""),
@@ -713,6 +810,54 @@ class K8sSource:
                 }
             )
         return sorted(rows, key=lambda row: row["node"])
+
+    def node_pools(self) -> list[dict]:
+        """CoreWeave NodePool capacity, autoscaling policy, and conditions."""
+        rows = []
+        for pool in self._list(_NODE_POOLS_PATH):
+            metadata = pool.get("metadata") or {}
+            spec = pool.get("spec") or {}
+            status = pool.get("status") or {}
+            conditions = {
+                condition.get("type"): condition for condition in status.get("conditions") or [] if condition.get("type")
+            }
+            active_conditions = {name for name, condition in conditions.items() if condition.get("status") == "True"}
+
+            target_nodes = status.get("targetNodes")
+            if target_nodes is None:
+                target_nodes = spec.get("targetNodes") or 0
+            current_nodes = status.get("currentNodes") or 0
+            at_target = _NODE_POOL_AT_TARGET_CONDITION in active_conditions
+            problem_reasons = []
+            for name, expected in _NODE_POOL_PROBLEM_CONDITIONS:
+                condition = conditions.get(name) or {}
+                if (name in active_conditions) != expected:
+                    problem_reasons.append(f"{name}: {condition.get('reason') or 'Unknown'}")
+            rows.append(
+                {
+                    "node_pool": metadata.get("name", ""),
+                    "instance_type": spec.get("instanceType", ""),
+                    "compute_class": spec.get("computeClass", ""),
+                    "autoscaling": bool(spec.get("autoscaling")),
+                    "scale_down_strategy": (spec.get("lifecycle") or {}).get("scaleDownStrategy", ""),
+                    "min_nodes": spec.get("minNodes") or 0,
+                    "max_nodes": spec.get("maxNodes") or 0,
+                    "target_nodes": target_nodes,
+                    "current_nodes": current_nodes,
+                    "in_progress_nodes": status.get("inProgress") or 0,
+                    "queued_nodes": status.get("queuedNodes") or 0,
+                    "prefill_nodes": status.get("prefillNodes") or 0,
+                    "missing_nodes": max(target_nodes - current_nodes, 0),
+                    "off_target": int(not at_target),
+                    "validated": _NODE_POOL_VALIDATED_CONDITION in active_conditions,
+                    "at_target": at_target,
+                    "capacity_available": _NODE_POOL_CAPACITY_CONDITION in active_conditions,
+                    "under_quota": _NODE_POOL_QUOTA_CONDITION in active_conditions,
+                    "reconfiguration_required": _NODE_POOL_RECONFIGURATION_CONDITION in active_conditions,
+                    "problems": "; ".join(problem_reasons),
+                }
+            )
+        return sorted(rows, key=lambda row: row["node_pool"])
 
     def gpu_racks(self) -> list[dict]:
         """One row per physical rack of GB200 nodes: trays registered vs. Ready.
@@ -752,11 +897,19 @@ class K8sSource:
 
 
 def _node_gpu_capacity(node: dict) -> int:
-    raw = ((node.get("status") or {}).get("capacity") or {}).get(_GPU_RESOURCE, 0)
+    return _node_gpu_quantity(node, "capacity")
+
+
+def _node_gpu_allocatable(node: dict) -> int:
+    return _node_gpu_quantity(node, "allocatable")
+
+
+def _node_gpu_quantity(node: dict, field: str) -> int:
+    raw = ((node.get("status") or {}).get(field) or {}).get(_GPU_RESOURCE, 0)
     try:
         return int(raw)
     except (TypeError, ValueError) as err:
-        raise ValueError(f"invalid {_GPU_RESOURCE} capacity quantity: {raw!r}") from err
+        raise ValueError(f"invalid {_GPU_RESOURCE} {field} quantity: {raw!r}") from err
 
 
 def _node_ready(node: dict) -> bool:
@@ -843,13 +996,28 @@ def _pod_gpu_count(pod: dict) -> int:
 
 
 def _iris_task_attempt(pod: dict) -> str:
+    return _iris_task_environment_value(pod, _IRIS_TASK_ID_ENV)
+
+
+def _iris_task_environment_value(pod: dict, variable: str) -> str:
     for container in (pod.get("spec") or {}).get("containers") or []:
-        if container.get("name") != "task":
+        if container.get("name") != _IRIS_TASK_CONTAINER:
             continue
         for item in container.get("env") or []:
-            if item.get("name") == _IRIS_TASK_ID_ENV:
+            if item.get("name") == variable:
                 return item.get("value") or ""
     return ""
+
+
+def _iris_task_resources(pod: dict) -> dict:
+    return json.loads(_iris_task_environment_value(pod, _IRIS_TASK_RESOURCES_ENV) or "{}")
+
+
+def _root_job_id(task: str, fallback: str) -> str:
+    parts = task.removeprefix("/").split("/")
+    if task.startswith("/") and len(parts) >= 2:
+        return f"/{parts[0]}/{parts[1]}"
+    return fallback or task
 
 
 def _termination_class(pod: dict, overdue_seconds: int | None) -> TerminationClass:
@@ -914,6 +1082,9 @@ class K8sFleet:
     def pending(self) -> list[dict]:
         return self._fan_out(lambda s: s.pending(), self._error_row)
 
+    def workload_allocations(self) -> list[dict]:
+        return self._fan_out(lambda source: [asdict(row) for row in source.workload_allocations()], self._error_row)
+
     def termination_candidates(self) -> list[TerminatingPodResult]:
         return self._collect(
             lambda source: source.termination_candidates(),
@@ -928,6 +1099,9 @@ class K8sFleet:
 
     def nodes(self) -> list[dict]:
         return self._fan_out(lambda s: s.nodes(), self._error_row)
+
+    def node_pools(self) -> list[dict]:
+        return self._fan_out(lambda s: s.node_pools(), self._error_row)
 
     def gpu_racks(self) -> list[dict]:
         return self._fan_out(lambda s: s.gpu_racks(), self._error_row)

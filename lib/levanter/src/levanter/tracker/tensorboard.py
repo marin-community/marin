@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import jax
 import numpy as np
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.json_logger import _flatten

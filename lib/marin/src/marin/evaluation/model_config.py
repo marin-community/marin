@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import draccus
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 
 class ServeBackend(StrEnum):
@@ -31,7 +31,9 @@ class ResourceHint:
     ``{"H100": 8}``. A CLI accelerator override may change the GPU shape but cannot move a
     GPU-required model onto TPU.
 
-    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults.
+    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults. Leave
+    ``memory`` unset unless the model needs more than its checkpoint implies: the lowering path
+    otherwise sizes host memory from the checkpoint's weight files and the slice's rank count.
     """
 
     hbm_gb: int | None = None

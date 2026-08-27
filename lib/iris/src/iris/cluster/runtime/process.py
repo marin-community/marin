@@ -358,6 +358,7 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
     """Build container_path -> host_path mapping for process runtime.
 
     WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
+    OUTPUT mounts resolve to config.output_host_path.
     CACHE mounts resolve to shared subdirectories under cache_dir.
     TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
     """
@@ -366,6 +367,10 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
         if mount.kind == MountKind.WORKDIR:
             if config.workdir_host_path:
                 result[mount.container_path] = str(config.workdir_host_path)
+        elif mount.kind == MountKind.OUTPUT:
+            if config.output_host_path:
+                config.output_host_path.mkdir(parents=True, exist_ok=True)
+                result[mount.container_path] = str(config.output_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
                 host_dir = cache_dir / cache_host_dirname(mount.container_path)
@@ -527,7 +532,12 @@ class ProcessContainerHandle:
         dispatch = LocalProfileDispatch(resume_pid=pid)
 
         if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
+            return capture_threads(
+                dispatch,
+                pid=str(pid),
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
         elif profile_type.HasField("cpu"):
             return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):

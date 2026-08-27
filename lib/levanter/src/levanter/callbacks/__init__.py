@@ -12,7 +12,7 @@ from typing import Callable, Optional
 import wandb
 
 import jax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
@@ -32,7 +32,6 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
-from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import (
     ProfileOptionsConfig as ProfileOptionsConfig,
@@ -295,7 +294,6 @@ __all__ = [
     "StepInfo",
     "progress_event_scope",
     "log_performance_stats",
-    "iris_status_reporter",
     "log_step_info",
     "pbar_logger",
     "CallbackStateView",

@@ -31,12 +31,10 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     ScaleGroupResources,
     SliceConfig,
-    SshConfig,
     WorkerConfig,
     WorkerProviderConfig,
     WorkerSettings,
     backend_attribute_sets,
-    build_ssh_command_config,
     config_to_dict,
     load_config,
     make_local_config,
@@ -45,13 +43,10 @@ from iris.cluster.config import (
 )
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
-from iris.rpc import controller_pb2
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Duration
 
 
 class TestConfigRoundTrip:
@@ -516,89 +511,6 @@ scale_groups:
         assert "tpu_v5e_8" in autoscaler.groups
 
 
-class TestSshConfigMerging:
-    """Tests for SSH config merging from cluster defaults and per-group overrides."""
-
-    def test_uses_cluster_default_ssh_config(self):
-        """build_ssh_command_config returns cluster defaults when no group override."""
-
-        config = IrisClusterConfig()
-        config.defaults.ssh = SshConfig(
-            user="ubuntu",
-            key_file="~/.ssh/cluster_key",
-            impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
-            connect_timeout=Duration.from_seconds(60),
-        )
-
-        ssh_config = build_ssh_command_config(config)
-
-        assert ssh_config.user == "ubuntu"
-        assert ssh_config.key_file == "~/.ssh/cluster_key"
-        assert ssh_config.port == 22  # DEFAULT_SSH_PORT
-        assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
-        assert ssh_config.connect_timeout.to_ms() == 60_000
-
-    def test_applies_per_group_ssh_overrides(self):
-        """build_ssh_command_config applies per-group SSH overrides for manual slice template."""
-        config = IrisClusterConfig()
-        config.defaults.ssh.user = "ubuntu"
-        config.defaults.ssh.key_file = "~/.ssh/cluster_key"
-
-        config.scale_groups["manual_group"] = ScaleGroupConfig(
-            name="manual_group",
-            slice_template=SliceConfig(
-                manual=ManualSliceConfig(
-                    hosts=["10.0.0.1"],
-                    ssh_user="admin",
-                    ssh_key_file="~/.ssh/group_key",
-                )
-            ),
-        )
-
-        ssh_config = build_ssh_command_config(config, group_name="manual_group")
-
-        assert ssh_config.user == "admin"
-        assert ssh_config.key_file == "~/.ssh/group_key"
-        assert ssh_config.port == 22
-
-    def test_uses_defaults_when_cluster_ssh_config_empty(self):
-        """build_ssh_command_config uses built-in defaults when cluster config empty."""
-
-        config = IrisClusterConfig()
-
-        ssh_config = build_ssh_command_config(config)
-
-        assert ssh_config.user == "root"
-        assert ssh_config.key_file == ""
-        assert ssh_config.port == 22
-        assert ssh_config.impersonate_service_account == ""
-        assert ssh_config.connect_timeout.to_ms() == 30_000
-
-    def test_validate_config_requires_gcp_service_accounts(self):
-        config = IrisClusterConfig(
-            name="test-cluster",
-            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
-            controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
-        )
-        config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
-
-        config.scale_groups["tpu"] = ScaleGroupConfig(
-            name="tpu",
-            num_vms=1,
-            resources=ScaleGroupResources(
-                device_type=AcceleratorType.TPU,
-                device_variant="v5litepod-4",
-                capacity_type=CapacityType.PREEMPTIBLE,
-            ),
-            slice_template=SliceConfig(
-                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="tpu-ubuntu2204-base"),
-            ),
-        )
-
-        with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
-            validate_config(config)
-
-
 class TestLocalConfigTransformation:
     """Tests for make_local_config transformation."""
 
@@ -667,6 +579,10 @@ scale_groups:
         assert local_config.defaults.autoscaler.evaluation_interval.to_ms() == 500
         assert local_config.defaults.autoscaler.scale_up_delay.to_ms() == 1000
         assert local_config.defaults.autoscaler.scale_down_delay.to_ms() == 1000
+        assert local_config.task_outputs is not None
+        assert local_config.task_outputs.destination == "file://"
+        assert local_config.task_outputs.ttl_days == 0
+        assert local_config.defaults.worker.task_outputs == local_config.task_outputs
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
@@ -853,6 +769,30 @@ class TestConfigValidation:
         # would collide with the sentinel in the cluster-id namespace.
         with pytest.raises(ValueError, match="reserved as the federation"):
             validate_config(IrisClusterConfig(name=LOCAL_CLUSTER))
+
+    def test_validate_config_requires_gcp_service_accounts(self):
+        config = IrisClusterConfig(
+            name="test-cluster",
+            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
+            controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
+        )
+        config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
+
+        config.scale_groups["tpu"] = ScaleGroupConfig(
+            name="tpu",
+            num_vms=1,
+            resources=ScaleGroupResources(
+                device_type=AcceleratorType.TPU,
+                device_variant="v5litepod-4",
+                capacity_type=CapacityType.PREEMPTIBLE,
+            ),
+            slice_template=SliceConfig(
+                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="tpu-ubuntu2204-base"),
+            ),
+        )
+
+        with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
+            validate_config(config)
 
     def test_rejects_missing_resources(self):
         config = IrisClusterConfig(name="test-cluster", scale_groups={"test": ScaleGroupConfig(name="test", num_vms=1)})
@@ -1926,34 +1866,6 @@ def test_coreweave_worker_provider_rejected():
         validate_config(config)
 
 
-SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "config" / "ci-gcp-smoke.yaml"
-
-
-@pytest.mark.timeout(15)
-@pytest.mark.requires_cluster
-def test_smoke_gcp_config_boots_locally():
-    """Load ci-gcp-smoke.yaml, convert to local mode, verify workers join."""
-    config = load_config(SMOKE_GCP_CONFIG)
-    config = make_local_config(config)
-
-    with connect_cluster(config) as url:
-        client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        # The smoke config has buffer_slices=1 for v5e-smoke/16 across 2 zones,
-        # each with num_vms=4 → 8 workers total.  We only need one healthy
-        # worker to confirm the config boots.
-
-        def _has_healthy_worker() -> bool:
-            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
-            return any(w.healthy for w in workers)
-
-        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
-            _has_healthy_worker,
-            timeout=Duration.from_seconds(15.0),
-            error_message="No healthy workers with ci-gcp-smoke.yaml in local mode",
-        )
-        client.close()
-
-
 def _worker_daemon_backend(**overrides) -> BackendConfig:
     """A minimal valid worker_daemon backend (worker_provider present, in_process)."""
     fields = {"kind": "worker_daemon", "worker_provider": WorkerProviderConfig()}
@@ -2187,6 +2099,11 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
     )
     with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
         make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+
+
+def test_kubernetes_provider_rejects_nonpositive_cache_max_age():
+    with pytest.raises(ValueError, match="cache_max_age must be positive"):
+        KubernetesProviderConfig(cache_max_age=Duration.from_seconds(0))
 
 
 def test_k8s_backend_uses_canonical_default_task_image():

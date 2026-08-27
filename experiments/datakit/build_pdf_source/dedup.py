@@ -52,7 +52,7 @@ from marin.datakit.normalize import DedupMode, NormalizedData, normalize_step
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.decontam.config import (
     BLOOM_STEP_NAME,

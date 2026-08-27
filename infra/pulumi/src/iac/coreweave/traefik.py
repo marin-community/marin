@@ -35,6 +35,7 @@ from iris.cluster.platforms.k8s.network_manifests import (
 )
 
 from iac.config import IngressSpec
+from iac.imports import NO_IMPORTS, ImportRegistrar
 
 # Chart versions, pinned for reproducibility (same discipline as KueueAddon.CKS_KUEUE_VERSION) —
 # latest published at https://charts.core-services.ingress.coreweave.com/index.yaml as of this
@@ -55,9 +56,6 @@ class TraefikAddonArgs:
     # ComponentResources on its own, so a fresh cluster with no namespace yet needs this wired
     # explicitly — see IrisRbac.namespace.
     namespace_dependency: pulumi.Resource | None = None
-    # Adoption mode: stamp import_ on each object so `pulumi preview` shows the real adoption
-    # diff instead of planning creates. Set via the `marin-iac:import` stack flag.
-    adopt: bool = False
 
 
 class TraefikAddon(pulumi.ComponentResource):
@@ -74,6 +72,7 @@ class TraefikAddon(pulumi.ComponentResource):
         args: TraefikAddonArgs,
         *,
         k8s_provider: pulumi.ProviderResource,
+        imports: ImportRegistrar = NO_IMPORTS,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__("marin:coreweave:TraefikAddon", name, None, opts)
@@ -91,12 +90,11 @@ class TraefikAddon(pulumi.ComponentResource):
                 "reference a ClusterIssuer that TraefikAddon never creates"
             )
 
-        def child_opts(import_id: str | None = None, depends_on: list | None = None) -> pulumi.ResourceOptions:
+        def child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
                 parent=self,
                 provider=k8s_provider,
                 depends_on=depends_on,
-                import_=import_id if (args.adopt and import_id) else None,
             )
 
         # These two Releases omit `repository_opts`: with it set, Pulumi intermittently fails to
@@ -112,7 +110,12 @@ class TraefikAddon(pulumi.ComponentResource):
             version=CERT_MANAGER_VERSION,
             namespace=DEFAULT_CERT_MANAGER_NAMESPACE,
             create_namespace=True,
-            opts=child_opts(f"{DEFAULT_CERT_MANAGER_NAMESPACE}/{DEFAULT_CERT_MANAGER_RELEASE}"),
+            opts=child_opts(),
+        )
+        imports.register(
+            cert_manager_release,
+            parent=self,
+            provider_id=f"{DEFAULT_CERT_MANAGER_NAMESPACE}/{DEFAULT_CERT_MANAGER_RELEASE}",
         )
         traefik_release = k8s.helm.v3.Release(
             "traefik",
@@ -121,7 +124,12 @@ class TraefikAddon(pulumi.ComponentResource):
             version=TRAEFIK_VERSION,
             namespace=DEFAULT_TRAEFIK_NAMESPACE,
             create_namespace=True,
-            opts=child_opts(f"{DEFAULT_TRAEFIK_NAMESPACE}/{DEFAULT_TRAEFIK_RELEASE}"),
+            opts=child_opts(),
+        )
+        imports.register(
+            traefik_release,
+            parent=self,
+            provider_id=f"{DEFAULT_TRAEFIK_NAMESPACE}/{DEFAULT_TRAEFIK_RELEASE}",
         )
 
         # HTTP-01 ClusterIssuers named in spec.cluster_issuers (normally both staging + prod).
@@ -136,16 +144,16 @@ class TraefikAddon(pulumi.ComponentResource):
         for issuer_name in args.spec.cluster_issuers:
             env = ISSUER_ENVS[issuer_name]
             manifest = http01_issuer(env, args.spec.acme_email, args.spec.ingress_class)
-            issuers.append(
-                k8s.apiextensions.CustomResource(
-                    f"cluster-issuer-{env}",
-                    api_version=manifest["apiVersion"],
-                    kind=manifest["kind"],
-                    metadata=manifest["metadata"],
-                    spec=manifest["spec"],
-                    opts=child_opts(issuer_name, depends_on=[cert_manager_release]),
-                )
+            issuer = k8s.apiextensions.CustomResource(
+                f"cluster-issuer-{env}",
+                api_version=manifest["apiVersion"],
+                kind=manifest["kind"],
+                metadata=manifest["metadata"],
+                spec=manifest["spec"],
+                opts=child_opts(depends_on=[cert_manager_release]),
             )
+            imports.register(issuer, parent=self, provider_id=issuer_name)
+            issuers.append(issuer)
 
         # Both objects below are namespace-scoped to args.namespace, which only IrisRbac's
         # Namespace resource creates — depend on it explicitly (see TraefikAddonArgs.namespace_dependency).
@@ -153,14 +161,15 @@ class TraefikAddon(pulumi.ComponentResource):
 
         source_ranges = [normalize_source(source) for source in args.spec.federation_allow_sources]
         middleware_manifest = ipallowlist_middleware(namespace=args.namespace, source_ranges=source_ranges)
-        k8s.apiextensions.CustomResource(
+        middleware = k8s.apiextensions.CustomResource(
             "federation-ipallowlist",
             api_version=middleware_manifest["apiVersion"],
             kind=middleware_manifest["kind"],
             metadata=middleware_manifest["metadata"],
             spec=middleware_manifest["spec"],
-            opts=child_opts(f"{args.namespace}/{MIDDLEWARE_NAME}", depends_on=[traefik_release, *namespace_deps]),
+            opts=child_opts(depends_on=[traefik_release, *namespace_deps]),
         )
+        imports.register(middleware, parent=self, provider_id=f"{args.namespace}/{MIDDLEWARE_NAME}")
 
         ingress_manifest = federation_ingress(
             namespace=args.namespace,
@@ -171,16 +180,20 @@ class TraefikAddon(pulumi.ComponentResource):
             tls_secret=DEFAULT_TLS_SECRET,
             cluster_issuer=args.spec.active_cluster_issuer,
         )
-        k8s.networking.v1.Ingress(
+        ingress = k8s.networking.v1.Ingress(
             "federation-ingress",
             metadata=ingress_manifest["metadata"],
             spec=ingress_manifest["spec"],
             opts=child_opts(
-                f"{args.namespace}/{ingress_manifest['metadata']['name']}",
                 # Depends on the ClusterIssuer it references via cert-manager.io/cluster-issuer —
                 # applying the Ingress before that issuer exists means cert-manager's
                 # ingress-shim can't find it on first reconcile.
                 depends_on=[traefik_release, *issuers, *namespace_deps],
             ),
+        )
+        imports.register(
+            ingress,
+            parent=self,
+            provider_id=f"{args.namespace}/{ingress_manifest['metadata']['name']}",
         )
         self.register_outputs({})

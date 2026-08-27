@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from levanter.cutlass_kernel_cache import cute_launcher_factory
 from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
 
 
@@ -152,6 +153,7 @@ def _validate_sm90_native_config(
         )
 
 
+@cute_launcher_factory
 def segmented_flash_attention_forward_launcher(
     modules: Any,
     *,
@@ -930,6 +932,7 @@ def segmented_flash_attention_forward_launcher(
     return _launch_segmented_flash_attention_forward
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_launcher(
     modules: Any,
     *,
@@ -1174,6 +1177,7 @@ def segmented_flash_attention_backward_launcher(
     return _launch_segmented_flash_attention_backward
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_sm90_launcher(
     modules: Any,
     *,
@@ -1368,6 +1372,7 @@ def segmented_flash_attention_backward_sm90_launcher(
     return _launch_segmented_flash_attention_backward_sm90
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_sm90_preprocess_launcher(
     modules: Any,
     *,
@@ -1415,6 +1420,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     return _launch_flash_attention_backward_sm90_preprocess
 
 
+@cute_launcher_factory
 def flash_attention_backward_postprocess_launcher(
     modules: Any,
     *,
@@ -1542,6 +1548,16 @@ def _segmented_backward_arches(
     tile_n: int,
     num_threads: int,
 ) -> _BackwardArchSelection:
+    """Select the backward kernel path, rejecting tile shapes that do not hold up.
+
+    Compute capability 9.x, 10.x, and 12.x are restricted to a 64x64 backward at 128 threads.
+    That is narrower than ``SegmentedFlashAttentionBackwardSm120.can_implement``, which admits
+    any 16-aligned key tile whose shared memory fits, and the gap is load-bearing rather than
+    conservative: measured on GB200 at head dimension 128, a 192x64 or 256x64 backward passes
+    ``can_implement`` and returns gradients off by four orders of magnitude, and 256 threads
+    does the same at 128x64. The remaining admissible shapes are 1.7x to 24x slower than 64x64.
+    Widen this only against a gradient comparison, never against ``can_implement`` alone.
+    """
     is_sm120_config = tile_m == 64 and tile_n == 64 and num_threads == 128
     if compute_arch is None:
         inferred_arch = 120 if is_sm120_config else 80

@@ -97,7 +97,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import UNCHEATABLE_SUBSETS, uncheatable_raw

@@ -129,7 +129,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "SELECT t, cl AS series, SUM(w) / 1000.0 AS value FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'gpu_uuid') AS gpu, AVG(value) AS w FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3) GROUP BY 1, 2 ORDER BY 1"
+            "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT t, cl AS series, SUM(w) / 1000.0 AS value FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'gpu_uuid') AS gpu, AVG(value) AS w FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3) GROUP BY 1, 2 ORDER BY 1"
           },
           {
             "key": "from",

@@ -47,6 +47,17 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.testing.controller import (
+    check_task_can_be_scheduled,
+    make_test_entrypoint,
+    make_worker_metadata,
+    register_worker,
+)
+from iris.testing.controller import (
+    query_tasks_with_attempts as _query_tasks_with_attempts,
+)
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
@@ -56,18 +67,6 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
-    check_task_can_be_scheduled,
-    make_test_entrypoint,
-    make_worker_metadata,
-    register_worker,
-)
-from .conftest import (
-    query_tasks_with_attempts as _query_tasks_with_attempts,
-)
 
 # =============================================================================
 # Test Helpers
@@ -263,6 +262,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     _authoring_backend = _worker_backend(state, autoscaler)
     controller_mock.provider.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
     controller_mock.provider.status.side_effect = _authoring_backend.status
+    controller_mock.provider.runtime_image.side_effect = _authoring_backend.runtime_image
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
@@ -1213,6 +1213,15 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     assert proto_uids == db_uids
 
 
+def test_get_task_status_includes_runtime_image(client, state, job_request):
+    job_request.task_image = "registry.example/task:v2"
+    job_id = submit_job(state, "runtime-image", job_request)
+
+    response = rpc_post(client, "GetTaskStatus", {"taskId": job_id.task(0).to_wire()})
+
+    assert response["task"]["buildMetrics"]["imageTag"] == "registry.example/task:v2"
+
+
 def test_get_worker_status_by_worker_id(client, state):
     """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
@@ -1975,7 +1984,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
+    assert summaries["gcp"]["availability"]["version"] == 3  # wire contract; not the constant
     # Held capacity is reported per priority band so a parent can see what a
     # higher-priority job would reclaim there.
     assert summaries["gcp"]["availability"]["heldByBand"] == [

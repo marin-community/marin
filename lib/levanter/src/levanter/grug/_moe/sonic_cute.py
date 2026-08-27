@@ -135,6 +135,7 @@ def _moe_mlp_local_sonic_cute_chunked(
     Rows past the chunk's real assignments are folded into the last expert group (so the kernel never
     leaves ungrouped garbage rows) but weight-masked to zero, so they contribute nothing to the
     forward output and route a zero cotangent back to the router in the combine backward.
+
     """
     if sum(chunk_sizes) != num_experts:
         raise ValueError(f"chunk_sizes={chunk_sizes} must sum to num_experts={num_experts}")
@@ -169,9 +170,11 @@ def _moe_mlp_local_sonic_cute_chunked(
         lo = bounds[c]
         hi = bounds[c + 1]
         with jax.named_scope("gather_chunk"):
-            w13_chunk = jax.lax.all_gather(moe_w13_local[lo:hi], data_axis_name, axis=1, tiled=True)
+            # Interleave on the local shard: it rewrites the last axis and the gather is along H, so
+            # the two commute, and this does 1/data-th of the elementwise work.
+            w13_local = _interleave_gate_up(moe_w13_local[lo:hi], moe_dim)
+            w13_il = jax.lax.all_gather(w13_local, data_axis_name, axis=1, tiled=True)
             w2_chunk = jax.lax.all_gather(moe_w2_local[lo:hi], data_axis_name, axis=2, tiled=True)
-        w13_il = _interleave_gate_up(w13_chunk, moe_dim)
 
         start = cu[lo]
         x_seg = jax.lax.dynamic_slice(x_pad, (start, 0), (cap, hidden))

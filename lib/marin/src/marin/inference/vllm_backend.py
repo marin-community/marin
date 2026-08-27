@@ -22,17 +22,17 @@ from marin.inference.config import (
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
+    PreinstalledVllm,
     VllmEnvironment,
     VllmLauncher,
     VllmLauncherWithEnvironment,
     VllmType,
-    WorkspaceVllm,
 )
 
 
 def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
-    if config.launcher is VllmLauncherType.WORKSPACE:
-        return WorkspaceVllm()
+    if config.launcher is VllmLauncherType.PREINSTALLED:
+        return PreinstalledVllm()
     if config.launcher is VllmLauncherType.TPU:
         return IsolatedTpuVllm(
             vllm_ref=VLLM_FORK_REQUIREMENT,

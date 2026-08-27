@@ -15,11 +15,11 @@ from typing import cast
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
-from iris.client import iris_ctx
+from fray.types import ActorConfig, Entrypoint, JobRequest, JobStatus
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
-from iris.rpc import job_pb2
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
+from iris.resources.state import TaskState, is_job_finished
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
@@ -54,7 +54,6 @@ _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
-_METADATA_ACCELERATOR = "accelerator"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
@@ -103,11 +102,11 @@ class RemoteInferenceSession:
         client = iris_ctx().client
         for job in self.jobs:
             job_id = JobName.from_string(str(job.job_id))
-            status = client.status(job_id)
+            status = client.job_status(job_id)
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
             tasks = client.list_tasks(job_id)
-            if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
+            if not tasks or any(task.state is not TaskState.RUNNING for task in tasks):
                 state = InferenceBackendState.RECOVERING
         if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
             state = InferenceBackendState.RECOVERING
@@ -180,15 +179,6 @@ def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig 
     return None
 
 
-def _accelerator_label(iris: IrisConfig) -> str:
-    device = iris.worker_resources.device
-    if isinstance(device, CpuConfig):
-        raise ValueError("Inference workers require an accelerator")
-    if device.kind == "gpu":
-        return f"{device.variant}x{device.chip_count()}"
-    return device.variant
-
-
 def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedModelConfig, int]:
     # Keep model-cache and Transformers imports inside accelerator workers.
     from marin.inference.model_preparation import (  # noqa: PLC0415
@@ -235,7 +225,6 @@ def _endpoint_metadata(
     *,
     model: str,
     backend: str,
-    accelerator: str,
     tensor_parallel_size: int,
     streaming: bool,
     proxy_timeout_seconds: float,
@@ -244,7 +233,6 @@ def _endpoint_metadata(
         _METADATA_MODEL: model,
         _METADATA_KIND: _MARIN_SERVE_KIND,
         _METADATA_BACKEND: backend,
-        _METADATA_ACCELERATOR: accelerator,
         _METADATA_TENSOR_PARALLEL_SIZE: str(tensor_parallel_size),
         _METADATA_STREAMING: str(streaming).lower(),
         PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
@@ -305,7 +293,6 @@ def _register_dashboard(
         max_model_len=service.model.max_model_len,
         dtype=service.model.dtype,
         has_chat_template=has_chat_template,
-        tpu_type=_accelerator_label(service.iris),
         endpoint=service.endpoint_name,
         streaming=streaming,
     )
@@ -320,7 +307,6 @@ def _register_dashboard(
         metadata = _endpoint_metadata(
             model=model.endpoint.model,
             backend=backend_name,
-            accelerator=_accelerator_label(service.iris),
             tensor_parallel_size=tensor_parallel_size,
             streaming=streaming,
             proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
@@ -575,7 +561,6 @@ def _expose_brokered_inference(
             _endpoint_metadata(
                 model=model.model_id,
                 backend=worker_metadata.backend_name,
-                accelerator=_accelerator_label(iris),
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 streaming=False,
                 proxy_timeout_seconds=proxy.request_timeout_seconds,

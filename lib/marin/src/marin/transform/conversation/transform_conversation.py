@@ -25,9 +25,10 @@ import fsspec
 from fray.types import ResourceConfig
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.utils import load_dataset_with_backoff
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 from zephyr.writers import write_jsonl_file
 

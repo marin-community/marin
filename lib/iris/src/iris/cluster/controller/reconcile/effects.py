@@ -26,6 +26,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName, WorkerId
+from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # Per-entity row deltas
@@ -67,6 +68,7 @@ class AttemptRowDelta:
     pod_uid: str | None = None
     node_name: str | None = None
     terminal_reason: str | None = None
+    output_archive: job_pb2.TaskOutputArchive | None = None
 
 
 @dataclass
@@ -122,6 +124,8 @@ class TaskActionReason(StrEnum):
     COSCHEDULED_SIBLING_TERMINATED = "CoscheduledSiblingTerminated"
     COSCHEDULED_SIBLING_REQUEUED = "CoscheduledSiblingRequeued"
     JOB_FINALIZED_TASK_KILLED = "JobFinalizedTaskKilled"
+    PARENT_JOB_TERMINATED = "ParentJobTerminated"
+    JOB_COMPLETED_TASK_SUCCEEDED = "JobCompletedTaskSucceeded"
 
 
 @dataclass(frozen=True, slots=True)

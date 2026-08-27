@@ -78,13 +78,13 @@ import fsspec
 import httpx
 import polars as pl
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials, s3_endpoint
 from rigging.log_setup import configure_logging
 from transformers import AutoTokenizer
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.llama import llama3_tokenizer

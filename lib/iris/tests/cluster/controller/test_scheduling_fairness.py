@@ -12,15 +12,14 @@ from iris.cluster.controller.scheduling.policy import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-
-from ._test_support import set_task_state_for_test, submit_job_in_tx
-from .conftest import (
+from iris.testing.controller import (
     make_controller_state,
     make_job_request,
     query_tasks_for_job,
     submit_job,
 )
+from iris.testing.controller_state import set_task_state_for_test, submit_job_in_tx
+from rigging.timing import Timestamp
 
 
 def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int | None = None) -> list:
@@ -89,6 +88,26 @@ def test_batch_scheduled_after_interactive():
         interactive_indices = [i for i, tid in enumerate(task_ids) if tid in interactive_ids]
 
         assert max(interactive_indices) < min(batch_indices)
+
+
+def test_all_priority_bands_are_scheduled_in_policy_order():
+    with make_controller_state() as state:
+        task_bands = {}
+        for user, name, band in [
+            ("alice", "interactive-job", job_pb2.PRIORITY_BAND_INTERACTIVE),
+            ("bob", "batch-job", job_pb2.PRIORITY_BAND_BATCH),
+            ("charlie", "production-job", job_pb2.PRIORITY_BAND_PRODUCTION),
+            ("dana", "system-job", job_pb2.PRIORITY_BAND_SYSTEM),
+        ]:
+            [task] = _submit_user_job(state, user, name, band=band)
+            task_bands[task.task_id] = band
+
+        assert [task_bands[task.task_id] for task in _pending_sorted(state)] == [
+            job_pb2.PRIORITY_BAND_SYSTEM,
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_INTERACTIVE,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ]
 
 
 def test_depth_boost_within_band():

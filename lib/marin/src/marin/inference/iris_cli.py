@@ -22,9 +22,9 @@ pointing one client at both endpoints compares them directly.
 ``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the vLLM GPU
 path CUDA vLLM is provisioned in an isolated ``uv`` tool env — stock PyPI vLLM at ``--vllm-version``,
 or Marin's vLLM fork with ``--vllm-source marin-fork`` (needed for Marin-custom architectures like
-grug_moe); on the vLLM TPU path, a marin checkout serves vLLM from the workspace lock, and outside a
-checkout (or with ``--isolated-vllm``) from an isolated ``uv`` tool env holding Marin's forked TPU
-vLLM. The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
+grug_moe); on the vLLM TPU path, vLLM always runs from an isolated ``uv`` tool env holding Marin's
+forked TPU vLLM, so the worker venv only needs the ``tpu`` extra for the serving glue's JAX/libtpu.
+The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 
 ``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
@@ -45,34 +45,23 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
+from fray.iris_backend import convert_constraints, convert_resources
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
-from iris.cli.job import parse_gpu_spec
-from iris.client import IrisClient, Job
-from iris.cluster.constraints import (
-    CLUSTER_CONSTRAINT_KEY,
-    Constraint,
-    ConstraintOp,
-    preemptible_constraint,
-    region_constraint,
-)
+from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
+from iris.client.client import IrisClient, Job
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
-    ResourceSpec,
-    gpu_device,
     is_job_finished,
-    tpu_device,
 )
-from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
-    TPU_VLLM_WORKER_EXTRAS,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -102,7 +91,6 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
     "vllm_args": "--vllm-arg",
-    "isolated_vllm": "--isolated-vllm",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
 _LEVANTER_ONLY_OPTIONS = {
@@ -125,9 +113,8 @@ class ServingPlan:
     """How to serve on this slice: which backend, on what device, in which worker environment."""
 
     engine: VllmEngineConfig | LevanterEngineConfig
-    device: job_pb2.DeviceConfig
     worker_extras: tuple[str, ...]
-    tpu_type: str | None = None
+    tpu_types: tuple[str, ...] = ()
     gpu_type: str | None = None
     gpu_count: int | None = None
 
@@ -138,7 +125,6 @@ def _resolve_serving_plan(
     tpu: str,
     gpu: str | None,
     in_checkout: bool,
-    isolated_vllm: bool,
     task_image: str | None,
     cuda_vllm_version: str,
     vllm_source: VllmSource,
@@ -151,7 +137,8 @@ def _resolve_serving_plan(
     ``vllm`` and ``levanter`` arrive carrying the knobs the user set; what is decided here is which
     of them serves, and where its runtime comes from. Levanter computes in the worker venv, so that
     venv carries the accelerator's JAX and nothing else; vLLM runs as a subprocess, either from the
-    workspace lock or from an isolated uv-tool env.
+    vllm on the worker's PATH (a GPU task image) or from an isolated uv-tool env (the TPU forks or
+    the CUDA fork/upstream release).
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
@@ -165,36 +152,40 @@ def _resolve_serving_plan(
             gpu_type, gpu_count = parse_gpu_spec(gpu)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        device = gpu_device(gpu_type, gpu_count)
         if backend == "levanter":
-            return ServingPlan(
-                levanter, device, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count
-            )
+            return ServingPlan(levanter, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
         # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a prebuilt
         # --task-image, which is expected to ship its own vLLM on PATH.
         if task_image is None:
             source = vllm_source
             version = cuda_vllm_version if source is VllmSource.UPSTREAM else None
             vllm = replace(vllm, launcher=VllmLauncherType.CUDA, source=source, version=version)
-        return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
+        return ServingPlan(vllm, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
-    topology = get_tpu_topology(tpu)
-    if topology.vm_count != 1:
-        raise click.ClickException(
-            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
-            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-        )
-    device = tpu_device(tpu)
+    tpu_types = tuple(build_tpu_alternatives(tpu))
+    if not tpu_types:
+        raise click.ClickException("--tpu must specify at least one TPU variant.")
+    try:
+        ResourceConfig.with_tpu(tpu_types)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for tpu_type in tpu_types:
+        topology = get_tpu_topology(tpu_type)
+        if topology.vm_count != 1:
+            raise click.ClickException(
+                f"{tpu_type!r} is a multi-host slice (vm_count={topology.vm_count}); marin-serve iris supports "
+                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+            )
     if backend == "levanter":
-        return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_type=tpu)
-    if isolated_vllm or not in_checkout:
-        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout to build
-        # it from (or when explicitly requested); otherwise serve the workspace TPU-vLLM from the
-        # lock. The worker venv always needs the `tpu` extra for the serving glue's jax/libtpu; the
-        # `vllm` extra is only for the in-workspace build.
-        vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-        return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
-    return ServingPlan(vllm, device, (*TPU_VLLM_WORKER_EXTRAS, *extras), tpu_type=tpu)
+        return ServingPlan(
+            levanter,
+            (*_LEVANTER_TPU_EXTRAS, *extras),
+            tpu_types=tpu_types,
+        )
+    # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
+    # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
+    vllm = replace(vllm, launcher=VllmLauncherType.TPU)
+    return ServingPlan(vllm, ("tpu", *extras), tpu_types=tpu_types)
 
 
 def _default_job_name(model: str) -> str:
@@ -301,7 +292,14 @@ def _mint_and_print_capability_url(
 @click.option(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
-@click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--tpu",
+    default="v6e-8",
+    help=(
+        "Single-host TPU slice type. Pass compatible comma-separated variants "
+        "(e.g. v6e-8,v5litepod-8) to use whichever has capacity."
+    ),
+)
 @click.option(
     "--gpu",
     default=None,
@@ -311,13 +309,6 @@ def _mint_and_print_capability_url(
     "--target-cluster",
     default=None,
     help="Federate the job to this peer cluster (e.g. cw-rno2a). --cluster still selects the controller.",
-)
-@click.option(
-    "--isolated-vllm",
-    is_flag=True,
-    default=False,
-    help="TPU path: provision vLLM from the isolated uvx env (Marin's forked TPU vLLM) "
-    "even inside a checkout. Auto-selected when marin-serve runs outside a checkout.",
 )
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
@@ -417,7 +408,6 @@ def main(
     tpu: str,
     gpu: str | None,
     target_cluster: str | None,
-    isolated_vllm: bool,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -478,7 +468,6 @@ def main(
         tpu=tpu,
         gpu=gpu,
         in_checkout=workspace_dir is not None,
-        isolated_vllm=isolated_vllm,
         task_image=task_image,
         cuda_vllm_version=vllm_version,
         vllm_source=vllm_source_enum,
@@ -518,7 +507,7 @@ def main(
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
-            plan.tpu_type or tpu,
+            plan.tpu_types,
             cpu=cpu,
             ram=memory,
             disk=disk,
@@ -565,18 +554,27 @@ def main(
     else:
         environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
 
-    constraints: list[Constraint] = []
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
     # have the requested accelerator slice. Direct serves still place the server in --region.
+    submission_regions = None
     if region and not brokered:
-        regions = [r.strip() for r in region.split(",") if r.strip()]
-        if regions:
-            constraints.append(region_constraint(regions))
-    if target_cluster:
-        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
+        submission_regions = [r.strip() for r in region.split(",") if r.strip()] or None
     if brokered:
-        constraints.append(preemptible_constraint(False))
+        submission_resources = ResourceConfig.with_cpu(
+            cpu=2,
+            ram="8g",
+            disk="20g",
+            preemptible=False,
+            target_cluster=target_cluster,
+        )
+    else:
+        submission_resources = replace(
+            worker_resources,
+            regions=submission_regions,
+            target_cluster=target_cluster,
+        )
+    constraints = convert_constraints(submission_resources)
 
     endpoint_cluster = cluster if controller is None else None
     with connect_controller(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
@@ -587,11 +585,7 @@ def main(
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
-                resources=(
-                    ResourceSpec(cpu=2, memory="8g", disk="20g")
-                    if brokered
-                    else ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=plan.device)
-                ),
+                resources=convert_resources(submission_resources),
                 environment=environment,
                 ports=["http"],
                 constraints=constraints or None,
@@ -610,7 +604,7 @@ def main(
             if gpu is not None:
                 click.echo(f"  gpu          {plan.gpu_type}x{plan.gpu_count}")
             else:
-                click.echo(f"  tpu          {tpu}")
+                click.echo(f"  tpu          {','.join(plan.tpu_types)}")
             if target_cluster:
                 click.echo(f"  target       {target_cluster}")
             click.echo(f"  endpoint     {endpoint}")
@@ -621,9 +615,9 @@ def main(
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
-                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+                click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
             else:
-                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
+                click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {job}")
             click.echo("")
 
             if not wait:

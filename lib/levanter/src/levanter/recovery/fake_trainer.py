@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import resource
 import sys
 import time
 
@@ -55,6 +56,7 @@ def _inject(behavior: str) -> None:
         while True:
             time.sleep(3600)
     if behavior == "crash":
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.abort()  # SIGABRT -> negative returncode -> FaultClass.CRASH
     if behavior == "hard":
         sys.exit(7)  # non-sentinel nonzero -> FaultClass.HARD, not restarted

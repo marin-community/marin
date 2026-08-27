@@ -23,7 +23,7 @@ from iris.cluster.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
 )
-from iris.cluster.controller import ops, writes
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -50,7 +50,7 @@ from iris.cluster.controller.reconcile.worker import (
     observations_to_updates as worker_observations_to_updates,
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.schema import task_attempts_table
+from iris.cluster.controller.schema import job_config_table, task_attempts_table
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
@@ -58,20 +58,10 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
+from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import job_pb2, worker_pb2
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import (
-    WorkerTaskUpdates,
-    apply_task_observations,
-    commit_dispatch_updates,
-    commit_reconcile,
-)
-
-from .conftest import (
+from iris.testing.controller import (
     assign_task,
     dispatch_task,
     make_controller_state,
@@ -88,6 +78,16 @@ from .conftest import (
     store_from_runtime,
     submit_job,
 )
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.transitions import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+    commit_reconcile,
+)
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 _W1 = "worker-1"
 _W2 = "worker-2"
@@ -123,6 +123,7 @@ def _obs(
     *,
     exit_code: int | None = None,
     error: str | None = None,
+    status_message: str | None = None,
 ) -> worker_pb2.Worker.AttemptObservation:
     kwargs: dict = {
         "attempt_uid": attempt_uid,
@@ -132,6 +133,8 @@ def _obs(
         kwargs["exit_code"] = exit_code
     if error is not None:
         kwargs["error"] = error
+    if status_message is not None:
+        kwargs["status_message"] = status_message
     return worker_pb2.Worker.AttemptObservation(**kwargs)
 
 
@@ -1212,6 +1215,26 @@ def test_observation_routed_by_attempt_uid():
         assert updates[0].task_id == task_id
         assert updates[0].attempt_id == attempt_id
         assert updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+
+
+def test_output_finalization_observation_suspends_execution_timeout():
+    with make_controller_state() as state:
+        task_id, _, uid = _setup_running_task(state)
+        assert task_id.parent is not None
+        with state._db.transaction() as cur:
+            cur.execute(update(job_config_table).where(job_config_table.c.job_id == task_id.parent).values(timeout_ms=1))
+
+        with state._db.read_snapshot() as tx:
+            assert task_id in {row.task_id for row in reads.scan_execution_timeout_rows(tx)}
+
+        _apply_observations(
+            state,
+            _W1,
+            [_obs(uid, job_pb2.TASK_STATE_RUNNING, status_message=TASK_OUTPUT_FINALIZING_STATUS)],
+        )
+
+        with state._db.read_snapshot() as tx:
+            assert task_id not in {row.task_id for row in reads.scan_execution_timeout_rows(tx)}
 
 
 def test_unresolvable_observation_uid_is_dropped():

@@ -11,13 +11,13 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
-    DefaultEnvironmentProvider,
     HardwareProbe,
     HostMetricsCollector,
     _read_net_dev_bytes,
     build_worker_metadata,
     check_worker_health,
     construct_worker_id,
+    probe_hardware,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
 
@@ -43,16 +43,15 @@ def _make_hardware(**overrides) -> HardwareProbe:
     return HardwareProbe(**defaults)
 
 
-def test_environment_provider_basic_probe(monkeypatch):
-    """Test that DefaultEnvironmentProvider produces valid WorkerMetadata."""
+def test_hardware_probe_builds_valid_metadata(monkeypatch):
+    """Probing real system resources produces valid WorkerMetadata."""
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
     monkeypatch.delenv("TPU_WORKER_ID", raising=False)
     monkeypatch.delenv("IRIS_WORKER_ATTRIBUTES", raising=False)
 
-    provider = DefaultEnvironmentProvider()
-    metadata = provider.probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     assert metadata.hostname
     assert metadata.ip_address
@@ -68,8 +67,8 @@ def test_environment_provider_basic_probe(monkeypatch):
     assert metadata.attributes[WellKnownAttribute.DEVICE_TYPE].string_value == "cpu"
 
 
-def test_environment_provider_probes_tpu_metadata(monkeypatch):
-    """Provider should resolve TPU diagnostic metadata from GCP metadata service."""
+def test_hardware_probe_resolves_tpu_metadata(monkeypatch):
+    """Hardware probing resolves TPU diagnostic metadata from the GCP metadata service."""
     monkeypatch.delenv("TPU_NAME", raising=False)
     monkeypatch.delenv("TPU_TYPE", raising=False)
     monkeypatch.delenv("TPU_WORKER_HOSTNAMES", raising=False)
@@ -88,7 +87,7 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     }
     monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda key: metadata_values.get(key))
 
-    metadata = DefaultEnvironmentProvider().probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     # Diagnostic TPU fields are populated from probes
     assert metadata.tpu_name == "test-slice"
@@ -99,7 +98,7 @@ def test_environment_provider_probes_tpu_metadata(monkeypatch):
     assert metadata.device.tpu.variant == "v5litepod-16"
 
 
-def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch):
+def test_hardware_probe_ignores_tpu_env_vars_without_metadata(monkeypatch):
     """TPU env vars alone should not trigger TPU detection."""
     monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: False)
     monkeypatch.setenv("TPU_NAME", "env-slice")
@@ -109,7 +108,7 @@ def test_environment_provider_ignores_tpu_env_vars_without_metadata(monkeypatch)
     monkeypatch.setenv("TPU_CHIPS_PER_HOST_BOUNDS", "1,2,1")
     monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda _key: None)
 
-    metadata = DefaultEnvironmentProvider().probe()
+    metadata = build_worker_metadata(probe_hardware())
 
     assert metadata.tpu_name == ""
     assert metadata.tpu_worker_id == ""

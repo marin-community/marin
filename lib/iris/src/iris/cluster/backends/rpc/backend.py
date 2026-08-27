@@ -246,6 +246,9 @@ class RpcTaskBackend:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPU chips a peer could schedule onto, keyed by lowercased device-variant.
 

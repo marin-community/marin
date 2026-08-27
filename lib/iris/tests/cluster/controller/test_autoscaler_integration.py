@@ -18,20 +18,20 @@ from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, 
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.types import CloudSliceState
 from iris.rpc import job_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     advance_all_tpus,
     make_autoscaler,
     make_demand_entries,
     make_gcp_provider,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     mark_all_slices_ready as _mark_all_slices_ready,
 )
+from rigging.timing import Duration, Timestamp
 
 # ---------------------------------------------------------------------------
 # Waterfall end-to-end (real GcpWorkerProvider)
@@ -221,7 +221,7 @@ class TestAutoscalerWaterfallEndToEnd:
     # The fallback slice now reports READY as soon as it has worker IPs (worker
     # health is canonical), so run_once health-probes it. Stub the probe — the
     # fake's synthetic IPs have no server and would otherwise block on timeouts.
-    @unittest.mock.patch("iris.cluster.controller.autoscaler.runtime._probe_worker_health", return_value=True)
+    @unittest.mock.patch("iris.cluster.controller.autoscaler.runtime.probe_worker_health", return_value=True)
     def test_demand_cascades_through_priority_groups_on_backoff(self, _mock_probe):
         """E2E: primary keeps failing creates -> detector HOSTILE -> cascades to fallback."""
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"])

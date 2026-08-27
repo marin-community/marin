@@ -16,6 +16,22 @@ import re
 # Container/host conventions baked into the bootstrap.
 CONTAINER_NAME = "finelog"
 CACHE_DIR = "/var/cache/finelog"
+# Axum may spend 10 seconds draining requests, followed by 10 seconds stopping
+# the forwarder, 2 seconds stopping diagnostics, and 10 seconds draining the
+# store. Docker must not SIGKILL the process before those bounded phases finish.
+CONTAINER_STOP_TIMEOUT = 45
+
+# `/health` answers 200 whenever the process is listening; the body says whether
+# its namespaces accept rows (`rust/src/server/ingest_health.rs`). A namespace
+# whose registration is `pending` is still starting up; `failed` is terminal for
+# the running binary, so a deploy gate stops waiting on it.
+HEALTH_OK = "ok"
+REGISTRATION_FAILED = "registration failed"
+
+
+def health_probe_command(port: int) -> str:
+    """The shell command a deploy gate runs to read `/health` from the server's own host."""
+    return f"curl -sf -m 5 http://localhost:{port}/health"
 
 
 def render_template(template: str, **variables: str | int) -> str:
@@ -69,7 +85,7 @@ sudo docker pull {{ docker_image }}
 # (seg_L*.parquet.tmp, _finelog_catalog.sqlite-journal). One vanishing between
 # readdir and the chown syscall makes `chown -R` exit non-zero, and `set -e`
 # would then abort the whole bootstrap before the new image is ever started.
-sudo docker stop --timeout 5 {{ container_name }} 2>/dev/null || true
+sudo docker stop --timeout {{ stop_timeout }} {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
 # Own the cache dir as UID/GID 1000 to match the in-container `finelog` user
@@ -114,7 +130,9 @@ for i in $(seq 1 60); do
         sudo docker logs {{ container_name }} --tail 200 || true
         exit 1
     fi
-    if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
+    # Gate on the body: /health answers 200 while the server is only listening.
+    health=$({{ health_probe }} 2>/dev/null || true)
+    if [ "$health" = "{{ health_ok }}" ]; then
         echo "[finelog-init] finelog is healthy"
         echo "[finelog-init] Bootstrap complete"
         exit 0
@@ -122,7 +140,7 @@ for i in $(seq 1 60); do
     sleep 2
 done
 
-echo "[finelog-init] ERROR: finelog failed to become healthy after 120s"
+echo "[finelog-init] ERROR: finelog failed to become healthy after 120s (last /health: ${health:-unreachable})"
 sudo docker ps -a -f name={{ container_name }}
 sudo docker logs {{ container_name }} --tail 200 || true
 exit 1
@@ -136,6 +154,7 @@ def render_bootstrap(
     auth_policy: str,
     query_metadata_cache_mb: int | None,
     query_index_cache_mb: int | None,
+    telemetry_migration_mode: str = "normal",
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -159,13 +178,17 @@ def render_bootstrap(
     )
     if query_index_cache_mb is not None:
         query_env += f"-e FINELOG_INDEX_CACHE_MB={query_index_cache_mb} "
+    migration_env = f"-e FINELOG_TELEMETRY_MIGRATION_MODE={telemetry_migration_mode} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
         port=port,
         remote_log_dir=remote_log_dir,
         auth_env=auth_env,
-        query_env=query_env,
+        query_env=query_env + migration_env,
         cache_dir=CACHE_DIR,
         container_name=CONTAINER_NAME,
+        stop_timeout=CONTAINER_STOP_TIMEOUT,
+        health_probe=health_probe_command(port),
+        health_ok=HEALTH_OK,
     )

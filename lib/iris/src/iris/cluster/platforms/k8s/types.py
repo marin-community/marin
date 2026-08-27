@@ -11,15 +11,23 @@ from enum import Enum
 # the cluster config does not override priority_class_names. Override via
 # kubernetes_provider.priority_classes.
 #
-# iris-system is the control plane band (controller, finelog, Kueue manager). It
-# is NOT a user band and is never mapped from a PriorityBand — user jobs cannot
-# request it. It sits above every user band so a user pod can never preempt the
-# control plane off the shared control node; PreemptLowerPriority lets it evict a
-# lower-priority pod to stay scheduled when that node is full.
+# iris-system is used by the control plane and the SYSTEM PriorityBand. It sits
+# above every other band so Iris, Finelog, and hero workloads can reclaim
+# capacity when the cluster is full.
 IRIS_PRIORITY_CLASS_SYSTEM = "iris-system"
 IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+# Stable pod metadata shared by the Kubernetes backend and node agent. Labels
+# support API selection; the annotation retains the full task id because label
+# values are limited to 63 characters.
+IRIS_MANAGED_LABEL = "iris.managed"
+IRIS_RUNTIME_LABEL = "iris.runtime"
+IRIS_KUBERNETES_RUNTIME = "iris-kubernetes"
+IRIS_TASK_ID_ANNOTATION = "iris.task_id"
+IRIS_ATTEMPT_ID_LABEL = "iris.attempt_id"
+IRIS_TASK_CONTAINER_NAME = "task"
 
 # Canonical (name, value, preemptionPolicy) for every PriorityClass Iris owns.
 # Single source of truth: the controller applies all of them at startup and the
@@ -113,6 +121,13 @@ class K8sResource(Enum):
     # created by Iris.
     CLUSTER_QUEUES = ("kueue.x-k8s.io", "v1beta1", False, "clusterqueues", "ClusterQueue")
     RESOURCE_FLAVORS = ("kueue.x-k8s.io", "v1beta1", False, "resourceflavors", "ResourceFlavor")
+    WORKLOAD_PRIORITY_CLASSES = (
+        "kueue.x-k8s.io",
+        "v1beta1",
+        False,
+        "workloadpriorityclasses",
+        "WorkloadPriorityClass",
+    )
 
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group
@@ -171,14 +186,6 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
-
-
-@dataclass(frozen=True)
-class PodResourceUsage:
-    """CPU and memory usage for a single pod."""
-
-    cpu_millicores: int
-    memory_bytes: int
 
 
 def parse_k8s_quantity(val: str) -> int:

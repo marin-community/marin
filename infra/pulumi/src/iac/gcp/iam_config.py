@@ -45,13 +45,15 @@ _YAML_HEADER = """\
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Canonical non-authoritative GCP IAM declaration for hai-gcp-models. Human
-# user principals are KMS ciphertexts declared once under `principals`; grants
-# reference their opaque IDs so one principal cannot drift across roles.
+# Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
+# the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
+# `marin` stack composes every declaration and is their sole owner. Resources
+# use role-authoritative IAM bindings. Human user principals are KMS ciphertexts
+# declared once under `principals`; grants reference their opaque IDs so one
+# principal cannot drift across roles.
 #
-# The owned service account and custom roles came from the retired
-# infra/permissions project. Do not add custom roles found live unless Pulumi
-# already owns them or their adoption has been reviewed separately.
+# Add a custom role found live only after confirming Pulumi already owns it or
+# reviewing its adoption separately.
 #
 # GCP does not support resource-based IAM Conditions for iam.googleapis.com
 # permissions. Custom-role-management grants therefore remain project-wide.
@@ -89,7 +91,7 @@ class GcpPrincipal:
 
 @dataclass(frozen=True)
 class GcpIamConfig:
-    """The complete checked-in IAM declaration before Pulumi stack settings."""
+    """The shared checked-in IAM declaration before deploy-target composition."""
 
     kms_location: str
     kms_key_ring: str
@@ -334,7 +336,7 @@ def _parse_service_accounts(
 
 
 def load_iam_config(path: Path = IAM_DATA_PATH) -> GcpIamConfig:
-    """Load and validate the complete IAM declaration."""
+    """Load and validate the shared IAM declaration."""
     raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
     fields = _fields(
         raw,

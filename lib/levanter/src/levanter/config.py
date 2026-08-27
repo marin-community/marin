@@ -19,7 +19,7 @@ from draccus import parse
 from draccus.parsers.decoding import decode_dataclass
 from haliax import ScanCheckpointPolicy
 from jax.sharding import PartitionSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
 

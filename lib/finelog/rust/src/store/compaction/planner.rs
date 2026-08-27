@@ -10,18 +10,19 @@
 //! flushes are small. The terminal level (`level_targets.len()`) never
 //! re-compacts.
 
+use std::collections::BTreeMap;
+
+use crate::partition_policy::SegmentPartition;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::schema::{Schema, IMPLICIT_SEQ_COLUMN};
 use crate::store::types::SegmentRow;
 
-/// Sort keys for both compaction's merge order: `key_column` first (so range
-/// scans on it prune row groups), then the implicit `seq`.
+/// Sort keys for compaction, including the implicit `seq` tie-breaker.
 pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
-    if !schema.key_column.is_empty() {
-        vec![schema.key_column.clone(), IMPLICIT_SEQ_COLUMN.to_string()]
-    } else {
-        vec![IMPLICIT_SEQ_COLUMN.to_string()]
-    }
+    let mut columns = crate::store::schema::resolve_sort_columns(schema)
+        .expect("registered schema has valid sort columns");
+    columns.push(IMPLICIT_SEQ_COLUMN.to_string());
+    columns
 }
 
 /// Return the next merge job, or `None` if nothing is due.
@@ -37,14 +38,26 @@ pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
 pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<CompactionJob> {
     for (n, &target) in config.level_targets.iter().enumerate() {
         let level = n as i32;
-        let mut at_level: Vec<&SegmentRow> = segments.iter().filter(|s| s.level == level).collect();
-        if at_level.is_empty() {
-            continue;
+        let mut streams: BTreeMap<Option<SegmentPartition>, Vec<&SegmentRow>> = BTreeMap::new();
+        for segment in segments.iter().filter(|segment| segment.level == level) {
+            streams
+                .entry(segment.partition.clone())
+                .or_default()
+                .push(segment);
         }
-        at_level.sort_by_key(|s| s.min_seq);
-        for run in contiguous_runs(&at_level) {
-            if run_bytes(&run) >= target || run.len() >= config.max_segments_per_level {
-                return Some(build_job(take_until_target(&run, target), level + 1));
+        for (partition, mut stream) in streams {
+            stream.sort_by_key(|segment| segment.min_seq);
+            let runs = if partition.is_some() {
+                // A partition stream is sparse in the namespace-wide seq space;
+                // its own files still form one compaction stream.
+                vec![stream]
+            } else {
+                contiguous_runs(&stream)
+            };
+            for run in runs {
+                if run_bytes(&run) >= target || run.len() >= config.max_segments_per_level {
+                    return Some(build_job(take_until_target(&run, target), level + 1));
+                }
             }
         }
     }
@@ -88,7 +101,7 @@ fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a Segment
     out
 }
 
-fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJob {
+pub(crate) fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJob {
     let output_min_seq = run.iter().map(|s| s.min_seq).min().expect("run non-empty");
     CompactionJob {
         inputs: run.into_iter().cloned().collect(),
@@ -122,7 +135,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::partition_policy::SegmentPartition;
     use crate::store::types::SegmentLocation;
 
     /// Build a `SegmentRow` for planner tests.
@@ -138,6 +154,7 @@ mod tests {
             created_at_ms: 0,
             min_key_value: None,
             max_key_value: None,
+            partition: None,
             location: SegmentLocation::Local,
         }
     }
@@ -206,6 +223,32 @@ mod tests {
         assert_eq!(job.output_level, 3);
         assert_eq!(job.inputs.len(), 1);
         assert_eq!(job.inputs[0].min_seq, 1);
+    }
+
+    #[test]
+    fn partition_stream_compacts_across_namespace_seq_gaps() {
+        let partition = SegmentPartition {
+            spec_id: 1,
+            values: BTreeMap::from([("name_bucket".to_string(), "6".to_string())]),
+        };
+        let mut first = row(1, 1, 10, 60);
+        first.partition = Some(partition.clone());
+        let mut second = row(1, 100, 110, 60);
+        second.partition = Some(partition);
+        let mut other = row(1, 11, 99, 1_000);
+        other.partition = Some(SegmentPartition {
+            spec_id: 1,
+            values: BTreeMap::from([("name_bucket".to_string(), "7".to_string())]),
+        });
+
+        let job = plan(&config(vec![64, 100], 32), &[first, other, second]).unwrap();
+        assert_eq!(
+            job.inputs
+                .iter()
+                .map(|segment| segment.min_seq)
+                .collect::<Vec<_>>(),
+            vec![1, 100]
+        );
     }
 
     // --- take_until_target / contiguous_runs ----------------------------
@@ -291,6 +334,18 @@ mod tests {
             "ts",
         );
         assert_eq!(compaction_sort_keys(&with_key), vec!["ts", "seq"]);
+        let secondary = Schema::new(
+            vec![
+                Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("worker", ColumnType::COLUMN_TYPE_STRING, false),
+            ],
+            "ts",
+        )
+        .with_sort_columns(["worker", "ts"]);
+        assert_eq!(
+            compaction_sort_keys(&secondary),
+            vec!["worker", "ts", "seq"]
+        );
         let no_key = Schema::new(
             vec![Column::new("x", ColumnType::COLUMN_TYPE_INT64, false)],
             "",

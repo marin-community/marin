@@ -3,6 +3,7 @@
 
 """Upstream FlashAttention-4 THD/varlen wrapper for Grug attention."""
 
+import functools
 import importlib
 import math
 from dataclasses import dataclass
@@ -17,8 +18,8 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call, gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
-from levanter.grug.attention._fa4_cute import _gpu_compute_arch
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 
@@ -54,9 +55,10 @@ def _sm90_backward_kernel_options() -> dict[str, int | bool]:
     }
 
 
+@functools.lru_cache(maxsize=1)
 def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
     try:
-        arch = _gpu_compute_arch()
+        arch = gpu_compute_capability()
         arch_family = arch // 10
         cutlass = importlib.import_module("cutlass")
         cute = importlib.import_module("cutlass.cute")
@@ -155,7 +157,7 @@ def _validate_simple_causal_self_attention(
 
 
 def _thd_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
-    arch = _gpu_compute_arch()
+    arch = gpu_compute_capability()
     arch_family = arch // 10
     if arch_family not in _SUPPORTED_ARCH_FAMILIES:
         raise NotImplementedError(f"gpu_fa4_thd_attention currently supports only SM90/SM100/SM110, got SM{arch}.")
@@ -279,6 +281,7 @@ def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int 
     return sliding_window - 1, 0
 
 
+@cute_launcher_factory
 def _upstream_fa4_thd_forward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
@@ -367,6 +370,7 @@ def _upstream_fa4_thd_forward_launcher(
     return _launch_upstream_fa4_thd_forward
 
 
+@cute_launcher_factory
 def _upstream_fa4_thd_backward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
@@ -572,7 +576,7 @@ def fa4_thd_attention_forward(
     input_spec, output_spec = _cutlass_thd_forward_specs(modules)
     out_shape_dtype = jax.ShapeDtypeStruct(q.shape, q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[1], q.shape[0]), jnp.float32)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=(out_shape_dtype, lse_shape_dtype),
         input_spec=input_spec,
@@ -615,7 +619,7 @@ def fa4_thd_attention_backward(
     )
     input_spec, output_spec = _cutlass_thd_backward_specs(modules)
     output_shape_dtype = _cutlass_thd_backward_output_shapes(q, k, v, cu_seqlens, kernel_config.backward_tile)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
         input_spec=input_spec,

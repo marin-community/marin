@@ -10,32 +10,45 @@
 //! - re-register with an EMPTY policy KEEPS the existing policy.
 //! - `log` is privileged and undroppable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use clap::ValueEnum;
 
 use crate::errors::StatsError;
+use crate::ingestion_policy::IngestionBatchSource;
+use crate::policies::{
+    physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
+    storage_policy_for, PolicyRegistry,
+};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, RegisteredNamespace};
+use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, validate_index_policies, with_implicit_cluster,
-    with_implicit_seq, AlignedBatch, Column, Schema,
+    merge_managed_schema, merge_schemas, resolve_key_column, stamp_cluster_column, stored_form,
+    validate_and_align_batch, validate_and_align_forwarded_batch, validate_index_policies,
+    AlignedBatch, Column, Schema, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
+use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
 /// The privileged log namespace name.
 pub const LOG_NAMESPACE_NAME: &str = "log";
 /// Its on-disk subdirectory.
 pub const LOG_NAMESPACE_DIR: &str = "log";
+const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
 
 /// Bounded budget for stopping + joining a namespace's background tasks during a
 /// live lifecycle transition (re-register replacement, drop). Runs inside the
@@ -44,22 +57,56 @@ pub const LOG_NAMESPACE_DIR: &str = "log";
 /// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
 const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Result of appending one schema-compatible federated batch.
+pub struct ForwardedWrite {
+    pub rows_written: i64,
+    pub persisted_targets: Vec<(String, i64)>,
+    pub ignored_columns: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum SchemaRegistration {
+    Additive,
+    Managed,
+}
+
+#[derive(Clone, Copy)]
+enum BatchAlignment {
+    Strict,
+    ForwardCompatible,
+}
+
+impl BatchAlignment {
+    fn align(
+        self,
+        batch: &RecordBatch,
+        schema: &Schema,
+    ) -> Result<(AlignedBatch, Vec<String>), StatsError> {
+        match self {
+            Self::Strict => {
+                validate_and_align_batch(batch, schema).map(|aligned| (aligned, Vec::new()))
+            }
+            Self::ForwardCompatible => validate_and_align_forwarded_batch(batch, schema),
+        }
+    }
+}
+
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
 ///
 /// The original five columns (key/source/data/epoch_ms/level) are non-nullable.
 /// `cluster` is a later **additive, nullable** column: the writer-supplied origin
 /// cluster of each push (trusted — writers are authenticated), which namespaces
-/// logs a global finelog collects from many federated clusters. It is nullable so
-/// it evolves an already-registered `log` namespace additively — `merge_schemas`
-/// requires new columns to be nullable, and segments written before the column
-/// existed null-fill it on read.
-pub(crate) fn log_registered_schema() -> Schema {
+/// logs a global finelog collects from many federated clusters. It is nullable
+/// because segments written before the column existed null-fill it on read,
+/// which is also why `merge_schemas` adopts any new column as nullable.
+pub fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
-            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+            // The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to
+            // the sort's min/max statistics and needs a trigram index of its own.
+            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            // The log message body — substring-searched via contains()/LIKE, so
-            // it carries the trigram index.
+            // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
@@ -69,15 +116,29 @@ pub(crate) fn log_registered_schema() -> Schema {
     )
 }
 
-/// One consistent view of a namespace's sealed local segments: the arrow schema to
-/// read them with, their paths, and the lowest `seq` they hold (`None` when there is
-/// no local segment). Captured under a single hold of the engine's insertion lock, so
-/// `min_seq` always describes exactly the segments in `paths`.
+/// One consistent view of a namespace's sealed local segments: the Arrow schema,
+/// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
+/// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
     pub schema: SchemaRef,
+    pub exact_postings_policy: BTreeMap<String, Vec<String>>,
+    pub key_column: String,
     pub paths: Vec<String>,
+    pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
     pub index_cache: Arc<IndexCache>,
+}
+
+/// What a store may do to what it opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ServeMode {
+    /// A deployed server: runs per-namespace maintenance.
+    Live,
+    /// A rehearsal against a copy of a real store: runs no maintenance, so
+    /// nothing compacts, evicts, rewrites a segment layout, or redundancy-drops
+    /// a covered segment (which deletes its archived object).
+    Shadow,
 }
 
 /// Store backed by the Rust catalog plus per-namespace durability engines.
@@ -89,8 +150,12 @@ pub struct NamespaceSnapshot {
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
+    mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
+    /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
+    /// Concurrent first registrations must not build and displace separate engines.
+    namespace_registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
     /// side across the full DataFusion scan, because `query_providers` snapshots
     /// segment PATHS and DataFusion opens those parquet files LAZILY during
@@ -110,6 +175,49 @@ pub struct Store {
     query_visibility: Arc<tokio::sync::RwLock<()>>,
     index_cache: Arc<IndexCache>,
     index_backfill_slot: Arc<Mutex<()>>,
+    physical_layout_migration_slot: Arc<Mutex<()>>,
+    policies: PolicyRegistry,
+    _store_lock: Option<File>,
+}
+
+pub(crate) fn acquire_exclusive_store_lock(data_dir: &Path) -> Result<File, StatsError> {
+    let path = data_dir.join(STORE_LOCK_FILENAME);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| {
+            StatsError::Internal(format!("open store lock {}: {error}", path.display()))
+        })?;
+    // SAFETY: `file` owns this valid descriptor for the duration of the call and
+    // retains it until the returned lock guard is dropped.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        return Err(StatsError::Internal(format!(
+            "Finelog store is open in another process: {}",
+            data_dir.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn decode_bounded_write_batch(arrow_ipc: &[u8]) -> Result<RecordBatch, StatsError> {
+    if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
+            arrow_ipc.len()
+        )));
+    }
+    let batch = decode_one_record_batch(arrow_ipc)?;
+    if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
+        return Err(StatsError::SchemaValidation(format!(
+            "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
+            batch.num_rows()
+        )));
+    }
+    Ok(batch)
 }
 
 impl Store {
@@ -123,6 +231,23 @@ impl Store {
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
+        mode: ServeMode,
+    ) -> Result<Store, StatsError> {
+        Self::new_with_telemetry_root_write_mode(
+            data_dir,
+            remote_log_dir,
+            index_cache_mb,
+            mode,
+            TelemetryRootWriteMode::SemanticOnly,
+        )
+    }
+
+    pub fn new_with_telemetry_root_write_mode(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+        mode: ServeMode,
+        telemetry_root_write_mode: TelemetryRootWriteMode,
     ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
@@ -130,6 +255,10 @@ impl Store {
                 StatsError::Internal(format!("create data_dir {}: {e}", dir.display()))
             })?;
         }
+        let store_lock = data_dir
+            .as_deref()
+            .map(acquire_exclusive_store_lock)
+            .transpose()?;
         let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
@@ -148,11 +277,16 @@ impl Store {
         let store = Store {
             data_dir,
             remote_log_dir,
+            mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
+            namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
+            physical_layout_migration_slot: Arc::new(Mutex::new(())),
+            policies: PolicyRegistry::new(telemetry_root_write_mode),
+            _store_lock: store_lock,
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
         // rehydrate builds the engines, so the log engine is opened exactly once
@@ -180,6 +314,17 @@ impl Store {
         Ok(store)
     }
 
+    /// Return the root telemetry sequence fence before this process accepts writes.
+    pub fn telemetry_root_max_seq(&self) -> Result<i64, StatsError> {
+        match self.engines.lock().unwrap().get(TELEMETRY_NAMESPACE) {
+            Some(engine) => Ok(engine.stats().max_seq),
+            None => Ok(self
+                .catalog
+                .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
+                .max_seq),
+        }
+    }
+
     /// Start each namespace's maintenance task. Called once after `new`, before
     /// serving.
     ///
@@ -193,6 +338,10 @@ impl Store {
     /// archived-row catalog visibility + redundancy cleanup, never correct
     /// serving of live (local) rows.
     pub fn bootstrap_maintenance(&self) {
+        if self.mode == ServeMode::Shadow {
+            tracing::info!("shadow mode: maintenance not started");
+            return;
+        }
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
         for engine in &engines {
             engine.spawn_maintenance(true);
@@ -266,10 +415,11 @@ impl Store {
             Arc::clone(&self.query_visibility),
             Arc::clone(&self.index_cache),
             Arc::clone(&self.index_backfill_slot),
+            Arc::clone(&self.physical_layout_migration_slot),
             &self.remote_log_dir,
             policy,
         )?;
-        if spawn_maint {
+        if spawn_maint && self.mode == ServeMode::Live {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
             // re-register over a wiped catalog adopts the bucket's segments before
             // the caller observes the namespace), then start the maintenance
@@ -320,7 +470,7 @@ impl Store {
     fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(schema);
+        let stored = stored_form(schema);
         let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
         let stored_for_merge = stored.clone();
         self.catalog
@@ -362,22 +512,65 @@ impl Store {
         schema: Schema,
         policy: StoragePolicy,
     ) -> Result<Schema, StatsError> {
+        self.register_table_with(name, schema, policy, SchemaRegistration::Additive)
+    }
+
+    /// Register a server-owned schema whose derived layout is authoritative.
+    ///
+    /// Column evolution remains additive, but index and projection policy may
+    /// be withdrawn by a rollout. Callers must supply the canonical server
+    /// schema rather than a client declaration.
+    pub fn register_managed_table(
+        &self,
+        name: &str,
+        schema: Schema,
+        policy: StoragePolicy,
+    ) -> Result<Schema, StatsError> {
+        self.register_table_with(name, schema, policy, SchemaRegistration::Managed)
+    }
+
+    fn register_table_with(
+        &self,
+        name: &str,
+        schema: Schema,
+        policy: StoragePolicy,
+        registration: SchemaRegistration,
+    ) -> Result<Schema, StatsError> {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(with_implicit_cluster(schema));
+        let stored = stored_form(schema);
+        let registration_lock = {
+            let mut locks = self.namespace_registration_locks.lock().unwrap();
+            Arc::clone(
+                locks
+                    .entry(name.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _registration_guard = registration_lock.lock().unwrap();
 
-        // `merge_schemas` (pure) raises SchemaConflict on a non-additive change.
+        // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
         // under a single lock; we only supply the schema-merge decision.
         let stored_for_merge = stored.clone();
         let had_engine = self.engines.lock().unwrap().contains_key(name);
         let (effective_schema, effective_policy) =
             self.catalog
-                .register_or_evolve(name, stored, policy, move |existing_schema| {
-                    merge_schemas(existing_schema, &stored_for_merge)
-                })?;
+                .register_or_evolve(
+                    name,
+                    stored,
+                    policy,
+                    move |existing_schema| match registration {
+                        SchemaRegistration::Additive => {
+                            merge_schemas(existing_schema, &stored_for_merge)
+                        }
+                        SchemaRegistration::Managed => {
+                            merge_managed_schema(existing_schema, &stored_for_merge)
+                        }
+                    },
+                )?;
         // (Re)build the engine on fresh registration or when the effective schema
         // evolved. The engine re-opens on the same dir, adopting existing
         // segments and recovering next_seq, so an additive evolution keeps the
@@ -403,48 +596,155 @@ impl Store {
         Ok(effective_schema)
     }
 
-    /// Decode + validate + append a WriteRows batch, returning
-    /// `(rows_written, last_seq)`. `last_seq` is the durability target the caller
-    /// awaits (`-1` for an empty batch). The size/row caps and IPC decode happen
-    /// before namespace resolution, then validate/align runs OUTSIDE any lock.
-    /// Append a WriteRows batch. `origin_cluster` is the authenticated origin the
-    /// rows are attributed to (`Some` for a forwarding JWT; `None` for a
-    /// trusted-network writer, which names its own origin — empty for a local
-    /// write). When set, it overwrites the implicit `cluster` column after
-    /// alignment so origin does not depend on the sender having stamped it.
+    /// Append a routed batch and return its row count and durability target.
     pub fn write_rows(
         &self,
         name: &str,
         arrow_ipc: &[u8],
         origin_cluster: Option<&str>,
     ) -> Result<(i64, i64), StatsError> {
-        use crate::store::ipc::decode_one_record_batch;
-        use crate::store::schema::{
-            stamp_cluster_column, validate_and_align_batch, MAX_WRITE_ROWS_BYTES,
-            MAX_WRITE_ROWS_ROWS,
-        };
+        let outcome = self.write_physical_rows(name, arrow_ipc, origin_cluster)?;
+        debug_assert!(outcome.ignored_columns.is_empty());
+        let last_seq = outcome
+            .persisted_targets
+            .first()
+            .map(|(_, seq)| *seq)
+            .unwrap_or(-1);
+        Ok((outcome.rows_written, last_seq))
+    }
 
-        if arrow_ipc.len() > MAX_WRITE_ROWS_BYTES {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows body {} bytes exceeds {MAX_WRITE_ROWS_BYTES} limit",
-                arrow_ipc.len()
-            )));
+    /// Route and append a declared ingestion batch using strict schemas.
+    pub fn write_ingestion_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        self.write_routed_batch(
+            IngestionBatchSource::Declared(name),
+            batch,
+            origin_cluster,
+            BatchAlignment::Strict,
+        )
+    }
+
+    /// Append telemetry forwarded by another Finelog while preserving the hub's
+    /// server-owned schema. Unknown nullable columns are omitted and returned for
+    /// observability; all other validation remains strict.
+    pub fn write_forwarded_telemetry_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: &str,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
+        let routed = self
+            .policies
+            .route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
+        for partition in &routed {
+            let namespace = &partition.destination.logical_namespace;
+            match self.require_engine(namespace) {
+                Ok(_) => {}
+                Err(StatsError::NamespaceNotFound(_)) => {
+                    let schema = schema_for_namespace(namespace).ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "no server-owned schema is registered for {namespace:?}"
+                        ))
+                    })?;
+                    self.register_managed_table(namespace, schema, storage_policy_for(namespace)?)?;
+                }
+                Err(error) => return Err(error),
+            }
         }
-        let batch = decode_one_record_batch(arrow_ipc)?;
-        if batch.num_rows() > MAX_WRITE_ROWS_ROWS {
-            return Err(StatsError::SchemaValidation(format!(
-                "WriteRows batch {} rows exceeds {MAX_WRITE_ROWS_ROWS} limit",
-                batch.num_rows()
-            )));
+        self.append_routed_batches(
+            batch.num_rows() as i64,
+            routed,
+            Some(origin_cluster),
+            BatchAlignment::ForwardCompatible,
+        )
+    }
+
+    fn write_routed_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: RecordBatch,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let routed = self.policies.route_ingestion_batch(source, &batch)?;
+        self.append_routed_batches(batch.num_rows() as i64, routed, origin_cluster, alignment)
+    }
+
+    pub(crate) fn write_prepared_ingestion_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        self.append_routed_batches(rows_written, routed, origin_cluster, BatchAlignment::Strict)
+    }
+
+    fn append_routed_batches(
+        &self,
+        rows_written: i64,
+        routed: Vec<crate::ingestion_policy::RoutedIngestionBatch>,
+        origin_cluster: Option<&str>,
+        alignment: BatchAlignment,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let mut prepared_partitions = Vec::with_capacity(routed.len());
+        let mut ignored_columns = BTreeSet::new();
+        for partition in routed {
+            let destination = partition.destination.logical_namespace;
+            let engine = self.require_engine(&destination)?;
+            let (mut aligned, ignored) = alignment.align(&partition.batch, engine.schema())?;
+            if let Some(origin) = origin_cluster {
+                stamp_cluster_column(&mut aligned, origin);
+            }
+            ignored_columns.extend(ignored);
+            prepared_partitions.push((destination, engine, aligned));
         }
+        let persisted_targets = prepared_partitions
+            .into_iter()
+            .map(|(destination, engine, aligned)| {
+                let last_seq = engine.append_aligned_batch(&aligned);
+                (destination, last_seq)
+            })
+            .collect();
+        Ok(ForwardedWrite {
+            rows_written,
+            persisted_targets,
+            ignored_columns: ignored_columns.into_iter().collect(),
+        })
+    }
+
+    pub(crate) fn route_ingestion_batch(
+        &self,
+        source: IngestionBatchSource<'_>,
+        batch: &RecordBatch,
+    ) -> Result<Vec<crate::ingestion_policy::RoutedIngestionBatch>, StatsError> {
+        self.policies.route_ingestion_batch(source, batch)
+    }
+
+    fn write_physical_rows(
+        &self,
+        name: &str,
+        arrow_ipc: &[u8],
+        origin_cluster: Option<&str>,
+    ) -> Result<ForwardedWrite, StatsError> {
+        let batch = decode_bounded_write_batch(arrow_ipc)?;
         let engine = self.require_engine(name)?;
-        let mut aligned: AlignedBatch = validate_and_align_batch(&batch, engine.schema())?;
+        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
         let last_seq = engine.append_aligned_batch(&aligned);
-        Ok((n, last_seq))
+        Ok(ForwardedWrite {
+            rows_written: n,
+            persisted_targets: vec![(name.to_string(), last_seq)],
+            ignored_columns: Vec::new(),
+        })
     }
 
     /// Append log columns to the reserved `log` namespace, returning the last
@@ -503,12 +803,19 @@ impl Store {
                 None => continue,
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
-            let paths = engine.query_snapshot().paths;
-            let provider =
-                NamespaceProvider::build(arrow_schema, &paths, Arc::clone(&self.index_cache))
-                    .map_err(|e| {
-                        StatsError::Internal(format!("build provider {:?}: {e}", ns.name))
-                    })?;
+            let exact_postings_policy = engine.schema().exact_postings_policy();
+            let key_column = engine.key_column().to_string();
+            let segments = engine.query_snapshot();
+            let provider = NamespaceProvider::build(
+                arrow_schema,
+                &segments.paths,
+                Arc::clone(&self.index_cache),
+            )
+            .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
+            .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
+            .with_exact_postings_policy(exact_postings_policy)
+            .with_segment_key_bounds(key_column, segments.key_bounds)
+            .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -526,7 +833,11 @@ impl Store {
         let segments = engine.query_snapshot();
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
+            exact_postings_policy: engine.schema().exact_postings_policy(),
+            key_column: engine.key_column().to_string(),
             paths: segments.paths,
+            key_bounds: segments.key_bounds,
+            partitions: segments.partitions,
             min_seq: segments.min_seq,
             index_cache: Arc::clone(&self.index_cache),
         })
@@ -725,6 +1036,8 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::levanter_metrics_policy::levanter_metrics_schema;
+    use crate::store::schema::{with_implicit_cluster, with_implicit_seq, CoveringProjection};
 
     fn worker_schema() -> Schema {
         Schema::new(
@@ -742,6 +1055,7 @@ mod tests {
             None,
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
         )
         .unwrap()
     }
@@ -764,6 +1078,48 @@ mod tests {
             .column("cluster")
             .expect("implicit cluster column");
         assert!(cluster.nullable);
+    }
+
+    #[test]
+    fn managed_levanter_registration_can_disable_stale_index_policy() {
+        let store = mem_store();
+        let mut stale = levanter_metrics_schema();
+        stale
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .unwrap()
+            .index
+            .trigram = true;
+        stale
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "kind")
+            .unwrap()
+            .index
+            .value_counts = true;
+        store
+            .catalog
+            .register_or_evolve(
+                "levanter.metrics",
+                stored_form(stale),
+                StoragePolicy::default(),
+                |_| unreachable!("fresh catalog registration does not merge"),
+            )
+            .unwrap();
+
+        let effective = store
+            .register_managed_table(
+                "levanter.metrics",
+                levanter_metrics_schema(),
+                StoragePolicy::default(),
+            )
+            .unwrap();
+        assert!(effective.columns.iter().all(|column| {
+            !column.index.trigram
+                && !column.index.value_counts
+                && column.index.exact_values.is_empty()
+        }));
     }
 
     #[test]
@@ -893,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn type_change_and_non_nullable_reject() {
+    fn type_change_rejects_and_new_non_nullable_widens() {
         let store = mem_store();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
@@ -916,14 +1272,38 @@ mod tests {
             ColumnType::COLUMN_TYPE_FLOAT64,
             false,
         ));
-        assert!(matches!(
-            store.register_table(
+        let effective = store
+            .register_table(
                 "iris.worker",
                 Schema::new(cols, ""),
-                StoragePolicy::default()
-            ),
-            Err(StatsError::SchemaConflict(_))
-        ));
+                StoragePolicy::default(),
+            )
+            .unwrap();
+        assert!(effective.column("cpu_pct").unwrap().nullable);
+    }
+
+    #[test]
+    fn redefined_covering_projection_supersedes_instead_of_conflicting() {
+        // A binary whose covering projection differs from the catalog's must
+        // still register: the catalog rehydrates the registered definition at
+        // boot, so a rejection wedges the namespace's ingest on every restart.
+        let store = mem_store();
+        let projection = |values: &[&str]| {
+            CoveringProjection::new("busy-workers", "worker_id", values.to_vec(), ["worker_id"])
+        };
+        let schema = |values: &[&str]| worker_schema().with_covering_projection(projection(values));
+
+        store
+            .register_table("iris.worker", schema(&["w1"]), StoragePolicy::default())
+            .unwrap();
+        let effective = store
+            .register_table("iris.worker", schema(&["w2"]), StoragePolicy::default())
+            .unwrap();
+        assert_eq!(effective.projections, vec![projection(&["w2"])]);
+        assert_eq!(
+            store.get_table_schema("iris.worker").unwrap().projections,
+            vec![projection(&["w2"])],
+        );
     }
 
     #[test]
@@ -1076,6 +1456,7 @@ mod tests {
             Some(dir.clone()),
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
         )
         .unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
@@ -1087,11 +1468,59 @@ mod tests {
             schema.column("cluster").unwrap().nullable,
             "the evolved cluster column is nullable"
         );
+        assert!(
+            schema.column("key").unwrap().index.trigram,
+            "boot enables the key trigram index a pre-existing namespace lacks"
+        );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_shadow_store_starts_no_maintenance_for_a_namespace_registered_at_runtime() {
+        // A shadow boot registers its own namespaces after opening the snapshot,
+        // and a runtime `register_table` normally starts that namespace's
+        // maintenance task itself. Gating only the boot path would leave a
+        // rehearsal free to compact, evict, and rewrite the copy it was handed.
+        let live_dir = crate::test_support::unique_dir("maintenance_live");
+        let shadow_dir = crate::test_support::unique_dir("maintenance_shadow");
+        let mut counts = Vec::new();
+        for (dir, mode) in [
+            (&live_dir, ServeMode::Live),
+            (&shadow_dir, ServeMode::Shadow),
+        ] {
+            let store = Store::new(
+                Some(dir.clone()),
+                String::new(),
+                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                mode,
+            )
+            .unwrap();
+            store.bootstrap_maintenance();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+                    .unwrap();
+                store
+                    .require_engine("iris.worker")
+                    .unwrap()
+                    .background_task_count()
+            })
+            .await
+            .map(|count| counts.push(count))
+            .unwrap();
+        }
+        let (live, shadow) = (counts[0], counts[1]);
+        assert!(
+            shadow < live,
+            "a shadow store must run fewer background tasks than a live one \
+             (live {live}, shadow {shadow})"
+        );
+        std::fs::remove_dir_all(&live_dir).ok();
+        std::fs::remove_dir_all(&shadow_dir).ok();
     }
 }

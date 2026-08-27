@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "wandb_tensorboard_profile.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("wandb_tensorboard_profile", SCRIPT_PATH)

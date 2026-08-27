@@ -8,8 +8,9 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import rigging.timing as timing
 
@@ -20,10 +21,11 @@ import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax
+from iris.env_resources import _read_iris_resource_proto
+from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
-EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
-EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
+INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
 
 
 @dataclass
@@ -43,9 +45,12 @@ class FakeRegistry:
 @dataclass
 class FakeResolver:
     results: list[ResolveResult] = field(default_factory=list)
+    results_by_name: dict[str, ResolveResult] = field(default_factory=dict)
     call_count: int = 0
 
     def resolve(self, name: str) -> ResolveResult:
+        if self.results_by_name:
+            return self.results_by_name.get(name, ResolveResult(name=name))
         idx = min(self.call_count, len(self.results) - 1)
         result = self.results[idx]
         self.call_count += 1
@@ -96,13 +101,13 @@ def exit_hooks(monkeypatch: pytest.MonkeyPatch) -> FakeExitHooks:
     return hooks
 
 
-def _make_job_info(task_index: int = 0, num_tasks: int = 1) -> JobInfo:
-    """Create a JobInfo with the given task_index and num_tasks."""
+def _make_job_info(task_index: int = 0, num_tasks: int = 1, attempt_id: int = 0) -> JobInfo:
+    """Create a JobInfo with the given task index, task count, and attempt."""
     job_name = JobName.from_string(f"/testuser/testjob/{task_index}")
     return JobInfo(
         task_id=job_name,
         num_tasks=num_tasks,
-        attempt_id=0,
+        attempt_id=attempt_id,
         advertise_host="10.0.0.1",
         controller_address="controller:8080",
         ports={},
@@ -127,80 +132,19 @@ def _mock_compilation_cache_config(monkeypatch: pytest.MonkeyPatch) -> None:
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_single_task(
+def test_initialize_jax_supervised_world_requires_job_context(
     mock_get_job_info: MagicMock,
     _mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-) -> None:
-    """Single-task jobs call jax.distributed.initialize with explicit args."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
-
-    initialize_jax()
-
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
-        num_processes=1,
-        process_id=0,
-    )
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_tpu_multitask_uses_iris_registry(
-    mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TPU Iris jobs use the same explicit coordinator and rank wiring as other multi-task jobs."""
-    monkeypatch.setenv("PJRT_DEVICE", "TPU")
-    monkeypatch.setenv("JAX_PLATFORMS", "tpu,cpu")
-    mock_get_job_info.side_effect = [
-        _make_job_info(task_index=0, num_tasks=2),
-        _make_job_info(task_index=1, num_tasks=2),
-    ]
-    found = ResolveResult(
-        name="jax_coordinator",
-        endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="ep-1")],
-    )
-    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
-    mock_iris_ctx.return_value = fake_ctx
-
-    initialize_jax()
-    initialize_jax(poll_timeout=10.0, poll_interval=0.01)
-
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
-    assert mock_jax_init.call_args_list == [
-        call(
-            "10.0.0.1:8476",
-            2,
-            0,
-            initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-            heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-        ),
-        call(
-            "10.0.0.1:8476",
-            2,
-            1,
-            initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-            heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-        ),
-    ]
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_no_job_info(
-    mock_get_job_info: MagicMock,
-    _mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-) -> None:
-    """No job info means we're not in an Iris job — skip distributed init."""
     mock_get_job_info.return_value = None
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
 
-    initialize_jax()
+    with pytest.raises(RuntimeError, match="requires an Iris job context"):
+        initialize_jax()
 
     mock_jax_init.assert_not_called()
 
@@ -208,102 +152,19 @@ def test_initialize_jax_no_job_info(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_task0_registers(
-    mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-    exit_hooks: FakeExitHooks,
-) -> None:
-    """Task 0 registers the coordinator endpoint and calls jax.distributed.initialize."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=4)
-    fake_ctx = FakeContext()
-    mock_iris_ctx.return_value = fake_ctx
-
-    initialize_jax(port=9999, heartbeat_timeout=37)
-
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:9999")]
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:9999",
-        4,
-        0,
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=37,
-    )
-    exit_hooks.run()
-    assert fake_ctx.registry.unregistered == ["endpoint-1"]
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_task0_uses_iris_port(
-    mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-) -> None:
-    """Task 0 uses IRIS_PORT_jax when available, ignoring the port argument."""
-    info = _make_job_info(task_index=0, num_tasks=2)
-    info.ports = {"jax": 12345}
-    mock_get_job_info.return_value = info
-    fake_ctx = FakeContext()
-    mock_iris_ctx.return_value = fake_ctx
-
-    initialize_jax(port=9999)
-
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:12345",
-        2,
-        0,
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-    )
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_taskN_polls(
+def test_initialize_jax_supervised_peer_times_out_without_coordinator(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
     fake_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task N polls for the coordinator endpoint and calls jax.distributed.initialize."""
-    mock_get_job_info.return_value = _make_job_info(task_index=2, num_tasks=4)
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
 
-    empty = ResolveResult(name="jax_coordinator", endpoints=[])
-    found = ResolveResult(
-        name="jax_coordinator",
-        endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="ep-1")],
-    )
-    fake_ctx = FakeContext(resolver=FakeResolver(results=[empty, empty, found]))
-    mock_iris_ctx.return_value = fake_ctx
-
-    initialize_jax(poll_timeout=10.0, poll_interval=0.01)
-
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
-        4,
-        2,
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-    )
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_poll_timeout(
-    mock_get_job_info: MagicMock,
-    mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-    fake_clock: FakeClock,
-) -> None:
-    """TimeoutError is raised when coordinator endpoint is not found within timeout."""
-    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
-
-    empty = ResolveResult(name="jax_coordinator", endpoints=[])
+    empty = ResolveResult(name=INITIAL_ATTEMPT_ENDPOINT_NAME, endpoints=[])
     fake_ctx = FakeContext(resolver=FakeResolver(results=[empty]))
     mock_iris_ctx.return_value = fake_ctx
 
@@ -317,41 +178,16 @@ def test_initialize_jax_poll_timeout(
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_supervised_single_host(
-    mock_get_job_info: MagicMock,
-    _mock_iris_ctx: MagicMock,
-    mock_jax_init: MagicMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
-    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
-    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
-    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
-
-    initialize_jax()
-
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
-        8,
-        3,
-        local_device_ids=[3],
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-    )
-
-
-@patch("jax.distributed.initialize")
-@patch("iris.runtime.jax_init.iris_ctx")
-@patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_supervised_global_rank0_registers(
+def test_initialize_jax_maps_supervised_global_rank_zero(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
+    exit_hooks: FakeExitHooks,
 ) -> None:
-    """Global rank 0 on a multi-host supervised job registers the coordinator."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    info = _make_job_info(task_index=0, num_tasks=2, attempt_id=3)
+    info.ports = {"jax": 12345}
+    mock_get_job_info.return_value = info
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
@@ -360,49 +196,70 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
-        16,
-        0,
-        local_device_ids=[0],
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-    )
+    assert fake_ctx.registry.registered == [(RETRY_ATTEMPT_ENDPOINT_NAME, "10.0.0.1:12345")]
+    jax_args, jax_options = mock_jax_init.call_args
+    assert jax_args == ("10.0.0.1:12345", 16, 0)
+    assert jax_options["local_device_ids"] == [0]
+    assert jax_options["shutdown_timeout_seconds"] == 120
+    exit_hooks.run()
+    assert fake_ctx.registry.unregistered == ["endpoint-1"]
 
 
 @patch("jax.distributed.initialize")
 @patch("iris.runtime.jax_init.iris_ctx")
 @patch("iris.runtime.jax_init.get_job_info")
-def test_initialize_jax_supervised_other_host_polls(
+def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     mock_get_job_info: MagicMock,
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A supervised rank on host != 0 polls the registry for rank 0's address."""
-    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
-    found = ResolveResult(
+    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2, attempt_id=3)
+    stale = ResolveResult(
         name="jax_coordinator",
-        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
+        endpoints=[ResolvedEndpoint(url="10.0.0.1:27055", actor_id="attempt-2")],
     )
-    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
+    current = ResolveResult(
+        name=RETRY_ATTEMPT_ENDPOINT_NAME,
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="attempt-3")],
+    )
+    fake_ctx = FakeContext(
+        resolver=FakeResolver(
+            results_by_name={
+                "jax_coordinator": stale,
+                RETRY_ATTEMPT_ENDPOINT_NAME: current,
+            }
+        )
+    )
     mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
-    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "8")
-    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "9")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "1")
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with(
-        "10.0.0.9:8476",
-        16,
-        8,
-        local_device_ids=[0],
-        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
-        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
-    )
+    jax_args, jax_options = mock_jax_init.call_args
+    assert jax_args == ("10.0.0.9:8476", 16, 9)
+    assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+
+
+@pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
+def test_resolve_coordinator_port_uses_kernel_fallback(assigned: dict[str, int]) -> None:
+    info = _make_job_info()
+    info.ports = assigned
+
+    with patch("iris.runtime.jax_init.find_free_port", return_value=45678) as find_port:
+        assert resolve_coordinator_port(info) == 45678
+    find_port.assert_called_once_with()
+
+
+def test_resolve_coordinator_port_prefers_assigned_port() -> None:
+    info = _make_job_info()
+    info.ports = {"jax": 12345}
+
+    assert resolve_coordinator_port(info, 9999) == 12345
+    assert resolve_coordinator_port(_make_job_info(), 9999) == 9999
 
 
 @contextmanager
@@ -415,10 +272,28 @@ def _isolated_jax_cache_config():
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
             os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
+            os.environ.pop("XLA_FLAGS", None)
+            os.environ.pop("IRIS_TASK_RESOURCES", None)
+            # Off a real launch by default, so the autotune cache stays node-local
+            # and never reaches for object storage.
+            os.environ.pop("MARIN_PROVENANCE", None)
+            _read_iris_resource_proto.cache_clear()
             yield
     finally:
+        _read_iris_resource_proto.cache_clear()
         jax.config.update("jax_compilation_cache_dir", original_cache_dir)
         jax.config.update("jax_persistent_cache_enable_xla_caches", original_enable_xla_caches)
+
+
+@contextmanager
+def _gpu_task(tmp_path):
+    """Present this process as an Iris GPU task with the scratch cache mount in place."""
+    scratch_cache_dir = tmp_path / "scratch-cache"
+    scratch_cache_dir.mkdir()
+    os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"gpu": {"count": 4, "variant": "GB200"}}}'
+    _read_iris_resource_proto.cache_clear()
+    with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", str(scratch_cache_dir)):
+        yield scratch_cache_dir
 
 
 def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
@@ -493,3 +368,182 @@ def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> No
         # var itself (which JAX reads directly) is left as the caller set it.
         assert jax.config.jax_persistent_cache_enable_xla_caches == original
         assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "all"
+
+
+def test_remote_cache_points_xla_autotune_at_the_node_mount(tmp_path) -> None:
+    """A GPU task with a remote JAX cache autotunes into the node-local mount."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["XLA_FLAGS"] = "--xla_gpu_enable_command_buffer="
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"].split()
+        # The pre-existing flag survives; XLA_FLAGS is additive, not replaced.
+        assert "--xla_gpu_enable_command_buffer=" in os.environ["XLA_FLAGS"].split()
+        assert os.path.isdir(autotune_dir)
+
+
+def test_remote_cache_leaves_xla_flags_alone_without_gpus(tmp_path) -> None:
+    """A TPU or CPU jaxlib aborts on an unknown --xla_gpu flag, so never set one there."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"tpu": {"count": 4, "variant": "v5p-8"}}}'
+        _read_iris_resource_proto.cache_clear()
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
+@pytest.mark.parametrize("mount", ["missing", "file-shadowed"])
+def test_remote_cache_skips_the_autotune_flag_when_the_mount_is_unusable(tmp_path, mount) -> None:
+    """No mount, or a file where the autotune dir belongs: skip the flag, don't abort JAX init."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        if mount == "missing":
+            scratch_cache_path = str(tmp_path / "never-mounted")
+        else:
+            (scratch_cache_dir / "xla").write_bytes(b"")
+            scratch_cache_path = str(scratch_cache_dir)
+        with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", scratch_cache_path):
+            with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+                configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
+def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
+    """An operator-chosen autotune directory wins over the node mount."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["XLA_FLAGS"] = "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+
+
+def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
+    """Task 0 hands its node-local autotune directory to the remote uploader."""
+    calls: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        with (
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: calls.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=0, num_tasks=8)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    assert calls == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+
+
+def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> None:
+    """Each task warms its node-local cache, while only task 0 uploads changes."""
+    fetches: list[tuple[str, str]] = []
+    uploads: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        with (
+            patch.object(jax_init_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=3, num_tasks=8)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    assert fetches == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+    assert uploads == []
+
+
+@pytest.mark.parametrize(
+    ("process_index", "expected_fetches"),
+    [(8, 1), (9, 0)],
+    ids=["local-leader", "other-local-rank"],
+)
+def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_index, expected_fetches) -> None:
+    fetches: list[tuple[str, str]] = []
+    uploads: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
+        os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
+        with (
+            patch.object(jax_init_module, "fetch_file_set_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_file_set_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=1, num_tasks=2)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert len(fetches) == expected_fetches
+    assert uploads == []
+
+
+def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:
+    """Off a real launch (no MARIN_PROVENANCE), the autotune cache never reaches object storage."""
+    calls: list = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        with (
+            patch.object(jax_init_module, "sync_file_set_cache", lambda *args: calls.append(args)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert calls == []
+
+
+def test_autotune_file_set_storage_failure_starts_cold(tmp_path) -> None:
+    """The shared file set is an optimization, so an object-store outage cannot abort JAX startup."""
+    with (
+        patch.object(jax_init_module, "_file_set_cache_root", return_value="gs://cache/tree"),
+        patch.object(jax_init_module, "FineStoreDirectory", side_effect=OSError("unavailable")),
+        patch.object(jax_init_module, "fetch_file_set", side_effect=OSError("unavailable")),
+    ):
+        assert jax_init_module.sync_file_set_cache("xla", str(tmp_path)) is None
+        jax_init_module.fetch_file_set_cache("xla", str(tmp_path))
+
+
+def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
+    """The remote-URL guard follows the cache dir, not who set it.
+
+    An explicitly configured ``gs://``/``s3://`` cache dir used to skip the
+    guard entirely, so JAX handed XLA a URL and the first compile died with
+    "UNIMPLEMENTED: File system scheme not implemented".
+    """
+    from jax._src import compiler as jax_compiler  # noqa: PLC0415
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = "s3://explicit/cache"
+        configure_jax_compilation_cache()
+
+        options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        # Not `== ""`: jaxlib folds XLA_FLAGS into the same field, and whether it
+        # has already parsed them depends on what ran earlier in the process. The
+        # invariant is that XLA is never handed a URL.
+        assert "://" not in options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"]
+
+
+def test_xla_autotune_directory_does_not_change_the_compilation_cache_key() -> None:
+    """Node-local autotune paths must share the remote compilation cache."""
+    from jax._src import cache_key, compiler  # noqa: PLC0415
+
+    lowered = jax.jit(lambda value: value + 1).lower(1)
+    module = lowered.compiler_ir(dialect="stablehlo")
+    devices = np.asarray(jax.devices(), dtype=object)
+    backend = jax.devices()[0].client
+
+    def compilation_cache_key(autotune_dir: str) -> str:
+        options = compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir = autotune_dir
+        xla_flags = f"{jax_init_module._XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}"
+        with patch.dict(os.environ, {"XLA_FLAGS": xla_flags}):
+            return cache_key.get(module, devices, options, backend)
+
+    assert compilation_cache_key("/cache/node-a") == compilation_cache_key("/cache/node-b")

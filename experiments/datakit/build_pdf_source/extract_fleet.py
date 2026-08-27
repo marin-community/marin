@@ -56,11 +56,11 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.config import BrokerConfig, InferenceProxyConfig, InferenceWorkerConfig
 from marin.inference.converter_pool import ConverterPoolConfig, ConverterPoolSession, remote_converter_pool
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_document_boilerplate

@@ -12,6 +12,7 @@ target is BF16/FP16 BSHD causal self-attention with dynamic per-token lower boun
 This avoids both THD compaction and materialized [B, S, S] masks.
 """
 
+import functools
 import importlib
 from dataclasses import dataclass
 from functools import partial
@@ -20,6 +21,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
+from levanter.cutlass_kernel_cache import cutlass_call
 from levanter.grug.attention._fa4_cute_kernels import (
     flash_attention_backward_postprocess_launcher,
     segmented_flash_attention_backward_launcher,
@@ -45,7 +47,12 @@ class _BackwardBlockSparseMetadata:
     full_block_idx: jax.Array
 
 
+@functools.lru_cache(maxsize=1)
 def _import_cutlass_cute() -> _CutlassCuteModules:
+    """Return the CuTe/CUTLASS module bundle.
+
+    The launcher factories are keyed on this bundle, so it has to be a singleton.
+    """
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     cuda = importlib.import_module("cuda.bindings.driver")
@@ -122,7 +129,7 @@ def segmented_flash_attention_forward(
     input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
     out_shape_dtype = jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=(out_shape_dtype, lse_shape_dtype),
         input_spec=input_spec,
@@ -200,7 +207,7 @@ def segmented_flash_attention_backward(
         qhead_per_kvhead=qhead_per_kvhead,
     )
     output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
         input_spec=input_spec,
@@ -295,7 +302,7 @@ def segmented_flash_attention_backward_sm90_native(
         vector_elems=8,
     )
     preprocess_output_shape_dtype = _cutlass_attention_backward_sm90_preprocess_output_shapes(q, sm90_config.tile)
-    preprocess_call = modules.cjax.cutlass_call(
+    preprocess_call = cutlass_call(
         preprocess_launcher,
         output_shape_dtype=preprocess_output_shape_dtype,
         input_spec=preprocess_input_spec,
@@ -306,7 +313,7 @@ def segmented_flash_attention_backward_sm90_native(
 
     backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
     backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
-    backward_call = modules.cjax.cutlass_call(
+    backward_call = cutlass_call(
         backward_launcher,
         output_shape_dtype=backward_output_shape_dtype,
         input_spec=backward_input_spec,
@@ -335,7 +342,7 @@ def segmented_flash_attention_backward_sm90_native(
     postprocess_arch = 90
     postprocess_tile_m = sm90_config.tile[0]
     postprocess_atom_layout_m = 1
-    dq_postprocess = modules.cjax.cutlass_call(
+    dq_postprocess = cutlass_call(
         flash_attention_backward_postprocess_launcher(
             modules,
             dtype=q.dtype,
@@ -353,7 +360,7 @@ def segmented_flash_attention_backward_sm90_native(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dk_postprocess = modules.cjax.cutlass_call(
+    dk_postprocess = cutlass_call(
         flash_attention_backward_postprocess_launcher(
             modules,
             dtype=k.dtype,
@@ -370,7 +377,7 @@ def segmented_flash_attention_backward_sm90_native(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dv_postprocess = modules.cjax.cutlass_call(
+    dv_postprocess = cutlass_call(
         flash_attention_backward_postprocess_launcher(
             modules,
             dtype=v.dtype,

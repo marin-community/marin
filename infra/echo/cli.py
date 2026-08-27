@@ -14,7 +14,9 @@ under ``~/.config/marin/credentials``) and this reuses that token; agents and CI
 ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
-    uv run infra/echo/cli.py get file:lib/iris/OPS.md
+    uv run infra/echo/cli.py search "compare cache implementations" --repository all
+    uv run infra/echo/cli.py get file:marin-community/marin@main:lib/iris/OPS.md
+    uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:731=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
@@ -23,16 +25,21 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 """
 
 import argparse
+import json
 import logging
 import os
-import shutil
+import shlex
+import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 import okf
+import repository_identity
 import requests
 import search_config
+import search_feedback
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     IapCredentialsUnavailable,
@@ -59,7 +66,9 @@ KINDS = ("issue", "pr", "comment", "message")
 DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
+SEARCH_DETAIL_MAX_CHARACTERS = 240
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
+DEFAULT_REQUEST_TIMEOUT = 30
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -93,15 +102,22 @@ def bearer_token() -> str:
     return token
 
 
-def request(method: str, path: str, *, params: dict | None = None, body: dict | None = None) -> object:
-    """Call echo-api and return the decoded JSON, or exit with a message on any HTTP error."""
+def request_response(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: object = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+) -> requests.Response:
+    """Call echo-api and return a successful response with headers intact."""
     response = requests.request(
         method,
         f"{API_BASE}{path}",
         params={k: v for k, v in (params or {}).items() if v is not None},
         json=body,
         headers={"Authorization": f"Bearer {bearer_token()}"},
-        timeout=30,
+        timeout=timeout,
         allow_redirects=False,
     )
     if response.status_code == 401:
@@ -113,7 +129,19 @@ def request(method: str, path: str, *, params: dict | None = None, body: dict | 
             else response.text
         )
         raise SystemExit(f"{method} {path} -> {response.status_code}: {detail}")
-    return response.json()
+    return response
+
+
+def request(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: object = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
+) -> object:
+    """Call echo-api and return decoded JSON."""
+    return request_response(method, path, params=params, body=body, timeout=timeout).json()
 
 
 def response_object(value: object) -> dict[str, object]:
@@ -145,33 +173,26 @@ def print_search_results(results: list[SearchResult]) -> None:
         print("No results.")
         return
 
-    ids = [result.id for result in results]
-    titles = [one_line(result.title) for result in results]
-    id_width = max(len("ID"), *(len(value) for value in ids))
-    available = max(40, shutil.get_terminal_size(fallback=(160, 24)).columns - id_width - 4)
-    title_width = min(max(len("TITLE"), *(len(value) for value in titles)), 36, max(16, available // 3))
-    detail_width = max(20, available - title_width)
-    print(f"{'ID':<{id_width}}  {'TITLE':<{title_width}}  DETAIL")
+    print("KEY  TITLE  ID")
     for result in results:
+        key = result.key or "unavailable"
         if result.references:
-            detail = " · ".join(f"L{reference.line} {reference.text}" for reference in result.references)
+            reference = result.references[0]
+            detail = f"L{reference.line} {reference.text}"
         else:
             detail = result.subtitle if result.domain == "wiki" else result.snippet
-        print(
-            f"{result.id:<{id_width}}  "
-            f"{truncate_cell(one_line(result.title), title_width):<{title_width}}  "
-            f"{truncate_cell(one_line(detail), detail_width)}"
-        )
+        print(f"{key}  {one_line(result.title)}  {result.id}")
+        print(f"  {truncate_detail(one_line(detail))}")
 
 
 def one_line(value: str) -> str:
     return " ".join(value.split())
 
 
-def truncate_cell(value: str, width: int) -> str:
-    if len(value) <= width:
+def truncate_detail(value: str) -> str:
+    if len(value) <= SEARCH_DETAIL_MAX_CHARACTERS:
         return value
-    return f"{value[: width - 1]}…"
+    return f"{value[: SEARCH_DETAIL_MAX_CHARACTERS - 1]}…"
 
 
 def print_wiki(entries: list[dict]) -> None:
@@ -193,17 +214,114 @@ def read_body(value: str) -> str:
     return value
 
 
+def github_remote_repository(url: str) -> str | None:
+    marker = "github.com"
+    if marker not in url:
+        return None
+    path = url.split(marker, 1)[1].lstrip("/:").rstrip("/")
+    parts = path.removesuffix(".git").split("/")
+    return "/".join(parts) if len(parts) == 2 and all(parts) else None
+
+
+def current_configured_repository() -> str:
+    remotes = subprocess.run(
+        ["git", "config", "--local", "--get-regexp", r"^remote\..*\.url$"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if remotes.returncode == 0:
+        repositories = {
+            repository
+            for line in remotes.stdout.splitlines()
+            if len(line.split(maxsplit=1)) == 2
+            for repository in [github_remote_repository(line.split(maxsplit=1)[1])]
+            if repository is not None
+        }
+        canonical = {target.repository.casefold(): target.repository for target in search_config.REPOSITORY_TARGETS}
+        exact_matches = {
+            canonical[repository.casefold()] for repository in repositories if repository.casefold() in canonical
+        }
+        if len(exact_matches) == 1:
+            return exact_matches.pop()
+        canonical_by_name = {repository.rsplit("/", 1)[1].casefold(): repository for repository in canonical.values()}
+        fork_matches = {
+            canonical_by_name[repository.rsplit("/", 1)[1].casefold()]
+            for repository in repositories
+            if repository.rsplit("/", 1)[1].casefold() in canonical_by_name
+        }
+        if len(fork_matches) == 1:
+            return fork_matches.pop()
+    raise SystemExit(
+        "cannot infer a configured repository from this Git checkout; "
+        "pass --repository <owner/repo> or --repository all"
+    )
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     domains = list(dict.fromkeys(args.domain or DEFAULT_DOMAINS))
-    remote_value = response_objects(
+    params: dict[str, object] = {"q": args.query, "domain": domains, "limit": args.limit}
+    if "file" in domains:
+        repository = args.repository or current_configured_repository()
+        params["repository"] = repository
+        print(f"File scope: {repository}")
+    started_at = time.perf_counter()
+    response = request_response(
+        "GET",
+        "/federated-search",
+        params=params,
+    )
+    remote_value = response_objects(response.json())
+    results = [SearchResult.from_json(result) for result in remote_value]
+    elapsed = time.perf_counter() - started_at
+    noun = "result" if len(results) == 1 else "results"
+    print(f"{len(results)} {noun} in {elapsed:.2f}s")
+    server_timing = response.headers.get(search_config.SERVER_TIMING_HEADER)
+    if server_timing:
+        print(f"Server timing: {server_timing}")
+    print_search_results(results)
+    execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
+    execution_flag = f"--execution-id {execution_id} " if execution_id else ""
+    print(
+        "Feedback: uv run infra/echo/cli.py feedback "
+        f"--query {shlex.quote(args.query)} {execution_flag}"
+        f"--grade '<key>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>' "
+        "<<< 'brief overall assessment'"
+    )
+
+
+def feedback_grade(value: str) -> search_feedback.FeedbackGrade:
+    try:
+        return search_feedback.FeedbackGrade.from_spec(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def feedback_note() -> str | None:
+    if sys.stdin.isatty():
+        return None
+    return sys.stdin.read().strip() or None
+
+
+def cmd_feedback(args: argparse.Namespace) -> None:
+    note = feedback_note()
+    if note is None:
+        raise SystemExit("provide a short overall explanation on stdin")
+    body = {
+        "query": args.query,
+        "grades": [{"key": grade.key, "grade": grade.grade} for grade in args.grade],
+        "note": note,
+    }
+    if args.execution_id is not None:
+        body["execution_id"] = args.execution_id
+    entry = response_object(
         request(
-            "GET",
-            "/federated-search",
-            params={"q": args.query, "domain": domains, "limit": args.limit},
+            "POST",
+            "/feedback",
+            body=body,
         )
     )
-    results = [SearchResult.from_json(result) for result in remote_value]
-    print_search_results(results)
+    print(f"recorded feedback #{entry['id']}")
 
 
 def cmd_grep(args: argparse.Namespace) -> None:
@@ -227,7 +345,8 @@ def cmd_get(args: argparse.Namespace) -> None:
         url = wiki_link(int(value))
         text = entry["body"]
     elif domain == "file":
-        file = response_object(request("GET", f"/repository-files/{quote(value, safe='/')}"))
+        reference = repository_identity.parse_repository_file_id(args.id)
+        file = response_object(request("GET", f"/repository-files/{quote(reference.route_value, safe='/@:')}"))
         title, subtitle, url, text = file["title"], file["subtitle"], file["url"], file["text"]
     else:
         chunk = response_object(request("GET", f"/chunks/{value}"))
@@ -247,6 +366,24 @@ def cmd_get(args: argparse.Namespace) -> None:
         print(subtitle)
     print(f"{url}\n")
     print(text)
+
+
+def cmd_history_export(args: argparse.Namespace) -> None:
+    after_id = args.after_id
+    while True:
+        entries = response_objects(
+            request(
+                "GET",
+                "/search-executions",
+                params={"after_id": after_id, "mode": args.mode, "limit": args.page_size},
+                timeout=180,
+            )
+        )
+        for entry in entries:
+            print(json.dumps(entry, sort_keys=True))
+        if len(entries) < args.page_size:
+            return
+        after_id = int(entries[-1]["id"])
 
 
 def chunk_domain(chunk: dict[str, object]) -> str:
@@ -316,12 +453,20 @@ def nonblank(value: str) -> str:
 
 
 def artifact_id(value: str) -> str:
-    domain, separator, detail = value.partition(":")
-    if not separator or domain not in DOMAINS or not detail:
-        raise argparse.ArgumentTypeError("must be <wiki|file|discord|pr|issue>:<id>")
-    if domain != "file" and not detail.isdecimal():
-        raise argparse.ArgumentTypeError(f"{domain} result IDs are numeric")
-    return value
+    try:
+        return search_feedback.checked_artifact_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def detail_artifact_id(value: str) -> str:
+    checked = artifact_id(value)
+    if checked.startswith("file:"):
+        try:
+            repository_identity.parse_repository_file_id(checked)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
+    return checked
 
 
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
@@ -351,7 +496,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="search this domain; repeat to select several (default: wiki,file,pr,issue)",
     )
     search.add_argument("--limit", type=bounded_limit, default=10)
+    search.add_argument(
+        "--repository",
+        choices=(*(target.repository for target in search_config.REPOSITORY_TARGETS), search_config.ALL_REPOSITORIES),
+        help="file scope; omit to infer the configured repository from the current Git checkout",
+    )
     search.set_defaults(func=cmd_search)
+    feedback = sub.add_parser("feedback", help="grade federated-search results")
+    feedback.add_argument("--query", required=True, type=nonblank, help="the exact search query")
+    feedback.add_argument(
+        "--grade",
+        action="append",
+        type=feedback_grade,
+        default=[],
+        metavar=f"<result-key>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
+        help="grade one result; repeat as needed (a short overall explanation is read from stdin)",
+    )
+    feedback.add_argument("--execution-id", type=int, help="execution ID printed by the corresponding search")
+    feedback.set_defaults(func=cmd_feedback)
 
     grep = sub.add_parser("grep", help="exact substring scan over activity, newest first")
     grep.add_argument("pattern", type=nonblank)
@@ -361,9 +523,17 @@ def build_parser() -> argparse.ArgumentParser:
     grep.set_defaults(func=cmd_grep)
 
     get = sub.add_parser("get", help="print full detail for a federated-search result ID")
-    get.add_argument("id", type=artifact_id)
+    get.add_argument("id", type=detail_artifact_id)
     get.set_defaults(func=cmd_get)
 
+    history = sub.add_parser("history", help="export durable search executions").add_subparsers(
+        dest="history_command", required=True
+    )
+    history_export = history.add_parser("export", help="write search executions as JSONL")
+    history_export.add_argument("--after-id", type=int, default=0)
+    history_export.add_argument("--mode", choices=("federated", "activity", "grep"))
+    history_export.add_argument("--page-size", type=bounded_limit, default=100)
+    history_export.set_defaults(func=cmd_history_export)
     wiki = sub.add_parser("wiki", help="search, read, add, or edit wiki notes").add_subparsers(
         dest="wiki", required=True
     )

@@ -24,11 +24,17 @@ try:
     from kubernetes.client.exceptions import ApiException
     from kubernetes.dynamic import DynamicClient
     from kubernetes.dynamic.exceptions import NotFoundError
+
+    # The kubernetes client reports transport failures — connect and read timeouts,
+    # connection resets, retry exhaustion — as urllib3 errors rather than
+    # ApiException, so they need the same conversion to KubectlError.
+    from urllib3.exceptions import HTTPError as TransportError
 except ImportError:
     kubernetes = None  # type: ignore[assignment]
     ApiException = Exception  # type: ignore[assignment,misc]
     NotFoundError = Exception  # type: ignore[assignment,misc]
     DynamicClient = None  # type: ignore[assignment,misc]
+    TransportError = Exception  # type: ignore[assignment,misc]
 
 
 from rigging.log_setup import slow_log
@@ -40,9 +46,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
-    parse_k8s_cpu,
-    parse_k8s_quantity,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import find_free_port
@@ -55,6 +58,24 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+
+@contextmanager
+def _k8s_call(operation: str) -> Iterator[None]:
+    """Time one kubernetes API call and convert its transport failures.
+
+    ``operation`` names the call in both the slow-call warning and the raised
+    error. Callers add their own ``except ApiException`` where a status code
+    selects different handling; everything reaching here is a transport failure
+    the client raises as a urllib3 error, which callers expect as
+    ``KubectlError``.
+    """
+    with slow_log(logger, operation, threshold_ms=_SLOW_THRESHOLD_MS):
+        try:
+            yield
+        except TransportError as error:
+            raise KubectlError(f"{operation} failed: {error}") from error
+
+
 # Items requested per LIST page. An unpaginated list of a large collection
 # streams one chunked response body that no timeout bounds — the client arms a
 # per-recv socket timeout, which every arriving chunk resets — so a slow list
@@ -65,6 +86,11 @@ _LIST_PAGE_LIMIT: int = 500
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
+
+# GNU timeout's conventional exit status. K8s exec consumers already model
+# process completion as an integer exit code, so preserve that contract when
+# the websocket remains open past the caller's deadline.
+_COMMAND_TIMEOUT_EXIT_CODE: int = 124
 
 
 @runtime_checkable
@@ -154,8 +180,6 @@ class K8sService(Protocol):
         self,
         field_selector: str | None = None,
     ) -> list[dict]: ...
-
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]: ...
 
     def read_file(
         self,
@@ -295,10 +319,10 @@ class CloudK8sService:
         ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
 
         logger.info("k8s: apply %s/%s", kind, name)
-        with slow_log(logger, f"apply {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"apply {kind}/{name}"):
             try:
                 if res is K8sResource.PODS:
-                    self._apply_pod(res, name, ns, manifest)
+                    self._apply_pod(res, ns, manifest)
                 else:
                     self._dyn.server_side_apply(
                         resource=self._resource_api(res),
@@ -314,7 +338,7 @@ class CloudK8sService:
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
 
-    def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
+    def _apply_pod(self, res: K8sResource, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
 
         The pod name embeds the attempt's uid (see K8s backend ``_pod_name``), so a
@@ -330,21 +354,22 @@ class CloudK8sService:
         api = self._resource_api(res)
         ns_kw = {"namespace": ns} if ns else {}
         timeout_kw = self._request_timeout_kwargs()
-        try:
-            api.create(body=manifest, **timeout_kw, **ns_kw)
-        except ApiException as e:
-            if e.status == 409:
-                # Pod already present (or a prior generation still terminating);
-                # leave it. A later reconcile re-applies once any deletion lands.
-                return
-            raise
+        with _k8s_call(f"create {res.plural}"):
+            try:
+                api.create(body=manifest, **timeout_kw, **ns_kw)
+            except ApiException as e:
+                if e.status == 409:
+                    # Pod already present (or a prior generation still terminating);
+                    # leave it. A later reconcile re-applies once any deletion lands.
+                    return
+                raise
 
     # -- get -----------------------------------------------------------------
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None:
         """Get a Kubernetes resource as a parsed dict. Returns None if not found."""
         logger.info("k8s: GET %s/%s", resource.plural, name)
-        with slow_log(logger, f"get {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"get {resource.plural}/{name}"):
             try:
                 result = self._resource_api(resource).get(
                     name=name,
@@ -387,7 +412,7 @@ class CloudK8sService:
         kwargs.update(self._request_timeout_kwargs())
         api = self._resource_api(resource)
         continue_token = ""
-        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"list {resource.plural}"):
             while True:
                 page_kwargs = dict(kwargs, limit=_LIST_PAGE_LIMIT)
                 if continue_token:
@@ -425,7 +450,7 @@ class CloudK8sService:
             body["gracePeriodSeconds"] = 0
         if not wait:
             body["propagationPolicy"] = "Background"
-        with slow_log(logger, f"delete {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"delete {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).delete(name=name, body=body, **kwargs)
             except NotFoundError:
@@ -475,7 +500,7 @@ class CloudK8sService:
     def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
         """Delete a pod in an explicit namespace, ignoring NotFound."""
         logger.info("k8s: DELETE pod %s/%s", namespace, name)
-        with slow_log(logger, f"delete pod {namespace}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"delete pod {namespace}/{name}"):
             try:
                 self._resource_api(K8sResource.PODS).delete(
                     name=name,
@@ -506,7 +531,7 @@ class CloudK8sService:
             return
         remaining = [f for f in finalizers if f != finalizer]
         logger.info("k8s: PATCH remove finalizer %s from %s/%s", finalizer, resource.plural, name)
-        with slow_log(logger, f"remove_finalizer {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"remove_finalizer {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body={"metadata": {"finalizers": remaining}},
@@ -534,7 +559,7 @@ class CloudK8sService:
             }
         }
         logger.info("k8s: PATCH set_image %s/%s container=%s image=%s", resource.plural, name, container, image)
-        with slow_log(logger, f"set_image {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"set_image {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body=patch_body,
@@ -563,7 +588,7 @@ class CloudK8sService:
             }
         }
         logger.info("k8s: PATCH rollout_restart %s/%s", resource.plural, name)
-        with slow_log(logger, f"rollout_restart {resource.plural}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"rollout_restart {resource.plural}/{name}"):
             try:
                 self._resource_api(resource).patch(
                     body=patch_body,
@@ -611,7 +636,7 @@ class CloudK8sService:
     def get_events(self, field_selector: str | None = None) -> list[dict]:
         """Get Kubernetes events, optionally filtered by field selector."""
         logger.info("k8s: list events field_selector=%s", field_selector)
-        with slow_log(logger, "get_events", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call("get_events"):
             try:
                 kwargs: dict = {"namespace": self.namespace, "_request_timeout": self.timeout}
                 if field_selector:
@@ -628,7 +653,7 @@ class CloudK8sService:
     def logs(self, pod_name: str, *, container: str | None = None, tail: int = 50, previous: bool = False) -> str:
         """Fetch logs from a Pod container."""
         logger.info("k8s: logs %s container=%s tail=%d previous=%s", pod_name, container, tail, previous)
-        with slow_log(logger, f"logs {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"logs {pod_name}"):
             try:
                 kwargs: dict = {
                     "name": pod_name,
@@ -662,7 +687,7 @@ class CloudK8sService:
         before parsing.
         """
         logger.info("k8s: stream_logs %s since=%s limit_bytes=%s", pod_name, since_time, limit_bytes)
-        with slow_log(logger, f"stream_logs {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+        with _k8s_call(f"stream_logs {pod_name}"):
             try:
                 kwargs: dict = {
                     "name": pod_name,
@@ -734,10 +759,24 @@ class CloudK8sService:
                 with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        _preload_content=False,
                         **kwargs,
                     )
-                return ExecResult(returncode=0, stdout=resp, stderr="")
-            except ApiException as e:
+                    try:
+                        resp.run_forever(timeout=effective_timeout)
+                        stdout = resp.read_stdout(timeout=0) or ""
+                        stderr = resp.read_stderr(timeout=0) or ""
+                        if resp.is_open():
+                            timeout_error = f"Command timed out after {effective_timeout:g} seconds"
+                            return ExecResult(
+                                returncode=_COMMAND_TIMEOUT_EXIT_CODE,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, timeout_error) if part),
+                            )
+                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                    finally:
+                        resp.close()
+            except (ApiException, TransportError) as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
 
     # -- read_file / rm_files ------------------------------------------------
@@ -752,51 +791,6 @@ class CloudK8sService:
     def rm_files(self, pod_name: str, paths: list[str], *, container: str | None = None) -> None:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
-
-    # -- top_pods ------------------------------------------------------------
-
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        """Return CPU/memory usage for every pod, keyed by pod name.
-
-        Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
-        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
-        unavailable (metrics-server absent); returns an empty map rather than
-        raising so callers degrade quietly.
-        """
-        logger.info("k8s: top_pods labels=%s", labels)
-        kwargs = self._request_timeout_kwargs()
-        if labels:
-            kwargs["label_selector"] = _label_selector(labels)
-        with slow_log(logger, "top_pods", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._custom.list_namespaced_custom_object(
-                    group="metrics.k8s.io",
-                    version="v1beta1",
-                    namespace=self.namespace,
-                    plural="pods",
-                    **kwargs,
-                )
-            except ApiException as e:
-                if e.status == 404:
-                    return {}
-                raise
-
-        usage_by_pod: dict[str, PodResourceUsage] = {}
-        for item in result.get("items", []):
-            name = item.get("metadata", {}).get("name", "")
-            containers = item.get("containers", [])
-            if not name or not containers:
-                continue
-            total_cpu = 0
-            total_mem = 0
-            for c in containers:
-                usage = c.get("usage", {})
-                if "cpu" in usage:
-                    total_cpu += parse_k8s_cpu(usage["cpu"])
-                if "memory" in usage:
-                    total_mem += parse_k8s_quantity(usage["memory"])
-            usage_by_pod[name] = PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
-        return usage_by_pod
 
     # -- port_forward (subprocess-based) -------------------------------------
 

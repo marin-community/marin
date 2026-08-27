@@ -5,6 +5,9 @@ COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
 COPY dashboard/ ./
 RUN npm run build
+# Echo admits one request per Cloud Run instance. Keep first paint in the HTML response
+# so an uncached dashboard load does not start model-serving instances for static assets.
+RUN test "$(find dist -type f | wc -l)" -eq 1
 
 FROM python:3.12-slim AS runtime
 
@@ -18,8 +21,12 @@ RUN pip install --no-cache-dir \
 WORKDIR /app
 COPY schema.py .
 COPY hybrid_search.py .
+COPY repository_files.py .
+COPY repository_identity.py .
 COPY reranking.py .
 COPY search_config.py .
+COPY search_feedback.py .
+COPY search_history.py .
 COPY api/app.py .
 COPY api/dashboard.py .
 COPY --from=dashboard /build/dist /app/dist

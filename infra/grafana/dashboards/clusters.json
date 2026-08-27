@@ -1,6 +1,6 @@
 {
   "uid": "marin-clusters",
-  "title": "Clusters",
+  "title": "Fleet health",
   "description": "Is the infrastructure under the jobs healthy: CoreWeave control planes, nodes, GB200 racks, host resources, and the finelog mirrors and canary probes behind them. The current-state reads have no history and cover every cluster; the cluster selector applies to the host-resource charts, which come from the node agents' telemetry stream. Each row says which of the two it is.",
   "tags": [
     "marin",
@@ -77,14 +77,30 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "cluster_capacity"
+    },
+    {
+      "linkRef": "fleet_accelerators"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Node details",
       "type": "link",
-      "url": "/d/marin-accel"
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
     },
     {
       "asDropdown": false,
@@ -112,9 +128,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -519,7 +535,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -682,7 +698,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -845,7 +861,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1234,272 +1250,6 @@
                   "selector": "last_seen",
                   "text": "last seen",
                   "type": "string"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 22,
-      "type": "row",
-      "title": "Canary probes and TPU fleet — all regions",
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 48
-      },
-      "panels": [
-        {
-          "id": 60,
-          "type": "timeseries",
-          "title": "Canary probe health",
-          "description": "One series per canary probe: 1 is passing. A probe dropping to 0 is the ferry telling you a control path broke before a user does.",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 0
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "showLegend": true,
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "timeseries",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_up' AND contains(labels, '\"probe\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
-              },
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "value",
-                  "text": "up",
-                  "type": "number"
-                },
-                {
-                  "selector": "labels",
-                  "text": "labels",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": 61,
-          "type": "timeseries",
-          "title": "Healthy workers by region",
-          "description": "GCE worker count reporting healthy, per region.",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 0
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false
-              },
-              "min": 0
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "showLegend": true,
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "timeseries",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
-              },
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "value",
-                  "text": "workers",
-                  "type": "number"
-                },
-                {
-                  "selector": "labels",
-                  "text": "labels",
-                  "type": "string"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "id": 62,
-          "type": "timeseries",
-          "title": "Fleet TPU chips",
-          "description": "Total TPU chips the GCE fleet is holding. The TPU counterpart to fleet GPU power -- TPU hosts report no power draw.",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 8
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 2,
-                "fillOpacity": 0,
-                "showPoints": "never",
-                "spanNulls": false
-              },
-              "min": 0
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "showLegend": true,
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": []
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "desc"
-            }
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "type": "json",
-              "source": "url",
-              "format": "timeseries",
-              "parser": "backend",
-              "url": "/query",
-              "url_options": {
-                "method": "GET",
-                "params": [
-                  {
-                    "key": "sql",
-                    "value": "SELECT collected_at AS t, value FROM \"infra.canary.metrics\" WHERE metric = 'worker_tpu_chips' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
-                  },
-                  {
-                    "key": "from",
-                    "value": "${__from}"
-                  },
-                  {
-                    "key": "to",
-                    "value": "${__to}"
-                  }
-                ]
-              },
-              "columns": [
-                {
-                  "selector": "t",
-                  "text": "time",
-                  "type": "timestamp_epoch"
-                },
-                {
-                  "selector": "value",
-                  "text": "chips",
-                  "type": "number"
                 }
               ]
             }

@@ -38,12 +38,12 @@ import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 logger = logging.getLogger(__name__)

@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -67,6 +67,8 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
+from levanter.cutlass_kernel_cache import cutlass_kernel_cache
+from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
@@ -356,6 +358,12 @@ class Trainer:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
+
+    def request_checkpoint(self) -> None:
+        """Request a checkpoint after the current step, subject to the save policy."""
+        if self._checkpointer is None:
+            raise RuntimeError("Checkpointing is not configured")
+        self._checkpointer.request_checkpoint()
 
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
@@ -698,7 +706,7 @@ class Trainer:
             max_buffered_batches=128,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            prefetch_size=32,
+            fetch_batch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -902,12 +910,17 @@ class TrainerConfig:
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
-    load_checkpoint_path: Optional[str] = None
-    """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
+    load_checkpoint_path: Optional[str | list[str]] = None
+    """One checkpoint root/path, or ordered roots searched for the newest checkpoint.
+
+    If None, search the checkpointer's permanent and temporary roots.
+    """
 
     def checkpoint_search_paths(self, run_id: str) -> list[str]:
-        if self.load_checkpoint_path is not None:
+        if isinstance(self.load_checkpoint_path, str):
             return [self.load_checkpoint_path]
+        if self.load_checkpoint_path is not None:
+            return list(self.load_checkpoint_path)
 
         paths = [self.checkpointer.expanded_path(run_id)]
         temp_path = self.checkpointer.expanded_temporary_path(run_id)
@@ -973,6 +986,9 @@ class TrainerConfig:
         # Can't do full logging setup until we've initialized jax b/c we use jax for rank id
         pylogging.basicConfig(level=pylogging.WARNING)
         self.distributed.initialize()
+        # Importing cutlass.jax may initialize the XLA backend, so install its
+        # cache only after jax.distributed.initialize().
+        install_cutlass_kernel_cache(cutlass_kernel_cache())
         self._validate_and_set_defaults()
 
         id = self._maybe_set_id()

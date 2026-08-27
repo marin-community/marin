@@ -21,10 +21,10 @@
 //! freshly allocated seq under the lock, and never writes parquet.
 
 use std::cmp::Reverse;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{Array, Int64Array, RecordBatch};
@@ -32,28 +32,39 @@ use arrow::datatypes::SchemaRef;
 use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
+use crate::partition_policy::{segment_path, SegmentPartition};
+use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
-use crate::store::compaction::planner::plan;
+use crate::store::compaction::executor::{
+    read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
+    PlannedSwap,
+};
+use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
-use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
+use crate::store::schema::{
+    resolve_key_column, resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema,
+};
+#[cfg(test)]
+use crate::store::segment::write_segment_to_dir;
 use crate::store::segment::{
-    discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
-    write_segment_to_dir,
+    discover_files, discover_segments, read_segment_footer, segment_layout_is_current,
+    stage_rewritten_segment, write_segment_to_dir_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
 use crate::store::segment_index::{
     covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
     needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
     SegmentIndexConfig, SegmentIndexWrite,
 };
-use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
+use crate::store::types::{
+    basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
+};
 
 /// Best-effort removal of a segment's derived index files, co-located with every
 /// parquet unlink. Missing artifacts are not errors.
@@ -97,6 +108,14 @@ fn remove_index_artifacts(parquet_path: &str) {
     }
 }
 
+fn fixed_index_artifacts_exist(parquet_path: &Path) -> bool {
+    crate::store::index_bundle::bundle_path(parquet_path).exists()
+        || crate::store::index_bundle::staging_path(parquet_path).exists()
+        || legacy_artifact_paths(parquet_path)
+            .into_iter()
+            .any(|path| path.exists())
+}
+
 fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
     if let Err(error) = remove_if_exists(path) {
         tracing::warn!(
@@ -127,14 +146,14 @@ pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Segment index bundles rebuilt per maintenance tick by the background backfill.
+/// Segment index bundles rebuilt or removed per maintenance tick.
 ///
 /// A single index build over a terminal-level segment is heavy (substantial CPU
 /// and RAM), and the backfill is the lowest-priority maintenance work, so this
 /// stays small enough never to starve compaction/sync/eviction. It is four rather
 /// than one so a namespace whose bundles all need rebuilding converges in tens
 /// of minutes instead of hours while queries safely use partial coverage.
-pub const BACKFILL_INDEX_BUNDLES_PER_TICK: usize = 4;
+pub const INDEX_BUNDLES_PER_TICK: usize = 4;
 
 /// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
 ///
@@ -148,6 +167,16 @@ pub const BACKFILL_INDEX_BUNDLES_PER_TICK: usize = 4;
 /// The work is a storage and footer-size win rather than a correctness fix, so it
 /// stays a minority of the 30 s tick.
 const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
+
+/// Per-maintenance budget for converging legacy physical placement.
+///
+/// Each rewrite already in flight may overrun this budget. The bound controls
+/// how many additional jobs start before ordinary compaction and remote sync get
+/// their turn.
+const PHYSICAL_LAYOUT_MIGRATION_BUDGET: Duration = Duration::from_secs(3);
+const PHYSICAL_LAYOUT_MIGRATION_CONCURRENCY: usize = 2;
+const PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES: i64 = 32 * 1024 * 1024;
+const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Process-wide permit for the layout rewrite, so only one namespace re-encodes
 /// at a time.
@@ -187,7 +216,9 @@ pub struct Namespace {
     name: String,
     schema: Schema,
     arrow_schema: SchemaRef,
-    key_column: Option<String>,
+    key_column: String,
+    sort_columns: Vec<String>,
+    max_row_group_rows: usize,
     /// `None` => in-memory mode (every append immediately persisted, no parquet).
     data_dir: Option<PathBuf>,
     catalog: Arc<Catalog>,
@@ -256,6 +287,9 @@ pub struct Namespace {
     /// Shared by every namespace in this store so historical projection builds
     /// cannot saturate the process with concurrent scans and compression.
     index_backfill_slot: Arc<Mutex<()>>,
+    /// Shared by every namespace in this store so only one two-worker physical
+    /// migration wave runs at a time.
+    physical_layout_migration_slot: Arc<Mutex<()>>,
 }
 
 /// Segments the index backfill cannot bring up to date, and the indexed set
@@ -293,10 +327,56 @@ struct BackfillCandidate {
     expected_rows: i64,
 }
 
+#[derive(Clone, Copy, Default)]
+struct PhysicalLayoutMigrationPending {
+    migration_l0: usize,
+    stale_partitions: usize,
+    misplaced_local: usize,
+}
+
+impl PhysicalLayoutMigrationPending {
+    fn any(self) -> bool {
+        self.migration_l0 > 0 || self.stale_partitions > 0 || self.misplaced_local > 0
+    }
+}
+
+fn migration_l0_needs_rebuild(segment: &LocalSegment) -> bool {
+    segment.level == 0 && (segment.min_seq < 0 || segment.partition.is_some())
+}
+
+fn partition_is_stale(
+    segment: &LocalSegment,
+    policy: &dyn crate::partition_policy::PhysicalPartitionPolicy,
+) -> bool {
+    segment.level >= 1
+        && segment
+            .partition
+            .as_ref()
+            .is_none_or(|partition| !policy.is_current_partition(partition))
+}
+
+fn current_layout_destination(
+    dir: &Path,
+    path: &str,
+    level: i32,
+    partition: Option<&SegmentPartition>,
+    policy: &dyn crate::partition_policy::PhysicalPartitionPolicy,
+) -> Option<PathBuf> {
+    let partition = partition?;
+    if level < 1 || !policy.is_current_partition(partition) {
+        return None;
+    }
+    let filename = Path::new(path).file_name()?.to_str()?;
+    let destination = segment_path(dir, filename, level, Some(partition), Some(policy));
+    (Path::new(path) != destination).then_some(destination)
+}
+
 /// A namespace's sealed local segments as one consistent observation: the files a
-/// scan may read, and the lowest `seq` any of them holds.
+/// scan may read, their known key bounds, and the lowest `seq` any of them holds.
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
+    pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
 }
 
@@ -325,16 +405,19 @@ impl Namespace {
         query_visibility: Arc<RwLock<()>>,
         index_cache: Arc<IndexCache>,
         index_backfill_slot: Arc<Mutex<()>>,
+        physical_layout_migration_slot: Arc<Mutex<()>>,
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
-        let key_column = if schema.key_column.is_empty() {
-            None
+        let sort_columns = resolve_sort_columns(&schema)?;
+        let max_row_group_rows = if schema.max_row_group_rows == 0 {
+            MAX_ROW_GROUP_ROWS
         } else {
-            Some(schema.key_column.clone())
+            schema.max_row_group_rows as usize
         };
+        let key_column = resolve_key_column(&schema)?;
 
         let local_recovery_started = Instant::now();
         let (next_seq, adopted, init_persisted) = match &data_dir {
@@ -343,7 +426,7 @@ impl Namespace {
                 std::fs::create_dir_all(dir).map_err(|e| {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
-                let adopted = adopt_local_segments(dir, key_column.as_deref(), &catalog, name);
+                let adopted = adopt_local_segments(dir, Some(&key_column), &catalog, name);
                 // Seed next_seq past every segment the catalog knows about, not
                 // just on-disk footers. A segment evicted to remote has its local
                 // parquet unlinked, so a footer-only scan under-counts and would
@@ -388,6 +471,8 @@ impl Namespace {
             schema,
             arrow_schema: Arc::clone(&arrow_schema),
             key_column,
+            sort_columns,
+            max_row_group_rows,
             data_dir,
             catalog: Arc::clone(&catalog),
             compaction_config: CompactionConfig::default(),
@@ -410,6 +495,7 @@ impl Namespace {
             current_layouts: Mutex::new(HashSet::new()),
             index_cache,
             index_backfill_slot,
+            physical_layout_migration_slot,
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -456,7 +542,7 @@ impl Namespace {
             remote,
             &self.name,
             dir,
-            self.key_column.as_deref(),
+            Some(&self.key_column),
         )
         .await?;
         // Reconcile may have adopted REMOTE-only segments the catalog did not
@@ -492,8 +578,13 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
-    /// one hold of the insertion lock so the two describe the same segment set.
+    /// Resolved physical key, including the implicit `timestamp_ms` default.
+    pub fn key_column(&self) -> &str {
+        &self.key_column
+    }
+
+    /// Snapshot sealed local paths, key bounds, and their lowest `seq` under one
+    /// hold of the insertion lock so they describe the same segment set.
     /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
     /// whose segments have all been evicted to remote).
     ///
@@ -504,11 +595,27 @@ impl Namespace {
     /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
     pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
+        let key_bounds = inner
+            .local_segments
+            .iter()
+            .filter_map(|segment| {
+                Some((
+                    segment.path.clone(),
+                    (segment.min_key_value?, segment.max_key_value?),
+                ))
+            })
+            .collect();
         SegmentSnapshot {
             paths: inner
                 .local_segments
                 .iter()
                 .map(|s| s.path.clone())
+                .collect(),
+            key_bounds,
+            partitions: inner
+                .local_segments
+                .iter()
+                .filter_map(|segment| Some((segment.path.clone(), segment.partition.clone()?)))
                 .collect(),
             min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
         }
@@ -734,7 +841,13 @@ impl Namespace {
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
-        let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        let (path, size) = write_segment_to_dir_with_max_row_group_rows(
+            dir,
+            0,
+            sealed.min_seq,
+            &sealed.batch,
+            self.max_row_group_rows,
+        )?;
         // L0 files are small and short-lived. Derived indexes are built after
         // compaction promotes them to L1+, keeping flush acknowledgement fast
         // while query plans merge indexed counts with uncovered L0 data.
@@ -749,6 +862,7 @@ impl Namespace {
             created_at_ms: now_ms(),
             min_key_value: min_key,
             max_key_value: max_key,
+            partition: None,
             location: SegmentLocation::Local,
         };
         let row = segment_to_row(&self.name, &seg);
@@ -769,10 +883,7 @@ impl Namespace {
     /// Int64 key-column bounds from the in-memory sealed batch (cheaper than
     /// re-reading the parquet footer we just wrote).
     fn key_bounds(&self, batch: &RecordBatch) -> (Option<i64>, Option<i64>) {
-        let Some(key) = &self.key_column else {
-            return (None, None);
-        };
-        let Ok(idx) = batch.schema().index_of(key) else {
+        let Ok(idx) = batch.schema().index_of(&self.key_column) else {
             return (None, None);
         };
         let Some(col) = batch.column(idx).as_any().downcast_ref::<Int64Array>() else {
@@ -817,6 +928,259 @@ impl Namespace {
         };
         self.run_one_job(&dir, &job)?;
         Ok(true)
+    }
+
+    /// Select up to `limit` independent legacy L0 rebuild jobs.
+    fn physical_layout_migration_l0_jobs(&self, limit: usize) -> Vec<CompactionJob> {
+        if physical_partition_policy_for(&self.name).is_none() {
+            return Vec::new();
+        }
+        let inner = self.inner.lock().unwrap();
+        let mut jobs = Vec::new();
+        let mut inputs = Vec::new();
+        let mut compressed_bytes: i64 = 0;
+        // Coalesce compressed inputs before repartitioning. One output set per
+        // migration source would turn the existing backlog into hundreds of
+        // thousands of tiny L1s.
+        for segment in inner
+            .local_segments
+            .iter()
+            .filter(|segment| migration_l0_needs_rebuild(segment))
+        {
+            if !inputs.is_empty()
+                && compressed_bytes.saturating_add(segment.size_bytes)
+                    > PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES
+            {
+                let input_refs = inputs.iter().collect();
+                jobs.push(build_job(input_refs, 1));
+                inputs.clear();
+                compressed_bytes = 0;
+                if jobs.len() >= limit {
+                    break;
+                }
+            }
+            let mut row = segment_to_row(&self.name, segment);
+            // An unpartitioned job forces the executor through its sort and
+            // partition path. This also repairs the legacy version that stamped
+            // an L0 footer before L0 was defined as policy-free.
+            row.partition = None;
+            compressed_bytes = compressed_bytes.saturating_add(segment.size_bytes);
+            inputs.push(row);
+        }
+        if jobs.len() < limit && !inputs.is_empty() {
+            jobs.push(build_job(inputs.iter().collect(), 1));
+        }
+        jobs
+    }
+
+    /// Rebuild one parallel wave of legacy L0s and atomically publish each input.
+    fn physical_layout_migration_l0_wave(&self) -> Result<usize, StatsError> {
+        let Some(dir) = self.data_dir.as_deref() else {
+            return Ok(0);
+        };
+        let jobs = self.physical_layout_migration_l0_jobs(PHYSICAL_LAYOUT_MIGRATION_CONCURRENCY);
+        if jobs.is_empty() {
+            return Ok(0);
+        }
+        let results = std::thread::scope(|scope| {
+            jobs.into_iter()
+                .map(|job| scope.spawn(move || self.run_one_job(dir, &job)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join())
+                .collect::<Vec<_>>()
+        });
+        let mut completed = 0;
+        for result in results {
+            result.map_err(|_| {
+                StatsError::Internal("physical layout migration worker panicked".to_string())
+            })??;
+            completed += 1;
+        }
+        Ok(completed)
+    }
+
+    /// Rebuild or relocate one legacy L1+ segment.
+    fn physical_layout_migration_non_l0_step(&self) -> Result<bool, StatsError> {
+        let Some(dir) = self.data_dir.as_deref() else {
+            return Ok(false);
+        };
+        let Some(policy) = physical_partition_policy_for(&self.name) else {
+            return Ok(false);
+        };
+
+        let stale_partition = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .local_segments
+                .iter()
+                .find(|segment| partition_is_stale(segment, policy))
+                .map(|segment| {
+                    let mut row = segment_to_row(&self.name, segment);
+                    row.partition = None;
+                    row
+                })
+        };
+        if let Some(input) = stale_partition {
+            let output_level = input.level;
+            let output_min_seq = input.min_seq;
+            self.run_one_job(
+                dir,
+                &CompactionJob {
+                    inputs: vec![input],
+                    output_level,
+                    output_min_seq,
+                },
+            )?;
+            return Ok(true);
+        }
+
+        let relocation = {
+            let inner = self.inner.lock().unwrap();
+            inner.local_segments.iter().find_map(|segment| {
+                current_layout_destination(
+                    dir,
+                    &segment.path,
+                    segment.level,
+                    segment.partition.as_ref(),
+                    policy,
+                )
+                .map(|destination| (segment.clone(), destination))
+            })
+        };
+        let Some((segment, destination)) = relocation else {
+            return Ok(false);
+        };
+        let mut moved = segment.clone();
+        moved.path = destination.to_string_lossy().into_owned();
+        // The durable copy, if any, still has the old flat object key. Mark the
+        // moved row LOCAL so sync uploads the new key before orphan cleanup can
+        // delete the old one.
+        moved.location = SegmentLocation::Local;
+        self.commit_swap(PlannedSwap {
+            removed: vec![segment.path.clone()],
+            added: vec![moved],
+            unlink_removed: false,
+            bump_rename: Some((PathBuf::from(segment.path), destination)),
+            input_arrow_bytes: 0,
+        })?;
+        Ok(true)
+    }
+
+    fn physical_layout_migration_pending(&self) -> PhysicalLayoutMigrationPending {
+        let Some(dir) = self.data_dir.as_deref() else {
+            return PhysicalLayoutMigrationPending::default();
+        };
+        let Some(policy) = physical_partition_policy_for(&self.name) else {
+            return PhysicalLayoutMigrationPending::default();
+        };
+        let inner = self.inner.lock().unwrap();
+        let mut pending = PhysicalLayoutMigrationPending::default();
+        for segment in &inner.local_segments {
+            if migration_l0_needs_rebuild(segment) {
+                pending.migration_l0 += 1;
+                continue;
+            }
+            if segment.level == 0 {
+                continue;
+            };
+            if partition_is_stale(segment, policy) {
+                pending.stale_partitions += 1;
+                continue;
+            }
+            pending.misplaced_local += usize::from(
+                current_layout_destination(
+                    dir,
+                    &segment.path,
+                    segment.level,
+                    segment.partition.as_ref(),
+                    policy,
+                )
+                .is_some(),
+            );
+        }
+        pending
+    }
+
+    fn physical_layout_migration_is_pending(&self) -> bool {
+        self.physical_layout_migration_pending().any()
+    }
+
+    /// Relocate one archived segment to its current physical path.
+    async fn remote_layout_migration_step(&self) -> Result<bool, StatsError> {
+        let (Some(dir), Some(remote)) = (self.data_dir.as_deref(), self.remote.as_ref()) else {
+            return Ok(false);
+        };
+
+        let candidate = self
+            .remote_layout_migration_candidates()?
+            .into_iter()
+            .next();
+        let Some((row, destination)) = candidate else {
+            return Ok(false);
+        };
+        let source_key = segment_relative_key(dir, &row.path).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "remote layout source is outside namespace directory: {}",
+                row.path
+            ))
+        })?;
+        let destination_path = destination.to_string_lossy().into_owned();
+        let destination_key = segment_relative_key(dir, &destination_path).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "remote layout destination is outside namespace directory: {destination_path}"
+            ))
+        })?;
+
+        remote
+            .copy(&self.name, &source_key, &destination_key)
+            .await?;
+
+        let mut moved = row.clone();
+        moved.path = destination_path;
+        {
+            let _write_guard = self.query_visibility.write().await;
+            self.catalog
+                .replace_segments(&self.name, std::slice::from_ref(&row.path), &[moved])?;
+        }
+        remote.delete(&self.name, &source_key).await;
+        tracing::info!(
+            namespace = %self.name,
+            from = %source_key,
+            to = %destination_key,
+            rows = row.row_count,
+            "remote physical layout segment relocated"
+        );
+        Ok(true)
+    }
+
+    fn remote_layout_migration_candidates(&self) -> Result<Vec<(SegmentRow, PathBuf)>, StatsError> {
+        let (Some(dir), Some(policy)) = (
+            self.data_dir.as_deref(),
+            physical_partition_policy_for(&self.name),
+        ) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .catalog
+            .list_segments_min_level(&self.name, 1)?
+            .into_iter()
+            .filter(|row| row.location == SegmentLocation::Remote)
+            .filter_map(|row| {
+                current_layout_destination(
+                    dir,
+                    &row.path,
+                    row.level,
+                    row.partition.as_ref(),
+                    policy,
+                )
+                .map(|destination| (row, destination))
+            })
+            .collect())
+    }
+
+    fn remote_layout_migration_remaining_count(&self) -> Result<usize, StatsError> {
+        Ok(self.remote_layout_migration_candidates()?.len())
     }
 
     /// Synthesize and apply a single L0->L1 merge of every L0 segment that fits
@@ -868,13 +1232,20 @@ impl Namespace {
             input_rows = job.inputs.iter().map(|s| s.row_count).sum::<i64>(),
             "compaction job starting"
         );
-        let swap = run_job(
+        let swap = run_job_with_partition_policy(
             job,
             dir,
             &self.arrow_schema,
-            self.key_column.as_deref(),
-            &index_config,
-            self.compaction_config.max_merge_arrow_bytes,
+            CompactionExecution {
+                layout: CompactionLayout {
+                    sort_columns: &self.sort_columns,
+                    key_column: &self.key_column,
+                    max_row_group_rows: self.max_row_group_rows,
+                },
+                index_config: &index_config,
+                partition_policy: physical_partition_policy_for(&self.name),
+                max_merge_arrow_bytes: self.compaction_config.max_merge_arrow_bytes,
+            },
             |path| self.input_key_bounds(path),
         )?;
         let merged_inputs = swap.removed.len();
@@ -885,7 +1256,7 @@ impl Namespace {
         // durable archive; a LOCAL-only row is removed) and tolerates the already
         // absent file. This unwedges compaction without deleting a segment that
         // still has a remote copy.
-        let Some(added) = swap.added.clone() else {
+        if swap.added.is_empty() {
             for path in &swap.removed {
                 self.evict_segment(path);
             }
@@ -896,10 +1267,10 @@ impl Namespace {
                 "dropped stale segment reference with no local file; compaction resumed"
             );
             return Ok(());
-        };
-        let output_path = added.path.clone();
-        let output_bytes = added.size_bytes;
-        let output_rows = added.row_count;
+        }
+        let output_bytes: i64 = swap.added.iter().map(|added| added.size_bytes).sum();
+        let output_rows: i64 = swap.added.iter().map(|added| added.row_count).sum();
+        let output_segments = swap.added.len();
         // A bump is a rename; a merge decodes its inputs into RAM. The
         // distinction is the whole memory story, so name it — along with the
         // decoded size the ceiling actually bounds, and how much of the planned
@@ -914,7 +1285,7 @@ impl Namespace {
             namespace = %self.name,
             kind,
             output_level = job.output_level,
-            output_path = %output_path,
+            output_segments,
             output_bytes,
             output_rows,
             merged_inputs,
@@ -963,11 +1334,14 @@ impl Namespace {
     }
 
     fn segment_index_config(&self) -> SegmentIndexConfig {
+        if !segment_indexes_enabled_for(&self.name) {
+            return SegmentIndexConfig::from_policies(Vec::<String>::new(), &[], &[], None);
+        }
         SegmentIndexConfig::from_policies(
             self.indexed_columns(),
             &self.exact_indexes(),
             &self.schema.projections,
-            self.key_column.clone(),
+            Some(self.key_column.clone()),
         )
         .with_adaptive_value_counts(self.adaptive_count_columns())
         .with_adaptive_group_extrema(self.schema.grouped_extrema.clone())
@@ -1007,6 +1381,18 @@ impl Namespace {
         //    propagated BEFORE any deque/catalog mutation, so the swap aborts
         //    with nothing changed.
         if let Some((from, to)) = &swap.bump_rename {
+            let destination_dir = to.parent().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "segment destination has no parent: {}",
+                    to.display()
+                ))
+            })?;
+            std::fs::create_dir_all(destination_dir).map_err(|e| {
+                StatsError::Internal(format!(
+                    "create segment destination directory {}: {e}",
+                    destination_dir.display()
+                ))
+            })?;
             std::fs::rename(from, to).map_err(|e| {
                 StatsError::Internal(format!(
                     "level-bump rename {} -> {} failed: {e}",
@@ -1029,16 +1415,14 @@ impl Namespace {
                     remove_orphaned_index_artifact(&self.name, &bundle_from, "index bundle");
                 }
             }
-            if let (Some(directory), Some(from_name), Some(to_name)) =
-                (from.parent(), from.file_name(), to.file_name())
-            {
+            if let (Some(from_name), Some(to_name)) = (from.file_name(), to.file_name()) {
                 let prefix = format!("{}{NAMED_PROJECTION_MARKER}", from_name.to_string_lossy());
                 match covering_projection_paths(from) {
                     Ok(projections) => {
                         for source in projections {
                             let name = source.file_name().and_then(|name| name.to_str()).unwrap();
                             let suffix = name.strip_prefix(&prefix).unwrap();
-                            let destination = directory.join(format!(
+                            let destination = destination_dir.join(format!(
                                 "{}{NAMED_PROJECTION_MARKER}{suffix}",
                                 to_name.to_string_lossy()
                             ));
@@ -1060,33 +1444,27 @@ impl Namespace {
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
-        // A drop (missing head input) never reaches `commit_swap` — `run_one_job`
-        // routes it through `evict_segment`. Every committed swap therefore
-        // replaces its inputs with a real output segment.
-        let added = swap
+        assert!(
+            !swap.added.is_empty(),
+            "commit_swap requires output segments; drops are handled by run_one_job"
+        );
+        let added_rows: Vec<SegmentRow> = swap
             .added
-            .as_ref()
-            .expect("commit_swap requires an output segment; drops are handled by run_one_job");
-        let added_row = segment_to_row(&self.name, added);
+            .iter()
+            .map(|segment| segment_to_row(&self.name, segment))
+            .collect();
         {
             let mut inner = self.inner.lock().unwrap();
-            let mut new_segments: VecDeque<LocalSegment> =
-                VecDeque::with_capacity(inner.local_segments.len());
-            let mut inserted = false;
-            for s in inner.local_segments.drain(..) {
-                if removed_set.contains(s.path.as_str()) {
-                    if !inserted {
-                        new_segments.push_back(added.clone());
-                        inserted = true;
-                    }
-                } else {
-                    new_segments.push_back(s);
-                }
-            }
-            if !inserted {
-                new_segments.push_back(added.clone());
-            }
-            inner.local_segments = new_segments;
+            inner
+                .local_segments
+                .retain(|segment| !removed_set.contains(segment.path.as_str()));
+            inner.local_segments.extend(swap.added.iter().cloned());
+            inner
+                .local_segments
+                .make_contiguous()
+                .sort_by(|left, right| {
+                    (left.min_seq, &left.path).cmp(&(right.min_seq, &right.path))
+                });
             debug_assert_unique_paths(&inner.local_segments);
             // Atomic catalog splice. Propagate on failure: the
             // deque now points at paths that exist on disk (the renamed bump
@@ -1095,7 +1473,7 @@ impl Namespace {
             // next boot adoption — never a mid-scan-unlink hazard — and the merge
             // inputs below are left intact because we return before unlinking.
             self.catalog
-                .replace_segments(&self.name, &swap.removed, &[added_row])?;
+                .replace_segments(&self.name, &swap.removed, &added_rows)?;
         }
         // 2) Unlink merged inputs after the swap (level bumps already renamed).
         if swap.unlink_removed {
@@ -1122,7 +1500,7 @@ impl Namespace {
     /// fails, `all_durable` is `false`.
     ///
     /// Phase 2 (orphan delete): runs ONLY if `all_durable`. Delete remote files
-    /// whose basename has no catalog row — those are compaction inputs whose row
+    /// whose relative key has no catalog row — those are compaction inputs whose row
     /// was dropped at commit. The ordering is the data-safety invariant: by the
     /// time phase 2 runs, the merged output subsuming those inputs is durable in
     /// the bucket (uploaded in phase 1), so the durable copy is in place before
@@ -1135,8 +1513,8 @@ impl Namespace {
         let Some(remote) = &self.remote else {
             return Ok(());
         };
-        let remote_basenames: std::collections::HashSet<String> =
-            match remote.list_basenames(&self.name).await {
+        let remote_keys: std::collections::HashSet<String> =
+            match remote.list_keys(&self.name).await {
                 Ok(names) => names.into_iter().collect(),
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, error = %e, "remote sync list failed");
@@ -1145,19 +1523,27 @@ impl Namespace {
             };
 
         let rows = self.catalog.list_segments_min_level(&self.name, 1)?;
+        let namespace_dir = self
+            .data_dir
+            .as_deref()
+            .expect("disk-backed namespace with remote store has a data directory");
         let mut all_durable = true;
         for row in &rows {
             if row.location != SegmentLocation::Local {
                 continue;
             }
-            let base = basename(&row.path);
-            if remote_basenames.contains(&base) {
+            let Some(key) = segment_relative_key(namespace_dir, &row.path) else {
+                tracing::warn!(namespace = %self.name, path = %row.path, "catalog segment is outside its namespace directory");
+                all_durable = false;
+                continue;
+            };
+            if remote_keys.contains(&key) {
                 // Uploaded but the catalog never flipped — adopt, no re-upload.
                 self.mark_uploaded(&row.path)?;
                 continue;
             }
             if remote
-                .upload(&self.name, std::path::Path::new(&row.path))
+                .upload(&self.name, &key, std::path::Path::new(&row.path))
                 .await
             {
                 self.mark_uploaded(&row.path)?;
@@ -1170,19 +1556,19 @@ impl Namespace {
             return Ok(());
         }
 
-        // Re-snapshot the L>=1 catalog rows (phase 1 may have added basenames) and
+        // Re-snapshot the L>=1 catalog rows (phase 1 may have added keys) and
         // delete only genuine orphans. min_level=1 is equivalent to scanning all
         // levels here because remote files are exclusively L>=1 (L0 is never
-        // uploaded), so an L0 basename can never appear in `remote_basenames`.
-        let catalog_basenames: std::collections::HashSet<String> = self
+        // uploaded), so an L0 key can never appear in the remote set.
+        let catalog_keys: std::collections::HashSet<String> = self
             .catalog
             .list_segments_min_level(&self.name, 1)?
             .iter()
-            .map(|r| basename(&r.path))
+            .filter_map(|row| segment_relative_key(namespace_dir, &row.path))
             .collect();
-        for base in remote_basenames.difference(&catalog_basenames) {
-            remote.delete(&self.name, base).await;
-            tracing::info!(namespace = %self.name, segment = %base, "deleted orphan remote segment");
+        for key in remote_keys.difference(&catalog_keys) {
+            remote.delete(&self.name, key).await;
+            tracing::info!(namespace = %self.name, segment = %key, "deleted orphan remote segment");
         }
         Ok(())
     }
@@ -1395,6 +1781,66 @@ impl Namespace {
         built
     }
 
+    /// Remove derived index files from a namespace whose policy disables them.
+    fn cleanup_disabled_index_bundles(&self, max: usize) -> usize {
+        if self.data_dir.is_none() || max == 0 || segment_indexes_enabled_for(&self.name) {
+            return 0;
+        }
+        let Ok(_slot) = self.index_backfill_slot.try_lock() else {
+            return 0;
+        };
+        let segments: Vec<LocalSegment> = self
+            .inner
+            .lock()
+            .unwrap()
+            .local_segments
+            .iter()
+            .cloned()
+            .collect();
+        let candidates = {
+            let mut skips = self.index_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = segments
+                .iter()
+                .map(|segment| segment.path.as_str())
+                .collect();
+            skips.reconcile(&["disabled"], &live);
+            let mut candidates = Vec::new();
+            for segment in segments.iter().rev() {
+                if skips.paths.contains(&segment.path) {
+                    continue;
+                }
+                if fixed_index_artifacts_exist(Path::new(&segment.path)) {
+                    candidates.push(segment.path.clone());
+                    if candidates.len() >= max {
+                        break;
+                    }
+                } else {
+                    skips.paths.insert(segment.path.clone());
+                }
+            }
+            candidates
+        };
+        let mut cleaned = 0;
+        for path in candidates {
+            remove_index_artifacts(&path);
+            if fixed_index_artifacts_exist(Path::new(&path)) {
+                continue;
+            }
+            self.index_cache
+                .invalidate(&crate::store::index_bundle::bundle_path(Path::new(&path)));
+            self.index_backfill_skips.lock().unwrap().paths.insert(path);
+            cleaned += 1;
+        }
+        if cleaned > 0 {
+            tracing::info!(
+                namespace = %self.name,
+                segments = cleaned,
+                "removed disabled segment index artifacts"
+            );
+        }
+        cleaned
+    }
+
     fn layout_is_current(&self, path: &str) -> bool {
         if self.current_layouts.lock().unwrap().contains(path) {
             return true;
@@ -1407,6 +1853,70 @@ impl Namespace {
             .unwrap()
             .insert(path.to_string());
         true
+    }
+
+    /// Advance local layout work and report whether another fast retry is due.
+    fn advance_physical_layout_migration(&self) -> Result<bool, StatsError> {
+        let migration_slot = match self.physical_layout_migration_slot.try_lock() {
+            Ok(slot) => slot,
+            Err(TryLockError::WouldBlock) => return Ok(self.physical_layout_migration_is_pending()),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(StatsError::Internal(
+                    "physical layout migration permit is poisoned".to_string(),
+                ));
+            }
+        };
+        let started = Instant::now();
+        let mut migrated = 0;
+        while !self.stopped.load(Ordering::SeqCst)
+            && started.elapsed() < PHYSICAL_LAYOUT_MIGRATION_BUDGET
+        {
+            let rebuilt = self.physical_layout_migration_l0_wave()?;
+            if rebuilt > 0 {
+                migrated += rebuilt;
+                continue;
+            }
+            if self.physical_layout_migration_non_l0_step()? {
+                migrated += 1;
+                continue;
+            }
+            break;
+        }
+        drop(migration_slot);
+        let pending = self.physical_layout_migration_pending();
+        if migrated > 0 {
+            tracing::info!(
+                namespace = %self.name,
+                jobs = migrated,
+                remaining_migration_l0 = pending.migration_l0,
+                remaining_stale_partition = pending.stale_partitions,
+                remaining_misplaced = pending.misplaced_local,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "physical layout migration advanced"
+            );
+        }
+        Ok(pending.any())
+    }
+
+    async fn advance_remote_layout_migration(&self) -> Result<(), StatsError> {
+        let started = Instant::now();
+        let mut migrated = 0;
+        while !self.stopped.load(Ordering::SeqCst)
+            && started.elapsed() < PHYSICAL_LAYOUT_MIGRATION_BUDGET
+            && self.remote_layout_migration_step().await?
+        {
+            migrated += 1;
+        }
+        if migrated > 0 {
+            tracing::info!(
+                namespace = %self.name,
+                segments = migrated,
+                remaining = self.remote_layout_migration_remaining_count()?,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "remote physical layout migration advanced"
+            );
+        }
+        Ok(())
     }
 
     // ----- maintenance orchestration ------------------------------------
@@ -1434,6 +1944,7 @@ impl Namespace {
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || -> Result<(), StatsError> {
             ns.flush_once()?;
+            let migration_pending = ns.advance_physical_layout_migration()?;
             // An optional forced L0->L1 merge, then the planner-drain loop runs so
             // a forced compaction that leaves >= 32 L1 segments still promotes
             // L1->L2 in the same maintenance call. The drain checks the stop latch
@@ -1451,6 +1962,13 @@ impl Namespace {
                 if !ns.compaction_step()? {
                     break;
                 }
+                // While the rebuild is active, one ordinary job is enough to
+                // keep live L0 bounded. Spend the remaining CPU on releasing
+                // legacy inputs; partition-local L1 consolidation can catch up
+                // after the source backlog is gone.
+                if migration_pending {
+                    break;
+                }
             }
             Ok(())
         })
@@ -1460,18 +1978,27 @@ impl Namespace {
         // Sync (async object_store).
         self.sync_step().await?;
 
+        // Relocate evicted objects after local outputs are durable. Each copy is
+        // server-side and crash-safe; the time budget prevents a cold archive
+        // backlog from monopolizing the maintenance cycle.
+        self.advance_remote_layout_migration().await?;
+
         // Evict (blocking; evict_segment takes blocking_write per segment).
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || ns.eviction_step())
             .await
             .map_err(|e| StatsError::Internal(format!("maintenance evict task panicked: {e}")))??;
 
-        // Backfill (blocking parquet reads + index build). Last + bounded so it is
-        // the lowest-priority work: older/terminal segments compaction never
-        // indexed get their bundles rebuilt a few per tick.
+        // Maintain derived indexes last and in bounded batches. Namespaces with
+        // an active policy backfill missing bundles; namespaces whose managed
+        // policy disables indexes remove stale bundles left by older binaries.
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            ns.backfill_missing_index_bundles(BACKFILL_INDEX_BUNDLES_PER_TICK)
+            if segment_indexes_enabled_for(&ns.name) {
+                ns.backfill_missing_index_bundles(INDEX_BUNDLES_PER_TICK)
+            } else {
+                ns.cleanup_disabled_index_bundles(INDEX_BUNDLES_PER_TICK)
+            }
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
@@ -1524,7 +2051,10 @@ impl Namespace {
                 break;
             };
             let started = Instant::now();
-            let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
+            let (staging, size) = match stage_rewritten_segment(
+                Path::new(&path),
+                self.max_row_group_rows,
+            ) {
                 Ok(staged) => staged,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
@@ -1657,6 +2187,11 @@ impl Namespace {
         self.task_handles.lock().unwrap().push(handle);
     }
 
+    /// How many background tasks this namespace is running (flush, maintenance).
+    pub fn background_task_count(&self) -> usize {
+        self.task_handles.lock().unwrap().len()
+    }
+
     /// Aggregate in-RAM accounting for the diagnostics line:
     /// `(ram_bytes, chunk_count)` under the insertion lock.
     pub fn memory_summary(&self) -> (i64, usize) {
@@ -1771,6 +2306,7 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
         created_at_ms: seg.created_at_ms,
         min_key_value: seg.min_key_value.map(|v| v.to_string()),
         max_key_value: seg.max_key_value.map(|v| v.to_string()),
+        partition: seg.partition.clone(),
         location: seg.location,
     }
 }
@@ -1780,19 +2316,17 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 /// the final path, and `discover_segments` ignores the extension, so a survivor
 /// is disk the namespace's own byte accounting cannot see.
 fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+    for path in discover_files(dir) {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("tmp") {
             continue;
         }
         match std::fs::remove_file(&path) {
             Ok(()) => tracing::info!(namespace = %namespace, file = %path.display(),
                 "discarded an abandoned staging file"),
-            Err(e) => tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
-                "could not discard an abandoned staging file"),
+            Err(e) => {
+                tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
+                "could not discard an abandoned staging file")
+            }
         }
     }
 }
@@ -1895,6 +2429,7 @@ fn adopt_local_segments(
             created_at_ms: row.created_at_ms,
             min_key_value: meta.min_key_value,
             max_key_value: meta.max_key_value,
+            partition: meta.partition,
             location,
         });
     }
@@ -1944,6 +2479,7 @@ fn adopt_local_segments(
             created_at_ms,
             min_key_value: meta.min_key_value,
             max_key_value: meta.max_key_value,
+            partition: meta.partition,
             location: SegmentLocation::Local,
         });
     }
@@ -2018,7 +2554,7 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Spawn the per-namespace maintenance task.
+/// Run remote reconciliation before periodic maintenance when requested.
 ///
 /// When `reconcile_first` is set, the task FIRST runs the boot remote reconcile
 /// (adopt unknown remote parquet, redundancy-drop covered segments), then enters
@@ -2030,10 +2566,11 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
 /// in-flight reconcile future is cancelled when the task is aborted on shutdown).
 ///
 /// Every `check_interval` the loop runs one `run_maintenance` cycle (compaction
-/// drain, then sync, then evict). The cycle's heavy work is dispatched onto
-/// `spawn_blocking` inside `run_maintenance`, so the reactor is never stalled. On
-/// the stop notify the task exits immediately WITHOUT a final maintenance cycle;
-/// the final drain-to-disk and reconcile on shutdown are handled by
+/// drain, then sync, then evict). A physical-layout backlog shortens only the
+/// next delay to 100 ms, so the streaming rebuild continues without a 30 s gap
+/// while each cycle still flushes and syncs live writes. On the stop notify the
+/// task exits immediately WITHOUT a final maintenance cycle; the final
+/// drain-to-disk and reconcile on shutdown are handled by
 /// [`Namespace::shutdown`].
 fn spawn_maintenance_task(
     ns: Arc<Namespace>,
@@ -2046,6 +2583,7 @@ fn spawn_maintenance_task(
             }
         }
         let interval = ns.compaction_config.check_interval;
+        let mut migration_pending = ns.physical_layout_migration_is_pending();
         loop {
             // Stop latch: a stop signalled while a maintenance cycle was running
             // (and thus missed the Notify wake) still exits here.
@@ -2053,8 +2591,13 @@ fn spawn_maintenance_task(
                 return;
             }
             let stopped = ns.stop.notified();
+            let delay = if migration_pending {
+                PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL
+            } else {
+                interval
+            };
             tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
+                _ = tokio::time::sleep(delay) => {}
                 _ = stopped => {
                     return;
                 }
@@ -2062,8 +2605,16 @@ fn spawn_maintenance_task(
             if ns.stopped.load(Ordering::SeqCst) {
                 return;
             }
-            if let Err(e) = ns.run_maintenance(false).await {
-                tracing::warn!(namespace = %ns.name, error = %e, "maintenance task: run_maintenance failed");
+            match ns.run_maintenance(false).await {
+                Ok(()) => {
+                    migration_pending = ns.physical_layout_migration_is_pending();
+                }
+                Err(e) => {
+                    // Fall back to the ordinary interval after an error. A bad
+                    // input must not turn the recovery worker into a hot loop.
+                    migration_pending = false;
+                    tracing::warn!(namespace = %ns.name, error = %e, "maintenance task: run_maintenance failed");
+                }
             }
         }
     })
@@ -2073,12 +2624,14 @@ fn spawn_maintenance_task(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{Float64Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
 
     use super::*;
+    use crate::levanter_metrics_policy::levanter_metrics_schema;
     use crate::proto::finelog::stats::ColumnType;
-    use crate::store::schema::{with_implicit_seq, Column, Schema};
+    use crate::store::schema::{stored_form, with_implicit_seq, Column, Schema};
+    use crate::store::types::seg_filename;
 
     fn worker_schema() -> Schema {
         with_implicit_seq(Schema::new(
@@ -2104,6 +2657,32 @@ mod tests {
             ],
             num_rows: n as usize,
             byte_size: 16 * n,
+        }
+    }
+
+    fn metrics_aligned(run_ids: &[&str]) -> AlignedBatch {
+        let schema = schema_to_arrow(&levanter_metrics_schema());
+        let rows = run_ids.len();
+        let column_names = ["timestamp_ms", "run_id", "step", "name", "kind", "value"];
+        AlignedBatch {
+            arrays: vec![
+                Arc::new(Int64Array::from_iter_values(
+                    (0..rows).map(|row| 1_700_000_000_000 + row as i64),
+                )),
+                Arc::new(StringArray::from(run_ids.to_vec())),
+                Arc::new(Int64Array::from_iter_values(0..rows as i64)),
+                Arc::new(StringArray::from(vec!["training_loss"; rows])),
+                Arc::new(StringArray::from(vec!["scalar"; rows])),
+                Arc::new(Float64Array::from_iter_values(
+                    (0..rows).map(|row| row as f64 / 10.0),
+                )),
+            ],
+            fields: column_names
+                .iter()
+                .map(|name| schema.field_with_name(name).unwrap().clone())
+                .collect(),
+            num_rows: rows,
+            byte_size: 128 * rows as i64,
         }
     }
 
@@ -2134,6 +2713,7 @@ mod tests {
             Arc::new(RwLock::new(())),
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
+            Arc::new(Mutex::new(())),
             "",
             StoragePolicy::default(),
         )
@@ -2156,6 +2736,7 @@ mod tests {
             catalog,
             Arc::new(RwLock::new(())),
             crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
             remote_log_dir,
             policy,
@@ -2217,6 +2798,420 @@ mod tests {
         assert_eq!(stats.max_seq, 3);
         assert_eq!(stats.segment_count, 1);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn levanter_l0_stays_flat_and_compaction_writes_bucketed_l1() {
+        let dir = tempdir();
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.flush_once().unwrap();
+
+        let l0 = discover_segments(&ns_dir);
+        assert_eq!(l0.len(), 1);
+        assert_eq!(l0[0].parent(), Some(ns_dir.as_path()));
+        assert!(read_segment_footer(&l0[0], Some("timestamp_ms"))
+            .unwrap()
+            .partition
+            .is_none());
+
+        ns.run_maintenance(true).await.unwrap();
+        let l1 = discover_segments(&ns_dir);
+        assert_eq!(l1.len(), 2);
+        for path in &l1 {
+            assert_eq!(
+                path.parent().unwrap().parent(),
+                Some(ns_dir.join("run_id").as_path())
+            );
+            let bucket: u32 = path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(bucket < 32);
+            assert!(read_segment_footer(path, Some("timestamp_ms"))
+                .unwrap()
+                .partition
+                .is_some());
+        }
+        assert_eq!(ns.stats().row_count, 2);
+        ns.shutdown(Duration::from_secs(10)).await;
+        let reopened = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+        assert_eq!(reopened.stats().row_count, 2);
+        assert_eq!(reopened.query_snapshot().paths.len(), 2);
+        reopened.shutdown(Duration::from_secs(10)).await;
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn levanter_index_cleanup_converges_across_restart() {
+        let dir = tempdir();
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let segments = discover_segments(&ns_dir);
+        assert_eq!(segments.len(), 2);
+        for segment in &segments {
+            std::fs::write(crate::store::index_bundle::bundle_path(segment), b"stale").unwrap();
+        }
+        let legacy = legacy_artifact_paths(&segments[0])[0].clone();
+        std::fs::write(&legacy, b"stale").unwrap();
+        let projection = crate::store::exact::named_projection_path(&segments[0], "legacy");
+        std::fs::write(&projection, b"stale").unwrap();
+        ns.shutdown(Duration::from_secs(10)).await;
+
+        let cleanup = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+        assert_eq!(cleanup.cleanup_disabled_index_bundles(1), 1);
+        assert_eq!(
+            segments
+                .iter()
+                .filter(|segment| crate::store::index_bundle::bundle_path(segment).exists())
+                .count(),
+            1
+        );
+        cleanup.shutdown(Duration::from_secs(10)).await;
+
+        let reopened = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+        reopened.run_maintenance(false).await.unwrap();
+        for segment in &segments {
+            assert!(!crate::store::index_bundle::bundle_path(segment).exists());
+        }
+        assert!(!legacy.exists());
+        assert!(!projection.exists());
+        assert_eq!(reopened.stats().row_count, 2);
+        reopened.shutdown(Duration::from_secs(10)).await;
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn levanter_runtime_layout_migration_repairs_legacy_l0_and_flat_l1() {
+        let dir = tempdir();
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let first = ns.inner.lock().unwrap().local_segments[0].clone();
+        let legacy_l0_path = ns_dir.join(seg_filename(0, first.min_seq));
+        let mut legacy_l0 = first.clone();
+        legacy_l0.path = legacy_l0_path.to_string_lossy().into_owned();
+        legacy_l0.level = 0;
+        legacy_l0.location = SegmentLocation::Local;
+        let swap = PlannedSwap {
+            removed: vec![first.path.clone()],
+            added: vec![legacy_l0],
+            unlink_removed: false,
+            bump_rename: Some((PathBuf::from(first.path), legacy_l0_path)),
+            input_arrow_bytes: 0,
+        };
+        let commit_ns = Arc::clone(&ns);
+        tokio::task::spawn_blocking(move || commit_ns.commit_swap(swap))
+            .await
+            .unwrap()
+            .unwrap();
+        ns.run_maintenance(false).await.unwrap();
+
+        let second = ns.inner.lock().unwrap().local_segments[1].clone();
+        let flat_l1_path = ns_dir.join(seg_filename(1, second.min_seq));
+        let mut flat_l1 = second.clone();
+        flat_l1.path = flat_l1_path.to_string_lossy().into_owned();
+        flat_l1.location = SegmentLocation::Local;
+        let swap = PlannedSwap {
+            removed: vec![second.path.clone()],
+            added: vec![flat_l1],
+            unlink_removed: false,
+            bump_rename: Some((PathBuf::from(second.path), flat_l1_path.clone())),
+            input_arrow_bytes: 0,
+        };
+        let commit_ns = Arc::clone(&ns);
+        tokio::task::spawn_blocking(move || commit_ns.commit_swap(swap))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(flat_l1_path.parent(), Some(ns_dir.as_path()));
+        ns.run_maintenance(false).await.unwrap();
+        assert!(!ns.physical_layout_migration_is_pending());
+
+        let segments = ns.inner.lock().unwrap().local_segments.clone();
+        assert_eq!(segments.len(), 2);
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.row_count)
+                .sum::<i64>(),
+            2
+        );
+        for segment in segments {
+            assert!(segment.level >= 1);
+            assert!(segment.partition.is_some());
+            assert_eq!(
+                Path::new(&segment.path).parent().unwrap().parent(),
+                Some(ns_dir.join("run_id").as_path())
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn levanter_streaming_rebuild_publishes_unindexed_outputs() {
+        let dir = tempdir();
+        let ns_dir = dir.join("levanter.metrics");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+        let schema = stored_form(levanter_metrics_schema());
+        let arrow_schema = schema_to_arrow(&schema);
+        for input in 0..6_i64 {
+            let first_seq = -1_000_000 + input * 10;
+            let batch = stamp_seq_and_build(
+                &metrics_aligned(&["run-a", "run-b"]),
+                first_seq,
+                &arrow_schema,
+            );
+            write_segment_to_dir(&ns_dir, 0, first_seq, &batch).unwrap();
+        }
+        let ns = open_ns(
+            "levanter.metrics",
+            schema,
+            Some(ns_dir.clone()),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+        assert_eq!(ns.physical_layout_migration_pending().migration_l0, 6);
+
+        let migration_ns = Arc::clone(&ns);
+        let rebuilt =
+            tokio::task::spawn_blocking(move || migration_ns.physical_layout_migration_l0_wave())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(rebuilt, 1);
+        assert_eq!(ns.physical_layout_migration_pending().migration_l0, 0);
+        assert_eq!(ns.stats().row_count, 12);
+
+        for path in discover_segments(&ns_dir) {
+            if read_segment_footer(&path, Some("timestamp_ms"))
+                .unwrap()
+                .level
+                >= 1
+            {
+                assert!(path.starts_with(ns_dir.join("run_id")));
+                assert!(!crate::store::index_bundle::bundle_path(&path).exists());
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn runtime_layout_migration_ignores_namespaces_without_a_partition_policy() {
+        let dir = tempdir();
+        let ns_dir = dir.join("telemetry_v1.vllm");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+        let schema = worker_schema();
+        let batch = stamp_seq_and_build(&aligned(2), -10, &schema_to_arrow(&schema));
+        write_segment_to_dir(&ns_dir, 0, -10, &batch).unwrap();
+        let ns = open_ns(
+            "telemetry_v1.vllm",
+            schema,
+            Some(ns_dir),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+
+        assert!(!ns.physical_layout_migration_pending().any());
+        let migration_ns = Arc::clone(&ns);
+        assert_eq!(
+            tokio::task::spawn_blocking(move || migration_ns.physical_layout_migration_l0_wave())
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert_eq!(ns.stats().row_count, 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn levanter_runtime_layout_migration_relocates_remote_only_l1() {
+        let dir = tempdir();
+        let remote_dir = dir.join("remote");
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns_remote(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+            remote_dir.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let current = ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .remove(0);
+        assert_eq!(current.location, SegmentLocation::Both);
+        let current_key = segment_relative_key(&ns_dir, &current.path).unwrap();
+        let current_remote_path = remote_dir.join("levanter.metrics").join(&current_key);
+        assert!(current_remote_path.exists());
+
+        let evict_ns = Arc::clone(&ns);
+        let evict_path = current.path.clone();
+        tokio::task::spawn_blocking(move || evict_ns.evict_segment(&evict_path))
+            .await
+            .unwrap();
+        let mut legacy = ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .remove(0);
+        assert_eq!(legacy.location, SegmentLocation::Remote);
+
+        let filename = Path::new(&legacy.path).file_name().unwrap();
+        let legacy_remote_path = remote_dir.join("levanter.metrics").join(filename);
+        std::fs::rename(&current_remote_path, &legacy_remote_path).unwrap();
+        let old_path = legacy.path.clone();
+        legacy.path = ns_dir.join(filename).to_string_lossy().into_owned();
+        ns.catalog
+            .replace_segments("levanter.metrics", &[old_path], &[legacy.clone()])
+            .unwrap();
+
+        assert_eq!(ns.remote_layout_migration_remaining_count().unwrap(), 1);
+        assert!(ns.remote_layout_migration_step().await.unwrap());
+        assert_eq!(ns.remote_layout_migration_remaining_count().unwrap(), 0);
+        assert!(!ns.remote_layout_migration_step().await.unwrap());
+
+        let relocated = ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .remove(0);
+        assert_eq!(relocated.location, SegmentLocation::Remote);
+        assert_eq!(
+            Path::new(&relocated.path).parent().unwrap().parent(),
+            Some(ns_dir.join("run_id").as_path())
+        );
+        let relocated_key = segment_relative_key(&ns_dir, &relocated.path).unwrap();
+        assert!(remote_dir
+            .join("levanter.metrics")
+            .join(relocated_key)
+            .exists());
+        assert!(!legacy_remote_path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn boot_reconcile_removes_missing_remote_catalog_pointer() {
+        let dir = tempdir();
+        let remote_dir = dir.join("remote");
+        let ns_dir = dir.join("levanter.metrics");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns_remote(
+            "levanter.metrics",
+            stored_form(levanter_metrics_schema()),
+            Some(ns_dir.clone()),
+            catalog,
+            remote_dir.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let segment = ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .remove(0);
+        let evict_ns = Arc::clone(&ns);
+        let evict_path = segment.path.clone();
+        tokio::task::spawn_blocking(move || evict_ns.evict_segment(&evict_path))
+            .await
+            .unwrap();
+        let remote_key = segment_relative_key(&ns_dir, &segment.path).unwrap();
+        std::fs::remove_file(remote_dir.join("levanter.metrics").join(remote_key)).unwrap();
+
+        ns.boot_reconcile().await.unwrap();
+
+        assert!(ns
+            .catalog
+            .list_segments("levanter.metrics")
+            .unwrap()
+            .is_empty());
+        ns.shutdown(Duration::from_secs(10)).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn implicit_timestamp_key_captures_segment_bounds() {
+        let dir = tempdir();
+        let mut schema = worker_schema();
+        schema.key_column.clear();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            schema,
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        let last = ns.append_aligned_batch(&aligned(3));
+        ns.await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        let snapshot = ns.query_snapshot();
+        assert_eq!(
+            snapshot.key_bounds.values().copied().collect::<Vec<_>>(),
+            vec![(1000, 1002)]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2308,6 +3303,7 @@ mod tests {
             created_at_ms: 1,
             min_key_value: None,
             max_key_value: None,
+            partition: None,
             location: SegmentLocation::Local,
         }
     }

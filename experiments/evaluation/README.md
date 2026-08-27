@@ -62,19 +62,78 @@ winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus 
 math500): one model boot, eleven evals against the shared endpoint, eleven records — the dashboard
 shows the full model x task grid of runs.
 
+Before upgrading a store, run the non-destructive smoke command on its platform. This CoreWeave
+example selects one sealed v1 archive with sample rows and no more than 256 MiB of FineStore data,
+copies only its FineStore objects to a same-bucket one-day prefix, migrates the copy, and compares
+every source object and deduplicated table row with the v2 `ReadView`:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
+  --job-name finestore-v1-v2-smoke --cpu 2 --memory 8GB --disk 10GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade \
+  --records-prefix s3://marin-us-east-02a/marin/evals
+```
+
+The final `status=validated` JSON records the source and temporary destination, object and byte
+counts, an aggregate source digest, per-table row counts and digests, and the v2 commit token. The
+source remains format v1. A failed run leaves only lifecycle-managed temporary data for inspection.
+
+Use the fleet rehearsal before changing the production archives. It scans both current and legacy
+CoreWeave record roots, deduplicates shared results paths, and selects every sealed v1 archive. A dry
+run reports the exact selection and refuses to proceed if a record is unreadable. Unsealed v1
+archives are included in the rehearsal as stable snapshots, while production migration continues to
+require a seal:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
+  --job-name finestore-v1-v2-fleet-inventory --cpu 2 --memory 8GB --disk 10GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 1800 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --mode inventory
+```
+
+The full rehearsal clones each selected archive beneath one generated `tmp/ttl=1d` fleet root and
+independently compares every copied object and deduplicated Arrow row. `--mode cleanup` removes that
+exact root only after every archive validates; an error or early exit preserves the partial fleet
+for diagnosis until its lifecycle expiry:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --target-cluster cw-us-east-02a \
+  --job-name finestore-v1-v2-fleet --cpu 4 --memory 32GB --disk 20GB \
+  --enable-extra-resources --sync-package marin-core --extra cpu --timeout 14400 -- \
+  python -m experiments.evaluation.migrations.cli smoke-upgrade-fleet --mode cleanup
+```
+
+After the platform smoke passes, upgrade the sealed archive fleet before deploying a format-v2
+evaluation reader. The migration publishes existing Parquet shards through `HEAD` and does not copy
+their payload data:
+
+```bash
+uv run python -m experiments.evaluation.migrations.cli upgrade-format --prefix gs://marin-eval-metadata/evals
+```
+
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `finestore.eval` (the parquet files are
+useful after a change to the contract in `marin.evaluation.archive` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
-uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/evals
+uv run python -m experiments.evaluation.migrations.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
+
+A task scored under several extraction filters (gsm8k under `strict-match` and `flexible-extract`)
+stores one sample per (document, filter); the two disagree by design. The dashboard's sample browser
+shows one filter at a time, defaulting to the one that produced the run's headline metric, with a
+selector for the others.
 
 ## Records and the dashboard index
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
-`infra_failed`), the per-task metrics, provenance, normalized evaluator configuration, the `group_id`
+`artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
+the `group_id`
 shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
 orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
@@ -83,9 +142,10 @@ dashboard) without cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`finestore.eval`, the per-sample contract -- `EvalSample`, normalized from
-lm-eval's native row shape, with the parquet schema *being* the Pydantic model) -- load them with
-pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
+parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
+`EvalSample`, the per-sample contract in `marin.evaluation.archive`, with the parquet schema *being* the
+Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
+to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
@@ -93,11 +153,12 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle. The step submits the same CPU orchestrator used by
-the CLI and writes eval outputs to the launcher's shared `evals` root; its artifact path contains the
-pipeline cache record. The slice override is a runtime arg, so changing it does not change the artifact
-identity.
+`pipeline.py` exposes the same run as an `ArtifactStep`:
+`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
+versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
+to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity. Produced-model
+adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
 
 ## Evalchemy config files
 
@@ -227,8 +288,9 @@ cached `models()` registry in `models.py`:
 
 Set `resource_hint.hbm_gb` to a portable serving footprint, or set
 `resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
-that requirement to a cluster. Set `resource_hint.memory` when serving needs more than the default
-host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
+that requirement to a cluster. Host memory is sized from the checkpoint's weight files and the
+slice's rank count, so set `resource_hint.memory` only when a model needs more than its weights
+imply. Set `tokenizer` when `location` is an object-store export because the eval client loads
 its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)

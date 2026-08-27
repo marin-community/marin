@@ -41,7 +41,8 @@ from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.policy import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
-    TERMINAL_STATE_REASONS,
+    PARENT_JOB_TERMINATED_REASON,
+    TERMINAL_STATE_FALLBACK_REASONS,
 )
 from iris.cluster.controller.reconcile.snapshot import (
     TaskUpdate,
@@ -68,28 +69,62 @@ logger = logging.getLogger(__name__)
 # ``task.merge_task_termination``, and job.py is forbidden from importing task.
 
 
-def _kill_non_terminal_tasks(overlay: Overlay, job_id: JobName, reason: str, now_ms: int) -> None:
-    """Kill all non-terminal tasks for a single job and delete endpoints."""
+def _finish_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    *,
+    task_state: int,
+    error: str | None,
+    exit_code: int | None,
+    message: str,
+    action_reason: TaskActionReason,
+    severity: TaskEventSeverity,
+    now_ms: int,
+) -> None:
+    """Finish all non-terminal tasks for a job and stop their active attempts."""
     for row in overlay.active_tasks_for_job(job_id, states=NON_TERMINAL_TASK_STATES):
         task.merge_task_termination(
             overlay,
             row.task_id.to_wire(),
             row.current_attempt_id,
-            job_pb2.TASK_STATE_KILLED,
-            reason,
+            task_state,
+            error,
             now_ms,
             stamp_attempt_finished=False,
+            exit_code=exit_code,
         )
         overlay.emit_task_event(
             TaskActionEvent(
                 task_id=row.task_id,
                 attempt_id=row.current_attempt_id,
                 ts=Timestamp.from_ms(now_ms),
-                reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
-                message=reason,
-                severity=TaskEventSeverity.WARNING,
+                reason=action_reason,
+                message=message,
+                severity=severity,
             )
         )
+
+
+def _kill_non_terminal_tasks(
+    overlay: Overlay,
+    job_id: JobName,
+    reason: str,
+    now_ms: int,
+    *,
+    action_reason: TaskActionReason,
+) -> None:
+    """Kill all non-terminal tasks for a single job and delete endpoints."""
+    _finish_non_terminal_tasks(
+        overlay,
+        job_id,
+        task_state=job_pb2.TASK_STATE_KILLED,
+        error=reason,
+        exit_code=None,
+        message=reason,
+        action_reason=action_reason,
+        severity=TaskEventSeverity.WARNING,
+        now_ms=now_ms,
+    )
 
 
 def _cascade_to_children(
@@ -97,11 +132,19 @@ def _cascade_to_children(
     job_id: JobName,
     now_ms: int,
     reason: str,
+    *,
+    action_reason: TaskActionReason,
 ) -> None:
     """Kill descendant jobs (not the job itself) on a parent terminal/preempt."""
     descendants = overlay.job_descendants(job_id)
     for child_job_id in descendants:
-        _kill_non_terminal_tasks(overlay, child_job_id, reason, now_ms)
+        _kill_non_terminal_tasks(
+            overlay,
+            child_job_id,
+            reason,
+            now_ms,
+            action_reason=action_reason,
+        )
         overlay.merge_cascade_kill(
             JobRowDelta(
                 job_id=child_job_id,
@@ -113,16 +156,32 @@ def _cascade_to_children(
         )
 
 
+def _terminal_job_reason(overlay: Overlay, job_id: JobName, terminal_state: int) -> str:
+    return overlay.job_delta_error(job_id) or TERMINAL_STATE_FALLBACK_REASONS.get(terminal_state, "Job finalized")
+
+
 def _finalize_terminal_job(overlay: Overlay, job_id: JobName, terminal_state: int, now_ms: int) -> None:
     """Kill remaining tasks and optionally cascade to children when a job goes terminal."""
-    reason = TERMINAL_STATE_REASONS.get(terminal_state, "Job finalized")
-    _kill_non_terminal_tasks(overlay, job_id, reason, now_ms)
+    reason = _terminal_job_reason(overlay, job_id, terminal_state)
+    _kill_non_terminal_tasks(
+        overlay,
+        job_id,
+        reason,
+        now_ms,
+        action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+    )
     should_cascade = True
     if terminal_state != job_pb2.JOB_STATE_SUCCEEDED:
         policy = overlay.job_preemption_policy(job_id)
         should_cascade = policy == job_pb2.JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN
     if should_cascade:
-        _cascade_to_children(overlay, job_id, now_ms, reason)
+        _cascade_to_children(
+            overlay,
+            job_id,
+            now_ms,
+            PARENT_JOB_TERMINATED_REASON,
+            action_reason=TaskActionReason.PARENT_JOB_TERMINATED,
+        )
 
 
 def _cascade_to_peers(overlay: Overlay, outcome: task.TransitionOutcome, now_ms: int) -> None:
@@ -206,11 +265,14 @@ class ReconcileState:
         if cascaded_jobs:
             self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
             for job_id in cascaded_jobs:
+                basis = self.overlay.job_basis(job_id)
+                assert basis is not None
                 self.overlay.emit_log_event(
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
                         trigger="dispatch_updates_applied",
+                        details=(("reason", _terminal_job_reason(self.overlay, job_id, basis.state)),),
                     )
                 )
         return self.overlay.effects
@@ -300,12 +362,23 @@ class ReconcileState:
         finished_at = Timestamp.from_ms(now_ms)
 
         for jid in subtree:
-            _kill_non_terminal_tasks(self.overlay, jid, reason, now_ms)
+            is_root = jid == job_id
+            job_reason = reason if is_root else PARENT_JOB_TERMINATED_REASON
+            action_reason = (
+                TaskActionReason.JOB_FINALIZED_TASK_KILLED if is_root else TaskActionReason.PARENT_JOB_TERMINATED
+            )
+            _kill_non_terminal_tasks(
+                self.overlay,
+                jid,
+                job_reason,
+                now_ms,
+                action_reason=action_reason,
+            )
             self.overlay.merge_cascade_kill(
                 JobRowDelta(
                     job_id=jid,
                     state=job_pb2.JOB_STATE_KILLED,
-                    error=reason,
+                    error=job_reason,
                     finished_at=finished_at,
                     is_cascade_kill=True,
                     allow_overwrite_worker_failed=True,
@@ -315,6 +388,36 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(action="job_cancelled", entity_id=job_id.to_wire(), details=(("reason", reason),))
         )
+        return self.overlay.effects
+
+    def complete_job(self, job_id: JobName, now: Timestamp) -> ControllerEffects:
+        """Complete a running job successfully and stop its unfinished tasks."""
+        basis = self._snapshot.job_state_basis.get(job_id)
+        if basis is None or basis.state in TERMINAL_JOB_STATES:
+            return self.overlay.effects
+
+        now_ms = now.epoch_ms()
+        reason = TERMINAL_STATE_FALLBACK_REASONS[job_pb2.JOB_STATE_SUCCEEDED]
+        _finish_non_terminal_tasks(
+            self.overlay,
+            job_id,
+            task_state=job_pb2.TASK_STATE_SUCCEEDED,
+            error=None,
+            exit_code=0,
+            message=reason,
+            action_reason=TaskActionReason.JOB_COMPLETED_TASK_SUCCEEDED,
+            severity=TaskEventSeverity.NORMAL,
+            now_ms=now_ms,
+        )
+        self.overlay.merge_job_state(
+            JobRowDelta(
+                job_id=job_id,
+                state=job_pb2.JOB_STATE_SUCCEEDED,
+                finished_at=Timestamp.from_ms(now_ms),
+            )
+        )
+        _finalize_terminal_job(self.overlay, job_id, job_pb2.JOB_STATE_SUCCEEDED, now_ms)
+        self.overlay.emit_log_event(LogEvent(action="job_completed", entity_id=job_id.to_wire()))
         return self.overlay.effects
 
     # ------------------------------------------------------------------
@@ -417,7 +520,13 @@ class ReconcileState:
         for job_id, reason in self.pending_child_cascades.items():
             if job_id in cascaded_jobs:
                 continue
-            _cascade_to_children(self.overlay, job_id, now_ms, reason)
+            _cascade_to_children(
+                self.overlay,
+                job_id,
+                now_ms,
+                reason,
+                action_reason=TaskActionReason.JOB_FINALIZED_TASK_KILLED,
+            )
         return cascaded_jobs
 
     def _note(self, job_id: JobName) -> None:

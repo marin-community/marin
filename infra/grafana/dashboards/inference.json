@@ -21,7 +21,7 @@
         "name": "identity_kind",
         "label": "Identity kind",
         "type": "custom",
-        "query": "job_id,root_run_uid,execution_uid",
+        "query": "job_id,run_id,execution_uid",
         "current": {
           "text": "job_id",
           "value": "job_id"
@@ -34,8 +34,8 @@
           },
           {
             "selected": false,
-            "text": "root_run_uid",
-            "value": "root_run_uid"
+            "text": "run_id",
+            "value": "run_id"
           },
           {
             "selected": false,
@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT json_get(resource_attributes_json, '${identity_kind}') AS value FROM \"telemetry_v1\" WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND json_get(resource_attributes_json, '${identity_kind}') IS NOT NULL ORDER BY 1"
+                  "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.vllm\") SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM telemetry WHERE service = 'vllm' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -201,7 +201,7 @@
       "id": 9,
       "type": "table",
       "title": "Replica freshness detail",
-      "description": "Worst-first freshness for up to 128 producer/resource identities observed in the bounded scan. Current telemetry_v1 records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
+      "description": "Worst-first freshness for up to 128 producer/resource identities observed in the bounded scan. Current telemetry_v1.vllm records producer time but not ingest time, so producer and export gaps cannot yet be separated.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -729,7 +729,7 @@
       "id": 7,
       "type": "table",
       "title": "Reset-aware latency evidence",
-      "description": "TTFT, TPOT/inter-token, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
+      "description": "TTFT, request TPOT, inter-token latency, queue, and end-to-end means from _sum/_count deltas plus p50/p90/p99 upper-bound estimates from bucket deltas. A reset or missing predecessor in any stored component invalidates the complete replica/family sample; a null quantile means the stored finite buckets do not bound it.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -908,14 +908,27 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "fleet_accelerators_without_vars"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Node details",
       "type": "link",
-      "url": "/d/marin-accel"
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
     },
     {
       "asDropdown": false,
@@ -938,14 +951,7 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "fleet_health_without_vars"
     },
     {
       "asDropdown": false,
@@ -953,9 +959,9 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,

@@ -154,6 +154,84 @@ checkpointer:
 This policy will save permanent checkpoints every 1,000 steps until 10,000 steps, then every 5,000 steps until 40,000 steps, then every 10,000 steps.
 The default step-based checkpoint policy is to save a checkpoint every 10,000 steps.
 
+#### Checkpoint Format
+
+A checkpoint directory contains three kinds of file:
+
+* `manifest.json`: the format declaration and the inventory of arrays, each with its shape,
+  dtype and chunk grid. Written when the save starts. A reader that meets a `format_version`
+  above its own fails. Older checkpoints have no manifest and fall back to listing.
+* `metadata.json`: step, timestamp, and whether the checkpoint is temporary. Written after
+  every process has committed, so a directory containing it is complete. Checkpoint
+  discovery keys off this file.
+* the array data itself, as a single OCDBT database of zarr3 arrays.
+
+#### Checkpoint Write Parallelism
+
+Every process writes the part of the state it holds, and arrays replicated across processes
+are split across their replicas. A save also bounds the host memory it stages: one whose
+share fits under `max_staged_host_bytes` returns while the commits drain, and a larger save
+rolls through it.
+
+| Parameter                                  | Description                                                                            | Default |
+|--------------------------------------------|----------------------------------------------------------------------------------------|---------|
+| `checkpointer.write.max_write_replicas`    | Cap on how many replicas of an array write part of it. `1` disables replica splitting. | 1024    |
+| `checkpointer.write.min_replica_slice_bytes` | Do not split an array when doing so would give each replica less than this.          | 16 MiB  |
+| `checkpointer.write.max_chunk_bytes`       | Upper bound on one zarr3 chunk, which bounds a single object store write.              | 512 MiB |
+| `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
+| `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
+| `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
+
+#### Checkpoint Telemetry
+
+Checkpoint debug mode publishes numeric data from each JAX process to Finelog. This configuration disables allocation tracing and forced garbage collection:
+
+```yaml
+checkpointer:
+  debug:
+    enabled: true
+    tracemalloc_frames: null
+    force_gc_before_serialize: false
+    top_allocations: 0
+    flush_logs: false
+```
+
+This configuration does not start `tracemalloc` or force Python garbage collection. It publishes these gauges:
+
+| Metric | Value |
+|--------|-------|
+| `checkpoint_phase_duration_seconds` | Time in one checkpoint phase. |
+| `checkpoint_total_duration_seconds` | Time from checkpoint start through metadata commit. Process zero publishes this metric. |
+| `checkpoint_staged_host_bytes` | Peak host bytes staged by one process. |
+| `checkpoint_process_peak_rss_bytes` | Peak resident memory for one process. |
+
+The phase metric uses the `phase` attribute. All metrics use `checkpoint_step`. Finelog also records the run, job, process, node, and cluster fields.
+
+Use a short run that saves at least one checkpoint for a cluster smoke test. Then query the regional Finelog deployment:
+
+```bash
+uv run finelog query <cluster> --format table <<'SQL'
+SELECT to_timestamp_millis(timestamp_ms) AS ts,
+       process_index,
+       name,
+       value,
+       json_get(attributes_json, 'checkpoint_step') AS checkpoint_step,
+       json_get(attributes_json, 'phase') AS phase
+FROM telemetry_v1
+WHERE run_id = '<run-id>'
+  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '2 hours') * 1000 AS BIGINT)
+  AND name IN (
+    'checkpoint_phase_duration_seconds',
+    'checkpoint_total_duration_seconds',
+    'checkpoint_staged_host_bytes',
+    'checkpoint_process_peak_rss_bytes'
+  )
+ORDER BY timestamp_ms, process_index, name
+SQL
+```
+
+The checkpoint is complete when process zero reports `checkpoint_total_duration_seconds`. Each process reports its local asynchronous commit phase.
+
 ### JAX Compilation Cache Configuration
 
 Levanter allows you to configure JAX's persistent compilation cache. This can significantly speed up startup times by caching compiled JAX functions.

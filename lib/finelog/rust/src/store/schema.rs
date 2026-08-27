@@ -5,6 +5,7 @@
 //! `arrow::datatypes::Schema`, and a JSON sidecar form persisted in the
 //! catalog.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch, StringArray};
@@ -41,6 +42,13 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
+
+/// Accepted bounds for an explicit Parquet row-group row ceiling. Smaller
+/// groups create excessive footer/index metadata; larger values weaken the
+/// existing server ceiling without improving wide-row namespaces, whose byte
+/// target binds first.
+pub const MIN_CONFIGURED_ROW_GROUP_ROWS: u32 = 16_384;
+pub const MAX_CONFIGURED_ROW_GROUP_ROWS: u32 = 1_048_576;
 
 /// User-facing column index policy. It compiles into the closed planner-facing
 /// [`crate::store::segment_index::IndexSpec`] family.
@@ -134,11 +142,14 @@ impl Column {
 ///
 /// `columns` are in registered order (preserved on disk so projections produce
 /// stable ordering across additive evolutions). `key_column` empty means the
-/// server falls back to `timestamp_ms`.
+/// server falls back to `timestamp_ms`. `sort_columns` controls the physical
+/// compaction order independently of the event/range key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub columns: Vec<Column>,
     pub key_column: String,
+    pub sort_columns: Vec<String>,
+    pub max_row_group_rows: u32,
     pub projections: Vec<CoveringProjection>,
     pub grouped_extrema: Vec<GroupExtremaConfig>,
 }
@@ -148,9 +159,48 @@ impl Schema {
         Self {
             columns,
             key_column: key_column.into(),
+            sort_columns: Vec::new(),
+            max_row_group_rows: 0,
             projections: Vec::new(),
             grouped_extrema: Vec::new(),
         }
+    }
+
+    /// Exact string values for which the current layout may write source-row postings.
+    pub fn exact_postings_policy(&self) -> BTreeMap<String, Vec<String>> {
+        let mut policy: BTreeMap<String, Vec<String>> = self
+            .columns
+            .iter()
+            .filter(|column| !column.index.exact_values.is_empty())
+            .map(|column| (column.name.clone(), column.index.exact_values.clone()))
+            .collect();
+        for projection in &self.projections {
+            policy
+                .entry(projection.predicate_column.clone())
+                .or_default()
+                .extend(projection.predicate_values.iter().cloned());
+        }
+        for values in policy.values_mut() {
+            values.sort();
+            values.dedup();
+        }
+        policy
+    }
+
+    /// Set the compaction order. The implicit `seq` tie-breaker is appended by
+    /// the compactor and must not be included here.
+    pub fn with_sort_columns(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.sort_columns = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Bound Parquet row groups by row count in addition to the encoded-byte target.
+    pub fn with_max_row_group_rows(mut self, rows: u32) -> Self {
+        self.max_row_group_rows = rows;
+        self
     }
 
     pub fn with_covering_projection(mut self, projection: CoveringProjection) -> Self {
@@ -200,6 +250,10 @@ pub fn map_utf8_utf8_type() -> DataType {
     )
 }
 
+fn list_type(element_type: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new("item", element_type, true)))
+}
+
 /// Whether a map's entries `DataType` is a `Struct` of a string key and a
 /// string value (the shape `COLUMN_TYPE_MAP` accepts), regardless of the field
 /// names or their nullability.
@@ -237,6 +291,8 @@ pub fn arrow_type_for(t: ColumnType) -> Option<DataType> {
         }
         ColumnType::COLUMN_TYPE_BYTES => Some(DataType::Binary),
         ColumnType::COLUMN_TYPE_MAP => Some(map_utf8_utf8_type()),
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => Some(list_type(DataType::Float64)),
+        ColumnType::COLUMN_TYPE_INT64_LIST => Some(list_type(DataType::Int64)),
         ColumnType::COLUMN_TYPE_UNKNOWN => None,
     }
 }
@@ -333,6 +389,12 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
         })
         .collect();
     let mut schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    schema.sort_columns = view
+        .sort_columns
+        .iter()
+        .map(|column| column.to_string())
+        .collect();
+    schema.max_row_group_rows = view.max_row_group_rows.unwrap_or(0);
     schema.projections = projections;
     schema.grouped_extrema = grouped_extrema;
     validate_index_policies(&schema)?;
@@ -384,6 +446,8 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
                 ..Default::default()
             })
             .collect(),
+        sort_columns: schema.sort_columns.clone(),
+        max_row_group_rows: Some(schema.max_row_group_rows),
         ..Default::default()
     }
     .with_key_column(&schema.key_column)
@@ -418,6 +482,10 @@ struct JsonColumn {
 #[derive(Serialize, Deserialize)]
 struct JsonSchema {
     key_column: String,
+    #[serde(default)]
+    sort_columns: Vec<String>,
+    #[serde(default)]
+    max_row_group_rows: u32,
     columns: Vec<JsonColumn>,
     #[serde(default)]
     projections: Vec<CoveringProjection>,
@@ -436,6 +504,8 @@ fn column_type_name(t: ColumnType) -> &'static str {
         ColumnType::COLUMN_TYPE_BYTES => "COLUMN_TYPE_BYTES",
         ColumnType::COLUMN_TYPE_INT32 => "COLUMN_TYPE_INT32",
         ColumnType::COLUMN_TYPE_MAP => "COLUMN_TYPE_MAP",
+        ColumnType::COLUMN_TYPE_FLOAT64_LIST => "COLUMN_TYPE_FLOAT64_LIST",
+        ColumnType::COLUMN_TYPE_INT64_LIST => "COLUMN_TYPE_INT64_LIST",
     }
 }
 
@@ -451,6 +521,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "timestamp_ms" => Some(ColumnType::COLUMN_TYPE_TIMESTAMP_MS),
         "bytes" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "map" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "float64_list" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "int64_list" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         "COLUMN_TYPE_UNKNOWN" => Some(ColumnType::COLUMN_TYPE_UNKNOWN),
         "COLUMN_TYPE_STRING" => Some(ColumnType::COLUMN_TYPE_STRING),
         "COLUMN_TYPE_INT64" => Some(ColumnType::COLUMN_TYPE_INT64),
@@ -460,6 +532,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
         "COLUMN_TYPE_BYTES" => Some(ColumnType::COLUMN_TYPE_BYTES),
         "COLUMN_TYPE_INT32" => Some(ColumnType::COLUMN_TYPE_INT32),
         "COLUMN_TYPE_MAP" => Some(ColumnType::COLUMN_TYPE_MAP),
+        "COLUMN_TYPE_FLOAT64_LIST" => Some(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+        "COLUMN_TYPE_INT64_LIST" => Some(ColumnType::COLUMN_TYPE_INT64_LIST),
         _ => None,
     };
     resolved.ok_or_else(|| {
@@ -471,6 +545,8 @@ fn column_type_from_json(name: &str) -> Result<ColumnType, StatsError> {
 pub fn schema_to_json(schema: &Schema) -> String {
     let payload = JsonSchema {
         key_column: schema.key_column.clone(),
+        sort_columns: schema.sort_columns.clone(),
+        max_row_group_rows: schema.max_row_group_rows,
         columns: schema
             .columns
             .iter()
@@ -506,6 +582,8 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
         cols.push(column);
     }
     let mut schema = Schema::new(cols, payload.key_column);
+    schema.sort_columns = payload.sort_columns;
+    schema.max_row_group_rows = payload.max_row_group_rows;
     schema.projections = payload.projections;
     schema.grouped_extrema = payload.grouped_extrema;
     validate_index_policies(&schema)?;
@@ -532,6 +610,8 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
     Schema {
         columns,
         key_column: schema.key_column,
+        sort_columns: schema.sort_columns,
+        max_row_group_rows: schema.max_row_group_rows,
         projections: schema.projections,
         grouped_extrema: schema.grouped_extrema,
     }
@@ -550,6 +630,8 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     let Schema {
         mut columns,
         key_column,
+        sort_columns,
+        max_row_group_rows,
         projections,
         grouped_extrema,
     } = schema;
@@ -561,9 +643,17 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     Schema {
         columns,
         key_column,
+        sort_columns,
+        max_row_group_rows,
         projections,
         grouped_extrema,
     }
+}
+
+/// Add the implicit columns registration gives every namespace: the `cluster`
+/// origin column appended, then the `seq` counter prepended.
+pub fn stored_form(schema: Schema) -> Schema {
+    with_implicit_seq(with_implicit_cluster(schema))
 }
 
 /// Resolve the ordering key column name, raising if invalid.
@@ -599,8 +689,58 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
     Ok(resolved)
 }
 
+/// Resolve and validate compaction columns before the implicit `seq` tie-breaker.
+/// An empty list preserves the historical `[key_column, seq]` order.
+pub fn resolve_sort_columns(schema: &Schema) -> Result<Vec<String>, StatsError> {
+    let columns = if schema.sort_columns.is_empty() {
+        if !schema.key_column.is_empty() {
+            vec![schema.key_column.clone()]
+        } else if schema.column(IMPLICIT_KEY_COLUMN).is_some() {
+            vec![IMPLICIT_KEY_COLUMN.to_string()]
+        } else {
+            Vec::new()
+        }
+    } else {
+        schema.sort_columns.clone()
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for column in &columns {
+        if column == IMPLICIT_SEQ_COLUMN {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort_columns must not include the implicit {IMPLICIT_SEQ_COLUMN:?} column"
+            )));
+        }
+        let Some(definition) = schema.column(column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort column {column:?} is not present in the schema"
+            )));
+        };
+        if definition.r#type == ColumnType::COLUMN_TYPE_MAP {
+            return Err(StatsError::SchemaValidation(format!(
+                "sort column {column:?} is a MAP column, which cannot be ordered"
+            )));
+        }
+        if !seen.insert(column) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate sort column {column:?}"
+            )));
+        }
+    }
+    Ok(columns)
+}
+
 /// Validate index column types and named covering-projection definitions.
 pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
+    resolve_sort_columns(schema)?;
+    if schema.max_row_group_rows != 0
+        && !(MIN_CONFIGURED_ROW_GROUP_ROWS..=MAX_CONFIGURED_ROW_GROUP_ROWS)
+            .contains(&schema.max_row_group_rows)
+    {
+        return Err(StatsError::SchemaValidation(format!(
+            "max_row_group_rows={} must be zero or between {} and {}",
+            schema.max_row_group_rows, MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS,
+        )));
+    }
     for column in &schema.columns {
         let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
         if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
@@ -718,15 +858,31 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 }
 
 // ---------------------------------------------------------------------------
-// Schema merge (additive-only).
+// Schema merge: additive for the column layout, replaceable for derived state.
 // ---------------------------------------------------------------------------
+
+/// Whether `registered` accelerates every query `requested` would: same
+/// predicate column, superset predicate values, superset columns.
+fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjection) -> bool {
+    registered.predicate_column == requested.predicate_column
+        && requested
+            .predicate_values
+            .iter()
+            .all(|value| registered.predicate_values.contains(value))
+        && requested
+            .columns
+            .iter()
+            .all(|column| registered.columns.contains(column))
+}
 
 /// Return the effective schema for a re-register against `registered`.
 ///
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
-/// - a conflicting column *type* -> `SchemaConflict`.
-/// - a new non-nullable column -> `SchemaConflict`.
+/// - a conflicting column *type* -> `SchemaConflict`. The registered layout
+///   cannot hold the requested rows, so every write would be rejected anyway.
+/// - a new non-nullable column is adopted as nullable, with a warn. Every
+///   already-stored row is missing it.
 /// - a nullability difference on an existing column is *not* a conflict: warn
 ///   and keep the registered nullability (adopt-from-disk widens compacted
 ///   columns to nullable, and re-registration with the original schema must be
@@ -739,8 +895,15 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
 ///   never clear one, mirroring the storage-policy rule.
-/// - a new named covering projection is added monotonically; reusing a
-///   registered name with a different definition is a conflict.
+/// - a named covering projection is added when its name is new, and superseded
+///   when a registered name comes back with a different definition. The
+///   registered definition only decides what future segments build: each
+///   segment's `.fidx` `CoveringProjection` section describes its own coverage,
+///   so segments written under the old definition stay queryable until the
+///   index backfill reclaims them. A definition the registered one already
+///   covers is ignored, so an older binary registering a narrower definition
+///   against a newer catalog does not churn a fleet's derived state
+///   mid-rollout.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(
@@ -754,39 +917,72 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut enable_trigram: Vec<&str> = Vec::new();
     let mut enable_value_counts: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
-    let mut projections = Vec::new();
+    let sort_columns = if requested.sort_columns.is_empty() {
+        registered.sort_columns.clone()
+    } else {
+        if registered.sort_columns != requested.sort_columns {
+            tracing::info!(
+                registered = ?registered.sort_columns,
+                requested = ?requested.sort_columns,
+                "register: updating compaction sort columns",
+            );
+        }
+        requested.sort_columns.clone()
+    };
+    let max_row_group_rows = if requested.max_row_group_rows == 0 {
+        registered.max_row_group_rows
+    } else {
+        requested.max_row_group_rows
+    };
     let grouped_extrema = requested
         .grouped_extrema
         .iter()
         .filter(|config| !registered.grouped_extrema.contains(config))
         .cloned()
         .collect::<Vec<_>>();
+    let mut projections = registered.projections.clone();
+    let mut projections_changed = false;
     for requested_projection in &requested.projections {
-        match registered
-            .projections
-            .iter()
+        match projections
+            .iter_mut()
             .find(|projection| projection.name == requested_projection.name)
         {
-            Some(existing) if existing != requested_projection => {
-                return Err(StatsError::SchemaConflict(format!(
-                    "projection {:?}: definition differs from registered schema",
-                    requested_projection.name
-                )));
+            None => {
+                projections.push(requested_projection.clone());
+                projections_changed = true;
             }
-            Some(_) => {}
-            None => projections.push(requested_projection.clone()),
+            Some(existing) if existing == requested_projection => {}
+            Some(existing) if covers_projection(existing, requested_projection) => {
+                tracing::debug!(
+                    projection = %requested_projection.name,
+                    "register: keeping the registered projection, which covers the requested one",
+                );
+            }
+            Some(existing) => {
+                tracing::warn!(
+                    projection = %requested_projection.name,
+                    superseded_values = ?existing.predicate_values,
+                    superseded_columns = ?existing.columns,
+                    "register: superseding a registered covering projection",
+                );
+                *existing = requested_projection.clone();
+                projections_changed = true;
+            }
         }
     }
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
                 if !rc.nullable {
-                    return Err(StatsError::SchemaConflict(format!(
-                        "non-additive change: new column {:?} must be nullable for evolve-merge",
-                        rc.name
-                    )));
+                    tracing::warn!(
+                        column = %rc.name,
+                        "register: adopting a new non-nullable column as nullable",
+                    );
                 }
-                extras.push(rc.clone());
+                extras.push(Column {
+                    nullable: true,
+                    ..rc.clone()
+                });
             }
             Some(existing) => {
                 if existing.r#type != rc.r#type {
@@ -839,7 +1035,9 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         && enable_trigram.is_empty()
         && enable_value_counts.is_empty()
         && exact_values.is_empty()
-        && projections.is_empty()
+        && sort_columns == registered.sort_columns
+        && max_row_group_rows == registered.max_row_group_rows
+        && !projections_changed
         && grouped_extrema.is_empty()
     {
         return Ok(registered.clone());
@@ -876,12 +1074,66 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     }
     merged.extend(extras);
     let mut merged_schema = Schema::new(merged, registered.key_column.clone());
-    merged_schema.projections = registered.projections.clone();
-    merged_schema.projections.extend(projections);
+    merged_schema.sort_columns = sort_columns;
+    merged_schema.max_row_group_rows = max_row_group_rows;
+    merged_schema.projections = projections;
     merged_schema.grouped_extrema = registered.grouped_extrema.clone();
     merged_schema.grouped_extrema.extend(grouped_extrema);
     validate_index_policies(&merged_schema)?;
     Ok(merged_schema)
+}
+
+/// Merge a server-owned schema while treating its derived layout as authoritative.
+///
+/// Columns still evolve additively so historical Parquets remain readable, but
+/// secondary indexes, projections, and grouped extrema are owned by the server
+/// policy rather than monotonically accumulated from older registrations. This
+/// lets a rollout disable a broken derived index without rewriting source data.
+pub fn merge_managed_schema(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
+    let mut merged = merge_schemas(registered, requested)?;
+    for column in &mut merged.columns {
+        column.index = requested
+            .column(&column.name)
+            .map(|requested_column| requested_column.index.clone())
+            .unwrap_or_default();
+    }
+    merged.projections = requested.projections.clone();
+    merged.grouped_extrema = requested.grouped_extrema.clone();
+    validate_index_policies(&merged)?;
+    Ok(merged)
+}
+
+/// Validate a forwarded schema without evolving the receiving schema.
+///
+/// Unknown nullable columns are returned as ignored. Shared columns must retain their
+/// registered type, and unknown non-nullable columns are rejected.
+pub fn ignored_forwarded_schema_columns(
+    requested: &Schema,
+    registered: &Schema,
+) -> Result<Vec<String>, StatsError> {
+    let mut ignored = Vec::new();
+    for requested_column in &requested.columns {
+        match registered.column(&requested_column.name) {
+            Some(registered_column) if registered_column.r#type != requested_column.r#type => {
+                return Err(StatsError::SchemaConflict(format!(
+                    "column {:?}: type mismatch registered={} requested={}",
+                    requested_column.name,
+                    column_type_name(registered_column.r#type),
+                    column_type_name(requested_column.r#type),
+                )));
+            }
+            Some(_) => {}
+            None if requested_column.nullable => ignored.push(requested_column.name.clone()),
+            None => {
+                return Err(StatsError::SchemaConflict(format!(
+                    "unknown required column {:?} not in registered schema",
+                    requested_column.name
+                )));
+            }
+        }
+    }
+    ignored.sort();
+    Ok(ignored)
 }
 
 // ---------------------------------------------------------------------------
@@ -899,13 +1151,19 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 /// reported). A `Map<Utf8,Utf8>` maps to `COLUMN_TYPE_MAP` regardless of its
 /// entries/key/value field names or sorted flag (so a parquet-round-tripped or
 /// non-pyarrow map still decodes); a map with any other key/value type is
-/// rejected. list/large-list/struct/union and any other unsupported type are
-/// rejected.
+/// rejected. Only lists of float64 and int64 are supported; large-list,
+/// fixed-size-list, struct, union, and other nested types are rejected.
 pub fn arrow_to_column_type(dt: &DataType) -> Result<ColumnType, StatsError> {
     match dt {
         DataType::Dictionary(_, value) => arrow_to_column_type(value),
         DataType::Map(field, _) if is_utf8_utf8_entries(field.data_type()) => {
             Ok(ColumnType::COLUMN_TYPE_MAP)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Float64 => {
+            Ok(ColumnType::COLUMN_TYPE_FLOAT64_LIST)
+        }
+        DataType::List(field) if field.data_type() == &DataType::Int64 => {
+            Ok(ColumnType::COLUMN_TYPE_INT64_LIST)
         }
         DataType::List(_)
         | DataType::LargeList(_)
@@ -1011,12 +1269,40 @@ pub fn validate_and_align_batch(
     batch: &RecordBatch,
     registered: &Schema,
 ) -> Result<AlignedBatch, StatsError> {
+    let (aligned, ignored_columns) =
+        validate_and_align_batch_with_policy(batch, registered, UnknownColumnPolicy::Reject)?;
+    debug_assert!(ignored_columns.is_empty());
+    Ok(aligned)
+}
+
+/// Align a batch from a federated telemetry writer to the hub's server-owned schema.
+///
+/// Unknown nullable columns are omitted. Unknown required columns, known-column type
+/// mismatches, and missing required registered columns are rejected.
+pub fn validate_and_align_forwarded_batch(
+    batch: &RecordBatch,
+    registered: &Schema,
+) -> Result<(AlignedBatch, Vec<String>), StatsError> {
+    validate_and_align_batch_with_policy(batch, registered, UnknownColumnPolicy::IgnoreNullable)
+}
+
+#[derive(Clone, Copy)]
+enum UnknownColumnPolicy {
+    Reject,
+    IgnoreNullable,
+}
+
+fn validate_and_align_batch_with_policy(
+    batch: &RecordBatch,
+    registered: &Schema,
+    unknown_column_policy: UnknownColumnPolicy,
+) -> Result<(AlignedBatch, Vec<String>), StatsError> {
     let decoded = decode_dictionary_columns(batch)?;
     let decoded_schema = decoded.schema();
 
     // Build name -> (field, array) map of the inbound batch, rejecting
     // duplicates and the reserved `seq` column.
-    let mut by_name_batch: std::collections::HashMap<&str, (DataType, ArrayRef)> =
+    let mut by_name_batch: std::collections::HashMap<&str, (DataType, bool, ArrayRef)> =
         std::collections::HashMap::new();
     for (i, field) in decoded_schema.fields().iter().enumerate() {
         let name = field.name().as_str();
@@ -1032,20 +1318,40 @@ pub fn validate_and_align_batch(
         }
         by_name_batch.insert(
             name,
-            (field.data_type().clone(), Arc::clone(decoded.column(i))),
+            (
+                field.data_type().clone(),
+                field.is_nullable(),
+                Arc::clone(decoded.column(i)),
+            ),
         );
     }
 
-    // Reject any inbound column not in the registered schema.
+    // A local write must exactly follow the registered schema. Federated telemetry is
+    // allowed to be one nullable column ahead of its hub: the hub keeps its canonical
+    // schema and discards only those optional values rather than the entire row batch.
     let registered_names: std::collections::HashSet<&str> =
         registered.columns.iter().map(|c| c.name.as_str()).collect();
-    for name in by_name_batch.keys() {
+    let mut ignored_columns = Vec::new();
+    for (name, (_, nullable, _)) in &by_name_batch {
         if !registered_names.contains(name) {
-            return Err(StatsError::SchemaValidation(format!(
-                "unknown column {name:?} not in registered schema"
-            )));
+            match unknown_column_policy {
+                UnknownColumnPolicy::IgnoreNullable if *nullable => {
+                    ignored_columns.push((*name).to_string());
+                }
+                UnknownColumnPolicy::IgnoreNullable => {
+                    return Err(StatsError::SchemaValidation(format!(
+                        "unknown required column {name:?} not in registered schema"
+                    )));
+                }
+                UnknownColumnPolicy::Reject => {
+                    return Err(StatsError::SchemaValidation(format!(
+                        "unknown column {name:?} not in registered schema"
+                    )));
+                }
+            }
         }
     }
+    ignored_columns.sort();
 
     let n_rows = decoded.num_rows();
     let mut aligned_arrays: Vec<ArrayRef> = Vec::new();
@@ -1058,7 +1364,7 @@ pub fn validate_and_align_batch(
         let arrow_dt =
             arrow_type_for(col.r#type).expect("registered column has a known Arrow type");
         match by_name_batch.get(col.name.as_str()) {
-            Some((actual_dt, array)) => {
+            Some((actual_dt, _, array)) => {
                 let actual_type = arrow_to_column_type(actual_dt)?;
                 if actual_type != col.r#type {
                     return Err(StatsError::SchemaValidation(format!(
@@ -1101,12 +1407,15 @@ pub fn validate_and_align_batch(
         aligned_fields.push(Field::new(&col.name, arrow_dt, col.nullable));
     }
 
-    Ok(AlignedBatch {
-        arrays: aligned_arrays,
-        fields: aligned_fields,
-        num_rows: n_rows,
-        byte_size,
-    })
+    Ok((
+        AlignedBatch {
+            arrays: aligned_arrays,
+            fields: aligned_fields,
+            num_rows: n_rows,
+            byte_size,
+        },
+        ignored_columns,
+    ))
 }
 
 /// Overwrite the aligned batch's implicit origin `cluster` column with `origin`
@@ -1191,6 +1500,14 @@ mod tests {
         assert_eq!(
             arrow_type_for(ColumnType::COLUMN_TYPE_MAP),
             Some(map_utf8_utf8_type())
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_FLOAT64_LIST),
+            Some(list_type(DataType::Float64))
+        );
+        assert_eq!(
+            arrow_type_for(ColumnType::COLUMN_TYPE_INT64_LIST),
+            Some(list_type(DataType::Int64))
         );
         assert_eq!(arrow_type_for(ColumnType::COLUMN_TYPE_UNKNOWN), None);
     }
@@ -1343,6 +1660,29 @@ mod tests {
     }
 
     #[test]
+    fn empty_sort_columns_use_the_resolved_implicit_key() {
+        assert_eq!(
+            resolve_sort_columns(&worker_schema()).unwrap(),
+            ["timestamp_ms"]
+        );
+    }
+
+    #[test]
+    fn configured_row_group_rows_are_bounded() {
+        for rows in [MIN_CONFIGURED_ROW_GROUP_ROWS, MAX_CONFIGURED_ROW_GROUP_ROWS] {
+            assert!(
+                validate_index_policies(&worker_schema().with_max_row_group_rows(rows)).is_ok()
+            );
+        }
+        for rows in [1, MAX_CONFIGURED_ROW_GROUP_ROWS + 1] {
+            assert!(matches!(
+                validate_index_policies(&worker_schema().with_max_row_group_rows(rows)),
+                Err(StatsError::SchemaValidation(_))
+            ));
+        }
+    }
+
+    #[test]
     fn json_round_trip_uses_proto_names_and_accepts_legacy() {
         let stored = with_implicit_seq(worker_schema());
         let json = schema_to_json(&stored);
@@ -1404,18 +1744,50 @@ mod tests {
         let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
         assert_eq!(merged.projections, vec![projection]);
 
-        let conflicting = with_implicit_seq(worker_schema().with_covering_projection(
-            CoveringProjection::new(
-                "training-status",
-                "worker_id",
-                ["other"],
-                ["seq", "worker_id"],
-            ),
+        let redefined = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["other"],
+            ["seq", "worker_id"],
+        );
+        let superseded = merge_schemas(
+            &merged,
+            &with_implicit_seq(worker_schema().with_covering_projection(redefined.clone())),
+        )
+        .unwrap();
+        assert_eq!(superseded.projections, vec![redefined]);
+    }
+
+    #[test]
+    fn covering_projection_redefinition_keeps_the_wider_definition() {
+        // A rolled-back binary registering a narrower definition must leave the
+        // registered one alone; flipping back and forth would re-index every
+        // segment in the namespace on each registration.
+        let wide = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let registered = with_implicit_seq(worker_schema().with_covering_projection(wide.clone()));
+        let narrow = with_implicit_seq(worker_schema().with_covering_projection(
+            CoveringProjection::new("training-status", "worker_id", ["phase"], ["worker_id"]),
         ));
-        assert!(matches!(
-            merge_schemas(&merged, &conflicting),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        assert_eq!(merge_schemas(&registered, &narrow).unwrap(), registered);
+
+        // An added predicate value is not covered, so it supersedes.
+        let wider = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "progress", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let merged = merge_schemas(
+            &registered,
+            &with_implicit_seq(worker_schema().with_covering_projection(wider.clone())),
+        )
+        .unwrap();
+        assert_eq!(merged.projections, vec![wider]);
     }
 
     #[test]
@@ -1512,15 +1884,12 @@ mod tests {
     }
 
     #[test]
-    fn merge_new_non_nullable_rejects() {
+    fn merge_new_non_nullable_column_is_adopted_as_nullable() {
         let reg = with_implicit_seq(worker_schema());
         let mut req_cols = reg.columns.clone();
         req_cols.push(col("cpu_pct", ColumnType::COLUMN_TYPE_FLOAT64, false));
-        let req = Schema::new(req_cols, "");
-        assert!(matches!(
-            merge_schemas(&reg, &req),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+        assert!(merged.column("cpu_pct").unwrap().nullable);
     }
 
     #[test]
@@ -1623,6 +1992,23 @@ mod tests {
         let req = Schema::new(reg.columns.clone(), "timestamp_ms");
         let merged = merge_schemas(&reg, &req).unwrap();
         assert_eq!(merged.key_column, reg.key_column); // kept registered (empty)
+    }
+
+    #[test]
+    fn merge_adopts_explicit_layout_policy_and_older_clients_cannot_clear_it() {
+        let registered = with_implicit_seq(worker_schema());
+        let requested = registered
+            .clone()
+            .with_sort_columns(["worker_id", "timestamp_ms"])
+            .with_max_row_group_rows(131_072);
+        let merged = merge_schemas(&registered, &requested).unwrap();
+        assert_eq!(merged.sort_columns, ["worker_id", "timestamp_ms"]);
+        assert_eq!(merged.max_row_group_rows, 131_072);
+
+        assert_eq!(
+            merge_schemas(&merged, &with_implicit_seq(worker_schema())).unwrap(),
+            merged
+        );
     }
 
     // -----------------------------------------------------------------------

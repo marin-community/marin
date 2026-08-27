@@ -42,7 +42,7 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datakit.build_pdf_source.common import LayoutModelData, PdfSourceData
 from experiments.datakit.build_pdf_source.docling_extract.model_spec import (

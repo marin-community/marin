@@ -299,17 +299,6 @@ class EndpointsProjection(Projection):
                     return row
             return None
 
-    def resolve_all(self, name: str) -> list[EndpointRow]:
-        """Every live (unexpired) endpoint row with exact ``name``.
-
-        A name is not unique in the schema — a local registration and rows mirrored
-        from one or more peers can share a name — so all live matches are returned,
-        not just the first. Expired-lease rows are omitted."""
-        now = Timestamp.now()
-        with self._lock:
-            ids = self._by_name.get(name, ())
-            return [self._by_id[eid] for eid in ids if not self._by_id[eid].is_expired(now)]
-
     def get(self, endpoint_id: str) -> EndpointRow | None:
         with self._lock:
             row = self._by_id.get(endpoint_id)

@@ -58,12 +58,14 @@ fn sqlite_err(e: rusqlite::Error) -> StatsError {
     StatsError::Internal(format!("catalog sqlite error: {e}"))
 }
 
-/// Map one selected `segments` row (in the canonical 11-column SELECT order) to
-/// a `SegmentRow`. Shared by every segment-row reader so the column order stays
-/// in lockstep with the SELECT lists.
+/// Decode one row from the ordered segment query projection.
 fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
     use crate::store::types::SegmentLocation;
     let loc: String = row.get(10)?;
+    let partition_json: Option<String> = row.get(11)?;
+    // Partition metadata is an optimization. Treat an unknown future encoding
+    // as unpartitioned so query planning scans the segment conservatively.
+    let partition = partition_json.and_then(|value| serde_json::from_str(&value).ok());
     Ok(SegmentRow {
         namespace: row.get(0)?,
         path: row.get(1)?,
@@ -75,6 +77,7 @@ fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
         created_at_ms: row.get(7)?,
         min_key_value: row.get(8)?,
         max_key_value: row.get(9)?,
+        partition,
         location: SegmentLocation::parse_str(&loc).unwrap_or(SegmentLocation::Local),
     })
 }
@@ -83,12 +86,18 @@ fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
 /// (plain connection) and `replace_segments` (inside a transaction; a
 /// `&Transaction` deref-coerces to `&Connection`).
 fn upsert_segment_in(conn: &Connection, row: &SegmentRow) -> Result<(), StatsError> {
+    let partition_json = row
+        .partition
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| StatsError::Internal(format!("serialize segment partition: {error}")))?;
     conn.execute(
         r#"
         INSERT INTO segments
             (namespace, path, level, min_seq, max_seq, row_count, byte_size,
-             created_at_ms, min_key_value, max_key_value, location)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             created_at_ms, min_key_value, max_key_value, location, partition_json)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ON CONFLICT (namespace, path) DO UPDATE SET
             level         = excluded.level,
             min_seq       = excluded.min_seq,
@@ -98,7 +107,8 @@ fn upsert_segment_in(conn: &Connection, row: &SegmentRow) -> Result<(), StatsErr
             created_at_ms = excluded.created_at_ms,
             min_key_value = excluded.min_key_value,
             max_key_value = excluded.max_key_value,
-            location      = excluded.location
+            location      = excluded.location,
+            partition_json = excluded.partition_json
         "#,
         rusqlite::params![
             row.namespace,
@@ -112,6 +122,7 @@ fn upsert_segment_in(conn: &Connection, row: &SegmentRow) -> Result<(), StatsErr
             row.min_key_value,
             row.max_key_value,
             row.location.as_str(),
+            partition_json,
         ],
     )
     .map_err(sqlite_err)?;
@@ -202,6 +213,7 @@ impl Catalog {
                 min_key_value TEXT,
                 max_key_value TEXT,
                 location      TEXT    NOT NULL,
+                partition_json TEXT,
                 PRIMARY KEY (namespace, path)
             );
             CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq);
@@ -213,7 +225,27 @@ impl Catalog {
             );
             "#,
         )
-        .map_err(sqlite_err)
+        .map_err(sqlite_err)?;
+        let has_partition_column = {
+            let mut statement = conn
+                .prepare("PRAGMA table_info(segments)")
+                .map_err(sqlite_err)?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(sqlite_err)?;
+            let mut found = false;
+            for column in columns {
+                if column.map_err(sqlite_err)? == "partition_json" {
+                    found = true;
+                }
+            }
+            found
+        };
+        if !has_partition_column {
+            conn.execute("ALTER TABLE segments ADD COLUMN partition_json TEXT", [])
+                .map_err(sqlite_err)?;
+        }
+        Ok(())
     }
 
     // ----- forward watermark ---------------------------------------------
@@ -325,7 +357,7 @@ impl Catalog {
         }
 
         if let Some(existing) = inner.live.get(name).cloned() {
-            // `merge` raises SchemaConflict on a non-additive change.
+            // `merge` raises SchemaConflict on a column-type change.
             let effective = merge(&existing.schema)?;
             if effective != existing.schema {
                 inner.upsert_locked(name, &effective)?;
@@ -474,7 +506,7 @@ impl Catalog {
             .conn
             .prepare(
                 "SELECT namespace, path, level, min_seq, max_seq, row_count, byte_size, \
-                 created_at_ms, min_key_value, max_key_value, location \
+                 created_at_ms, min_key_value, max_key_value, location, partition_json \
                  FROM segments WHERE namespace = ?1 AND level >= ?2 ORDER BY min_seq",
             )
             .map_err(sqlite_err)?;
@@ -497,7 +529,7 @@ impl Catalog {
             .conn
             .query_row(
                 "SELECT namespace, path, level, min_seq, max_seq, row_count, byte_size, \
-                 created_at_ms, min_key_value, max_key_value, location \
+                 created_at_ms, min_key_value, max_key_value, location, partition_json \
                  FROM segments WHERE namespace = ?1 AND level >= 1 AND location = ?2 \
                  ORDER BY min_seq ASC LIMIT 1",
                 rusqlite::params![name, SegmentLocation::Both.as_str()],
@@ -525,7 +557,7 @@ impl Catalog {
             .conn
             .query_row(
                 "SELECT namespace, path, level, min_seq, max_seq, row_count, byte_size, \
-                 created_at_ms, min_key_value, max_key_value, location \
+                 created_at_ms, min_key_value, max_key_value, location, partition_json \
                  FROM segments WHERE namespace = ?1 AND level >= 1 AND location = ?2 \
                  AND created_at_ms < ?3 ORDER BY created_at_ms ASC LIMIT 1",
                 rusqlite::params![name, SegmentLocation::Both.as_str(), cutoff_ms],
@@ -768,7 +800,10 @@ impl CatalogInner {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::partition_policy::SegmentPartition;
     use crate::proto::finelog::stats::ColumnType;
     use crate::store::schema::{with_implicit_seq, Column};
 
@@ -930,6 +965,103 @@ mod tests {
         let all = cat.list_all().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].0, "a");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn segment_partition_persists_across_catalog_reopen() {
+        let dir = tempdir();
+        let partition = SegmentPartition {
+            spec_id: 1,
+            values: BTreeMap::from([("name_bucket".to_string(), "6".to_string())]),
+        };
+        {
+            let catalog = Catalog::open(Some(&dir)).unwrap();
+            catalog.upsert("a", &worker_stored()).unwrap();
+            catalog
+                .upsert_segment(&SegmentRow {
+                    namespace: "a".to_string(),
+                    path: dir.join("a.parquet").to_string_lossy().into_owned(),
+                    level: 1,
+                    min_seq: 1,
+                    max_seq: 3,
+                    row_count: 3,
+                    byte_size: 100,
+                    created_at_ms: 1,
+                    min_key_value: None,
+                    max_key_value: None,
+                    partition: Some(partition.clone()),
+                    location: crate::store::types::SegmentLocation::Local,
+                })
+                .unwrap();
+        }
+        let catalog = Catalog::open(Some(&dir)).unwrap();
+        assert_eq!(
+            catalog.list_segments("a").unwrap()[0].partition,
+            Some(partition)
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn opening_an_old_catalog_adds_partition_metadata_without_losing_segments() {
+        let dir = tempdir();
+        let path = dir.join(CATALOG_DB_FILENAME);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE segments (
+                    namespace TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    level INTEGER NOT NULL,
+                    min_seq INTEGER NOT NULL,
+                    max_seq INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL,
+                    byte_size INTEGER NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    min_key_value TEXT,
+                    max_key_value TEXT,
+                    location TEXT NOT NULL,
+                    PRIMARY KEY (namespace, path)
+                );
+                INSERT INTO segments VALUES
+                    ('a', '/old.parquet', 1, 1, 3, 3, 100, 1, NULL, NULL, 'LOCAL');
+                "#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let catalog = Catalog::open(Some(&dir)).unwrap();
+        let old = catalog.list_segments("a").unwrap();
+        assert_eq!(old.len(), 1);
+        assert_eq!(old[0].path, "/old.parquet");
+        assert_eq!(old[0].partition, None);
+
+        let partition = SegmentPartition {
+            spec_id: 1,
+            values: BTreeMap::from([("name_bucket".to_string(), "6".to_string())]),
+        };
+        catalog
+            .upsert_segment(&SegmentRow {
+                namespace: "a".to_string(),
+                path: "/new.parquet".to_string(),
+                level: 1,
+                min_seq: 4,
+                max_seq: 4,
+                row_count: 1,
+                byte_size: 50,
+                created_at_ms: 2,
+                min_key_value: None,
+                max_key_value: None,
+                partition: Some(partition.clone()),
+                location: crate::store::types::SegmentLocation::Local,
+            })
+            .unwrap();
+        assert_eq!(
+            catalog.list_segments("a").unwrap()[1].partition,
+            Some(partition)
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

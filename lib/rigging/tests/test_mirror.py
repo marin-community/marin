@@ -107,6 +107,20 @@ def test_read_finds_file_in_second_remote(mirror_fs, mirror_env):
     assert mirror_fs.cat_file("data/remote2.txt") == b"from-remote2"
 
 
+def test_materialize_copies_remote_tree(mirror_fs, mirror_env):
+    _write_file(mirror_env["remote1"], "cache/data/a.bin", b"a")
+    _write_file(mirror_env["remote2"], "cache/metadata/b.json", b"b")
+
+    resolved = mirror_fs.materialize("cache")
+
+    assert resolved == os.path.join(mirror_env["local_prefix"], "cache")
+    with open(os.path.join(resolved, "data/a.bin"), "rb") as f:
+        assert f.read() == b"a"
+    with open(os.path.join(resolved, "metadata/b.json"), "rb") as f:
+        assert f.read() == b"b"
+    assert mirror_fs.bytes_copied == 2
+
+
 # ---------------------------------------------------------------------------
 # ls / glob tests
 # ---------------------------------------------------------------------------

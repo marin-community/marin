@@ -41,10 +41,11 @@ from collections.abc import Iterator
 
 import click
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
+from zephyr import memory_budget
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,10 @@ def _build_pipeline(
 )
 @click.option("--worker-cpu", type=int, default=1)
 @click.option("--worker-ram", type=str, default="4g")
+@click.option("--map-task-cpu", type=float, default=None)
+@click.option("--map-task-ram", type=str, default=None)
+@click.option("--reduce-task-cpu", type=float, default=None)
+@click.option("--reduce-task-ram", type=str, default=None)
 @click.option("--max-workers", type=int, default=None)
 @click.option("--label", type=str, default="shuffle-bench")
 @click.option(
@@ -179,6 +184,10 @@ def main(
     hot_key_pool: int,
     worker_cpu: int,
     worker_ram: str,
+    map_task_cpu: float | None,
+    map_task_ram: str | None,
+    reduce_task_cpu: float | None,
+    reduce_task_ram: str | None,
     max_workers: int | None,
     label: str,
     repeat: int,
@@ -215,10 +224,22 @@ def main(
     # Reuse one ZephyrContext across repeats so worker actors stay warm and
     # variance from coordinator/worker startup is isolated from shuffle time.
     ctx = ZephyrContext(**ctx_kwargs)
+    map_resources = ResourceConfig(
+        cpu=worker_cpu if map_task_cpu is None else map_task_cpu,
+        ram=worker_ram if map_task_ram is None else map_task_ram,
+    )
+    reduce_resources = ResourceConfig(
+        cpu=map_resources.cpu if reduce_task_cpu is None else reduce_task_cpu,
+        ram=map_resources.ram if reduce_task_ram is None else reduce_task_ram,
+    )
 
     for i in range(repeat):
         t0 = time.monotonic()
-        result = ctx.execute(pipeline)
+        result = ctx.execute(
+            pipeline,
+            map_task_resources=map_resources,
+            reduce_task_resources=reduce_resources,
+        )
         elapsed = time.monotonic() - t0
 
         counted = sum(result.results) if result.results else 0
@@ -245,6 +266,24 @@ def main(
             "items_per_sec": round(throughput_items, 1),
             "mb_per_sec": round(throughput_mb, 1),
             "target_gb": round(target_gb, 2),
+            "worker_cpu": worker_cpu,
+            "worker_ram": worker_ram,
+            "map_task_cpu": map_resources.cpu,
+            "map_task_ram": map_resources.ram,
+            "reduce_task_cpu": reduce_resources.cpu,
+            "reduce_task_ram": reduce_resources.ram,
+            "r_write": memory_budget.R_WRITE,
+            "r_read_max": memory_budget.R_READ_MAX,
+            "r_read_payload": memory_budget.R_READ_PAYLOAD,
+            "read_row_overhead_bytes": memory_budget.READ_ROW_OVERHEAD_BYTES,
+            "r_read_buffered_input_payload": memory_budget.R_READ_BUFFERED_INPUT_PAYLOAD,
+            "r_read_thread_shard": memory_budget.R_READ_THREAD_SHARD,
+            "r_read_spill_payload": memory_budget.R_READ_SPILL_PAYLOAD,
+            "fixed_overhead_write_bytes": memory_budget.FIXED_OVERHEAD_WRITE_BYTES,
+            "fixed_overhead_read_bytes": memory_budget.FIXED_OVERHEAD_READ_BYTES,
+            "safety_fraction_write": memory_budget.SAFETY_FRACTION_WRITE,
+            "safety_fraction_read": memory_budget.SAFETY_FRACTION_READ,
+            "streaming_chunk_size_rows": memory_budget.STREAMING_CHUNK_SIZE_ROWS,
             "counters": result.counters,
         }
         print("RESULT:", json.dumps(summary))
