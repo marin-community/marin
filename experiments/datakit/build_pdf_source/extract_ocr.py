@@ -643,8 +643,9 @@ def ocr_extract_step(source: StepSpec, classification: StepSpec) -> StepSpec:
                 classification_output_path=classification.output_path,
             ),
             resources=_DRIVER_RESOURCES,
-            # The sender tasks render pages with pymupdf at runtime (lazy-imported inside
-            # ocr_extract.render); it lives in the ``pdf`` extra.
+            # The sender tasks rasterise pages with pypdfium2 and encode them with pillow at
+            # runtime (both lazy-imported inside ocr_extract.render); they live in the ``pdf``
+            # extra.
             pip_dependency_groups=["datakit", "pdf"],
         ),
     )

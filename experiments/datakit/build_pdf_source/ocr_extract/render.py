@@ -18,25 +18,33 @@ page rectangles alone, because the router both scores on it and uses it to choos
 
 This module is where the rasteriser lives, and it is deliberately the only place it lives: the
 router reads its geometry through :func:`render_geometry` and the OCR route reads its pixels through
-:func:`iter_rendered_pages`, so replacing MuPDF moves both at once and touches nothing else in the
-pipeline. That swap is a decided but ungated change -- ``pdfium-evaluation.md`` adopts PDFium on
-licensing grounds with the quality objection retired, conditional on subprocess-isolating the
-rasteriser against an unexplained abort that is still being investigated.
+:func:`iter_rendered_pages`, so the engine behind both moved at once and nothing else in the
+pipeline changed.
+
+That engine is PDFium, through ``pypdfium2``, and the reason is licensing: PyMuPDF is AGPL and this
+was its last runtime role once the router pass and the Docling route were removed. PDFium is
+BSD-3-Clause. ``pdfium-evaluation.md`` has the adjudication -- blind, two-way and corpus-weighted,
+the model's reading of a PDFium-rendered page is preferred 0.481 to 0.498 of the time against a null
+of 0.500, with all five arms containing parity. The rendering changes on 8% of pages and is not
+worse on them. It is also the operationally safer engine on this corpus: over every page of 100,000
+oracle-sample documents on both architectures, PDFium recorded zero native aborts in 3,577,944
+renders where MuPDF recorded one deterministic SIGSEGV, repeating on 3 of 3 retries.
 
 The budget is 2048 tokens (~2.07 MP, ~146 DPI median on this crawl). The throughput sweep behind
 that choice is in ``experiments/datakit/build_pdf_source/ocr-budget-sweep.md``: below 2048 quality is surrendered
 for almost nothing (1024 serves within 3% and sits at the legibility floor, 512 renders 99% of pages
 under it), and above it the trade is real (-21% throughput for 4096).
 
-PyMuPDF is imported inside the two functions that touch a document, not at module scope. It lives in
-marin-core's ``datakit`` extra, which the Zephyr workers get through ``pip_dependency_groups`` but
-the entrypoint job does not -- its ``uv sync`` carries no extras. Since
-:mod:`~experiments.datakit.build_pdf_source.pipeline` imports the OCR step to build its DAG, a module-scope
-``import pymupdf`` here would kill the driver before it submitted anything. Everything above those
-two functions is arithmetic and is always importable.
+``pypdfium2`` and Pillow are imported inside the functions that touch a document, not at module
+scope. They live in marin-core's ``pdf`` extra, which the Zephyr workers get through
+``pip_dependency_groups`` but the entrypoint job does not -- its ``uv sync`` carries no extras.
+Since :mod:`~experiments.datakit.build_pdf_source.pipeline` imports the OCR step to build its DAG, a
+module-scope import here would kill the driver before it submitted anything. Everything above those
+functions is arithmetic and is always importable.
 """
 
 import base64
+import io
 import logging
 import math
 from collections.abc import Iterable, Iterator
@@ -80,6 +88,15 @@ DEFAULT_LEGIBILITY_FLOOR_DPI = 100.0
 # document would hold a sender task for the better part of an hour. Truncation is recorded per
 # document (``pages_unrendered``) rather than being silent.
 DEFAULT_MAX_PAGES = 1000
+
+# PNG encoding is the expensive half of the feed -- 65.7% of it on x86, 67.5% on aarch64 -- so the
+# encoder matters more than the rasteriser did. Level 1 decodes byte-identical to level 6 on
+# 3,014 of 3,014 measured pages and to MuPDF's own encoder on the same set, for a 4.8% larger
+# payload, and is 1.16x faster on x86 and 1.46x on aarch64. PNG is lossless, so this is the one
+# lever that moves cost with provably identical pixels; level 6 is slower than either alternative
+# for a payload no smaller than level 1, so the knob has no useful middle
+# (``pdfium-evaluation.md``, "The PNG finding survives").
+PNG_COMPRESS_LEVEL = 1
 
 
 @dataclass(frozen=True)
@@ -201,67 +218,117 @@ def render_geometry(page_rectangles: Iterable[tuple[float, float]], options: Ren
     )
 
 
-def page_rectangles(document: "pymupdf.Document") -> list[tuple[float, float]]:  # noqa: F821
+def page_rectangles(document: "pdfium.PdfDocument") -> list[tuple[float, float]]:  # noqa: F821
     """Every page's ``(width, height)`` in points.
 
-    A page whose rectangle cannot be read at all is skipped rather than guessed at; MuPDF fails
+    A page whose size cannot be read at all is skipped rather than guessed at; a PDF library fails
     arbitrarily deep on crawl input and one unreadable page is not a reason to lose a document's
-    geometry. This is the only PyMuPDF call the geometry pass makes.
+    geometry. This is the only rasteriser call the geometry pass makes, and it decodes no content
+    stream -- it walks the page tree and reads the boxes.
+
+    The sizes are the rasteriser's own, which is what makes the router's features describe what the
+    feed will do. Over 3,585 pages on both architectures the number where PDFium's ``get_size()``
+    would have produced different :func:`smart_resize` dimensions than MuPDF's page rectangle is 0.
     """
     sizes: list[tuple[float, float]] = []
     for page_index in range(len(document)):
         try:
-            rect = document[page_index].rect
+            width, height = document[page_index].get_size()
         except Exception:
-            logger.debug("Could not read the rectangle of page %d", page_index, exc_info=True)
+            logger.debug("Could not read the size of page %d", page_index, exc_info=True)
             continue
-        sizes.append((rect.width, rect.height))
+        sizes.append((width, height))
     return sizes
 
 
 @contextmanager
-def open_pdf(pdf: bytes) -> Iterator["pymupdf.Document"]:  # noqa: F821
+def open_pdf(pdf: bytes) -> Iterator["pdfium.PdfDocument"]:  # noqa: F821
     """Open PDF bytes, closing the document on the way out.
 
-    Raises whatever MuPDF raises on input it cannot parse at all, which for a crawl corpus is a
-    routine outcome rather than a pipeline failure; the caller decides what to count it as.
+    Raises whatever PDFium raises on input it cannot parse at all, which for a crawl corpus is a
+    routine outcome rather than a pipeline failure; the caller decides what to count it as. PDFium
+    refuses a slightly different set of documents than MuPDF did -- 213 pages of 1.79M that MuPDF
+    renders and it does not, never the reverse -- which is a corpus-composition change, not a
+    failure mode.
     """
-    import pymupdf  # noqa: PLC0415
+    import pypdfium2 as pdfium  # noqa: PLC0415
 
-    document = pymupdf.open(stream=pdf, filetype="pdf")
+    document = pdfium.PdfDocument(pdf)
     try:
         yield document
     finally:
         document.close()
 
 
-def iter_rendered_pages(document: "pymupdf.Document", options: RenderOptions) -> Iterator[RenderedPage]:  # noqa: F821
+def rasterise_page(page: "pdfium.PdfPage", height: int, width: int) -> "np.ndarray":  # noqa: F821
+    """One page onto an exactly ``width`` x ``height`` RGB buffer.
+
+    ``PdfPage.render`` takes a scalar ``scale`` and cannot express the non-uniform matrix the token
+    budget asks for. ``FPDF_RenderPageBitmap`` takes ``size_x`` and ``size_y`` independently and
+    derives the display matrix from them, so passing the aligned pair from
+    :func:`target_dimensions` rasterises straight to the target with no decode/resize/re-encode
+    round trip -- the property the feed's cost depends on. Letter resolves to 1280x1632 and A4 to
+    1216x1696, which is what the budget asks for exactly.
+
+    ``FPDF_ANNOT`` draws annotation appearance streams, which MuPDF's ``get_pixmap`` did by default.
+    The bitmap is filled white first because PDFium leaves it transparent, where MuPDF's
+    ``alpha=False`` pixmap arrived already composited on white.
+
+    ``FPDF_REVERSE_BYTE_ORDER`` in the render flags is what actually makes an ``FPDFBitmap_BGR``
+    buffer hold RGB. ``new_native``'s ``rev_byteorder`` only records the claim on the Python
+    wrapper, so ``to_numpy`` labels the buffer RGB either way; drop the flag and red and blue come
+    back swapped. A page of black text on white is symmetric under that swap, so the error is
+    invisible on exactly the pages one would check first -- which is why
+    ``test_a_coloured_page_keeps_its_channels`` renders something that is neither black nor white
+    nor grey.
+    """
+    import pypdfium2 as pdfium  # noqa: PLC0415
+    import pypdfium2.raw as pdfium_c  # noqa: PLC0415
+
+    bitmap = pdfium.PdfBitmap.new_native(width, height, pdfium_c.FPDFBitmap_BGR, rev_byteorder=True)
+    bitmap.fill_rect((255, 255, 255, 255), 0, 0, width, height)
+    flags = pdfium_c.FPDF_ANNOT | pdfium_c.FPDF_REVERSE_BYTE_ORDER
+    pdfium_c.FPDF_RenderPageBitmap(bitmap, page, 0, 0, width, height, 0, flags)
+    return bitmap.to_numpy()
+
+
+def encode_png(samples: "np.ndarray") -> bytes:  # noqa: F821
+    """An RGB buffer to PNG bytes, at the compression level the feed's cost was measured at."""
+    from PIL import Image  # noqa: PLC0415
+
+    buffer = io.BytesIO()
+    Image.fromarray(samples).save(buffer, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
+    return buffer.getvalue()
+
+
+def iter_rendered_pages(document: "pdfium.PdfDocument", options: RenderOptions) -> Iterator[RenderedPage]:  # noqa: F821
     """Render a document's pages one at a time, encoded as PNG data URIs.
 
     Lazy by design. A document is not bounded in length and an encoded page is well over a megabyte,
     so rendering a whole document up front would put a multi-gigabyte payload in memory for the tail
-    of the page distribution. Yielding pages lets the caller hold only what is in flight.
+    of the page distribution. Yielding pages lets the caller hold only what is in flight, and each
+    page is closed as soon as it is encoded so a thousand-page document does not accumulate them.
 
-    Each page is rendered once, straight to its final resolution: the target comes from the token
-    budget and PyMuPDF's matrix scales directly to it, so there is no decode/resize/re-encode round
-    trip. A page that MuPDF cannot render is skipped -- crawl PDFs fail arbitrarily deep inside the
+    Each page is rendered once, straight to its final resolution (see :func:`rasterise_page`). A
+    page that PDFium cannot render is skipped -- crawl PDFs fail arbitrarily deep inside any
     library, and one bad page is not a reason to lose the document. ``RenderedPage.page_index`` is
     the page's position in the PDF, so a skipped page is visible as a gap.
     """
-    import pymupdf  # noqa: PLC0415
-
     for page_index in range(min(len(document), options.max_pages)):
+        page = None
         try:
             page = document[page_index]
-            page_width, page_height = page.rect.width, page.rect.height
+            page_width, page_height = page.get_size()
             if page_width < 1 or page_height < 1:
                 continue
             height, width = target_dimensions(page_width, page_height, options)
-            matrix = pymupdf.Matrix(width / page_width, height / page_height)
-            png = page.get_pixmap(matrix=matrix).tobytes("png")
+            png = encode_png(rasterise_page(page, height, width))
         except Exception:
             logger.debug("Could not render page %d", page_index, exc_info=True)
             continue
+        finally:
+            if page is not None:
+                page.close()
         pixels = height * width
         yield RenderedPage(
             data_uri=f"data:image/png;base64,{base64.b64encode(png).decode()}",

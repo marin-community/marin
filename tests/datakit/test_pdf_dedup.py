@@ -136,7 +136,11 @@ def test_dedup_dag_ends_in_a_decontaminated_dataset_and_runs_no_fuzzy_dedup(tmp_
 def test_pipeline_dag_builds_without_worker_only_dependencies(tmp_path):
     """The entrypoint job syncs no extras, so building the full DAG must not import them.
 
-    Runs in a subprocess because this process may already have pymupdf loaded for other tests.
+    Runs in a subprocess because this process may already have the rasteriser loaded for other
+    tests. Pillow is in the same extra but is deliberately not blocked: the blocker refuses at
+    ``find_spec``, and third-party libraries probe for Pillow with ``find_spec`` as a capability
+    check rather than importing it, so blocking it fails the build on a question rather than on an
+    import. Anything in this module that reaches Pillow reaches pypdfium2 first.
     Also checks the invariant ``StepRunner`` needs: every dependency of every step is itself in
     the list the runner is given.
     """
@@ -145,7 +149,7 @@ def test_pipeline_dag_builds_without_worker_only_dependencies(tmp_path):
         import sys
 
         class Blocker:
-            blocked = {"pymupdf", "fitz", "docling", "docling_core"}
+            blocked = {"pypdfium2", "pdf_inspector", "xgboost", "warcio"}
 
             def find_spec(self, name, path=None, target=None):
                 if name.split(".")[0] in self.blocked:

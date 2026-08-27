@@ -49,10 +49,10 @@ every fetched document, so it would meet all of them.
 Each library gets its own round trip and therefore its own deadline, so a document that hangs one
 does not cost the other's result.
 
-``pdf_inspector`` and PyMuPDF are both imported inside the child alone -- the latter through
-:mod:`~experiments.datakit.build_pdf_source.ocr_extract.render`'s own deferred imports. Both live in
-marin-core's ``pdf`` extra, which the Zephyr workers get through ``pip_dependency_groups`` and the
-entrypoint job does not -- its ``uv sync`` carries no extras. Since
+``pdf_inspector`` and the rasteriser are both imported inside the child alone -- the latter
+through :mod:`~experiments.datakit.build_pdf_source.ocr_extract.render`'s own deferred imports. Both
+live in marin-core's ``pdf`` extra, which the Zephyr workers get through ``pip_dependency_groups``
+and the entrypoint job does not -- its ``uv sync`` carries no extras. Since
 :mod:`~experiments.datakit.build_pdf_source.pipeline` imports this module to build its DAG, a
 module-scope import of either would kill the driver before it submitted anything.
 """
@@ -81,8 +81,8 @@ from marin.execution.remote import remote
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
-from zephyr.dataset import Dataset
 from zephyr.context import ZephyrContext
+from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.boilerplate import BoilerplateOptions, strip_boilerplate
@@ -723,8 +723,8 @@ def inspector_extract_step(source: StepSpec) -> StepSpec:
         fn=remote(
             partial(extract_pdf_text, source_output_path=source.output_path),
             resources=_DRIVER_RESOURCES,
-            # The map tasks import pdf_inspector in a child process and pymupdf through the render
-            # module's deferred imports; both live in the ``pdf`` extra, not in ``datakit``.
+            # The map tasks import pdf_inspector in a child process and pypdfium2 through the
+            # render module's deferred imports; both live in the ``pdf`` extra, not in ``datakit``.
             pip_dependency_groups=["datakit", "pdf"],
         ),
     )

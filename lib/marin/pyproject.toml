@@ -178,11 +178,29 @@ pdf = [
     # (experiments/datakit/build_pdf_source/fetch.py).
     "warcio>=1.7.5",
     # Rasterises pages for the VLM feed and measures render geometry before the router decides
-    # (experiments/datakit/build_pdf_source/ocr_extract/render.py). Pinned: its per-page
-    # measurements are not stable across MuPDF releases, and the router's `mean_render_dpi` feature
-    # is one of them. AGPL, which is the licensing argument for replacing it with PDFium; see the
-    # `pypdfium2` note below.
-    "pymupdf==1.26.1",
+    # (experiments/datakit/build_pdf_source/ocr_extract/render.py). PDFium through its Python
+    # bindings, replacing AGPL PyMuPDF, which this was the last runtime use of once the router's
+    # feature pass and the Docling route were removed. BSD-3-Clause renderer, Apache-2.0 OR
+    # BSD-3-Clause bindings.
+    #
+    # The swap is a licensing decision that had to clear a quality bar, and it did:
+    # adjudicated blind and two-way over 715 pages in eight strata, the model's reading of a
+    # PDFium-rendered page is preferred 0.481 to 0.498 of the time corpus-page-weighted, every one
+    # of five arms containing the 0.500 null. It is also cheaper (rasterises 1.21x faster on x86,
+    # 1.43x on aarch64) and operationally cleaner: zero native aborts in 3,577,944 renders against
+    # MuPDF's one deterministic SIGSEGV over the same corpus
+    # (experiments/datakit/build_pdf_source/pdfium-evaluation.md).
+    #
+    # Pinned exactly. The vendored PDFium version moves independently of the binding's, and both
+    # the router's `mean_render_dpi` feature and the page dimensions the feed sends the model are
+    # this build's output. py3-none manylinux_2_17 wheels for x86_64 and aarch64, so it resolves on
+    # the Emerald Rapids and Grace pools and on macOS, unlike pdf-inspector below.
+    "pypdfium2==5.13.0",
+    # Encodes the rendered page. PNG encoding is ~65% of the feed's cost, and Pillow at
+    # compress_level=1 decodes byte-identical to both MuPDF's encoder and Pillow's own level 6 on
+    # 3,014 of 3,014 measured pages while being 1.16x/1.46x faster, so it is the one lever that cut
+    # feed cost with provably identical pixels. Previously arrived transitively through docling.
+    "pillow>=12.2.0",
     # The CPU build. Plain `xgboost` depends on nvidia-nccl-cu12, which installs its library at the
     # same `nvidia/nccl/lib/libnccl.so.2` that torch's nvidia-nccl-cu13 owns, so whichever lands
     # last wins for the whole venv. datakit runs on the CPU fleet and only calls

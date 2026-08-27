@@ -3,6 +3,8 @@
 
 """Tests for the OCR extraction route: page rendering and the sender's document assembly."""
 
+import base64
+import io
 import threading
 
 import pyarrow as pa
@@ -23,10 +25,11 @@ from experiments.datakit.build_pdf_source.ocr_extract.render import (
     target_dimensions,
 )
 
-# PyMuPDF ships only in marin-core's ``pdf`` extra, which the workspace root does not install, and
-# these fixtures author real PDFs with it so that rendering is exercised rather than mocked. The
-# modules above are importable without it: they defer the import to the functions that rasterise.
-pymupdf = pytest.importorskip("pymupdf")
+# The rasteriser ships in marin-core's ``pdf`` extra, which the workspace root does not install.
+# The modules above are importable without it -- they defer the import to the functions that
+# rasterise -- so only the tests that actually render are skipped.
+pytest.importorskip("pypdfium2")
+pytest.importorskip("PIL")
 
 # US Letter and ISO A0, in points. A0 is the case the visual-token budget handles badly on purpose:
 # it costs the model the same as a Letter page and therefore gets far less resolution.
@@ -45,12 +48,48 @@ def _word(index: int) -> str:
 
 
 def _pdf(page_count: int, size: tuple[float, float] = _LETTER) -> bytes:
-    """A real PDF with ``page_count`` numbered pages, so rendering is exercised for real."""
-    document = pymupdf.open()
+    """A real PDF with ``page_count`` numbered pages, so rendering is exercised for real.
+
+    Written out directly rather than through a PDF library. The renderer this pipeline ships,
+    PDFium, cannot author PDFs, and the only libraries that can are either AGPL -- which is the
+    dependency the render swap exists to remove -- or a new dependency carried for one fixture.
+    A page of Helvetica in a Letter or A0 MediaBox is a few hundred bytes of PDF syntax, and
+    writing it here keeps the fixture legible instead of checking in opaque binaries nobody can
+    regenerate.
+
+    Object numbering: 1 catalog, 2 page tree, 3 the shared font, then a page and a content stream
+    per page. Offsets are collected while the body is written so the xref table is exact; PDFium
+    accepts a broken one by repairing it, which would make the fixture silently stop testing what
+    it claims to.
+    """
+    width, height = size
+    bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [{}] /Count {} >>".format(
+            " ".join(f"{4 + 2 * index} 0 R" for index in range(page_count)), page_count
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
     for index in range(page_count):
-        page = document.new_page(width=size[0], height=size[1])
-        page.insert_text((72, 72), f"Page {index} content")
-    return document.tobytes()
+        stream = f"BT /F1 24 Tf 72 {height - 72:g} Td (Page {index} content) Tj ET"
+        bodies.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:g} {height:g}] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * index} 0 R >>"
+        )
+        bodies.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+
+    out = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for number, body in enumerate(bodies, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(bodies) + 1}\n".encode("latin-1")
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode("latin-1")
+    out += (f"trailer\n<< /Size {len(bodies) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").encode("latin-1")
+    return bytes(out)
 
 
 def _batch(rows: list[dict]) -> pa.RecordBatch:
@@ -152,6 +191,49 @@ def test_rendering_stops_at_the_page_budget():
     with open_pdf(_pdf(10)) as document:
         rendered = list(iter_rendered_pages(document, RenderOptions(max_pages=4)))
     assert [page.page_index for page in rendered] == [0, 1, 2, 3]
+
+
+def _blue_page_pdf() -> bytes:
+    """A single page flooded with pure blue, for the one bug a monochrome fixture cannot see."""
+    width, height = _LETTER
+    stream = f"0 0 1 rg 0 0 {width:g} {height:g} re f"
+    bodies = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:g} {height:g}] /Contents 4 0 R >>",
+        f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for number, body in enumerate(bodies, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(bodies) + 1}\n".encode("latin-1")
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode("latin-1")
+    out += f"trailer\n<< /Size {len(bodies) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("latin-1")
+    return bytes(out)
+
+
+def test_a_coloured_page_keeps_its_channels():
+    """Guards the byte-order trap: the render flag, not the wrapper's ``rev_byteorder``, does it.
+
+    ``PdfBitmap.new_native(..., rev_byteorder=True)`` only labels the buffer RGB on the Python
+    side; what actually reverses an ``FPDFBitmap_BGR`` buffer is ``FPDF_REVERSE_BYTE_ORDER`` in the
+    render flags. Drop the flag and red and blue come back swapped -- invisible on black-on-white
+    text, which is why this fixture is neither black nor white nor grey. Mutation-checked by
+    removing the flag from :func:`rasterise_page` and confirming this fails.
+    """
+    from PIL import Image  # noqa: PLC0415
+
+    with open_pdf(_blue_page_pdf()) as document:
+        page = next(iter(iter_rendered_pages(document, RenderOptions())))
+    image = Image.open(io.BytesIO(base64.b64decode(page.data_uri.split(",", 1)[1])))
+    red, green, blue = (band.getextrema()[0] for band in image.convert("RGB").split())
+    assert blue > 200, f"the blue channel should dominate a blue page, got r={red} g={green} b={blue}"
+    assert red < 60, f"the red channel should be empty on a blue page, got r={red} g={green} b={blue}"
 
 
 def test_rendered_pages_are_png_data_uris():

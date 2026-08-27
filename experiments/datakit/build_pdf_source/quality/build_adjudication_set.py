@@ -33,8 +33,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import pymupdf
+import pypdfium2 as pdfium
+from PIL import Image
 
+from experiments.datakit.build_pdf_source.ocr_extract.render import rasterise_page
 from experiments.datakit.build_pdf_source.quality import route_agreement
 
 logger = logging.getLogger(__name__)
@@ -114,9 +116,21 @@ def informative_pages(docling_pages: list[str], ocr_pages: list[str], count: int
     return sorted(chosen, key=lambda choice: choice.page_index)
 
 
-def render_page(doc: pymupdf.Document, index: int, destination: Path) -> None:
-    pixmap = doc.load_page(index).get_pixmap(dpi=RENDER_DPI)
-    pixmap.save(destination)
+def render_page(document: pdfium.PdfDocument, index: int, destination: Path) -> None:
+    """One page to a PNG on disk, at the judging resolution rather than the feed's.
+
+    Scaled from the page's own size because PDFium renders onto explicit pixel dimensions rather
+    than to a DPI, which is the same call :func:`~...ocr_extract.render.rasterise_page` makes for
+    the feed -- so a judge sees the page through the engine that produced the corpus.
+    """
+    page = document[index]
+    try:
+        width, height = page.get_size()
+        scale = RENDER_DPI / 72.0
+        samples = rasterise_page(page, round(height * scale), round(width * scale))
+    finally:
+        page.close()
+    Image.fromarray(samples).save(destination)
 
 
 def excerpt(text: str) -> str:
@@ -140,14 +154,17 @@ def write_document(row: dict, destination: Path, rng: random.Random) -> dict:
     labels = dict(zip(ROUTES, rng.sample(["A", "B"], 2), strict=True))
     destination.mkdir(parents=True, exist_ok=True)
 
-    with pymupdf.open(stream=row["pdf"], filetype="pdf") as doc:
+    document = pdfium.PdfDocument(row["pdf"])
+    try:
         rendered = []
         for choice in choices:
-            if choice.page_index >= len(doc):
+            if choice.page_index >= len(document):
                 continue
             name = f"page_{choice.page_index + 1:03d}.png"
-            render_page(doc, choice.page_index, destination / name)
+            render_page(document, choice.page_index, destination / name)
             rendered.append((choice, name))
+    finally:
+        document.close()
 
     sections = [
         f"# Document {row['source_id']}",
