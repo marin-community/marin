@@ -12,15 +12,13 @@ Four append-only namespaces under ``codehealth.autolint``:
 - ``human_comments`` — one row per classified human review comment.
 - ``pr_review_outcomes`` — one row per PR, rolling up the two above.
 
-Both comment tables are rewritten per PR by re-running the aggregator, so a
-reader takes the highest ``seq`` per natural key rather than assuming one row.
-``review.py`` exposes that as ``LATEST_HUMAN_COMMENTS_SQL`` and
-``LATEST_PR_OUTCOMES_SQL``.
+Re-running the aggregator appends a fresh row per PR to both comment tables, so
+a reader must take the highest ``seq`` per natural key. ``review.py`` exposes
+that as ``LATEST_HUMAN_COMMENTS_SQL`` and ``LATEST_PR_OUTCOMES_SQL``.
 
-Every row type declares a ``key_column``. The server's fallback for an
-undeclared key is a column literally named ``timestamp_ms``, which none of
-these have, and it rejects the registration rather than defaulting to the
-declared timestamp.
+Every row type declares a ``key_column``. With none declared the server looks
+for a column named ``timestamp_ms``; none of these have one, so registration
+fails.
 """
 
 import datetime as dt

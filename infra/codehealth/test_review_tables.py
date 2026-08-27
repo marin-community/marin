@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import is_available, require_embedded_server
+from finelog.errors import SchemaValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -75,7 +76,7 @@ def test_event_round_trips_through_both_namespaces(client):
     assert inv[0]["pr_number"] == 8731
     assert inv[0]["elapsed"] == pytest.approx(91.25)
     assert inv[0]["timed_out"] is False
-    # fill_defaults derives the count from the findings list, not the caller.
+    # finding_count comes from fill_defaults counting the findings list; the event omits it.
     assert inv[0]["finding_count"] == 1
 
     found = client.query(f'SELECT * FROM "{FINDINGS_NAMESPACE}"').to_pylist()
@@ -84,12 +85,12 @@ def test_event_round_trips_through_both_namespaces(client):
 
 
 def test_clean_run_with_no_findings_is_still_recorded(client):
-    """A run that had no objection is a data point, not an absence of one."""
+    """A clean run still writes an invocation row, with no findings namespace."""
     log_stats.write_event(client, log_stats.fill_defaults(_event(findings=[])))
 
     inv = client.query(f'SELECT finding_count FROM "{INVOCATIONS_NAMESPACE}"').to_pylist()
     assert inv == [{"finding_count": 0}]
-    with pytest.raises(Exception, match="not found"):
+    with pytest.raises(SchemaValidationError, match="not found"):
         client.query(f'SELECT * FROM "{FINDINGS_NAMESPACE}"')
 
 
@@ -116,12 +117,12 @@ def test_append_rows_raises_when_the_server_rejects_the_schema(client):
 
 
 def test_query_rows_is_empty_before_the_first_write(client):
-    """A namespace that does not exist yet reads as empty, not as an error."""
+    """query_rows returns [] for a namespace that has never been written."""
     assert query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE) == []
 
 
 def test_reader_takes_the_newest_row_per_comment(client):
-    """Re-running the aggregator supersedes a PR's rows rather than duplicating them."""
+    """Both re-emitted rows are stored; the read returns only the newest per comment."""
     base = dict(
         pr_number=8731,
         pr_title="A PR",
@@ -149,10 +150,10 @@ def test_reader_takes_the_newest_row_per_comment(client):
     latest = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
     assert [(r["comment_id"], r["comment_class"], r["catchable_generous"]) for r in latest] == [(55, "lint", True)]
     # query_rows normalizes finelog's naive timestamps so window filters work.
-    assert latest[0]["ts"].tzinfo is not None
+    assert latest[0]["ts"] == dt.datetime(2026, 8, 2, tzinfo=dt.UTC)
 
 
-def test_disable_flag_skips_the_write_without_contacting_a_server(tmp_path):
+def test_disable_flag_skips_the_write_without_contacting_a_server():
     """MARIN_REVIEW_STATS=0 must short-circuit before any connection attempt."""
     result = subprocess.run(
         [sys.executable, str(CODEHEALTH_DIR / "log_stats.py"), "--finelog-url", "http://127.0.0.1:1"],

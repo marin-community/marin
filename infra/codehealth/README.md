@@ -45,10 +45,10 @@ Namespace names contain dots and must be double-quoted in SQL.
 ## Writing
 
 `log_stats.py` reads one JSON event on stdin and is invoked fire-and-forget as a
-detached subprocess by `infra/linter.py`. It never blocks the caller, but it does
-not fail silently: a failed write exits non-zero and explains itself on stderr,
-which `linter.py` keeps as `stats.log` in the run's log directory. Set
-`MARIN_REVIEW_STATS=0` to skip recording.
+detached subprocess by `infra/linter.py`, so it never blocks the caller. A failed
+write exits non-zero and explains itself on stderr, which `linter.py` keeps as
+`stats.log` in the run's log directory. Set `MARIN_REVIEW_STATS=0` to skip
+recording.
 
 A CI runner checks out the synthetic pull-request merge ref, so local git state
 describes the merge commit rather than the branch under review, and a row built
@@ -73,11 +73,11 @@ which IAP registers as a programmatic client; that identity must hold
 
 ## Verifying a write landed
 
-`Table.flush` reports that the client queue drained, not that the server accepted
-the batch — a rejected schema or a non-retryable send is logged by the flush
+`Table.flush` reports that the client queue drained. The server can still reject
+the batch: a schema mismatch or a non-retryable send is logged by the flush
 thread and the rows are dropped. Append through `review_tables.append_rows`,
-which compares the namespace row count across the write and raises instead.
+which compares the namespace row count across the write and raises.
 
-Every row type must declare a `key_column`. The server's fallback for an
-undeclared key is a column named `timestamp_ms`, which none of these have, so it
-rejects the registration rather than defaulting to the declared timestamp.
+Every row type must declare a `key_column`. With none declared the server looks
+for a column named `timestamp_ms`; none of these have one, so registration
+fails.

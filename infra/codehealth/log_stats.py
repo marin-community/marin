@@ -3,16 +3,9 @@
 
 """Opportunistic Finelog logging for code-health automation.
 
-Reads one JSON event from stdin and appends rows to two append-only Finelog
-namespaces (see ``review_tables``):
-
-  - ``codehealth.autolint.invocations`` — one row per ``pre-commit.py --review``
-    / ``/code-review`` / ``/review-pr`` invocation. ``finding_count = 0`` rows
-    are kept; they are the "tool ran but said nothing" signal.
-  - ``codehealth.autolint.findings`` — one row per individual finding.
-
-Join key between the two: ``invocation_id``. Findings denormalize ``tool``,
-``pr_number``, and ``marin_user`` so single-table queries work.
+Reads one JSON event from stdin and appends it to the
+``codehealth.autolint.invocations`` and ``codehealth.autolint.findings``
+namespaces defined in ``review_tables``.
 
 Designed to be invoked fire-and-forget as a detached subprocess so missing
 auth or a slow network never blocks the dev. Every failure is reported on
