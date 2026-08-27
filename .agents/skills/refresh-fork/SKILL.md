@@ -90,10 +90,11 @@ temporary source descriptor or add a second tpu-inference requirement.
 2. Record the full vLLM and tpu-inference commits. Inspect their dependency files
    together, including the tpu-inference torch constraints and vLLM TPU
    requirements. These commits are release evidence, not Marin inputs.
-3. Freeze the vLLM workflow producer commit, both source commits, the dependency
-   cutoff, and the Marin consumer head. Dispatch the TPU lane of
-   `marin-gpu-candidate.yaml` at that producer commit with the two source commits
-   and cutoff as explicit inputs. Dispatch it once.
+3. Select one unused full `marin-vllm-tpu-...` release tag. Freeze that tag, the
+   vLLM workflow producer commit, both source commits, the dependency cutoff, and
+   the Marin consumer head. Dispatch the TPU lane of `marin-gpu-candidate.yaml`
+   at that producer commit with the tag, two source commits, and cutoff as
+   explicit inputs. Dispatch it once.
 4. Read back the public prerelease. It must contain exactly the vLLM wheel and its
    tpu-inference companion. Inspect the built vLLM wheel's `METADATA` and confirm
    its direct requirement names the companion's public release URL. Record the
