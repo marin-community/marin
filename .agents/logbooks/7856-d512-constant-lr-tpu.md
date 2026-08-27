@@ -379,3 +379,31 @@ changes d512 token-budget scaling relative to issue #7856?
 - Next action: snapshot and push the launcher and fit artifacts, check Iris and
   W&B for duplicate `AUG-LRC-LOW` identities, then submit the CPU StepRunner
   parent with five-way v4-8 concurrency.
+
+### 2026-08-27 10:54 PDT - Launched the lower-LR follow-up
+
+- Hypothesis: the `0.10x / 0.20x / 0.32x / 0.45x / 0.70x` grid brackets the
+  constant-LR optimum, with the existing four completed `0.70x` cells reusable
+  at 30x through 300x.
+- Commit Hash: `fdc6d312f5`.
+- Commands:
+  - checked Iris, W&B, and GCS for existing `AUG-LRC-LOW` jobs, runs, or
+    artifacts;
+  - submitted parent `/kaiyuew/issue-7856-d512-constant-lr-low` with five-way
+    concurrency;
+  - verified the first five child jobs and W&B identities.
+- Config: 21 new d512 cells on v4-8 in `us-central2-b`; batch 64; 1% warmup;
+  constant post-warmup LR; W&B group
+  `issue-7856-d512-constant-lr-low-tpu`; artifact version `2026.08.27`.
+- Result: the parent is running with zero failures and zero preemptions. The
+  first allocation is exactly `AUG-LRC-LOW-001` through `005`. All five runs
+  have finite, advancing train loss at steps 18 through 23 and have reached
+  their configured constant LRs. Dropped assignments and routing capacity
+  overflow are zero. No OOM, TPU fault, duplicate, or unrequested child is
+  present.
+- Interpretation: the replacement sweep passed its startup gate without
+  introducing a schedule, routing, identity, or hardware confound. The four
+  completed old `0.70x` cells remain excluded from the new work.
+- Next action: babysit at 15-minute cadence, combine the 21 new terminal Paloma
+  results with the four reusable old `0.70x` results, then refit the optimum and
+  compare the selected LR curve with the issue #7856 linear-decay baseline.
