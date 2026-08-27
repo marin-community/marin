@@ -274,6 +274,7 @@ the rasteriser's round trip while the extractor's still answers.
 """
 import json
 import os
+import signal
 import sys
 import time
 
@@ -298,6 +299,9 @@ while True:
         if mode == "die_once" and not os.path.exists(marker):
             open(marker, "w").close()
             os._exit(9)
+        if mode == "segv_once" and not os.path.exists(marker):
+            open(marker, "w").close()
+            os.kill(os.getpid(), signal.SIGSEGV)
     if request["op"] == "geometry":
         reply = {"page_rectangles": [[612.0, 792.0]]}
     else:
@@ -359,6 +363,28 @@ def test_a_child_that_dies_costs_one_document_rather_than_the_shard(stub_worker)
 
         assert worker.call(OP_EXTRACT, b"the next one")["pages"] == ["the next one"]
         assert worker.spawns == 2
+    finally:
+        worker.stop()
+
+
+def test_a_child_killed_by_a_signal_is_named_as_a_death_and_not_as_a_deadline(stub_worker):
+    """The two failures are told apart by the child's EOF, not by asking the process how it is.
+
+    A signal death and a hang both surface as "no reply", but they are different documents: one is a
+    native abort on this PDF, the other is the library still working. ``poll()`` cannot separate them
+    because it can still answer "running" on the read that saw the child's stdout close -- the exit
+    status is reaped through a different mechanism and can lag. Filing the abort under the deadline
+    writes "no reply within 30s" into the row's ``extraction_error`` and sends whoever reads it after
+    a hang that never happened. The deadline here is long precisely so that a regression cannot hide
+    behind a short one: the EOF arrives at once, and only the naming is under test.
+    """
+    worker = stub_worker(f"segv_once:{OP_EXTRACT}", deadline=30.0)
+    try:
+        reply = worker.call(OP_EXTRACT, b"a document that aborts the crate")
+
+        assert "killed by SIGSEGV" in reply["extract_error"]
+        assert "no reply within" not in reply["extract_error"]
+        assert worker.call(OP_EXTRACT, b"the next one")["pages"] == ["the next one"]
     finally:
         worker.stop()
 

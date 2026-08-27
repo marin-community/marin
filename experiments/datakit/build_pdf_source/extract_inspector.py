@@ -426,6 +426,9 @@ class InspectorWorker:
             env=os.environ.copy(),
         )
         self._selector.register(self._process.stdout, selectors.EVENT_READ)
+        # Per child: whether its stdout has reached EOF, which is what distinguishes a death from a
+        # deadline in :meth:`call`.
+        self._eof = False
         self.spawns += 1
 
     def stop(self) -> None:
@@ -438,14 +441,23 @@ class InspectorWorker:
         self._process = None
 
     def _death(self) -> str:
-        """How the worker died, named rather than numbered."""
-        code = self._process.poll()
-        if code is not None and code < 0:
+        """How the worker died, named rather than numbered.
+
+        ``wait()`` and not ``poll()``: the child's stdout reaches EOF before its exit status is
+        necessarily reapable, and ``poll()`` would then answer ``None`` -- writing "worker exited
+        with None" into the document's ``extraction_error`` for what was really a signal.
+        """
+        code = self._process.wait()
+        if code < 0:
             return f"worker killed by {signal.Signals(-code).name}"
         return f"worker exited with {code}"
 
     def _read_reply(self, deadline: float) -> str | None:
-        """One newline-terminated reply, or ``None`` on timeout or on the worker's EOF."""
+        """One newline-terminated reply, or ``None`` on timeout or on the worker's EOF.
+
+        The two ``None``s are told apart by :attr:`_eof` rather than by the caller re-checking the
+        process, because only the read that saw the empty chunk knows which one happened.
+        """
         buffer = bytearray()
         while True:
             remaining = deadline - time.monotonic()
@@ -453,6 +465,7 @@ class InspectorWorker:
                 return None
             chunk = os.read(self._process.stdout.fileno(), READ_CHUNK)
             if not chunk:
+                self._eof = True
                 return None
             buffer.extend(chunk)
             if b"\n" in buffer:
@@ -470,6 +483,8 @@ class InspectorWorker:
             write_frame(self._process.stdin, {"op": op, "size": len(pdf)}, pdf)
             line = self._read_reply(deadline)
         except (BrokenPipeError, OSError) as error:
+            # A write that fails means the child is already gone; its stdout would read EOF too.
+            self._eof = True
             line, failure = None, f"{type(error).__name__}: {error}"
         else:
             failure = None
@@ -478,8 +493,11 @@ class InspectorWorker:
             return json.loads(line)
 
         # Either the child is gone or it is still inside the library. Both mean this process is no
-        # longer usable: a worker mid-document cannot be handed the next one.
-        died = self._process.poll() is not None
+        # longer usable: a worker mid-document cannot be handed the next one. The descriptor decides
+        # which it was -- ``poll()`` can still say "running" on the read that saw the EOF, filing a
+        # native abort under the deadline's counter and sending the next reader after a hang that
+        # never happened.
+        died = self._eof
         reason = failure or (self._death() if died else f"no reply within {self._deadline:.0f}s")
         outcome = "worker_died" if died else "deadline_exceeded"
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/{outcome}/{op}", 1)

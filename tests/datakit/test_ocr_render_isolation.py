@@ -369,7 +369,7 @@ def test_the_in_flight_bound_caps_the_pages_a_task_holds(run_batch, worker, monk
     writing a page nothing has read. Measured on the queue itself: submissions in, absorptions out.
     """
     depth = {"held": 0, "peak": 0}
-    pool = extract_ocr._request_pool(4)  # noqa: SLF001 - the real pool, driven through a probe
+    pool = extract_ocr._request_pool(4)
 
     class Probe:
         def submit(self, *arguments):
@@ -377,14 +377,14 @@ def test_the_in_flight_bound_caps_the_pages_a_task_holds(run_batch, worker, monk
             depth["peak"] = max(depth["peak"], depth["held"])
             return pool.submit(*arguments)
 
-    absorb = extract_ocr._Document.absorb  # noqa: SLF001
+    absorb = extract_ocr._Document.absorb
 
     def counted(self, future, loop) -> None:
         depth["held"] -= 1
         absorb(self, future, loop)
 
     monkeypatch.setattr(extract_ocr, "_request_pool", lambda threads: Probe())
-    monkeypatch.setattr(extract_ocr._Document, "absorb", counted)  # noqa: SLF001
+    monkeypatch.setattr(extract_ocr._Document, "absorb", counted)
 
     (record,) = run_batch([_row(0, _plan(pages=20))], worker(), pages_in_flight=4)
 
