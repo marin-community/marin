@@ -24,12 +24,15 @@ author: kaiyuew
 
 ## Current TL;DR
 
-- Historical reconstruction is complete. The 25 d512 controls used 1% warmup
-  plus linear decay to 5% of peak LR, not constant LR, and ran on 4xGB200.
-- The TPU extension is being implemented as the same 25 cells with constant LR
-  after the 1% warmup. The representative TPU cell passed the live gate with
-  finite decreasing loss, flat post-warmup LR, and zero routing drops. The full
-  matrix parent is active with max concurrency 5.
+- Twenty terminal constant-LR cells cover 30x through 300x. Every budget chose
+  the original `0.7x` lower boundary and all four loss curves are monotone over
+  `0.7x` through `1.4x`, so the sweep did not bracket the optimum.
+- A budget-fixed-effect log-quadratic fit predicts a shared optimum at `0.323x`;
+  leave-one-budget-out fits span `0.304x` to `0.363x`. The follow-up grid is
+  `0.10x / 0.20x / 0.32x / 0.45x / 0.70x`.
+- The five nonterminal 600x cells were intentionally stopped because this
+  reproduction writes no checkpoints. A unique 21-cell follow-up reuses the
+  completed `0.7x` points at 30x through 300x and reruns all five 600x points.
 
 ## Baseline
 
@@ -53,7 +56,9 @@ author: kaiyuew
 - `AUG-LRC-TPU-H2`: the constant schedule will move the fitted peak-LR optimum
   below the historical sweep's optimum, especially at 300x and 600x. Minimum
   test: the five LR multipliers at 300x and 600x. Falsifier: fitted optima match
-  or exceed the historical multipliers within fit uncertainty.
+  or exceed the historical multipliers within fit uncertainty. Current
+  evidence: supported but boundary-censored at 30x through 300x; next test is
+  the bracketed low-LR sweep.
 
 ### Blocked
 
@@ -200,6 +205,9 @@ changes d512 token-budget scaling relative to issue #7856?
 - 2026-08-26: use the explicit `gs://marin-us-central2` datakit prefix because
   TensorStore cannot consume Marin's fsspec-only `mirror://` scheme. The v4-8
   remains pinned to `us-central2-b`, so reads stay in-region.
+- 2026-08-27: stop the five nonterminal 600x cells after all four completed
+  budgets selected the `0.7x` boundary. Replace the unbracketed range with
+  `0.10x / 0.20x / 0.32x / 0.45x / 0.70x` and submit only the 21 missing cells.
 
 ## Negative Results Index
 
@@ -342,3 +350,32 @@ changes d512 token-budget scaling relative to issue #7856?
   matrix. Startup has not introduced a schedule or routing confound.
 - Next action: babysit all 25 cells, verify checkpoints and terminal Paloma
   metrics, then fit the constant-LR optimum and loss scaling against #7856.
+
+### 2026-08-27 10:40 PDT - Stopped the boundary-censored sweep and bracketed the follow-up
+
+- Hypothesis: the completed constant-LR curves contain enough curvature to
+  choose a lower grid that brackets the optimum without repeating completed
+  `0.7x` artifacts.
+- Commit Hash: `53ec1fb6ec`.
+- Commands:
+  - queried the 20 finished `AUG-LRC-TPU` W&B runs and fit
+    `budget fixed effects + log(multiplier) + log(multiplier)^2`;
+  - `/Users/kaiyuew/Downloads/Project/marin-iris-client-current/.venv/bin/iris --controller-url http://127.0.0.1:19001 job cancel /kaiyuew/issue-7856-d512-constant-lr-matrix`;
+  - `uv run pytest -q tests/test_d512_constant_lr_tpu.py tests/test_d512_constant_lr_lower_sweep.py`;
+  - `./infra/pre-commit.py --changed-files --fix`.
+- Config: shared fitted optimum `0.323x`; individual optima
+  `0.201x / 0.358x / 0.377x / 0.352x`; leave-one-budget-out range
+  `0.304x–0.363x`; new grid `0.10x / 0.20x / 0.32x / 0.45x / 0.70x`.
+- Result: the original parent and five 600x descendants are `killed`; their
+  latest W&B partial metrics remain available at steps 16,296 / 16,196 /
+  10,377 / 10,514 / 3,319. No checkpoint can be preserved because this
+  throughput reproduction explicitly sets `checkpointer = None`. The new
+  launcher contains 21 unique cells: four new multipliers for each completed
+  budget and all five multipliers for 600x. Twelve focused tests and all
+  changed-file checks pass.
+- Interpretation: `0.7x` is an upper bound, not a measured interior optimum.
+  The shared fit is stable to dropping one budget, while the lower `0.10x`
+  endpoint protects against the 30x-only extrapolation near `0.20x`.
+- Next action: snapshot and push the launcher and fit artifacts, check Iris and
+  W&B for duplicate `AUG-LRC-LOW` identities, then submit the CPU StepRunner
+  parent with five-way v4-8 concurrency.

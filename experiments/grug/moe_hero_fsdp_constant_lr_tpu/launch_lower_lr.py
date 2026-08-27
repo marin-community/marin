@@ -28,9 +28,7 @@ NEW_LOW_LR_MULTIPLIERS = LOW_LR_MULTIPLIERS[:-1]
 def _new_lower_lr_coordinates() -> tuple[tuple[int, float], ...]:
     reused_budgets = D512_TOKEN_MULTIPLES[:-1]
     new_coordinates = tuple(
-        (token_multiple, lr_multiplier)
-        for token_multiple in reused_budgets
-        for lr_multiplier in NEW_LOW_LR_MULTIPLIERS
+        (token_multiple, lr_multiplier) for token_multiple in reused_budgets for lr_multiplier in NEW_LOW_LR_MULTIPLIERS
     )
     unfinished_600x_coordinates = tuple((600, lr_multiplier) for lr_multiplier in LOW_LR_MULTIPLIERS)
     return new_coordinates + unfinished_600x_coordinates

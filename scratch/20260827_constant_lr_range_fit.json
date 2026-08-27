@@ -1,0 +1,32 @@
+{
+  "source_project": "marin-community/marin_moe",
+  "source_run_count": 20,
+  "metric": "eval/paloma/macro_loss",
+  "fit": "budget fixed effects plus shared quadratic in log(lr_multiplier)",
+  "individual_optimum_multiplier": {
+    "30": 0.20065192427363548,
+    "60": 0.3580228609213404,
+    "150": 0.376619469211402,
+    "300": 0.3520809224945704
+  },
+  "shared_optimum_multiplier": 0.32335192885043385,
+  "shared_log_multiplier_slope": 0.3600029400035608,
+  "shared_log_multiplier_curvature": 0.15943245367205,
+  "leave_one_budget_out_optimum_multiplier": {
+    "30": 0.3627472112226581,
+    "60": 0.3098778296794505,
+    "150": 0.30439484662625316,
+    "300": 0.31535311576808667
+  },
+  "leave_one_budget_out_range": [
+    0.30439484662625316,
+    0.3627472112226581
+  ],
+  "recommended_grid": [
+    0.1,
+    0.2,
+    0.32,
+    0.45,
+    0.7
+  ]
+}

@@ -23,7 +23,9 @@ def test_lower_lr_sweep_reuses_completed_point_seven_cells():
     assert len(D512_NEW_LOW_LR_POINTS) == 21
     assert len({point.experiment_id for point in D512_NEW_LOW_LR_POINTS}) == 21
     assert len({point.run_id for point in D512_NEW_LOW_LR_POINTS}) == 21
-    assert {(point.token_multiple, point.lr_multiplier, point.num_train_steps) for point in D512_NEW_LOW_LR_POINTS} == expected
+    assert {
+        (point.token_multiple, point.lr_multiplier, point.num_train_steps) for point in D512_NEW_LOW_LR_POINTS
+    } == expected
 
 
 def test_lower_lr_sweep_brackets_the_shared_fit():
