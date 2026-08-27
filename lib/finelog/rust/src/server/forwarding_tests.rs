@@ -21,6 +21,7 @@ use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
 use crate::store::store::LOG_NAMESPACE_NAME;
 use crate::store::Store;
+use crate::telemetry_policy::TELEMETRY_NAMESPACE;
 
 use super::*;
 
@@ -686,6 +687,68 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
         vec![Some("accepted".to_string())]
     );
     assert_eq!(fx.cursor(namespace), Some(fx.tip(namespace)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
+    let fx = Fixture::new("telemetry-unseen-service").await;
+    let source = Arc::clone(&fx.source);
+    tokio::task::spawn_blocking(move || {
+        source.register_table(
+            TELEMETRY_NAMESPACE,
+            telemetry_schema(),
+            StoragePolicy::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("schema_version", DataType::Int32, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("batch_id", DataType::Utf8, false),
+            Field::new("record_index", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+            Field::new("kind", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("resource_attributes_json", DataType::Utf8, false),
+            Field::new("attributes_json", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1])),
+            Arc::new(arrow::array::Int64Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["batch"])),
+            Arc::new(arrow::array::Int64Array::from(vec![0])),
+            Arc::new(StringArray::from(vec!["marinskyrl"])),
+            Arc::new(StringArray::from(vec!["gauge"])),
+            Arc::new(StringArray::from(vec!["queue_depth"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+            Arc::new(StringArray::from(vec!["{}"])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx
+        .source
+        .write_rows(TELEMETRY_NAMESPACE, &ipc, None)
+        .unwrap();
+    fx.source
+        .await_persisted(TELEMETRY_NAMESPACE, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+    fx.forward_from_start(TELEMETRY_NAMESPACE);
+
+    fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
+
+    assert_eq!(
+        hub_column(fx.target_store(), "telemetry_v1.marinskyrl", "name").await,
+        vec![Some("queue_depth".to_string())]
+    );
+    assert_eq!(
+        fx.cursor(TELEMETRY_NAMESPACE),
+        Some(fx.tip(TELEMETRY_NAMESPACE))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

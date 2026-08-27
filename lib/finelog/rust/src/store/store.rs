@@ -23,7 +23,10 @@ use clap::ValueEnum;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for, PolicyRegistry};
+use crate::policies::{
+    physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
+    storage_policy_for, PolicyRegistry,
+};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -623,9 +626,27 @@ impl Store {
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        self.write_routed_batch(
-            IngestionBatchSource::Stored(name),
-            batch,
+        let routed = self
+            .policies
+            .route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
+        for partition in &routed {
+            let namespace = &partition.destination.logical_namespace;
+            match self.require_engine(namespace) {
+                Ok(_) => {}
+                Err(StatsError::NamespaceNotFound(_)) => {
+                    let schema = schema_for_namespace(namespace).ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "no server-owned schema is registered for {namespace:?}"
+                        ))
+                    })?;
+                    self.register_managed_table(namespace, schema, storage_policy_for(namespace)?)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.append_routed_batches(
+            batch.num_rows() as i64,
+            routed,
             Some(origin_cluster),
             BatchAlignment::ForwardCompatible,
         )

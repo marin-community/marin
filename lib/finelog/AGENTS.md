@@ -59,7 +59,10 @@ then immediately starts another round while any namespace remains backlogged. Pe
 namespace, it reads the rows past a durable per-`(target, namespace)` cursor
 (`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
 `WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
-of a table with a `cluster` column are stamped with the origin and skipped if they
+forwarded from the legacy `telemetry_v1` root can route to service-specific namespaces;
+the hub registers each missing destination with its canonical server-owned schema and
+managed storage policy before appending the routed rows. Rows of a table with a
+`cluster` column are stamped with the origin and skipped if they
 already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
 durable, so a restart resumes rather than replays.
 

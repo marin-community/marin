@@ -547,9 +547,13 @@ reports pressure but does not change the forwarding cursor; the sender continues
 draining every locally retained row. `rows evicted before they were forwarded`
 means that local retention has already made source sequence positions unreadable.
 `hub rejected the batch; preserving the cursor` means the sender will re-register
-the namespace's current schema on the next sweep and retry the same rows. The
-cumulative `skipped_seqs` progress counter reports only sequence positions lost to
-local retention; filtered foreign-origin rows may make it an upper bound on lost rows.
+the namespace's current schema on the next sweep and retry the same rows. A current
+hub also registers an unseen server-owned destination before appending telemetry
+routed from the legacy `telemetry_v1` root. A `namespace ... is not registered`
+rejection for such a destination means the hub predates that behavior or its managed
+registration failed. The cumulative `skipped_seqs` progress counter reports only
+sequence positions lost to local retention; filtered foreign-origin rows may make it an
+upper bound on lost rows.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
