@@ -4,20 +4,32 @@
 a replacement for MuPDF in the one role PyMuPDF still holds in this pipeline once the router pass
 and the Docling route are removed: turning pages into pixels.
 
-**No.** PDFium is cheaper, it is permissively licensed, its failure record on this corpus is as
-clean as MuPDF's, and it can hit production's exact page dimensions. It also changes what the model
-reads. Against a self-agreement control of **0.9954** bigram F1, the same pages rendered through
-PDFium score **0.9591** — a paired delta of **−0.0364 ± 0.0032** over 1,795 pages, about eight times
-the noise floor and 11 standard errors from it. **2.1% of pages** the model reads identically twice
-from a MuPDF rendering come back essentially unrecognisable from a PDFium one. The licensing win is
-real and it is not worth that.
+**Yes.** PDFium is cheaper, permissively licensed, operationally as clean as MuPDF on this corpus,
+and dimensionally exact. It also changes what the model reads: against a self-agreement control of
+**0.9954** bigram F1 the same pages rendered through PDFium score **0.9591**, a paired delta of
+**−0.0364 ± 0.0032** over 1,795 pages and eight times the noise floor. That divergence is real and it
+reproduces. What it is not is a loss.
 
-**The motivation was licensing, not speed, and that is worth saying plainly.** The feed costs ~20
-CPU core-hours per million pages, of which PNG encoding is ~62% and rasterisation ~38%. PDFium
-rasterises 1.21× faster on x86 and 1.43× faster on aarch64, which moves the whole feed by 1.25 and
-1.89 core-h/M respectively — 7% and 12%. Nobody would take a corpus-quality risk for that. The case
-for the swap was that PyMuPDF is AGPL and this corpus is intended for release, and that case is
-sound; it is just outweighed.
+Adjudicated blind against the rendered page, over 715 pages in eight strata, two judge models and
+both engines used as the reference in turn, the model's reading of a PDFium-rendered page is judged
+the more faithful one **0.481 to 0.498** of the time corpus-page-weighted. Every one of the five
+arms contains 0.500. On **33.7%** of pages the two readings are byte-identical and there is nothing
+to choose between; on the rest the estimate is 0.4585 ± 0.0263, which also contains 0.500. The
+divergence is **displacement, not degradation**, and a quality record built on readings that turn out
+to be interchangeable with the new ones is not invalidated by swapping them.
+
+**The motivation is licensing, not speed, and that is worth saying plainly.** The feed costs ~20 CPU
+core-hours per million pages, of which PNG encoding is ~62% and rasterisation ~38%. PDFium rasterises
+1.21× faster on x86 and 1.43× faster on aarch64, moving the whole feed by 1.25 and 1.89 core-h/M —
+7% and 12%. Nobody would take a corpus-quality risk for that. The case for the swap is that PyMuPDF
+is AGPL and this corpus is intended for release, and what this evaluation establishes is that the
+quality risk it was weighed against does not exist.
+
+**This reverses the first revision of this document, which recommended against the swap.** That
+revision measured divergence, could not measure direction, and treated divergence from MuPDF as the
+cost — which silently makes MuPDF's reading the reference and so cannot tell "worse" from
+"different". [Question 1b](#question-1b-is-pdfiums-reading-worse-or-only-different) is the pass it
+called for and did not run.
 
 [`pdf-oxide-evaluation.md`](pdf-oxide-evaluation.md) rejected a renderer swap on cost — the
 candidate was 1.7–1.8× slower, so fidelity never came up. PDFium is not in that position, so this
@@ -27,10 +39,15 @@ reading differ?** Pixel identity was never available between two rasterisers and
 Everything below is measured on the cluster over 1,000 documents from the 100,000-document oracle
 sample (`marin/data/pdf_quality/cc_focus_2026_22_sample100k`), the same documents in the same order
 on both architectures, by [`probe_pdfium`](quality/probe_pdfium.py) and
-[`build_render_study`](quality/build_render_study.py). x86_64 ran on `cw-us-east-02a`, aarch64 on
-`cw-us-east-08a` (the freer of the two at the time: 3 running tasks against 43, and 13 idle nodes
-against 9). Pages are sampled evenly across each document rather than taken from the front, because
-a document's first pages are covers more often than they are representative.
+[`build_render_study`](quality/build_render_study.py); Question 1b re-reads and adjudicates a
+715-page draw from that study with
+[`build_render_adjudication_set`](quality/build_render_adjudication_set.py) and
+[`judge_render_adjudication_set`](quality/judge_render_adjudication_set.py). x86_64 ran on
+`cw-us-east-02a`, aarch64 on `cw-us-east-08a` — the freer of the two on both occasions. **The render
+study exists on aarch64 only**: the x86_64 run produced no output, so every agreement number here and
+in Question 1b is an aarch64 measurement. Pages are sampled evenly across each document rather than
+taken from the front, because a document's first pages are covers more often than they are
+representative.
 
 ## Question 1: does the model read the page differently? Yes, materially
 
@@ -109,12 +126,224 @@ happens on is not predictable from the pixel metric.
 It establishes that the two renderings produce materially different model output. It does **not**
 establish that PDFium is worse: bigram recall (0.9622) and precision (0.9629) are symmetric, so
 neither renderer systematically loses content relative to the other, and the study measures
-divergence rather than correctness. Adjudicating which reading is right would need a separate
-blind-judging pass.
+divergence rather than correctness.
 
-That distinction does not rescue the swap. Every quality number this pipeline holds was established
-against MuPDF renderings, so divergence from MuPDF *is* the cost regardless of which reading a judge
-would prefer — it invalidates the record rather than moving it in a known direction.
+The first revision of this evaluation argued that the distinction did not matter — that divergence
+from MuPDF *is* the cost, whichever reading a judge would prefer, because every quality number the
+pipeline holds was established against MuPDF renderings. **That argument was wrong, and Question 1b
+is where it fails.** It treats the MuPDF reading as the reference by default and so cannot
+distinguish "PDFium is worse" from "PDFium is different", which is the whole question; a corpus
+record built on readings that turn out to be *interchangeable* with the new ones is not invalidated
+by swapping them. The blind-judging pass the paragraph above called for was run, and the answer is
+below.
+
+## Question 1b: is PDFium's reading worse, or only different?
+
+Question 1 measured divergence and could not measure direction. This section adjudicates it, with
+[`build_render_adjudication_set`](quality/build_render_adjudication_set.py) and
+[`judge_render_adjudication_set`](quality/judge_render_adjudication_set.py), on `cw-us-east-08a`.
+The answer is **different, not worse**, and the reason that answer took a two-way design to reach is
+the most useful thing in it.
+
+### The study did not keep the text, so the pages were read again
+
+`build_render_study` persists `mupdf_chars`, `pdfium_chars` and the agreement columns and **not the
+model's output**, so there was nothing on storage to adjudicate. Every drawn page was rendered both
+ways and read again, three times as before — the MuPDF rendering twice and the PDFium rendering once
+— so the fresh readings carry their own control and the divergence is shown to have reproduced
+rather than assumed to have. It did, to 3% of its own size: over the 715-page draw the study's mean
+delta is **−0.0849** and the fresh one **−0.0822**, against a fresh control of 0.9911.
+
+| stratum | pages | study delta | fresh delta | fresh control | fresh treatment | identical text |
+|---|---|---|---|---|---|---|
+| catastrophic | 38 | −0.8291 | −0.6825 | 0.9380 | 0.2555 | 2.6% |
+| large_loss | 104 | −0.2199 | −0.2170 | 0.9827 | 0.7657 | 1.0% |
+| moderate_loss | 150 | −0.0344 | −0.0385 | 0.9968 | 0.9582 | 2.7% |
+| below_legibility_floor | 22 | −0.0255 | −0.0795 | 0.9794 | 0.8999 | 36.4% |
+| cjk | 50 | −0.0151 | −0.0221 | 0.9995 | 0.9774 | 34.0% |
+| small_glyphs | 50 | −0.0146 | −0.0182 | 0.9778 | 0.9596 | 30.0% |
+| unchanged | 300 | −0.0004 | −0.0025 | 0.9994 | 0.9969 | 64.7% |
+| reverse_catastrophic | 1 | +0.9947 | +0.0000 | 1.0000 | 1.0000 | 100% |
+
+The last column earns its own sentence: on **33.7%** of the draw the two renderings produced
+**byte-identical** text. On a third of these pages there is nothing for any judge to prefer.
+
+### There is no neutral reference renderer, and the pixels say so
+
+A judge decides by looking at a rendered page, and that page has to be drawn by one of the two
+engines under test. If they converged at the judging resolution the choice would not matter. They do
+not. All 715 pages, both engines onto identical buffer shapes, at the feed's own dimensions and at
+three fixed resolutions:
+
+| resolution | mean DPI | changed-pixel p50 | p90 | mean abs difference |
+|---|---|---|---|---|
+| feed (what the VLM saw) | 145.7 | 0.0408 | 0.0751 | 2.53/255 |
+| **160 (what the judge sees)** | 160.0 | **0.0376** | 0.0698 | 2.40/255 |
+| 220 | 220.0 | 0.0277 | 0.0522 | 1.88/255 |
+| 300 | 300.0 | 0.0228 | 0.0419 | 1.73/255 |
+
+Divergence falls with resolution and does not collapse: at the judge's 160 DPI it retains **92%** of
+the feed's changed-pixel fraction, and even at 300 DPI it retains 56%. Restricting to the strata
+where the readings actually moved changes nothing (0.0427 at the feed, 0.0375 at 160 DPI). So the
+adjudication was run **twice** — once against each engine's rendering of the same page, with the
+text, the blinding and the section order held fixed and only the image moving — and the agreement
+between the two arms is reported as a result rather than assumed away.
+
+### What the judge is asked
+
+One page image and two transcriptions of it, labelled A and B, with the engine's *position* and its
+*letter* randomised together per page. Both transcriptions come from the same model under the same
+prompt at temperature 0, so there is no dialect axis and the route packets' canonicalisation is
+deliberately not applied: it would erase the structural differences the judge is meant to see.
+
+The verdict is a **forced pairwise choice**, the half of this instrument that survived human
+validation — 0.756 agreement over 45 human verdicts, 1.000 where the human was confident. The
+equivalence flag is recorded and reported as description. Nothing is gated or weighted by it, because
+the margin is the half that failed validation, at 0.22.
+
+### The draw, and why two headline numbers
+
+715 pages over 577 documents and 294 domains, assigned first-match into disjoint strata, oversampling
+the divergent tail because a uniform draw would spend three-quarters of the budget on pages whose
+readings already agree.
+
+| stratum | corpus pages | corpus share | drawn | draw share |
+|---|---|---|---|---|
+| unchanged | 1,218 | 67.86% | 300 | 41.96% |
+| moderate_loss | 269 | 14.99% | 150 | 20.98% |
+| large_loss | 104 | 5.79% | 104 | 14.55% |
+| small_glyphs | 86 | 4.79% | 50 | 6.99% |
+| cjk | 57 | 3.18% | 50 | 6.99% |
+| catastrophic | 38 | 2.12% | 38 | 5.31% |
+| below_legibility_floor | 22 | 1.23% | 22 | 3.08% |
+| reverse_catastrophic | 1 | 0.06% | 1 | 0.14% |
+
+The stratified mean is what a corpus made entirely of hard pages would experience; the
+corpus-page-weighted estimate is what this corpus would. Both are reported and they are not
+interchangeable — in the route adjudication the stratified headline read 0.414 and post-stratifying
+to corpus page share put it at ~0.51.
+
+### The judge breaks ties by position, and that has to be taken out
+
+A forced choice means a judge that finds two readings interchangeable still has to name one. This one
+names the first. On the 241 judged pages whose two readings are **byte-identical** it called them
+equivalent on 240 and picked label A on 240 of 241; across all 715 pages it names the first
+extraction 72.2% of the time.
+
+That is not a preference for either renderer — which engine hides behind A is drawn per page — so the
+plain rate stays unbiased. It is noise, and on a tie-heavy stratum it is most of the signal:
+`unchanged` came out at 0.443 because PDFium happened to draw label A on 44.0% of its pages, not
+because anything about the readings differed. Conditioning on the draw removes it exactly. With
+`a = P(pick first | first is PDFium's reading)` and `b = P(pick first | first is MuPDF's)`, the
+estimate `(a + 1 − b) / 2` cancels any position preference the two halves share; a judge that only
+looked at position gives `a = b` and lands on exactly 0.5. Every number below is that estimator, and
+it moves `unchanged` from 0.443 to **0.487**, which is what a stratum of near-identical readings
+should report.
+
+### Verdicts
+
+P(the PDFium-rendered page's reading is judged the more faithful one). The null is 0.500.
+
+| stratum | corpus share | pages | domains | MuPDF reference | PDFium reference | judged equivalent |
+|---|---|---|---|---|---|---|
+| catastrophic | 2.12% | 38 | 21 | 0.316 ± 0.073 | 0.474 ± 0.079 | 7.9% |
+| large_loss | 5.79% | 104 | 65 | 0.487 ± 0.048 | 0.526 ± 0.048 | 1.0% |
+| moderate_loss | 14.99% | 150 | 91 | 0.483 ± 0.041 | 0.505 ± 0.041 | 6.7% |
+| below_legibility_floor | 1.23% | 22 | 16 | 0.364 ± 0.084 | 0.364 ± 0.095 | 40.9% |
+| cjk | 3.18% | 50 | 17 | 0.466 ± 0.051 | 0.447 ± 0.053 | 38.0% |
+| small_glyphs | 4.79% | 50 | 35 | 0.500 ± 0.060 | 0.540 ± 0.056 | 36.0% |
+| unchanged | 67.86% | 300 | 171 | 0.487 ± 0.020 | 0.485 ± 0.021 | 76.7% |
+| reverse_catastrophic | 0.06% | 1 | 1 | — | — | 100% |
+
+| | MuPDF reference | PDFium reference |
+|---|---|---|
+| stratified (the oversampled draw) | 0.4583 ± 0.0167 | 0.4778 ± 0.0169 |
+| **corpus-page-weighted** | **0.4808 ± 0.0157** | **0.4898 ± 0.0162** |
+| 95% interval | [0.450, 0.512] | [0.458, 0.522] |
+| judged equivalent | 40.7% | 40.6% |
+| names the first extraction | 72.2% | 71.3% |
+
+**Both corpus-weighted intervals contain 0.500.** The stratified numbers sit below it because the
+draw is four-fifths hard pages by construction, which is exactly the number not to quote.
+
+### Agreement, and what the reference actually costs
+
+Three agreement numbers, all on the same 715 pages, and the first is the one that makes the other two
+readable.
+
+| comparison | same engine named |
+|---|---|
+| same reference, judged twice (the judge's own noise floor) | **0.9259** |
+| MuPDF reference against PDFium reference | 0.9189 |
+| two judges, MuPDF reference | 0.8923 |
+| two judges, PDFium reference | 0.9020 |
+
+**Swapping the reference renderer moves the verdict barely more than asking the same judge the same
+question twice** — 0.9189 against a 0.9259 floor, a difference of 0.007. Two different models
+disagree with each other three to five times as much as one model disagrees with itself across
+references. Corpus-wide, the reference is very nearly neutral at the level of the verdict even though
+its pixels are not.
+
+`gemini-3.7-flash` reaches the same place from a visibly different disposition: it calls the two
+readings equivalent on 53.2% of pages against `gpt-5.6-luna`'s 40.7%, and still lands at 0.491 and
+0.498. The equivalence flag is worth more here than in the route adjudication, and there is an
+objective check on it: of the 241 judged pages whose readings are byte-identical, the primary judge
+called 240 equivalent.
+
+### The reference is not neutral where it matters most
+
+The corpus-wide neutrality above hides a local failure, and it is the most useful finding in this
+section. The one stratum that looks like a real loss under a MuPDF reference is `catastrophic` —
+0.316 ± 0.073, the 38 pages the rejection was written around. Under a PDFium reference the same 38
+pages, same readings, same blinding, score **0.474 ± 0.079**.
+
+That is not noise. Paired page by page, the reference swap flips verdicts in one direction on
+`catastrophic` and in no direction anywhere else, and the same judge re-asked with the *same*
+reference flips symmetrically everywhere:
+
+| stratum | reference swap → PDFium | → MuPDF | McNemar p | same reference, repeat |
+|---|---|---|---|---|
+| **catastrophic** | **6** | **0** | **0.031** | 1 / 1 |
+| large_loss | 12 | 8 | 0.503 | 7 / 5 |
+| moderate_loss | 7 | 4 | 0.549 | 7 / 6 |
+| unchanged | 8 | 8 | 1.000 | 11 / 9 |
+
+The manipulation moves one stratum one-directionally; the judge's own irreproducibility moves none of
+them.
+
+So the reference effect is not a general distortion — it is concentrated exactly where the two
+renderings disagree most about what is on the page, which is where a reference has the most
+opportunity to agree with one reading and not the other. **This is what the two-way design was built
+to catch**: a single-reference adjudication of a renderer pair will favour the incumbent's reading,
+by construction, on precisely the pages that decide the question. Had this study been run with a
+MuPDF reference alone it would have reported the catastrophic set as a real PDFium loss, and that
+conclusion would have been an artifact.
+
+### Answer: different, not worse
+
+Every arm, both judges, both references, corpus-page-weighted:
+
+| arm | corpus-page-weighted | 95% interval |
+|---|---|---|
+| gpt-5.6-luna, MuPDF reference | 0.4808 ± 0.0157 | [0.450, 0.512] |
+| gpt-5.6-luna, PDFium reference | 0.4898 ± 0.0162 | [0.458, 0.522] |
+| gpt-5.6-luna, MuPDF reference, repeat | 0.4902 ± 0.0154 | [0.460, 0.520] |
+| gemini-3.7-flash, MuPDF reference | 0.4912 ± 0.0169 | [0.458, 0.524] |
+| gemini-3.7-flash, PDFium reference | 0.4979 ± 0.0167 | [0.465, 0.531] |
+
+**All five contain 0.500.** The spread across them, 0.481 to 0.498, is smaller than any one
+interval's width. Restricting to the 474 pages whose readings are not byte-identical — an objective
+cut, not a model's opinion — gives 0.4585 ± 0.0263, which also contains 0.500. Dropping the render
+study's truncation and runaway-length confound gives 0.4848 ± 0.0160.
+
+The one cut that excludes parity is the 424 pages the judge declined to call equivalent, at 0.4362 ±
+0.0275. That cut conditions on the model's margin, which is the part of this instrument that failed
+human validation at 0.22 agreement, and it is reported here for completeness rather than as evidence.
+
+The render study's −0.0364 bigram-F1 delta is real and reproduces at −0.0822 on this draw. What
+Question 1b establishes is that it is **displacement, not degradation**: the model reads a
+PDFium-rendered page differently, and a judge looking at the page cannot tell which reading is
+better. On a third of the corpus it cannot tell because the two readings are the same string.
 
 ## Question 2: what the pixels do
 
@@ -238,10 +467,9 @@ renders — and MuPDF performed 18,593 with the same clean record.
 
 The honest statement is **zero aborts in 24,621 PDFium page renders across two architectures, plus
 one unexplained abort in an earlier, unisolated configuration that was never attributed to a
-library.** Because the recommendation is
-not to adopt, the subprocess-isolation question this raised does not arise. Were PDFium adopted, it
-would need answering first, since the feed renders in the map task and a hard abort would take the
-task rather than the page.
+library.** The recommendation is now to adopt, so the subprocess-isolation question this raised is
+live and is the first of the two conditions attached to it: the feed renders inside the Zephyr map
+task, and a hard abort would take the task rather than the page.
 
 ## The second-order effect: labels judged against MuPDF renderings
 
@@ -252,21 +480,24 @@ change moves the judges' ground truth too. Assessed rather than assumed away, it
 `route_features` measured worse on all five domain-disjoint splits. Labels whose consumer is being
 deleted do not need regenerating whatever the renderer does.
 
-**The adjudication verdicts would not be moot, and this is the expensive part.** They compare three
-routes' *extractions* against a 160-DPI page image. Two things would move:
+**The adjudication verdicts are not moot, and this is the expensive part.** They compare three
+routes' *extractions* against a 160-DPI page image. Two things move:
 
 1. *The VLM extraction itself changes.* This is Question 1, and at −0.0233 to −0.0364 bigram F1 with
    2.1% of pages read differently it is larger than effects this pipeline already treats as
    decisive: pdf-inspector 1.14.1→1.17.0 moved corpus-wide bigram recall by +0.0113 and that was
    judged *inside* the noise floor; Router v2's +0.0127 against a 0.0096 paired floor was judged a
-   real finding. The VLM arm of every adjudication packet would have to be re-extracted and
-   re-judged.
-2. *The judge's reference image changes.* At 160 DPI the two renderers differ by a changed-pixel
-   p50 of 0.0382 and a mean absolute difference of 2.33/255. Genuinely second-order next to (1).
+   real finding. The VLM arm of every adjudication packet has to be re-extracted and re-judged.
+2. *The judge's reference image changes.* At 160 DPI the two renderers differ by a changed-pixel p50
+   of 0.0376 and a mean absolute difference of 2.40/255. Question 1b measured what that is worth at
+   the level of a verdict — 0.9189 agreement against a 0.9259 same-reference floor — so it is
+   genuinely second-order next to (1) corpus-wide, though not on the pages where the two renderings
+   disagree most.
 
-So the label question is not an argument against adopting PDFium so much as a cost attached to it: a
-full re-extraction and re-adjudication, on top of a corpus whose quality record would have to be
-rebuilt. Since the recommendation is not to adopt, nothing needs regenerating.
+Question 1b changes the *reason* this work is needed, not the amount. It is no longer "the readings
+may be worse and the record has to be rebuilt"; it is "the readings are different and the record
+should describe the renderer that produced the corpus". The re-extraction and re-adjudication is the
+price of adoption, and the price does not include a quality regression.
 
 ## Licence and wheels
 
@@ -293,12 +524,10 @@ is the least demanding of the three. Verified rather than assumed: both probe ru
 imported the wheel in a stock Marin worker image, logging `pypdfium2 5.13.0 (pdfium 153.0.7999.0)`
 on x86_64 and on Grace aarch64.
 
-**It would have been a promotion, not an addition.** `uv.lock` already carried `pypdfium2` 5.12.1 as
-a transitive dependency of `docling-slim` — docling ships a pypdfium2 backend. Since docling is being
-dropped, adopting PDFium would have turned that transitive into a direct dependency rather than
-introducing an unknown wheel: known-good in this workspace, on a friendlier glibc baseline than
-pdf-oxide's. That is a genuinely favourable starting position, and it is why the pin is retained here
-for the probes even though the answer is no.
+**It is a promotion, not an addition.** `uv.lock` already carried `pypdfium2` 5.12.1 as a transitive
+dependency of `docling-slim` — docling ships a pypdfium2 backend. Since docling is being dropped,
+adopting PDFium turns that transitive into a direct dependency rather than introducing an unknown
+wheel: known-good in this workspace, on a friendlier glibc baseline than pdf-oxide's.
 
 ## pdf-inspector's bundled PDFium is not reachable
 
@@ -375,28 +604,49 @@ to whoever makes the release.
 
 ## Recommendation
 
-**Do not adopt PDFium for the render feed.** It is cheaper, permissively licensed, operationally
-clean and dimensionally exact, and it still changes what the model reads on 8% of pages and rewrites
-2.1% of them outright. A corpus whose entire quality record was built on MuPDF renderings cannot
-absorb that for a 7–12% saving on one stage and a licence change.
+**Adopt PDFium for the render feed.** It is cheaper, permissively licensed, operationally clean and
+dimensionally exact, and the quality objection does not survive adjudication: blind, two-way and
+corpus-weighted, its readings are preferred 0.481–0.498 of the time against a null of 0.500, with all
+five arms containing parity. It changes what the model reads on 8% of pages and does not read them
+worse. The AGPL dependency goes away for the price of a re-extraction.
+
+**Two conditions attach, and neither is a quality condition.**
+
+*Subprocess-isolate the rasteriser, or establish that it does not need it.* PDFium performed 24,621
+page renders here with zero aborts, but the feed rasterises inside the Zephyr map task, where a hard
+abort takes the task rather than the page — and PDFium is a native extension whose failure modes are
+not catchable in the calling process. The [exit 133 above](#reconciling-the-exit-133) was never
+attributed to any library and the rule-of-three bound over a million-page corpus is not comfortable.
+This is the question the first revision deferred because it recommended against adopting; adopting
+makes it due.
+
+*Re-extract and re-adjudicate.* The 345 adjudication packets compare three routes' extractions
+against a rendered page, and the VLM arm of every one of them was produced from a MuPDF rendering.
+Those verdicts need regenerating — not because the readings are worse, but because they are
+different and the record should describe the renderer that produced the corpus. The 19,977 preference
+labels remain moot: Router v2 retired their consumer. See
+[the second-order section](#the-second-order-effect-labels-judged-against-mupdf-renderings).
 
 **Do take the PNG encoder.** Pillow at `compress_level=1` is pixel-identical on 3,014 of 3,014 pages
 on both architectures and on both renderers' buffers, and moves the feed from 20.16 to 19.06
 core-h/M on x86 and to 15.98 on aarch64 — a larger saving than the rasteriser was ever going to buy,
 at zero quality risk. It is renderer-independent and survives this result untouched.
 
-**PyMuPDF stays in the runtime path**, and the AGPL question stays open. What this evaluation
-narrows is where it lives: after the router and Docling deletions, PyMuPDF's only runtime role is
-`ocr_extract/render.py`, reached through one function, and its only test role is one module's
-fixtures. Whoever reopens this has a small surface to attack.
+**PyMuPDF leaves the runtime path and stays in the test path.** Its only runtime role after the
+router and Docling deletions is `ocr_extract/render.py`, reached through one function, so the swap is
+small. `tests/datakit/test_ocr_extract.py` still authors fixture PDFs with it and `pypdfium2` cannot
+author PDFs; whether a test-only AGPL dependency is acceptable is
+[a release question, not a technical one](#test-fixtures--a-question-for-the-maintainer-not-a-decision-made-here).
 
-**Worth revisiting if the model changes.** The finding is a property of *this* model's sensitivity to
-this rasteriser pair, not a property of PDFium. A different VLM, a higher token budget (the
-`below_legibility_floor` stratum lost 0.2006, four times the corpus figure, which points at
-resolution rather than renderer), or a model fine-tuned across renderers would all move it. The
-measurement to repeat is [`build_render_study`](quality/build_render_study.py); it costs one GPU for
-twelve minutes.
+**What not to do is settle a renderer question on pixels, and now also not on one reference.** The
+changed-pixel fraction correlates with the agreement delta at −0.032, and PDFium's pixels are five
+times closer to MuPDF's than pdf_oxide's were for no benefit. The second trap is newer: at the
+judging resolution the two engines still differ on 3.8% of pixels, and adjudicating against a single
+engine's rendering flipped the `catastrophic` stratum 6–0 in that engine's favour. **Any future
+renderer comparison has to be run through the model, and judged against both renderings.**
 
-**What not to do is settle it on pixels.** The changed-pixel fraction correlates with the agreement
-delta at −0.032. PDFium's pixels are five times closer to MuPDF's than pdf_oxide's were, and that
-bought nothing. Any future renderer question has to be run through the model.
+**Worth revisiting if the model changes.** The finding is a property of *this* model's insensitivity
+to this rasteriser pair, not a property of PDFium. The measurements to repeat are
+[`build_render_study`](quality/build_render_study.py) and
+[`build_render_adjudication_set`](quality/build_render_adjudication_set.py); together they cost one
+GPU for about half an hour and roughly $6 of judging.
