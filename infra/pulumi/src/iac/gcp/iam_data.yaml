@@ -1174,6 +1174,7 @@ project_grants:
 - role: roles/iam.serviceAccountAdmin
   members:
   - principal: human-070
+  - principal: human-007
 - role: roles/iam.serviceAccountCreator
   members:
   - principal: human-019
