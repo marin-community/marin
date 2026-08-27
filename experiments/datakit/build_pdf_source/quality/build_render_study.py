@@ -337,7 +337,7 @@ def _f1(recall: float, precision: float) -> float:
     return 2 * recall * precision / (recall + precision) if recall + precision else 0.0
 
 
-def _agreement_columns(agreement) -> dict:
+def agreement_columns(agreement) -> dict:
     return {
         "unigram_recall": agreement.unigram_recall,
         "unigram_precision": agreement.unigram_precision,
@@ -381,8 +381,8 @@ class StudyPage:
             "pdfium_completion_tokens": other.completion_tokens,
             "mupdf_truncated": first.truncated,
             "pdfium_truncated": other.truncated,
-            **{f"control_{key}": value for key, value in _agreement_columns(control).items()},
-            **{f"treatment_{key}": value for key, value in _agreement_columns(treatment).items()},
+            **{f"control_{key}": value for key, value in agreement_columns(control).items()},
+            **{f"treatment_{key}": value for key, value in agreement_columns(treatment).items()},
         }
 
 
