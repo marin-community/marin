@@ -41,7 +41,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import BATCH_AXES, GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -126,9 +126,6 @@ def build_train_dataset(
     )
 
 
-_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-
-
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
@@ -142,7 +139,7 @@ def build_train_loader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": _BATCH_AXES},
+        axis_resources={"__BATCH__": BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -168,9 +165,9 @@ def build_tagged_evaluator(
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
-    eval_axis_mapping = {"batch": _BATCH_AXES}
+    eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    eval_array_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):

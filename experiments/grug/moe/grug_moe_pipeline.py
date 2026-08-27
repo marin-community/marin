@@ -22,10 +22,13 @@ the mesh, initialize and place the state, split and place each batch, build the
 step once, pass it through ``prepare_explicit_step``, then call it for each batch.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TypeGuard
 
 import equinox as eqx
 import jax
@@ -51,6 +54,7 @@ from levanter.pipeline import (
 )
 
 from experiments.grug.moe.model import (
+    BATCH_AXES,
     Block,
     GatedNorm,
     GrugModelConfig,
@@ -61,12 +65,17 @@ from experiments.grug.moe.model import (
 try:
     import jaxpp.api as jaxpp
     from jaxpp.experimental import mpmd
+    from jaxpp.experimental.mpmd import LoweredMpmdFun
 except ModuleNotFoundError:
     jaxpp = None
     mpmd = None
 
 
-_BATCH_AXES = ("replica_dcn", "data", "expert")
+TRAIN_LOSS_KEY = "train/loss"
+_QB_BETA_PER_LAYER_KEY = "qb_beta_per_layer"
+
+type _ArrayValue = jax.Array | jax.ShapeDtypeStruct | jaxpp.MpmdArray
+type _StagePullback = Callable[[tuple[jax.Array, jax.Array]], tuple[GrugMoePipelineStage, jax.Array]]
 
 
 @dataclass(frozen=True)
@@ -137,13 +146,12 @@ class GrugMoePipelineStage(eqx.Module):
     stage_index: int = eqx.field(static=True)
     start_layer: int = eqx.field(static=True)
     end_layer: int = eqx.field(static=True)
-    num_stages: int = eqx.field(static=True)
 
     @named_call
     def embed(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
         if self.token_embed is None or self.embed_norm is None or self.embed_gated_norm is None:
             raise ValueError("only stage 0 owns the token embedding")
-        hidden = self.token_embed.at[token_ids].get(out_sharding=P(_BATCH_AXES))
+        hidden = self.token_embed.at[token_ids].get(out_sharding=P(BATCH_AXES))
         return self.embed_gated_norm(self.embed_norm(hidden))
 
     @named_call
@@ -234,6 +242,39 @@ class GrugMoeAutomaticPipelineState:
     pending_qb_betas: tuple[jax.Array, ...]
 
 
+@register_dataclass
+@dataclass(frozen=True)
+class StageForwardWithPullbackResult:
+    output: jax.Array
+    next_qb_betas: jax.Array
+    router_loss: jax.Array
+    pullback: _StagePullback
+
+
+@dataclass(frozen=True)
+class _InitializedMpmdStageState:
+    step: jax.Array
+    opt_state: tuple[optax.OptState, ...]
+    pending_qb_betas: tuple[jax.Array, ...]
+
+
+@dataclass(frozen=True)
+class PreparedAutomaticMpmdStep:
+    step: Callable[..., tuple[GrugMoeAutomaticPipelineState, dict[str, jax.Array]]]
+    state: GrugMoeAutomaticPipelineState
+    batches: GrugLmExample
+    loss_denominator: jax.Array
+
+
+@dataclass(frozen=True)
+class _ExplicitZeroBubbleTasks:
+    stage_forwards: tuple[Callable[..., tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, ...]]], ...]
+    last_forward: Callable[..., tuple[jax.Array, jax.Array, tuple[jax.Array, ...]]]
+    stage0_weight: Callable[..., GrugMoePipelineStage]
+    input_gradients: tuple[Callable[..., jax.Array], ...]
+    weight_gradients: tuple[Callable[..., GrugMoePipelineStage], ...]
+
+
 def split_transformer(
     model: Transformer,
     num_stages: int,
@@ -269,7 +310,6 @@ def split_transformer(
                 stage_index=stage_index,
                 start_layer=start_layer,
                 end_layer=end_layer,
-                num_stages=num_stages,
             )
         )
     return tuple(stages)
@@ -301,25 +341,7 @@ def merge_stages(stages: tuple[GrugMoePipelineStage, ...]) -> Transformer:
     )
 
 
-def make_pipeline_state(
-    model: Transformer,
-    optimizer: optax.GradientTransformation,
-    *,
-    num_stages: int,
-    layer_counts: tuple[int, ...] | None = None,
-) -> GrugMoePipelineState:
-    stages = split_transformer(model, num_stages, layer_counts=layer_counts)
-    return GrugMoePipelineState(
-        step=jnp.array(0, dtype=jnp.int32),
-        params=stages,
-        opt_state=tuple(optimizer.init(stage) for stage in stages),
-        pending_qb_betas=tuple(
-            jnp.zeros((len(stage.blocks), model.config.num_experts), dtype=jnp.float32) for stage in stages
-        ),
-    )
-
-
-def _partition_automatic_stages(
+def split_automatic_stages(
     model: Transformer,
     *,
     num_stages: int,
@@ -339,31 +361,6 @@ def _partition_automatic_stages(
         trainable_stages.append(trainable_stage)
         static_stages.append(static_stage)
     return tuple(trainable_stages), tuple(static_stages)
-
-
-def make_automatic_pipeline_state(
-    model: Transformer,
-    optimizer: optax.GradientTransformation,
-    *,
-    num_stages: int,
-    layer_counts: tuple[int, ...] | None = None,
-) -> tuple[GrugMoeAutomaticPipelineState, tuple[GrugMoePipelineStage, ...]]:
-    """Separate QB router state from the parameters differentiated by JaxPP."""
-    trainable_stages, static_stages = _partition_automatic_stages(
-        model,
-        num_stages=num_stages,
-        layer_counts=layer_counts,
-    )
-
-    state = GrugMoeAutomaticPipelineState(
-        step=jnp.array(0, dtype=jnp.int32),
-        trainable_params=trainable_stages,
-        opt_state=tuple(optimizer.init(stage) for stage in trainable_stages),
-        pending_qb_betas=tuple(
-            jnp.zeros((len(stage.blocks), model.config.num_experts), dtype=jnp.float32) for stage in trainable_stages
-        ),
-    )
-    return state, static_stages
 
 
 def _process_has_sharding(sharding: NamedSharding) -> bool:
@@ -392,6 +389,35 @@ def _localize_optimizer_scalars(mpmd_mesh, stage_index: int, opt_state):
     return jax.tree.map(localize, opt_state)
 
 
+def _initialize_mpmd_stage_state(
+    stages: tuple[GrugMoePipelineStage, ...],
+    optimizer: optax.GradientTransformation,
+    mpmd_mesh,
+    stage_to_mpmd_index: tuple[int, ...],
+    memory_threshold: int | None,
+) -> _InitializedMpmdStageState:
+    pp, _ = _require_jaxpp()
+    qb_targets = tuple(
+        pp.MpmdSharding(mpmd_mesh, mesh_ids={mpmd_index}, spec=P(None, None)) for mpmd_index in stage_to_mpmd_index
+    )
+    pending_qb_betas = pp.spmd_to_mpmd_reshard(
+        mpmd_mesh,
+        tuple(jnp.zeros((len(stage.blocks), stage.config.num_experts), dtype=jnp.float32) for stage in stages),
+        qb_targets,
+        threshold=memory_threshold,
+    )
+    opt_state = tuple(
+        _localize_optimizer_scalars(mpmd_mesh, mpmd_index, optimizer.init(stage))
+        for mpmd_index, stage in zip(stage_to_mpmd_index, stages, strict=True)
+    )
+    step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
+    return _InitializedMpmdStageState(
+        step=step,
+        opt_state=opt_state,
+        pending_qb_betas=pending_qb_betas,
+    )
+
+
 def make_mpmd_pipeline_state(
     model: Transformer,
     optimizer: optax.GradientTransformation,
@@ -411,27 +437,18 @@ def make_mpmd_pipeline_state(
         stage_targets,
         threshold=memory_threshold,
     )
-
-    qb_betas = tuple(jnp.zeros((len(stage.blocks), model.config.num_experts), dtype=jnp.float32) for stage in stages)
-    qb_targets = tuple(
-        pp.MpmdSharding(mpmd_mesh, mesh_ids={stage_index}, spec=P(None, None)) for stage_index in range(num_stages)
-    )
-    qb_betas = pp.spmd_to_mpmd_reshard(
+    initialized = _initialize_mpmd_stage_state(
+        stages,
+        optimizer,
         mpmd_mesh,
-        qb_betas,
-        qb_targets,
-        threshold=memory_threshold,
+        tuple(range(num_stages)),
+        memory_threshold,
     )
-    opt_state = tuple(
-        _localize_optimizer_scalars(mpmd_mesh, stage_index, optimizer.init(stage))
-        for stage_index, stage in enumerate(stages)
-    )
-    step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
     return GrugMoePipelineState(
-        step=step,
+        step=initialized.step,
         params=stages,
-        opt_state=opt_state,
-        pending_qb_betas=qb_betas,
+        opt_state=initialized.opt_state,
+        pending_qb_betas=initialized.pending_qb_betas,
     )
 
 
@@ -451,7 +468,7 @@ def make_mpmd_automatic_pipeline_state(
         stage_to_mpmd_index = tuple(range(num_stages))
     if len(stage_to_mpmd_index) != num_stages:
         raise ValueError(f"expected {num_stages} stage placements, got {len(stage_to_mpmd_index)}")
-    trainable_stages, static_stages = _partition_automatic_stages(
+    trainable_stages, static_stages = split_automatic_stages(
         model,
         num_stages=num_stages,
         layer_counts=layer_counts,
@@ -466,26 +483,19 @@ def make_mpmd_automatic_pipeline_state(
         trainable_targets,
         threshold=memory_threshold,
     )
-    qb_targets = tuple(
-        pp.MpmdSharding(mpmd_mesh, mesh_ids={mpmd_index}, spec=P(None, None)) for mpmd_index in stage_to_mpmd_index
-    )
-    qb_betas = pp.spmd_to_mpmd_reshard(
+    initialized = _initialize_mpmd_stage_state(
+        trainable_stages,
+        optimizer,
         mpmd_mesh,
-        tuple(jnp.zeros((len(stage.blocks), model.config.num_experts), dtype=jnp.float32) for stage in trainable_stages),
-        qb_targets,
-        threshold=memory_threshold,
+        stage_to_mpmd_index,
+        memory_threshold,
     )
-    opt_state = tuple(
-        _localize_optimizer_scalars(mpmd_mesh, mpmd_index, optimizer.init(stage))
-        for mpmd_index, stage in zip(stage_to_mpmd_index, trainable_stages, strict=True)
-    )
-    step = _stage_local_scalar(jnp.array(0, dtype=jnp.int32), NamedSharding(mpmd_mesh.unstack[0], P()))
     return (
         GrugMoeAutomaticPipelineState(
-            step=step,
+            step=initialized.step,
             trainable_params=trainable_stages,
-            opt_state=opt_state,
-            pending_qb_betas=qb_betas,
+            opt_state=initialized.opt_state,
+            pending_qb_betas=initialized.pending_qb_betas,
         ),
         static_stages,
     )
@@ -597,17 +607,22 @@ def stage_forward_with_pullback(
     mp_policy: jmp.Policy,
     *,
     router_loss_scale: float,
-):
+) -> StageForwardWithPullbackResult:
     """Run a stage once and retain the linearized backward for split scheduling."""
 
     def forward(stage_params, stage_hidden):
         stage_params = mp_policy.cast_to_compute(_apply_qb_betas(stage_params, qb_betas))
         output, metrics = stage_params.run_blocks(stage_hidden, batch.attn_mask)
         router_loss = stage_params.local_router_loss(metrics) * router_loss_scale
-        return (output, router_loss), metrics["qb_beta_per_layer"]
+        return (output, router_loss), metrics[_QB_BETA_PER_LAYER_KEY]
 
     (output, router_loss), pullback, next_qb_betas = jax.vjp(forward, params, hidden, has_aux=True)
-    return output, next_qb_betas, router_loss, pullback
+    return StageForwardWithPullbackResult(
+        output=output,
+        next_qb_betas=next_qb_betas,
+        router_loss=router_loss,
+        pullback=pullback,
+    )
 
 
 def stage_pullback_input_gradient(pullback, hidden_cotangent: jax.Array) -> jax.Array:
@@ -646,8 +661,10 @@ def _automatic_schedule(config: GrugMoePipelineConfig, schedule_name: str):
     raise ValueError(f"unknown automatic pipeline schedule: {schedule_name}")
 
 
-def _is_array(value: Any) -> bool:
-    return hasattr(value, "sharding") and hasattr(value, "ndim")
+def _is_array(value: object) -> TypeGuard[_ArrayValue]:
+    if isinstance(value, (jax.Array, jax.ShapeDtypeStruct)):
+        return True
+    return jaxpp is not None and isinstance(value, jaxpp.MpmdArray)
 
 
 def _named_sharding_tree(mesh, tree):
@@ -665,7 +682,9 @@ def _partition_spec_tree(tree):
     def partition_spec(value):
         if not _is_array(value):
             return None
-        if hasattr(value.sharding, "spec"):
+        if isinstance(value.sharding, NamedSharding):
+            return value.sharding.spec
+        if jaxpp is not None and isinstance(value.sharding, jaxpp.MpmdSharding):
             return value.sharding.spec
         return P(*([None] * value.ndim))
 
@@ -722,7 +741,7 @@ def place_pipeline_batches(mpmd_mesh, batches_by_microbatch, *, memory_threshold
 
 @dataclass(frozen=True)
 class _LocalExplicitStep:
-    lowered: Any
+    lowered: LoweredMpmdFun
 
     def __call__(self, state: GrugMoePipelineState, batches_by_microbatch):
         flat_args, args_tree = jax.tree.flatten((state, batches_by_microbatch))
@@ -737,7 +756,7 @@ class _LocalExplicitStep:
 
         local_mesh = self.lowered.mpmd_mesh.unstack[self.lowered.mpmd_mesh.my_mpmd_axis_index]
         local_loss = jax.device_put(jnp.zeros((), dtype=jnp.float32), NamedSharding(local_mesh, P()))
-        fallback = (state, {"train/loss": local_loss})
+        fallback = (state, {TRAIN_LOSS_KEY: local_loss})
         flat_fallback, fallback_tree = jax.tree.flatten(fallback)
         flat_output_shape, output_tree = jax.tree.flatten(self.lowered.out_shape)
         if fallback_tree != output_tree:
@@ -753,7 +772,7 @@ def prepare_explicit_step(step, state: GrugMoePipelineState, batches_by_microbat
     return _LocalExplicitStep(step.lower(state, batches_by_microbatch))
 
 
-def make_automatic_zero_bubble_step(
+def make_automatic_pipeline_step(
     optimizer: optax.GradientTransformation,
     mp_policy: jmp.Policy,
     static_stages: tuple[GrugMoePipelineStage, ...],
@@ -765,11 +784,15 @@ def make_automatic_zero_bubble_step(
     schedule_name: str = "zero_bubble",
     logsumexp_weight: float | None = None,
 ):
-    """Build JaxPP's equation-level ZeroBubble optimizer step.
+    """Build a JaxPP automatic ZeroBubble or DualPipeV optimizer step.
 
-    The stage loop is deliberately model-specific and explicit. JaxPP uses the
-    markers to place forward work, then partitions each reverse jaxpr into
-    activation- and weight-gradient tasks for the ZeroBubble schedule.
+    ``static_stages`` and ``sample_state`` must come from the same automatic
+    state initializer. ``sample_batches`` must have the leading microbatch axis
+    produced by :func:`stacked_microbatches`.
+
+    The stage loop stays model-specific. JaxPP uses the explicit markers to
+    place forward work and partition each reverse jaxpr into activation- and
+    weight-gradient tasks for the selected schedule.
     """
     pp, _ = _require_jaxpp()
     schedule = _automatic_schedule(config, schedule_name)
@@ -794,7 +817,7 @@ def make_automatic_zero_bubble_step(
                 assert hidden is not None
                 hidden, router_metrics = stage.run_blocks(hidden, batch.attn_mask)
                 router_loss = router_loss + stage.local_router_loss(router_metrics) / config.microbatches
-                next_qb_betas.append(router_metrics["qb_beta_per_layer"])
+                next_qb_betas.append(router_metrics[_QB_BETA_PER_LAYER_KEY])
                 if stage_index < config.stages - 1:
                     hidden = pp.mark_stage_end(hidden)
                 last_stage = stage
@@ -836,13 +859,13 @@ def make_automatic_zero_bubble_step(
             opt_state=tuple(next_opt_state),
             pending_qb_betas=tuple(beta / config.microbatches for beta in next_qb_betas),
         )
-        return next_state, {"train/loss": loss}
+        return next_state, {TRAIN_LOSS_KEY: loss}
 
     return pp.mpmd_jit_with_loop(
         pipeline_step,
         mpmd_mesh=mpmd_mesh,
         in_specs=(_partition_spec_tree(sample_state), _partition_spec_tree(sample_batches), P()),
-        out_specs=(_partition_spec_tree(sample_state), {"train/loss": P()}),
+        out_specs=(_partition_spec_tree(sample_state), {TRAIN_LOSS_KEY: P()}),
     )
 
 
@@ -854,7 +877,7 @@ def prepare_automatic_mpmd_step(
     mpmd_mesh,
     *,
     memory_threshold: int | None = None,
-):
+) -> PreparedAutomaticMpmdStep:
     """Compile with stage-local state and place only the still-SPMD batch inputs."""
     pp, _ = _require_jaxpp()
     compiled = step.compile(state, batches, loss_denominator)
@@ -889,7 +912,12 @@ def prepare_automatic_mpmd_step(
         (args_shardings[1], args_shardings[2]),
         threshold=memory_threshold,
     )
-    return compiled, state, batches, loss_denominator
+    return PreparedAutomaticMpmdStep(
+        step=compiled,
+        state=state,
+        batches=batches,
+        loss_denominator=loss_denominator,
+    )
 
 
 def make_explicit_1f1b_step(
@@ -971,7 +999,7 @@ def _make_explicit_step(
             )
 
     activation_shardings = tuple(
-        NamedSharding(mpmd_mesh.unstack[stage_index], P(_BATCH_AXES, None, None)) for stage_index in range(num_stages)
+        NamedSharding(mpmd_mesh.unstack[stage_index], P(BATCH_AXES, None, None)) for stage_index in range(num_stages)
     )
     qb_shardings = tuple(
         NamedSharding(mpmd_mesh.unstack[stage_index], P(None, None)) for stage_index in range(num_stages)
@@ -1004,7 +1032,7 @@ def _make_explicit_step(
         params = mp_policy.cast_to_compute(_apply_qb_betas(params, qb_betas))
         hidden = params.embed(batch.tokens)
         hidden, metrics = params.run_blocks(hidden, batch.attn_mask)
-        return hidden, metrics["qb_beta_per_layer"], params.local_router_loss(metrics) / config.microbatches
+        return hidden, metrics[_QB_BETA_PER_LAYER_KEY], params.local_router_loss(metrics) / config.microbatches
 
     def stage_forward(
         params: GrugMoePipelineStage,
@@ -1014,7 +1042,7 @@ def _make_explicit_step(
     ):
         params = mp_policy.cast_to_compute(_apply_qb_betas(params, qb_betas))
         hidden, metrics = params.run_blocks(hidden, batch.attn_mask)
-        return hidden, metrics["qb_beta_per_layer"], params.local_router_loss(metrics) / config.microbatches
+        return hidden, metrics[_QB_BETA_PER_LAYER_KEY], params.local_router_loss(metrics) / config.microbatches
 
     def stage0_backward(
         params: GrugMoePipelineStage,
@@ -1066,7 +1094,7 @@ def _make_explicit_step(
             )
             loss = jnp.where(loss_denominator != 0, loss / loss_denominator, jnp.zeros_like(loss))
             loss = loss + stage_params.local_router_loss(metrics) / config.microbatches
-            return loss, metrics["qb_beta_per_layer"]
+            return loss, metrics[_QB_BETA_PER_LAYER_KEY]
 
         (loss, next_qb_betas), (grads, hidden_cotangent) = jax.value_and_grad(
             loss_fn,
@@ -1094,7 +1122,7 @@ def _make_explicit_step(
                 reduction="sum",
             )
             loss = jnp.where(loss_denominator != 0, loss / loss_denominator, jnp.zeros_like(loss))
-            return loss + stage_params.local_router_loss(metrics) / config.microbatches, metrics["qb_beta_per_layer"]
+            return loss + stage_params.local_router_loss(metrics) / config.microbatches, metrics[_QB_BETA_PER_LAYER_KEY]
 
         loss, pullback, next_qb_betas = jax.vjp(loss_fn, params, hidden, has_aux=True)
         return loss, next_qb_betas, pullback
@@ -1158,7 +1186,7 @@ def _make_explicit_step(
                         sample_state.pending_qb_betas[stage_index],
                         hidden,
                         sample_batches[0][stage_index],
-                    )[3]
+                    ).pullback
             pullback_shapes.append(shape)
         # JAX's VJP pytree metadata embeds a trace-specific closed jaxpr. Only
         # residual arrays can safely cross an independently traced JaxPP task.
@@ -1256,19 +1284,21 @@ def _make_explicit_step(
     zero_bubble_tasks = None
     if pullback_shardings is not None and pullback_trees is not None:
 
-        def flattened_stage_forward(stage_index: int):
-            def forward(params, qb_betas, hidden, batch):
-                output, next_betas, router_loss, pullback = stage_forward_with_pullback(
-                    params,
-                    qb_betas,
-                    hidden,
-                    batch,
-                    mp_policy,
-                    router_loss_scale=1.0 / config.microbatches,
-                )
-                return output, next_betas, router_loss, tuple(jax.tree.leaves(pullback))
-
-            return forward
+        def flattened_stage_forward(params, qb_betas, hidden, batch):
+            result = stage_forward_with_pullback(
+                params,
+                qb_betas,
+                hidden,
+                batch,
+                mp_policy,
+                router_loss_scale=1.0 / config.microbatches,
+            )
+            return (
+                result.output,
+                result.next_qb_betas,
+                result.router_loss,
+                tuple(jax.tree.leaves(result.pullback)),
+            )
 
         def flattened_last_stage_forward(params, qb_betas, hidden, batch, loss_denominator):
             loss, next_betas, pullback = last_stage_loss_with_pullback(params, qb_betas, hidden, batch, loss_denominator)
@@ -1282,10 +1312,10 @@ def _make_explicit_step(
 
             return consume
 
-        zero_bubble_tasks = {
-            "stage_forwards": tuple(
+        zero_bubble_tasks = _ExplicitZeroBubbleTasks(
+            stage_forwards=tuple(
                 explicit_mpmd.task(
-                    flattened_stage_forward(stage_index),
+                    flattened_stage_forward,
                     name=f"grug_zb_stage{stage_index}_forward",
                     out_shardings=(
                         activation_shardings[stage_index],
@@ -1296,17 +1326,17 @@ def _make_explicit_step(
                 )
                 for stage_index in range(1, num_stages - 1)
             ),
-            "last_forward": explicit_mpmd.task(
+            last_forward=explicit_mpmd.task(
                 flattened_last_stage_forward,
                 name=f"grug_zb_stage{num_stages - 1}_loss_forward",
                 out_shardings=(loss_shardings[1], qb_shardings[-1], pullback_shardings[-1]),
             ),
-            "stage0_weight": explicit_mpmd.task(
+            stage0_weight=explicit_mpmd.task(
                 stage0_backward,
                 name="grug_zb_stage0_backward_weight",
                 out_shardings=param_shardings[0],
             ),
-            "input": tuple(
+            input_gradients=tuple(
                 explicit_mpmd.task(
                     pullback_consumer(
                         stage_index,
@@ -1321,7 +1351,7 @@ def _make_explicit_step(
                 )
                 for stage_index in range(1, num_stages)
             ),
-            "weight": tuple(
+            weight_gradients=tuple(
                 explicit_mpmd.task(
                     pullback_consumer(
                         stage_index,
@@ -1336,7 +1366,7 @@ def _make_explicit_step(
                 )
                 for stage_index in range(1, num_stages)
             ),
-        }
+        )
 
     def accumulate(accumulated, value, task):
         if accumulated is None:
@@ -1415,7 +1445,7 @@ def _make_explicit_step(
                     params[stage_index], state.pending_qb_betas[stage_index], hidden, stage_batches[stage_index]
                 )
             else:
-                hidden, qb_betas, router_loss, pullback = zero_bubble_tasks["stage_forwards"][stage_index - 1](
+                hidden, qb_betas, router_loss, pullback = zero_bubble_tasks.stage_forwards[stage_index - 1](
                     params[stage_index], state.pending_qb_betas[stage_index], hidden, stage_batches[stage_index]
                 )
                 stage_pullbacks[key] = pullback
@@ -1513,7 +1543,7 @@ def _make_explicit_step(
             stage_batches = batches_by_microbatch[microbatch_index]
             if stage_index == num_stages - 1:
                 ensure_forward(stage_index, microbatch_index)
-                loss, qb_betas, pullback = zero_bubble_tasks["last_forward"](
+                loss, qb_betas, pullback = zero_bubble_tasks.last_forward(
                     params[stage_index],
                     state.pending_qb_betas[stage_index],
                     stage_inputs[key],
@@ -1525,7 +1555,7 @@ def _make_explicit_step(
                 next_qb_betas[stage_index] = accumulate(
                     next_qb_betas[stage_index], qb_betas, qb_accumulators[stage_index]
                 )
-                hidden_cotangent = zero_bubble_tasks["input"][stage_index - 1](pullback)
+                hidden_cotangent = zero_bubble_tasks.input_gradients[stage_index - 1](pullback)
                 backward_transfers[(stage_index - 1, microbatch_index)] = explicit_mpmd.transfer(
                     hidden_cotangent,
                     out_shardings=activation_shardings[stage_index - 1],
@@ -1536,7 +1566,7 @@ def _make_explicit_step(
             ensure_input_backward(stage_index + 1, microbatch_index)
             hidden_cotangent = backward_transfers[key].done()
             if stage_index == 0:
-                grads = zero_bubble_tasks["stage0_weight"](
+                grads = zero_bubble_tasks.stage0_weight(
                     params[0],
                     state.pending_qb_betas[0],
                     stage_batches[0],
@@ -1549,7 +1579,7 @@ def _make_explicit_step(
 
             ensure_forward(stage_index, microbatch_index)
             stage_output_cotangents[key] = hidden_cotangent
-            input_cotangent = zero_bubble_tasks["input"][stage_index - 1](stage_pullbacks[key], hidden_cotangent)
+            input_cotangent = zero_bubble_tasks.input_gradients[stage_index - 1](stage_pullbacks[key], hidden_cotangent)
             backward_transfers[(stage_index - 1, microbatch_index)] = explicit_mpmd.transfer(
                 input_cotangent,
                 out_shardings=activation_shardings[stage_index - 1],
@@ -1566,9 +1596,11 @@ def _make_explicit_step(
             if stage_index == 0:
                 return
             if stage_index == num_stages - 1:
-                grads = zero_bubble_tasks["weight"][stage_index - 1](stage_pullbacks[key])
+                grads = zero_bubble_tasks.weight_gradients[stage_index - 1](stage_pullbacks[key])
             else:
-                grads = zero_bubble_tasks["weight"][stage_index - 1](stage_pullbacks[key], stage_output_cotangents[key])
+                grads = zero_bubble_tasks.weight_gradients[stage_index - 1](
+                    stage_pullbacks[key], stage_output_cotangents[key]
+                )
             accumulated_grads[stage_index] = accumulate(
                 accumulated_grads[stage_index], grads, gradient_accumulators[stage_index]
             )
@@ -1652,6 +1684,6 @@ def _make_explicit_step(
             opt_state=tuple(opt_state),
             pending_qb_betas=averaged_qb_betas,
         )
-        return next_state, {"train/loss": stage0_loss}
+        return next_state, {TRAIN_LOSS_KEY: stage0_loss}
 
     return pipeline_step

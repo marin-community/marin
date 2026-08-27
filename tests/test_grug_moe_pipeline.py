@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-import optax
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -18,16 +17,16 @@ from experiments.grug.moe.grug_moe_pipeline import (
     GrugMoePipelineConfig,
     automatic_stage_to_mpmd_indices,
     batches_for_pipeline,
-    make_automatic_pipeline_state,
     merge_stages,
     microbatched_staged_loss,
+    split_automatic_stages,
     split_transformer,
     stage_forward_with_pullback,
     stage_pullback_input_gradient,
     stage_pullback_weight_gradient,
     staged_loss,
 )
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import BATCH_AXES, GrugModelConfig, Transformer
 
 
 def _tiny_model(*, num_layers: int = 2) -> tuple[Mesh, Transformer]:
@@ -108,7 +107,7 @@ def test_reusable_stage_pullback_matches_combined_backward():
     mesh, model = _tiny_model(num_layers=4)
     stage = split_transformer(model, 2)[1]
     batch = _batch()
-    activation_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+    activation_sharding = NamedSharding(mesh, P(BATCH_AXES, None, None))
     hidden = jax.device_put(
         jax.random.normal(jax.random.PRNGKey(1), (2, 4, model.config.hidden_dim)),
         activation_sharding,
@@ -128,7 +127,7 @@ def test_reusable_stage_pullback_matches_combined_backward():
 
     with jax.set_mesh(mesh):
         expected_grads, expected_input_gradient = jax.grad(projected_loss, argnums=(0, 1))(stage, hidden)
-        _, _, _, pullback = stage_forward_with_pullback(
+        forward_result = stage_forward_with_pullback(
             stage,
             qb_betas,
             hidden,
@@ -136,8 +135,8 @@ def test_reusable_stage_pullback_matches_combined_backward():
             mp_policy,
             router_loss_scale=1.0,
         )
-        input_gradient = jax.jit(stage_pullback_input_gradient)(pullback, hidden_cotangent)
-        grads = jax.jit(stage_pullback_weight_gradient)(pullback, hidden_cotangent)
+        input_gradient = jax.jit(stage_pullback_input_gradient)(forward_result.pullback, hidden_cotangent)
+        grads = jax.jit(stage_pullback_weight_gradient)(forward_result.pullback, hidden_cotangent)
 
         np.testing.assert_allclose(input_gradient, expected_input_gradient, rtol=1e-5, atol=1e-5)
         _assert_trees_close(grads, expected_grads)
@@ -163,9 +162,9 @@ def test_dualpipe_v_maps_two_logical_stages_to_each_physical_rank():
 def test_automatic_pipeline_excludes_qb_bias_from_differentiated_parameters():
     _, model = _tiny_model(num_layers=4)
 
-    state, _ = make_automatic_pipeline_state(model, optax.sgd(0.1), num_stages=2)
+    trainable_stages, _ = split_automatic_stages(model, num_stages=2)
 
-    for trainable_stage in state.trainable_params:
+    for trainable_stage in trainable_stages:
         for trainable_block in trainable_stage.blocks:
             assert trainable_block.mlp.router_bias is None
 

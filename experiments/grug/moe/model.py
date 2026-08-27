@@ -57,7 +57,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
 
-_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -74,7 +74,7 @@ RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _batch_spec() -> P:
-    return P(_BATCH_AXES)
+    return P(BATCH_AXES)
 
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
@@ -349,7 +349,7 @@ class CausalSelfAttention(eqx.Module):
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;
         # match v to that dynamic sharding before the per-head projection math.
-        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
+        aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(BATCH_AXES, None, None, "model"))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
@@ -362,7 +362,7 @@ class CausalSelfAttention(eqx.Module):
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
-            out_sharding=P(_BATCH_AXES, None, "model"),
+            out_sharding=P(BATCH_AXES, None, "model"),
         )
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -444,7 +444,7 @@ class DenseMLP(eqx.Module):
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
         # routed result identically). Splitting the fused
-        # ("replica_dcn", "data", "expert") token axis back into (b, s) otherwise
+        # batch axes token dimension back into (b, s) otherwise
         # leaks the `expert` mesh axis onto the seq dim, so the shared+routed
         # residual add fails with a ShardingTypeError on a multi-node mesh.
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
@@ -602,9 +602,9 @@ class MoEMLP(eqx.Module):
         with jax.named_scope("moe_qb_beta"):
             # Sharded QB: compute beta locally per device, then average.
             mesh = get_abstract_mesh()
-            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(BATCH_AXES, None))
             num_devices = 1
-            for a in _BATCH_AXES:
+            for a in BATCH_AXES:
                 num_devices *= mesh.shape[a]
             local_tokens = s_minus_alpha.shape[0] // num_devices
             qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
@@ -612,12 +612,12 @@ class MoEMLP(eqx.Module):
             def _local_qb_beta(s_ma):
                 topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
                 beta = topk_vals[:, -1]
-                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+                return jax.lax.pmean(beta, axis_name=BATCH_AXES)
 
             router_stats["qb_beta"] = shard_map(
                 _local_qb_beta,
                 mesh=mesh,
-                in_specs=(P(_BATCH_AXES, None),),
+                in_specs=(P(BATCH_AXES, None),),
                 out_specs=P(),
             )(s_minus_alpha)
 
@@ -854,7 +854,7 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
             jax.sharding.AxisType.Explicit,
         ),
     )
-    return mesh, P(("replica_dcn", "data", "expert"), None)
+    return mesh, P(BATCH_AXES, None)
 
 
 def _with_state_dict_prefix(prefix: str | None, name: str) -> str:

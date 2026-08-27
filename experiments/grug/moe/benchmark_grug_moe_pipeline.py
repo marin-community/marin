@@ -8,20 +8,135 @@ import json
 import os
 import statistics
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from types import SimpleNamespace
 from typing import cast
 
 H100_BF16_PEAK_FLOPS = 989e12
 
 
-def _env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
+class PipelineSchedule(StrEnum):
+    ONE_F_ONE_B = "1f1b"
+    ZERO_BUBBLE = "zero_bubble"
+    AUTOMATIC_ZERO_BUBBLE = "automatic_zero_bubble"
+    AUTOMATIC_DUALPIPE_V = "automatic_dualpipe_v"
+
+    @property
+    def is_automatic(self) -> bool:
+        return self in {self.AUTOMATIC_ZERO_BUBBLE, self.AUTOMATIC_DUALPIPE_V}
+
+    @property
+    def automatic_schedule_name(self) -> str:
+        if self == self.AUTOMATIC_DUALPIPE_V:
+            return "dualpipe_v"
+        if self == self.AUTOMATIC_ZERO_BUBBLE:
+            return "zero_bubble"
+        raise ValueError(f"{self.value} is not an automatic pipeline schedule")
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    stages: int
+    physical_stages: int
+    microbatches: int
+    batch_size: int
+    seq_len: int
+    hidden_dim: int
+    intermediate_dim: int
+    shared_expert_intermediate_dim: int
+    num_layers: int
+    num_experts: int
+    top_k: int
+    expert_axis_size: int
+    vocab_size: int
+    num_heads: int
+    num_kv_heads: int
+    sliding_window: int
+    qk_mult: float
+    steps: int
+    warmup_steps: int
+    profile_start_step: int
+    profile_steps: int
+    profile_run_id: str | None
+    layer_counts: tuple[int, ...] | None
+    memory_threshold: int | None
+    mp_policy_string: str
+    remat_mode: str
+    attention_implementation: str
+    moe_implementation: str
+    schedule: PipelineSchedule
+
+
+def _env_int(environ: Mapping[str, str], name: str, default: int) -> int:
+    value = environ.get(name)
     return default if not value else int(value)
 
 
-def _env_float(name: str, default: float) -> float:
-    value = os.environ.get(name)
+def _env_float(environ: Mapping[str, str], name: str, default: float) -> float:
+    value = environ.get(name)
     return default if not value else float(value)
+
+
+def _resolve_benchmark_config(environ: Mapping[str, str]) -> BenchmarkConfig:
+    from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
+
+    stages = _env_int(environ, "PIPELINE_STAGES", 4)
+    physical_stages = _env_int(environ, "PIPELINE_PHYSICAL_STAGES", stages)
+    seq_len = _env_int(environ, "PIPELINE_SEQ_LEN", 4096)
+    hidden_dim = _env_int(environ, "PIPELINE_HIDDEN_DIM", 2560)
+    warmup_steps = _env_int(environ, "PIPELINE_WARMUP_STEPS", 1)
+    profile_start_step = _env_int(environ, "PIPELINE_PROFILE_START_STEP", warmup_steps)
+    profile_steps = _env_int(environ, "PIPELINE_PROFILE_STEPS", 0)
+    profile_run_id = environ.get("PIPELINE_PROFILE_RUN_ID")
+    steps = _env_int(environ, "PIPELINE_STEPS", 4)
+    if profile_steps > 0:
+        if not profile_run_id:
+            raise ValueError("PIPELINE_PROFILE_RUN_ID is required when profiling")
+        if profile_start_step + profile_steps > steps:
+            raise ValueError("pipeline profile window must fit within PIPELINE_STEPS")
+
+    layer_counts_value = environ.get("PIPELINE_LAYERS_PER_STAGE")
+    layer_counts = None if not layer_counts_value else tuple(int(value) for value in layer_counts_value.split(","))
+    memory_threshold_value = environ.get("PIPELINE_RESHARD_THRESHOLD_BYTES")
+    memory_threshold = None if not memory_threshold_value else int(memory_threshold_value)
+    base_model_config = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    return BenchmarkConfig(
+        stages=stages,
+        physical_stages=physical_stages,
+        microbatches=_env_int(environ, "PIPELINE_MICROBATCHES", 8),
+        batch_size=_env_int(environ, "PIPELINE_BATCH", 256),
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        intermediate_dim=_env_int(environ, "PIPELINE_INTERMEDIATE_DIM", base_model_config.intermediate_dim),
+        shared_expert_intermediate_dim=_env_int(
+            environ,
+            "PIPELINE_SHARED_EXPERT_INTERMEDIATE_DIM",
+            base_model_config.shared_expert_intermediate_dim,
+        ),
+        num_layers=_env_int(environ, "PIPELINE_LAYERS", 24),
+        num_experts=_env_int(environ, "PIPELINE_EXPERTS", 256),
+        top_k=_env_int(environ, "PIPELINE_TOP_K", 4),
+        expert_axis_size=_env_int(environ, "PIPELINE_EXPERT_AXIS", 8),
+        vocab_size=_env_int(environ, "PIPELINE_VOCAB_SIZE", base_model_config.vocab_size),
+        num_heads=_env_int(environ, "PIPELINE_HEADS", base_model_config.num_heads),
+        num_kv_heads=_env_int(environ, "PIPELINE_KV_HEADS", base_model_config.num_kv_heads),
+        sliding_window=_env_int(environ, "PIPELINE_SLIDING_WINDOW", base_model_config.sliding_window),
+        qk_mult=_env_float(environ, "PIPELINE_QK_MULT", base_model_config.qk_mult),
+        steps=steps,
+        warmup_steps=warmup_steps,
+        profile_start_step=profile_start_step,
+        profile_steps=profile_steps,
+        profile_run_id=profile_run_id,
+        layer_counts=layer_counts,
+        memory_threshold=memory_threshold,
+        mp_policy_string=environ.get("PIPELINE_MP", "params=bfloat16,compute=bfloat16,output=bfloat16"),
+        remat_mode=environ.get("PIPELINE_REMAT", "recompute_all"),
+        attention_implementation=environ.get("PIPELINE_ATTENTION", "gpu_fa4_cute"),
+        moe_implementation=environ.get("PIPELINE_MOE", "ring"),
+        schedule=PipelineSchedule(environ.get("PIPELINE_SCHEDULE", PipelineSchedule.ONE_F_ONE_B)),
+    )
 
 
 def _log(event: str, **values) -> None:
@@ -46,13 +161,7 @@ def _validate_local_mesh(
         )
 
 
-def main() -> None:
-    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-
-    from iris.runtime.jax_init import initialize_jax  # noqa: PLC0415
-
-    initialize_jax()
-
+def _run_benchmark(config: BenchmarkConfig) -> None:
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
     import jmp  # noqa: PLC0415
@@ -60,14 +169,16 @@ def main() -> None:
     import optax  # noqa: PLC0415
     from jax.sharding import NamedSharding  # noqa: PLC0415
     from jax.sharding import PartitionSpec as P  # noqa: PLC0415
+    from jaxpp.array import MpmdArray  # noqa: PLC0415
     from levanter.data.text.examples import GrugLmExample  # noqa: PLC0415
     from levanter.utils.flop_utils import lm_flops_per_token  # noqa: PLC0415
 
     from experiments.grug.moe.grug_moe_pipeline import (  # noqa: PLC0415
+        TRAIN_LOSS_KEY,
         GrugMoePipelineConfig,
         automatic_stage_to_mpmd_indices,
         batches_for_pipeline,
-        make_automatic_zero_bubble_step,
+        make_automatic_pipeline_step,
         make_explicit_1f1b_step,
         make_explicit_zero_bubble_step,
         make_mpmd_automatic_pipeline_state,
@@ -79,75 +190,47 @@ def main() -> None:
         stacked_microbatches,
     )
     from experiments.grug.moe.heuristic import MoeHeuristic  # noqa: PLC0415
-    from experiments.grug.moe.model import Transformer  # noqa: PLC0415
+    from experiments.grug.moe.model import BATCH_AXES, Transformer  # noqa: PLC0415
 
-    stages = _env_int("PIPELINE_STAGES", 4)
-    physical_stages = _env_int("PIPELINE_PHYSICAL_STAGES", stages)
-    microbatches = _env_int("PIPELINE_MICROBATCHES", 8)
-    batch_size = _env_int("PIPELINE_BATCH", 256)
-    seq_len = _env_int("PIPELINE_SEQ_LEN", 4096)
-    hidden_dim = _env_int("PIPELINE_HIDDEN_DIM", 2560)
-    num_layers = _env_int("PIPELINE_LAYERS", 24)
-    num_experts = _env_int("PIPELINE_EXPERTS", 256)
-    top_k = _env_int("PIPELINE_TOP_K", 4)
-    expert_axis_size = _env_int("PIPELINE_EXPERT_AXIS", 8)
-    steps = _env_int("PIPELINE_STEPS", 4)
-    warmup_steps = _env_int("PIPELINE_WARMUP_STEPS", 1)
-    profile_start_step = _env_int("PIPELINE_PROFILE_START_STEP", warmup_steps)
-    profile_steps = _env_int("PIPELINE_PROFILE_STEPS", 0)
-    profile_run_id = os.environ.get("PIPELINE_PROFILE_RUN_ID")
-    if profile_steps > 0:
-        if not profile_run_id:
-            raise ValueError("PIPELINE_PROFILE_RUN_ID is required when profiling")
-        if profile_start_step + profile_steps > steps:
-            raise ValueError("pipeline profile window must fit within PIPELINE_STEPS")
-    layer_counts_value = os.environ.get("PIPELINE_LAYERS_PER_STAGE")
-    layer_counts = None if not layer_counts_value else tuple(int(value) for value in layer_counts_value.split(","))
-    memory_threshold_value = os.environ.get("PIPELINE_RESHARD_THRESHOLD_BYTES")
-    memory_threshold = None if not memory_threshold_value else int(memory_threshold_value)
-    mp_policy_string = os.environ.get("PIPELINE_MP", "params=bfloat16,compute=bfloat16,output=bfloat16")
-    mp_policy = jmp.get_policy(mp_policy_string)
-    remat_mode = os.environ.get("PIPELINE_REMAT", "recompute_all")
-    schedule = os.environ.get("PIPELINE_SCHEDULE", "1f1b")
+    mp_policy = jmp.get_policy(config.mp_policy_string)
     pipeline_config = GrugMoePipelineConfig(
-        stages=stages,
-        microbatches=microbatches,
-        physical_stages=None if physical_stages == stages else physical_stages,
+        stages=config.stages,
+        microbatches=config.microbatches,
+        physical_stages=None if config.physical_stages == config.stages else config.physical_stages,
     )
 
-    if jax.process_count() != physical_stages:
-        raise ValueError(f"expected one process per physical stage ({physical_stages}), got {jax.process_count()}")
+    if jax.process_count() != config.physical_stages:
+        raise ValueError(
+            f"expected one process per physical stage ({config.physical_stages}), got {jax.process_count()}"
+        )
     _validate_local_mesh(
         local_device_count=jax.local_device_count(),
-        expert_axis_size=expert_axis_size,
-        batch_size=batch_size,
-        microbatches=microbatches,
+        expert_axis_size=config.expert_axis_size,
+        batch_size=config.batch_size,
+        microbatches=config.microbatches,
     )
 
-    base_model_config = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    base_model_config = MoeHeuristic().build_model_config(config.hidden_dim, seq_len=config.seq_len)
     model_config = dataclasses.replace(
         base_model_config,
-        vocab_size=_env_int("PIPELINE_VOCAB_SIZE", base_model_config.vocab_size),
-        intermediate_dim=_env_int("PIPELINE_INTERMEDIATE_DIM", base_model_config.intermediate_dim),
-        shared_expert_intermediate_dim=_env_int(
-            "PIPELINE_SHARED_EXPERT_INTERMEDIATE_DIM",
-            base_model_config.shared_expert_intermediate_dim,
-        ),
-        num_layers=num_layers,
-        num_experts=num_experts,
-        num_experts_per_token=top_k,
-        num_heads=_env_int("PIPELINE_HEADS", base_model_config.num_heads),
-        num_kv_heads=_env_int("PIPELINE_KV_HEADS", base_model_config.num_kv_heads),
-        sliding_window=_env_int("PIPELINE_SLIDING_WINDOW", base_model_config.sliding_window),
-        qk_mult=_env_float("PIPELINE_QK_MULT", base_model_config.qk_mult),
+        vocab_size=config.vocab_size,
+        intermediate_dim=config.intermediate_dim,
+        shared_expert_intermediate_dim=config.shared_expert_intermediate_dim,
+        num_layers=config.num_layers,
+        num_experts=config.num_experts,
+        num_experts_per_token=config.top_k,
+        num_heads=config.num_heads,
+        num_kv_heads=config.num_kv_heads,
+        sliding_window=config.sliding_window,
+        qk_mult=config.qk_mult,
         router_z_loss_coef=0.0,
-        attention_implementation=cast(str, os.environ.get("PIPELINE_ATTENTION", "gpu_fa4_cute")),
-        moe_implementation=cast(str, os.environ.get("PIPELINE_MOE", "ring")),
-        remat_mode=cast(str, remat_mode),
+        attention_implementation=cast(str, config.attention_implementation),
+        moe_implementation=cast(str, config.moe_implementation),
+        remat_mode=cast(str, config.remat_mode),
     )
     mesh, mpmd_mesh = make_pipeline_mesh(
         pipeline_config,
-        expert_axis_size=expert_axis_size,
+        expert_axis_size=config.expert_axis_size,
         replica_axis_size=1,
     )
     optimizer = optax.adamw(learning_rate=1e-4, b1=0.9, b2=0.95, weight_decay=0.1)
@@ -159,59 +242,61 @@ def main() -> None:
         global_devices=jax.device_count(),
         local_devices=jax.local_device_count(),
         mesh_shape=dict(mesh.shape),
-        stages=stages,
-        physical_stages=physical_stages,
-        microbatches=microbatches,
-        batch_size=batch_size,
-        seq_len=seq_len,
-        hidden_dim=hidden_dim,
+        stages=config.stages,
+        physical_stages=config.physical_stages,
+        microbatches=config.microbatches,
+        batch_size=config.batch_size,
+        seq_len=config.seq_len,
+        hidden_dim=config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_expert_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=num_layers,
-        layers_per_stage=layer_counts,
-        num_experts=num_experts,
-        top_k=top_k,
+        num_layers=config.num_layers,
+        layers_per_stage=config.layer_counts,
+        num_experts=config.num_experts,
+        top_k=config.top_k,
         vocab_size=model_config.vocab_size,
         num_heads=model_config.num_heads,
         num_kv_heads=model_config.num_kv_heads,
         sliding_window=model_config.sliding_window,
         qk_mult=model_config.qk_mult,
-        steps=steps,
-        profile_start_step=profile_start_step,
-        profile_steps=profile_steps,
-        mp_policy=mp_policy_string,
-        remat_mode=remat_mode,
-        schedule=schedule,
+        steps=config.steps,
+        profile_start_step=config.profile_start_step,
+        profile_steps=config.profile_steps,
+        mp_policy=config.mp_policy_string,
+        remat_mode=config.remat_mode,
+        schedule=config.schedule,
         jax_version=jax.__version__,
     )
 
     init_started = time.monotonic()
     with jax.set_mesh(mesh):
         model = mp_policy.cast_to_param(Transformer.init(model_config, key=jax.random.PRNGKey(0)))
-        batch_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
-        token_row = np.arange(seq_len, dtype=np.int32) % model_config.vocab_size
-        host_tokens = np.broadcast_to(token_row, (batch_size, seq_len)).copy()
-        host_loss_weight = np.ones((batch_size, seq_len), dtype=np.float32)
+        batch_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
+        token_row = np.arange(config.seq_len, dtype=np.int32) % model_config.vocab_size
+        host_tokens = np.broadcast_to(token_row, (config.batch_size, config.seq_len)).copy()
+        host_loss_weight = np.ones((config.batch_size, config.seq_len), dtype=np.float32)
         host_loss_weight[:, -1] = 0
         batch = GrugLmExample(
             tokens=jax.device_put(host_tokens, batch_sharding),
             loss_weight=jax.device_put(host_loss_weight, batch_sharding),
         )
         loss_denominator = jnp.sum(batch.loss_weight.astype(jnp.float32))
-        if schedule in {"automatic_zero_bubble", "automatic_dualpipe_v"}:
-            batches = stacked_microbatches(batch, microbatches)
-            if schedule == "automatic_dualpipe_v":
-                stage_to_mpmd_index = automatic_stage_to_mpmd_indices(pipeline_config, "dualpipe_v")
+        if config.schedule.is_automatic:
+            batches = stacked_microbatches(batch, config.microbatches)
+            if config.schedule == PipelineSchedule.AUTOMATIC_DUALPIPE_V:
+                stage_to_mpmd_index = automatic_stage_to_mpmd_indices(
+                    pipeline_config, config.schedule.automatic_schedule_name
+                )
             else:
                 stage_to_mpmd_index = None
             state, static_stages = make_mpmd_automatic_pipeline_state(
                 model,
                 optimizer,
                 mpmd_mesh,
-                num_stages=stages,
-                layer_counts=layer_counts,
+                num_stages=config.stages,
+                layer_counts=config.layer_counts,
                 stage_to_mpmd_index=stage_to_mpmd_index,
-                memory_threshold=memory_threshold,
+                memory_threshold=config.memory_threshold,
             )
         else:
             batches = batches_for_pipeline(batch, pipeline_config)
@@ -219,14 +304,14 @@ def main() -> None:
                 model,
                 optimizer,
                 mpmd_mesh,
-                num_stages=stages,
-                layer_counts=layer_counts,
-                memory_threshold=memory_threshold,
+                num_stages=config.stages,
+                layer_counts=config.layer_counts,
+                memory_threshold=config.memory_threshold,
             )
             batches = place_pipeline_batches(
                 mpmd_mesh,
                 batches,
-                memory_threshold=memory_threshold,
+                memory_threshold=config.memory_threshold,
             )
     jax.block_until_ready((state, batches, loss_denominator))
     _log(
@@ -236,8 +321,8 @@ def main() -> None:
     )
 
     build_started = time.monotonic()
-    if schedule in {"automatic_zero_bubble", "automatic_dualpipe_v"}:
-        step = make_automatic_zero_bubble_step(
+    if config.schedule.is_automatic:
+        step = make_automatic_pipeline_step(
             optimizer,
             mp_policy,
             static_stages,
@@ -245,15 +330,15 @@ def main() -> None:
             batches,
             config=pipeline_config,
             mpmd_mesh=mpmd_mesh,
-            schedule_name="dualpipe_v" if schedule == "automatic_dualpipe_v" else "zero_bubble",
+            schedule_name=config.schedule.automatic_schedule_name,
         )
     else:
-        if schedule == "1f1b":
+        if config.schedule == PipelineSchedule.ONE_F_ONE_B:
             make_step = make_explicit_1f1b_step
-        elif schedule == "zero_bubble":
+        elif config.schedule == PipelineSchedule.ZERO_BUBBLE:
             make_step = make_explicit_zero_bubble_step
         else:
-            raise ValueError(f"unknown pipeline schedule: {schedule}")
+            raise ValueError(f"unknown pipeline schedule: {config.schedule}")
         step = make_step(
             optimizer,
             mp_policy,
@@ -268,15 +353,19 @@ def main() -> None:
         elapsed_seconds=time.monotonic() - build_started,
     )
     lower_started = time.monotonic()
-    if schedule in {"automatic_zero_bubble", "automatic_dualpipe_v"}:
-        step, state, batches, loss_denominator = prepare_automatic_mpmd_step(
+    if config.schedule.is_automatic:
+        prepared = prepare_automatic_mpmd_step(
             step,
             state,
             batches,
             loss_denominator,
             mpmd_mesh,
-            memory_threshold=memory_threshold,
+            memory_threshold=config.memory_threshold,
         )
+        step = prepared.step
+        state = prepared.state
+        batches = prepared.batches
+        loss_denominator = prepared.loss_denominator
     else:
         step = prepare_explicit_step(step, state, batches, mpmd_mesh)
     _log(
@@ -286,13 +375,13 @@ def main() -> None:
     )
 
     profiler_callback = None
-    if profile_steps > 0:
+    if config.profile_steps > 0:
         from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig  # noqa: PLC0415
 
         profiler_callback = ProfilerConfig(
             enabled=True,
-            start_step=profile_start_step,
-            num_steps=profile_steps,
+            start_step=config.profile_start_step,
+            num_steps=config.profile_steps,
             perfetto_link=False,
             profile_options=ProfileOptionsConfig(
                 host_tracer_level=1,
@@ -301,42 +390,47 @@ def main() -> None:
             ),
         ).build(
             "/tmp/grug-moe-pipeline-profiler",
-            run_id=profile_run_id,
+            run_id=config.profile_run_id,
         )
 
     step_times = []
     loss = None
-    for step_index in range(steps):
+    for step_index in range(config.steps):
         started = time.monotonic()
-        if schedule in {"automatic_zero_bubble", "automatic_dualpipe_v"}:
+        if config.schedule.is_automatic:
             state, metrics = step(state, batches, loss_denominator)
         else:
             state, metrics = step(state, batches)
         jax.block_until_ready((state, metrics))
         elapsed = time.monotonic() - started
         step_times.append(elapsed)
-        metric_loss = metrics["train/loss"]
+        metric_loss = metrics[TRAIN_LOSS_KEY]
         if profiler_callback is not None:
             profiler_callback(SimpleNamespace(step=step_index))
-        if not hasattr(metric_loss, "is_partially_addressable") or metric_loss.is_partially_addressable:
-            if hasattr(metric_loss, "to_mpmd_local_array"):
-                metric_loss = metric_loss.to_mpmd_local_array
-            loss = float(metric_loss)
-            _log(
-                "PIPELINE_STEP",
-                step=step_index,
-                elapsed_seconds=elapsed,
-                tokens_per_second=batch_size * seq_len / elapsed,
-                loss=loss,
-            )
+        if isinstance(metric_loss, MpmdArray):
+            if not metric_loss.is_partially_addressable:
+                continue
+            local_loss = metric_loss.to_mpmd_local_array
+            if not isinstance(local_loss, jax.Array):
+                raise TypeError(f"expected one local loss array, got {type(local_loss).__name__}")
+        else:
+            local_loss = metric_loss
+        loss = float(local_loss)
+        _log(
+            "PIPELINE_STEP",
+            step=step_index,
+            elapsed_seconds=elapsed,
+            tokens_per_second=config.batch_size * config.seq_len / elapsed,
+            loss=loss,
+        )
 
-    measured = step_times[warmup_steps:]
+    measured = step_times[config.warmup_steps :]
     if not measured:
         measured = step_times
     mean_step_seconds = sum(measured) / len(measured)
     median_step_seconds = statistics.median(measured)
-    tokens_per_second = batch_size * seq_len / mean_step_seconds
-    median_tokens_per_second = batch_size * seq_len / median_step_seconds
+    tokens_per_second = config.batch_size * config.seq_len / mean_step_seconds
+    median_tokens_per_second = config.batch_size * config.seq_len / median_step_seconds
     forward_flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
@@ -379,6 +473,16 @@ def main() -> None:
                 peak_bytes_in_use=stats.get("peak_bytes_in_use"),
                 bytes_limit=stats.get("bytes_limit"),
             )
+
+
+def main() -> None:
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+    from iris.runtime.jax_init import initialize_jax  # noqa: PLC0415
+
+    initialize_jax()
+    config = _resolve_benchmark_config(os.environ)
+    _run_benchmark(config)
 
 
 if __name__ == "__main__":
