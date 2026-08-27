@@ -265,7 +265,7 @@ class PoolConfig:
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
     map_task: ResourceConfig | None = None
     reduce_task: ResourceConfig | None = None
-    coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="8g", preemptible=False))
+    coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="4g", preemptible=False))
 
 
 @dataclass(frozen=True)
