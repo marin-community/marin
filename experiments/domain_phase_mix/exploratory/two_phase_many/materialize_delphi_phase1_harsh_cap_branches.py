@@ -26,6 +26,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "delphi_phase1_harsh_cap_branch_results_20260825"
 TARGET_PREFIX = "eval/uncheatable_eval/"
 TARGET = "eval/uncheatable_eval/bpb"
+OPERATIONAL_EVAL_FIELDS = frozenset({"eval/loading_time", "eval/total_time"})
 TERMINAL_STEP = replay.EXPECTED_FULL_TRAIN_STEPS - 1
 
 
@@ -131,7 +132,11 @@ def terminal_metrics(fs: fsspec.AbstractFileSystem, output_path: str) -> dict[st
     records = [row for row in read_json_lines(fs, path) if int(row.get("step", -1)) == TERMINAL_STEP]
     if not records:
         raise ValueError(f"Expected a step-{TERMINAL_STEP} metric row under {output_path}")
-    if any(record != records[0] for record in records[1:]):
+    scientific_record = {key: value for key, value in records[0].items() if key not in OPERATIONAL_EVAL_FIELDS}
+    if any(
+        {key: value for key, value in record.items() if key not in OPERATIONAL_EVAL_FIELDS} != scientific_record
+        for record in records[1:]
+    ):
         raise ValueError(f"Conflicting step-{TERMINAL_STEP} metric rows under {output_path}")
     record = records[0]
     if TARGET not in record or isinstance(record[TARGET], bool) or not isinstance(record[TARGET], (float, int)):
