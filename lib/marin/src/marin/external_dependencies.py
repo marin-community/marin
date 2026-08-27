@@ -118,11 +118,11 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
 )
 
 VLLM_TPU_RELEASE = VllmTpuRelease(
-    release_tag="marin-vllm-tpu-20260826-5b69c198a2cc-e8f28a4ef357",
+    release_tag="marin-vllm-tpu-20260827-5b69c198a2cc-e8f28a4ef357-r1",
     exclude_newer="2026-08-12T00:00:00Z",
     requirement=(
         "vllm @ https://github.com/marin-community/vllm/releases/download/"
-        "marin-vllm-tpu-20260826-5b69c198a2cc-e8f28a4ef357/"
+        "marin-vllm-tpu-20260827-5b69c198a2cc-e8f28a4ef357-r1/"
         "vllm-0.20.1rc1.dev0+marin.5b69c198a2cc.tpu-cp312-cp312-linux_x86_64.whl"
     ),
 )
