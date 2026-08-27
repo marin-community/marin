@@ -273,6 +273,17 @@ def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | Non
     return NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[2], q_spec[1], k_spec[1]))
 
 
+def _reference_context_sharding(q: jax.Array, v: jax.Array) -> NamedSharding | None:
+    q_sharding = named_sharding_of(q)
+    v_sharding = named_sharding_of(v)
+    if q_sharding is None or v_sharding is None or q_sharding.mesh != v_sharding.mesh:
+        return None
+
+    q_spec = (*q_sharding.spec, *((None,) * (q.ndim - len(q_sharding.spec))))
+    v_spec = (*v_sharding.spec, *((None,) * (v.ndim - len(v_sharding.spec))))
+    return NamedSharding(v_sharding.mesh, P(v_spec[0], q_spec[1], v_spec[2], v_spec[3]))
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -329,7 +340,7 @@ def reference_attention(
         "bhqk,bkhd->bqhd",
         weights,
         v,
-        out_sharding=named_sharding_of(q) if score_sharding is not None else None,
+        out_sharding=_reference_context_sharding(q, v) if score_sharding is not None else None,
     )
     return ctx.astype(v.dtype)
 

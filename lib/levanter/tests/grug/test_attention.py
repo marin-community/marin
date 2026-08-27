@@ -90,7 +90,7 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
     with use_abstract_mesh(mesh):
         output = jax.eval_shape(lambda q, k, v: reference_attention(q, k, v, None, logits_dtype=jnp.float32), q, k, v)
 
-    assert output.sharding == q_sharding
+    assert output.sharding == NamedSharding(mesh, P("data", None, None, None))
 
 
 def test_real_tpu_splash_attention_matches_reference():
