@@ -14,7 +14,6 @@ from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
@@ -102,12 +101,14 @@ def auto_serve_overrides(
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect a model's config.json and fill portable vLLM defaults."""
     if "://" in model:
-        config_path = StoragePath(model) / _HF_CONFIG_FILENAME
+        config_url = f"{model.rstrip('/')}/{_HF_CONFIG_FILENAME}"
+        fs, config_path = filesystem_for(config_url)
+        with fs.open(config_path, "r") as handle:
+            config = json.load(handle)
     elif Path(model).is_dir():
-        config_path = StoragePath(str(Path(model) / _HF_CONFIG_FILENAME))
+        config = json.loads((Path(model) / _HF_CONFIG_FILENAME).read_text())
     else:
-        config_path = StoragePath(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision))
-    config = json.loads(config_path.read_text())
+        config = json.loads(Path(hf_hub_download(model, _HF_CONFIG_FILENAME, revision=revision)).read_text())
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 

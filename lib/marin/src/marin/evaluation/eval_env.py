@@ -11,6 +11,11 @@ EVAL_RUNTIME_ENV_KEYS: tuple[str, ...] = (
     "WANDB_ENTITY",
     "WANDB_PROJECT",
     "HF_TOKEN",
+    # Namespaced R2 credentials let a CoreWeave task read an R2 model without replacing the
+    # ambient AWS_* credentials it still needs for its regional object store.
+    "R2_KEY_ID",
+    "R2_KEY_SECRET",
+    "R2_S3_ENDPOINT",
     # RunAI object-store tuning. These are allowlisted so a prefix assignment on the evaluation
     # launcher reaches the remote inference child.
     "RUNAI_STREAMER_CHUNK_BYTESIZE",
