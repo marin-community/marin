@@ -33,6 +33,7 @@ MRCR_NEEDLE_COUNTS: tuple[int, ...] = (2, 4, 8)
 MRCR_DISTANCE_BOUNDS: tuple[int, ...] = (32_768, 65_536, 131_072)
 MRCR_BOOTSTRAP_SAMPLES = 10_000
 MRCR_PREAMBLE_PREFIX = "Here are some examples of conversations succeeded by a follow-up question answered correctly:"
+MRCR_DATASET_SCHEMA_VERSION = "2026.08.26.1"
 
 _EXAMPLE_START = "======EXAMPLE======"
 _EXAMPLE_END = "======END EXAMPLE======"
@@ -81,6 +82,7 @@ class MrcrTransformConfig:
     input_path: str
     output_path: str
     tokenizer: str
+    schema_version: str = MRCR_DATASET_SCHEMA_VERSION
     context_caps: tuple[int, ...] = MRCR_CONTEXT_CAPS
     distance_bounds: tuple[int, ...] = MRCR_DISTANCE_BOUNDS
     prompt_variants: tuple[MrcrPromptVariant, ...] = (
@@ -472,6 +474,7 @@ def transform_mrcr(config: MrcrTransformConfig) -> None:
             json.dump(
                 {
                     "dataset_revision": MRCR_DATASET_REVISION,
+                    "schema_version": config.schema_version,
                     "tokenizer": config.tokenizer,
                     "accepted": accepted,
                     f"excluded_over_{config.context_caps[-1]}": excluded,

@@ -371,6 +371,8 @@ def test_transform_mrcr_builds_paired_variants_with_identical_scored_bodies(
             ],
         }
     ]
+    stats = json.loads((output / "stats.json").read_text())
+    assert stats["schema_version"] == mrcr.MRCR_DATASET_SCHEMA_VERSION
 
 
 def _canonical_length(row: dict[str, Any]) -> int:
