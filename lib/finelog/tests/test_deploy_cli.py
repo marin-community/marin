@@ -81,7 +81,7 @@ def _fake_log_client(client: _FakeLogClient):
 
 
 def _patch_cli_client(client: _FakeLogClient):
-    return patch("finelog.deploy.cli._log_client", return_value=_fake_log_client(client))
+    return patch("finelog.deploy.cli.open_client", return_value=_fake_log_client(client))
 
 
 def test_query_reads_multiline_sql_from_stdin_without_shell_escaping() -> None:

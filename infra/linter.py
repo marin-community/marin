@@ -311,27 +311,38 @@ def _lint_catalog_sha() -> str | None:
     return h.hexdigest()
 
 
-def _ship_review_stats(event: dict) -> None:
+def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
     """Fire-and-forget: hand the event off to infra/codehealth/log_stats.py via
-    `uv run`. Detached so the W&B init/network cost never blocks the dev.
-    Silent on every failure mode (no uv, no wandb, no auth, no network).
+    `uv run`. Detached so the Finelog connect and write never block the dev.
+
+    The child's stderr goes to `stats.log` in the run's log directory, so a
+    failed ship (no uv, no Finelog credentials, no network) is diagnosable
+    afterwards rather than silently dropped. Without a log directory there is
+    nowhere to put it and the output is discarded.
     """
     if not shutil.which("uv"):
         return
+    stats_log = None
     try:
+        if log_dir is not None:
+            stats_log = (log_dir / "stats.log").open("wb")
         proc = subprocess.Popen(
             ["uv", "run", "--quiet", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=stats_log or subprocess.DEVNULL,
             cwd=ROOT_DIR,
             start_new_session=True,
         )
         assert proc.stdin is not None
         proc.stdin.write(json.dumps(event).encode())
         proc.stdin.close()
-    except Exception:
-        pass
+    except (OSError, ValueError) as e:
+        click.echo(f"  ⚠ Lint review: could not ship review stats: {e}")
+    finally:
+        # The child holds its own dup of the descriptor.
+        if stats_log is not None:
+            stats_log.close()
 
 
 @dataclass(frozen=True)
@@ -709,9 +720,11 @@ def _ship_review_event(
     merge_base: str,
     diff_stats: tuple[int, int, int],
     started: float,
+    elapsed: float,
     composer_rc: int,
     timed_out: bool,
     findings: list[list],
+    log_dir: pathlib.Path | None,
 ) -> None:
     """Assemble and ship the review's telemetry event (see infra/codehealth/log_stats.py)."""
     diff_files, diff_added, diff_removed = diff_stats
@@ -733,12 +746,13 @@ def _ship_review_event(
                 "diff_files": diff_files,
                 "diff_added_lines": diff_added,
                 "diff_removed_lines": diff_removed,
-                "elapsed": time.time() - started,
+                "elapsed": elapsed,
                 "agent_exit_code": composer_rc,
                 "timed_out": timed_out,
             },
             "findings": findings,
-        }
+        },
+        log_dir,
     )
 
 
@@ -816,20 +830,35 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
 
     outcome = _merge_lane_results(lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose)
     parsed = _parse_findings(outcome.findings_text) if outcome.findings_text else []
-    _ship_review_event(
-        outcome.mode, agent_cmd, merge_base, diff_stats, started, outcome.composer_rc, outcome.timed_out, parsed
-    )
+    elapsed = time.time() - started
 
     # Persist raw per-arm + combined output for debugging a slow/broken cycle. Log I/O is a
     # side channel: a write failure (e.g. /tmp not writable) must not fail the advisory review.
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, time.time() - started, branch)
+    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, elapsed, branch)
+    log_dir: pathlib.Path | None = None
     try:
         log_dir = _review_log_dir(branch, started)
         _write_review_log(log_dir, run)
         click.echo(f"  Lint review logs: {log_dir}")
     except OSError as e:
+        log_dir = None
         click.echo(f"  ⚠ Lint review: could not write logs under {LINT_REVIEW_LOG_ROOT}: {e}")
+
+    # Ships after the log dir exists so a failed write lands in stats.log beside
+    # the run it belongs to instead of vanishing.
+    _ship_review_event(
+        outcome.mode,
+        agent_cmd,
+        merge_base,
+        diff_stats,
+        started,
+        elapsed,
+        outcome.composer_rc,
+        outcome.timed_out,
+        parsed,
+        log_dir,
+    )
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")

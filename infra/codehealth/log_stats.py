@@ -1,28 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opportunistic W&B logging for code-health automation.
+"""Opportunistic Finelog logging for code-health automation.
 
-Reads one JSON event from stdin and appends rows to two flat W&B Tables
-attached to a single persistent run (`review-stats`) in the
-`marin-review-stats` project — one global table per metric, filter by
-the `ts` column in the W&B UI:
+Reads one JSON event from stdin and appends rows to two append-only Finelog
+namespaces (see ``review_tables``):
 
-  - `invocations` — one row per `pre-commit.py --review` / `/code-review` /
-    `/review-pr` invocation. `finding_count = 0` rows are kept; they are the
-    "tool ran but said nothing" signal.
-  - `findings` — one row per individual finding emitted by the agent.
+  - ``codehealth.autolint.invocations`` — one row per ``pre-commit.py --review``
+    / ``/code-review`` / ``/review-pr`` invocation. ``finding_count = 0`` rows
+    are kept; they are the "tool ran but said nothing" signal.
+  - ``codehealth.autolint.findings`` — one row per individual finding.
 
-Join key between the two: `invocation_id`. Both tables denormalize `tool`,
-`pr_number`, and `marin_user` so single-table queries in the W&B UI work.
-
-Append-to-artifact pattern: fetch the latest artifact for the run, append,
-re-log. Concurrent writers race on the artifact and the loser's row is
-dropped — acceptable at our scale; if we ever care, shard by year.
+Join key between the two: ``invocation_id``. Findings denormalize ``tool``,
+``pr_number``, and ``marin_user`` so single-table queries work.
 
 Designed to be invoked fire-and-forget as a detached subprocess so missing
-deps, missing auth, or slow networks never block the dev. Disable with
-`MARIN_REVIEW_STATS=0`.
+auth or a slow network never blocks the dev. Every failure is reported on
+stderr and exits non-zero; the caller decides whether anyone sees it
+(``linter.py`` keeps it in the run's log directory). Disable with
+``MARIN_REVIEW_STATS=0``.
 
 Expected stdin payload:
 
@@ -38,6 +34,7 @@ Expected stdin payload:
     }
 """
 
+import argparse
 import datetime as dt
 import hashlib
 import json
@@ -47,99 +44,32 @@ import subprocess
 import sys
 import uuid
 
-WANDB_PROJECT = "marin-review-stats"
-WANDB_RUN_ID = "review-stats"
+from finelog.client import LogClient
+
+# Run as a script, so its own directory is sys.path[0] and siblings import bare.
+from review_tables import (
+    FINDINGS_NAMESPACE,
+    IAP_AUDIENCE_ENV,
+    INVOCATIONS_NAMESPACE,
+    Finding,
+    Invocation,
+    append_rows,
+    open_tables_client,
+)
+
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 LINT_DIR = ROOT_DIR / "infra" / "lint"
 
-INVOCATION_COLUMNS = [
-    "ts",
-    "invocation_id",
-    "tool",
-    "variant",
-    "trigger",
-    "agent_cli",
-    "git_branch",
-    "merge_base_sha",
-    "head_sha",
-    "pr_number",
-    "marin_user",
-    "lint_catalog_sha",
-    "diff_files",
-    "diff_added_lines",
-    "diff_removed_lines",
-    "finding_count",
-    "elapsed",
-    "agent_exit_code",
-    "timed_out",
-]
-
-FINDING_COLUMNS = [
-    "ts",
-    "invocation_id",
-    "tool",
-    "pr_number",
-    "git_branch",
-    "head_sha",
-    "marin_user",
-    "file",
-    "line",
-    "code",
-    "confidence",
-    "message",
-]
-
-
-def _load_existing_rows(wandb, run_id: str, log_key: str) -> list[list]:
-    """Best-effort fetch of prior rows for `log_key` on the run.
-
-    Returns [] on the very first invocation or if the artifact is missing
-    for any other reason — both are normal and not errors.
-    """
-    artifact_name = f"run-{run_id}-{log_key}:latest"
-    try:
-        art = wandb.use_artifact(artifact_name)
-        table = art.get(log_key)
-        return [list(row) for row in table.data]
-    except Exception:
-        return []
-
-
-def _build_invocation_row(event: dict) -> list:
-    invocation = event.get("invocation") or {}
-    row = {
-        "ts": event.get("ts"),
-        "invocation_id": event.get("invocation_id"),
-        "tool": event.get("tool"),
-        **invocation,
-    }
-    return [row.get(col) for col in INVOCATION_COLUMNS]
-
-
-def _build_finding_rows(event: dict) -> list[list]:
-    invocation = event.get("invocation") or {}
-    ts = event.get("ts")
-    invocation_id = event.get("invocation_id")
-    tool = event.get("tool")
-    pr_number = invocation.get("pr_number")
-    git_branch = invocation.get("git_branch")
-    head_sha = invocation.get("head_sha")
-    marin_user = invocation.get("marin_user")
-
-    rows: list[list] = []
-    for finding in event.get("findings") or []:
-        # finding is [file, line, code, confidence, message]
-        if len(finding) != 5:
-            continue
-        rows.append([ts, invocation_id, tool, pr_number, git_branch, head_sha, marin_user, *finding])
-    return rows
+DEFAULT_DEPLOYMENT = "marin"
+# The whole point is to not delay the dev; give up rather than retry forever.
+FLUSH_TIMEOUT = 30.0
 
 
 def _git(args: list[str]) -> str | None:
     try:
         r = subprocess.run(["git", *args], cwd=ROOT_DIR, capture_output=True, text=True, timeout=2)
         return r.stdout.strip() or None
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
 
 
@@ -154,12 +84,20 @@ def _lint_catalog_sha() -> str | None:
     return h.hexdigest()
 
 
-def _fill_defaults(event: dict) -> dict:
+def _parse_ts(value: str | None) -> dt.datetime:
+    """Parse an event timestamp, defaulting to now. Always tz-aware UTC."""
+    if not value:
+        return dt.datetime.now(dt.UTC)
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+
+
+def fill_defaults(event: dict) -> dict:
     """Populate environment-derived fields the caller didn't supply.
 
-    Callers (pre-commit.py, /review-pr, etc.) only need to specify what's
-    specific to their invocation; the helper fills in everything inferable
-    from local git state. Existing values are never overwritten.
+    Callers (``linter.py``, ``/review-pr``) specify only what is specific to
+    their invocation; everything inferable from local git state is filled in
+    here. Existing values are never overwritten.
     """
     event.setdefault("invocation_id", str(uuid.uuid4()))
     event.setdefault("ts", dt.datetime.now(dt.UTC).isoformat())
@@ -173,48 +111,89 @@ def _fill_defaults(event: dict) -> dict:
     return event
 
 
-def main() -> int:
+def build_invocation(event: dict) -> Invocation:
+    inv = event.get("invocation") or {}
+    return Invocation(
+        ts=_parse_ts(event.get("ts")),
+        invocation_id=event["invocation_id"],
+        tool=event.get("tool") or "",
+        variant=inv.get("variant"),
+        trigger=inv.get("trigger"),
+        agent_cli=inv.get("agent_cli"),
+        git_branch=inv.get("git_branch"),
+        merge_base_sha=inv.get("merge_base_sha"),
+        head_sha=inv.get("head_sha"),
+        pr_number=inv.get("pr_number"),
+        marin_user=inv.get("marin_user"),
+        lint_catalog_sha=inv.get("lint_catalog_sha"),
+        diff_files=inv.get("diff_files"),
+        diff_added_lines=inv.get("diff_added_lines"),
+        diff_removed_lines=inv.get("diff_removed_lines"),
+        finding_count=inv.get("finding_count"),
+        elapsed=inv.get("elapsed"),
+        agent_exit_code=inv.get("agent_exit_code"),
+        timed_out=inv.get("timed_out"),
+    )
+
+
+def build_findings(event: dict) -> list[Finding]:
+    """One row per ``[file, line, code, confidence, message]`` entry."""
+    inv = event.get("invocation") or {}
+    ts = _parse_ts(event.get("ts"))
+    rows: list[Finding] = []
+    for finding in event.get("findings") or []:
+        if len(finding) != 5:
+            continue
+        file, line, code, confidence, message = finding
+        rows.append(
+            Finding(
+                ts=ts,
+                invocation_id=event["invocation_id"],
+                tool=event.get("tool") or "",
+                pr_number=inv.get("pr_number"),
+                git_branch=inv.get("git_branch"),
+                head_sha=inv.get("head_sha"),
+                marin_user=inv.get("marin_user"),
+                file=file,
+                line=line,
+                code=code,
+                confidence=confidence,
+                message=message,
+            )
+        )
+    return rows
+
+
+def write_event(client: LogClient, event: dict) -> int:
+    """Append one event's rows. Returns the number of rows written."""
+    append_rows(client, INVOCATIONS_NAMESPACE, Invocation, [build_invocation(event)], flush_timeout=FLUSH_TIMEOUT)
+    written = 1
+
+    findings = build_findings(event)
+    if findings:
+        append_rows(client, FINDINGS_NAMESPACE, Finding, findings, flush_timeout=FLUSH_TIMEOUT)
+        written += len(findings)
+    return written
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT, help="Finelog deployment to write to.")
+    parser.add_argument("--finelog-url", default=None, help="Connect to this address instead of a deployment.")
+    parser.add_argument(
+        "--iap-audience",
+        default=None,
+        help=f"IAP client id for unattended auth (default: ${IAP_AUDIENCE_ENV}).",
+    )
+    args = parser.parse_args(argv)
+
     if os.environ.get("MARIN_REVIEW_STATS", "1") == "0":
         return 0
-    try:
-        event = json.load(sys.stdin)
-    except Exception:
-        return 0
 
-    try:
-        import wandb  # noqa: PLC0415  # guarded: optional wandb, fire-and-forget script
-    except ImportError:
-        return 0
-
-    event = _fill_defaults(event)
-
-    try:
-        run = wandb.init(
-            project=WANDB_PROJECT,
-            id=WANDB_RUN_ID,
-            resume="allow",
-            settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
-        )
-    except Exception:
-        return 0
-
-    try:
-        invocation_rows = _load_existing_rows(wandb, WANDB_RUN_ID, "invocations")
-        invocation_rows.append(_build_invocation_row(event))
-        run.log({"invocations": wandb.Table(columns=INVOCATION_COLUMNS, data=invocation_rows)})
-
-        new_findings = _build_finding_rows(event)
-        if new_findings:
-            finding_rows = _load_existing_rows(wandb, WANDB_RUN_ID, "findings")
-            finding_rows.extend(new_findings)
-            run.log({"findings": wandb.Table(columns=FINDING_COLUMNS, data=finding_rows)})
-    except Exception:
-        pass
-    finally:
-        try:
-            run.finish(quiet=True)
-        except Exception:
-            pass
+    event = fill_defaults(json.load(sys.stdin))
+    with open_tables_client(args.deployment, args.finelog_url, args.iap_audience) as client:
+        written = write_event(client, event)
+    print(f"recorded {written} row(s) for invocation {event['invocation_id']}", file=sys.stderr)
     return 0
 
 

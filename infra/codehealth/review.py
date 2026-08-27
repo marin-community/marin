@@ -1,21 +1,11 @@
-#!/usr/bin/env -S uv run --script
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "click>=8.0",
-#     "pydantic>=2.0",
-#     "wandb>=0.18",
-# ]
-# ///
 
 """Aggregator and reporter for the code-health stats dashboard.
 
 Two subcommands:
   - `aggregate` (designed to run as a daily GHA cron) classifies reviewer
-    comments and appends them to the shared `review-stats` W&B run.
+    comments and appends them to the `codehealth.autolint` Finelog namespaces.
   - `report` reads those accumulated tables back and renders a markdown digest
     (summary table, by-class breakdown, weekly trend, top PRs, examples). It
     also folds in the linter-fed `invocations`/`findings` tables (written by
@@ -39,45 +29,56 @@ Two subcommands:
      Strict ⊆ generous by construction (the prompt enforces it).
   4. Pull the bot's own findings for the PR's head_sha from the existing
      `findings` artifact written by `infra/codehealth/log_stats.py`.
-  5. Append two flat tables to the shared `review-stats` W&B run (same run
-     that `infra/codehealth/log_stats.py` writes invocations + findings to):
+  5. Append two tables alongside the invocations and findings that
+     `infra/codehealth/log_stats.py` writes:
        - human_comments      — one row per classified comment.
        - pr_review_outcomes  — one row per PR (rollup).
 
-Same append-to-artifact pattern as `infra/codehealth/log_stats.py`. Concurrent
-writers race; loser's row is dropped (acceptable at our scale).
+The tables are append-only, and a rolling window re-emits rows for PRs seen on
+an earlier run, so both reads take the most recent row per natural key by the
+server-assigned `seq`.
 
-Requires a logged-in `claude` CLI (subscription auth) and W&B auth, plus
-`gh auth login` for the GitHub side. Designed to run as a daily GHA cron.
+Requires a logged-in `claude` CLI (subscription auth) and Finelog access
+(`uv run iris --cluster marin login`), plus `gh auth login` for the GitHub
+side. Designed to run as a daily GHA cron.
 """
 
 import datetime as dt
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
 import click
-import wandb
-
-# Sibling standalone script: the canonical schema for the linter-fed tables this
-# report reads back. Importing keeps the column layouts in one place rather than
-# re-declaring them here and risking drift.
-from log_stats import FINDING_COLUMNS, INVOCATION_COLUMNS
+from finelog.client import LogClient, NamespaceNotFoundError, SchemaValidationError
 from pydantic import BaseModel, Field, TypeAdapter
+
+# Sibling module: the canonical row types for every table this tool reads and
+# writes, shared with log_stats.py so the layouts cannot drift.
+from review_tables import (
+    FINDINGS_NAMESPACE,
+    HUMAN_COMMENTS_NAMESPACE,
+    INVOCATIONS_NAMESPACE,
+    NAMESPACE_PREFIX,
+    PR_REVIEW_OUTCOMES_NAMESPACE,
+    HumanComment,
+    PrReviewOutcome,
+    append_rows,
+    open_tables_client,
+)
 
 logger = logging.getLogger("codehealth.review")
 
-WANDB_PROJECT = "marin-review-stats"
-WANDB_RUN_ID = "review-stats"
+DEFAULT_DEPLOYMENT = "marin"
 DEFAULT_REPO = "marin-community/marin"
 # Classifier backend: a headless Claude Code session (`claude -p`). The model is
 # a CLI alias (`sonnet`, `opus`, `haiku`) or a full model id. `sonnet` balances
@@ -87,41 +88,6 @@ DEFAULT_BATCH_SIZE = 20
 # One headless `claude` subprocess per batch, so concurrency caps simultaneous
 # processes (and subscription rate pressure) — lower than an HTTP-API backend.
 DEFAULT_CONCURRENCY = 4
-
-HUMAN_COMMENT_COLUMNS = [
-    "ts",
-    "pr_number",
-    "pr_title",
-    "merged_at",
-    "author",
-    "comment_id",
-    "comment_type",  # inline | review_body | issue
-    "file",
-    "line",
-    "body",
-    "class",
-    "catchable_strict",
-    "catchable_generous",
-    "confidence",
-    "reason",
-]
-
-PR_OUTCOME_COLUMNS = [
-    "ts",
-    "pr_number",
-    "pr_title",
-    "merged_at",
-    "author",
-    "head_sha",
-    "base_sha",
-    "total_human_comments",
-    "by_class_json",
-    "catchable_strict_count",
-    "catchable_generous_count",
-    "bot_findings_count",
-    "overlap_count",
-]
-
 
 # ---------------------------------------------------------------------------
 # Comment classifier: schema + prompt
@@ -428,6 +394,11 @@ def _parse_github_timestamp(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _optional_github_timestamp(value: str | None) -> dt.datetime | None:
+    """Parse a GitHub timestamp that an unmerged PR leaves unset."""
+    return _parse_github_timestamp(value) if value else None
+
+
 def _pr_from_rest_pull(pull: dict) -> dict:
     user = pull.get("user") or {}
     return {
@@ -570,25 +541,82 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
 
 
 # ---------------------------------------------------------------------------
-# W&B: load bot findings + append new rows
+# Finelog: load prior rows + append new ones
 # ---------------------------------------------------------------------------
 
 
-def _load_existing_rows(wandb, log_key: str) -> list[list]:
+# The comment tables are append-only and a rolling window re-emits a PR's rows,
+# so every read collapses to the most recent row per natural key. `seq` is the
+# server-assigned per-row counter; ordering on it breaks ties within a run.
+LATEST_HUMAN_COMMENTS_SQL = f"""
+    SELECT * FROM (
+        SELECT *, row_number() OVER (
+            PARTITION BY pr_number, comment_type, comment_id ORDER BY seq DESC
+        ) AS recency
+        FROM "{HUMAN_COMMENTS_NAMESPACE}"
+    ) WHERE recency = 1
+"""
+
+LATEST_PR_OUTCOMES_SQL = f"""
+    SELECT * FROM (
+        SELECT *, row_number() OVER (
+            PARTITION BY pr_number ORDER BY seq DESC
+        ) AS recency
+        FROM "{PR_REVIEW_OUTCOMES_NAMESPACE}"
+    ) WHERE recency = 1
+"""
+
+_SHA_PATTERN = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
+
+
+def _as_utc(value):
+    """Stamp UTC on Finelog's naive timestamps; pass everything else through."""
+    if isinstance(value, dt.datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value
+
+
+def query_rows(client: LogClient, sql: str) -> list[dict]:
+    """Run `sql` and return rows as dicts with tz-aware timestamps.
+
+    A namespace that has never been written does not exist yet, which is the
+    normal state on a first run and not an error.
+    """
     try:
-        art = wandb.use_artifact(f"run-{WANDB_RUN_ID}-{log_key}:latest")
-        table = art.get(log_key)
-        return [list(row) for row in table.data]
-    except Exception:
+        table = client.query(sql)
+    except (NamespaceNotFoundError, SchemaValidationError) as exc:
+        logger.warning("query returned no table (%s); treating as empty", exc)
         return []
+    return [{k: _as_utc(v) for k, v in row.items()} for row in table.to_pylist()]
 
 
-def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
-    """Zip the flat W&B table rows back into dicts keyed by column name."""
-    return [dict(zip(columns, r, strict=False)) for r in rows]
+def load_findings_for_shas(client: LogClient, shas: set[str]) -> dict[str, list[dict]]:
+    """Fetch the bot's own findings for `shas`, grouped by head_sha."""
+    by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
+    safe = sorted(sha for sha in shas if _SHA_PATTERN.match(sha))
+    if not safe:
+        return by_sha
+    in_list = ", ".join(f"'{sha}'" for sha in safe)
+    rows = query_rows(
+        client,
+        f"SELECT head_sha, file, line, code, confidence, message "
+        f'FROM "{FINDINGS_NAMESPACE}" WHERE head_sha IN ({in_list})',
+    )
+    for r in rows:
+        if r["head_sha"] in by_sha:
+            by_sha[r["head_sha"]].append(
+                {
+                    "file": r["file"],
+                    "line": r["line"],
+                    "code": r["code"],
+                    "confidence": r["confidence"],
+                    "message": r["message"],
+                }
+            )
+    return by_sha
 
 
-def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
+def build_classification_cache(human_rows: list[dict]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
     """Index already-classified comments so unchanged comments can skip
     re-classification. Keyed on (comment_type, comment_id) — GitHub's inline /
     review / issue comment ids live in separate spaces, so the type disambiguates
@@ -597,9 +625,9 @@ def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], 
     cache is model-agnostic — re-run with `--refresh` after changing `--model`,
     since the table does not record it."""
     cache: dict[tuple[str, int], tuple[str, CommentClassification]] = {}
-    for row in _rows_to_dicts(HUMAN_COMMENT_COLUMNS, human_rows):
+    for row in human_rows:
         cls = CommentClassification(
-            **{"class": row["class"]},
+            **{"class": row["comment_class"]},
             catchable_strict=bool(row["catchable_strict"]),
             catchable_generous=bool(row["catchable_generous"]),
             confidence=float(row["confidence"]),
@@ -643,27 +671,6 @@ def resolve_classifications(
     return final
 
 
-def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
-    """Fetch bot findings rows for the given head_shas from the shared run.
-
-    Returns sha -> list of finding dicts (file, line, code, confidence, message).
-    """
-    by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
-    for r in _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings")):
-        sha = r["head_sha"]
-        if sha in by_sha:
-            by_sha[sha].append(
-                {
-                    "file": r["file"],
-                    "line": r["line"],
-                    "code": r["code"],
-                    "confidence": r["confidence"],
-                    "message": r["message"],
-                }
-            )
-    return by_sha
-
-
 def overlap_count(bot_findings: list[dict], human_comments: list[Comment], window: int = 5) -> int:
     """Bot finding and human inline comment on same file within ±`window` lines."""
     if not bot_findings:
@@ -684,25 +691,16 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 
 
 # ---------------------------------------------------------------------------
-# Report: render the accumulated W&B tables into a shareable markdown digest
+# Report: render the accumulated tables into a shareable markdown digest
 # ---------------------------------------------------------------------------
 
 
-def _parse_ts(s: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-
-
 def _in_window(row: dict, key: str, start: dt.datetime) -> bool:
-    """True when the timestamp at `row[key]` is on/after `start`. Rows with a
-    missing or unparseable timestamp fall outside the window. Shared by the
-    merged-PR tables (keyed on `merged_at`) and the automation tables (`ts`)."""
+    """True when the timestamp at `row[key]` is on/after `start`. Rows with no
+    timestamp fall outside the window. Shared by the merged-PR tables (keyed on
+    `merged_at`) and the automation tables (`ts`)."""
     ts = row.get(key)
-    if not ts:
-        return False
-    try:
-        return _parse_ts(ts) >= start
-    except ValueError:
-        return False
+    return ts is not None and ts >= start
 
 
 def _group_by_isoweek(rows: list[dict], ts_key: str) -> dict[tuple[int, int], list[dict]]:
@@ -714,7 +712,7 @@ def _group_by_isoweek(rows: list[dict], ts_key: str) -> dict[tuple[int, int], li
         if not ts:
             continue
         try:
-            y, w, _ = _parse_ts(ts).isocalendar()
+            y, w, _ = ts.isocalendar()
         except ValueError:
             continue
         weeks.setdefault((y, w), []).append(row)
@@ -726,7 +724,7 @@ def _pct(n: int, d: int) -> str:
 
 
 def _to_int(value: object) -> int:
-    """Coerce a possibly-null W&B cell to int; missing/garbage counts as 0."""
+    """Coerce a possibly-null cell to int; missing/garbage counts as 0."""
     try:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -734,7 +732,7 @@ def _to_int(value: object) -> int:
 
 
 def _to_float(value: object) -> float | None:
-    """Coerce a possibly-null W&B cell to float, or None when absent/garbage."""
+    """Coerce a possibly-null cell to float, or None when absent/garbage."""
     try:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -784,7 +782,7 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
     blurb = (
         "What the review bot itself did over the window — every "
         "`pre-commit.py --review`, `/code-review`, and `/review-pr` run logs to "
-        "W&B. Distinct from the catchability analysis above: that measures human "
+        "Finelog. Distinct from the catchability analysis above: that measures human "
         "comments the bot could have caught; this is the bot's own output."
     )
     if not runs:
@@ -931,7 +929,7 @@ def build_report(
     # per-comment class + catchable flags the per-PR rollup does not.
     by_class: dict[str, list[int]] = {}
     for c in comments:
-        e = by_class.setdefault(str(c["class"]), [0, 0, 0])
+        e = by_class.setdefault(str(c["comment_class"]), [0, 0, 0])
         e[0] += 1
         e[1] += 1 if c["catchable_strict"] else 0
         e[2] += 1 if c["catchable_generous"] else 0
@@ -1002,7 +1000,7 @@ def build_report(
             _pr_link(repo, c["pr_number"]),
             _cell(_where(c.get("file"), c.get("line"))),
             "strict" if c["catchable_strict"] else "generous",
-            _cell(c["class"]),
+            _cell(c["comment_class"]),
             f"{float(c['confidence']):.2f}",
             _cell(c["body"], 120),
             _cell(c["reason"], 80),
@@ -1099,7 +1097,8 @@ def cli() -> None:
     is_flag=True,
     help="Re-classify every comment, ignoring the cache (use after changing --model)",
 )
-@click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
+@click.option("--dry-run", is_flag=True, help="Skip the Finelog write; print the rollup")
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to use")
 def aggregate(
     repo: str,
     days: int,
@@ -1111,10 +1110,11 @@ def aggregate(
     bot_logins: str,
     refresh: bool,
     dry_run: bool,
+    deployment: str,
 ) -> None:
-    """Classify reviewer comments on recently-merged PRs and append to W&B.
+    """Classify reviewer comments on recently-merged PRs and append to Finelog.
 
-    Comments already classified in the W&B `human_comments` table are reused by
+    Comments already classified in the `human_comments` table are reused by
     `comment_id` (unless their text changed), so a daily run over a rolling
     window only sends genuinely-new comments to the model. Pass `--refresh` to
     re-classify everything."""
@@ -1132,10 +1132,10 @@ def aggregate(
     prs = list_merged_prs(repo, days, limit)
     logger.info("Found %d merged PRs", len(prs))
 
-    aggregator_ts = dt.datetime.now(dt.UTC).isoformat()
+    aggregator_ts = dt.datetime.now(dt.UTC)
 
-    human_rows: list[list] = []
-    pr_rows: list[list] = []
+    human_rows: list[HumanComment] = []
+    pr_rows: list[PrReviewOutcome] = []
     all_shas: set[str] = set()
     per_pr_comments: dict[int, list[Comment]] = {}
 
@@ -1148,21 +1148,16 @@ def aggregate(
         per_pr_comments[pr["number"]] = comments
         all_shas.add(pr["headRefOid"])
 
-    # Pull bot findings + the existing human_comments table from the shared run
-    # (skip in dry-run). The human_comments rows serve double duty: the
-    # classification cache below, and the replace-by-PR merge at the end.
+    # Pull the bot's findings for these PRs plus the already-classified
+    # comments, which seed the classification cache below. A dry run needs
+    # neither, so it never opens a client.
     if dry_run:
         findings_by_sha = {sha: [] for sha in all_shas}
-        existing_human_rows: list[list] = []
+        existing_human_rows: list[dict] = []
     else:
-        wandb.init(
-            project=WANDB_PROJECT,
-            id=WANDB_RUN_ID,
-            resume="allow",
-            settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
-        )
-        findings_by_sha = load_findings_for_shas(wandb, all_shas)
-        existing_human_rows = _load_existing_rows(wandb, "human_comments")
+        with open_tables_client(deployment) as client:
+            findings_by_sha = load_findings_for_shas(client, all_shas)
+            existing_human_rows = query_rows(client, LATEST_HUMAN_COMMENTS_SQL)
     cache = {} if refresh else build_classification_cache(existing_human_rows)
 
     # Flatten every human comment across all PRs. Reuse a cached classification
@@ -1199,42 +1194,42 @@ def aggregate(
             if cls.catchable_generous:
                 generous_cnt += 1
             human_rows.append(
-                [
-                    aggregator_ts,
-                    n,
-                    pr["title"],
-                    pr["mergedAt"],
-                    c.author,
-                    c.comment_id,
-                    c.comment_type,
-                    c.file,
-                    c.line,
-                    c.body[:500],
-                    cls.klass,
-                    cls.catchable_strict,
-                    cls.catchable_generous,
-                    cls.confidence,
-                    cls.reason,
-                ]
+                HumanComment(
+                    ts=aggregator_ts,
+                    pr_number=n,
+                    pr_title=pr["title"],
+                    merged_at=_optional_github_timestamp(pr["mergedAt"]),
+                    author=c.author,
+                    comment_id=c.comment_id,
+                    comment_type=c.comment_type,
+                    file=c.file,
+                    line=c.line,
+                    body=c.body[:500],
+                    comment_class=cls.klass,
+                    catchable_strict=cls.catchable_strict,
+                    catchable_generous=cls.catchable_generous,
+                    confidence=cls.confidence,
+                    reason=cls.reason,
+                )
             )
 
         bot_findings = findings_by_sha.get(pr["headRefOid"], [])
         pr_rows.append(
-            [
-                aggregator_ts,
-                n,
-                pr["title"],
-                pr["mergedAt"],
-                (pr.get("author") or {}).get("login") or "unknown",
-                pr["headRefOid"],
-                pr["baseRefOid"],
-                len(human),
-                json.dumps(by_class),
-                strict_cnt,
-                generous_cnt,
-                len(bot_findings),
-                overlap_count(bot_findings, human),
-            ]
+            PrReviewOutcome(
+                ts=aggregator_ts,
+                pr_number=n,
+                pr_title=pr["title"],
+                merged_at=_optional_github_timestamp(pr["mergedAt"]),
+                author=(pr.get("author") or {}).get("login") or "unknown",
+                head_sha=pr["headRefOid"],
+                base_sha=pr["baseRefOid"],
+                total_human_comments=len(human),
+                by_class_json=json.dumps(by_class),
+                catchable_strict_count=strict_cnt,
+                catchable_generous_count=generous_cnt,
+                bot_findings_count=len(bot_findings),
+                overlap_count=overlap_count(bot_findings, human),
+            )
         )
         logger.info(
             "PR #%s: %d human comments, strict=%d generous=%d bot_findings=%d",
@@ -1246,35 +1241,26 @@ def aggregate(
         )
 
     if dry_run:
-        click.echo(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
+        payload = {
+            "pr_rollups": [asdict(r) for r in pr_rows],
+            "human_comments": [asdict(r) for r in human_rows[:20]],
+        }
+        click.echo(json.dumps(payload, default=str, indent=2))
         return
 
-    # Replace-by-PR: a daily cron over a rolling window re-emits rows for PRs
-    # we've seen before. Drop existing rows whose pr_number is in this batch,
-    # then append the fresh ones — the new rows are the source of truth for
-    # those PRs. (Cached comments are re-emitted with their stored verdict, so
-    # the dropped rows are reconstructed identically unless the text changed.)
-    refreshed_prs = {pr["number"] for pr in prs}
-    pr_col_idx = HUMAN_COMMENT_COLUMNS.index("pr_number")
-    out_pr_col_idx = PR_OUTCOME_COLUMNS.index("pr_number")
-
-    existing_humans = [r for r in existing_human_rows if r[pr_col_idx] not in refreshed_prs]
-    existing_humans.extend(human_rows)
-    wandb.log({"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)})
-
-    existing_outcomes = [
-        r for r in _load_existing_rows(wandb, "pr_review_outcomes") if r[out_pr_col_idx] not in refreshed_prs
-    ]
-    existing_outcomes.extend(pr_rows)
-    wandb.log({"pr_review_outcomes": wandb.Table(columns=PR_OUTCOME_COLUMNS, data=existing_outcomes)})
-
-    wandb.finish(quiet=True)
+    # The tables are append-only. A rolling window re-emits rows for PRs seen
+    # on an earlier run; those supersede rather than replace, and every reader
+    # collapses to the newest row per key (LATEST_*_SQL). Cached comments are
+    # re-emitted with their stored verdict, so a repeat run is a no-op in
+    # substance even though it adds rows.
+    with open_tables_client(deployment) as client:
+        append_rows(client, HUMAN_COMMENTS_NAMESPACE, HumanComment, human_rows)
+        append_rows(client, PR_REVIEW_OUTCOMES_NAMESPACE, PrReviewOutcome, pr_rows)
     logger.info(
-        "Logged %d PR rollups and %d classified human comments to %s/%s",
+        "Appended %d PR rollups and %d classified human comments to %s",
         len(pr_rows),
         len(human_rows),
-        WANDB_PROJECT,
-        WANDB_RUN_ID,
+        NAMESPACE_PREFIX,
     )
 
 
@@ -1284,27 +1270,22 @@ def aggregate(
 @click.option("--out", type=click.Path(dir_okay=False), default=None, help="Also write the markdown report here")
 @click.option("--public", is_flag=True, help="Create a public gist (default: secret)")
 @click.option("--no-gist", is_flag=True, help="Print the report to stdout instead of creating a gist")
-def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -> None:
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to use")
+def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool, deployment: str) -> None:
     """Render the accumulated review stats into a markdown digest and gist it.
 
-    Reads four tables from the shared `review-stats` run: `pr_review_outcomes`
-    and `human_comments` (the catchability analysis) plus the linter-fed
+    Reads the four `codehealth.autolint` namespaces: `pr_review_outcomes` and
+    `human_comments` (the catchability analysis) plus the linter-fed
     `invocations` and `findings` (the review bot's own activity)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     now = dt.datetime.now(dt.UTC)
     start = now - dt.timedelta(days=days)
 
-    wandb.init(
-        project=WANDB_PROJECT,
-        id=WANDB_RUN_ID,
-        resume="allow",
-        settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
-    )
-    outcomes = _rows_to_dicts(PR_OUTCOME_COLUMNS, _load_existing_rows(wandb, "pr_review_outcomes"))
-    comments = _rows_to_dicts(HUMAN_COMMENT_COLUMNS, _load_existing_rows(wandb, "human_comments"))
-    invocations = _rows_to_dicts(INVOCATION_COLUMNS, _load_existing_rows(wandb, "invocations"))
-    findings = _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings"))
-    wandb.finish(quiet=True)
+    with open_tables_client(deployment) as client:
+        outcomes = query_rows(client, LATEST_PR_OUTCOMES_SQL)
+        comments = query_rows(client, LATEST_HUMAN_COMMENTS_SQL)
+        invocations = query_rows(client, f'SELECT * FROM "{INVOCATIONS_NAMESPACE}"')
+        findings = query_rows(client, f'SELECT * FROM "{FINDINGS_NAMESPACE}"')
 
     markdown = build_report(outcomes, comments, invocations, findings, repo=repo, start=start, now=now, days=days)
 
