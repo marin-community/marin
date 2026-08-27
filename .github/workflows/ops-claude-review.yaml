@@ -113,10 +113,21 @@ jobs:
         with:
           credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
 
-      - name: Export the Finelog IAP audience
+      # The checkout above is the synthetic merge ref, so local git state names
+      # the merge commit. Name the reviewed branch explicitly, or the row cannot
+      # be joined to its pull request.
+      - name: Export the review telemetry environment
         env:
           IAP_AUDIENCE: ${{ secrets.IRIS_IAP_AUDIENCE }}
-        run: echo "MARIN_FINELOG_IAP_AUDIENCE=${IAP_AUDIENCE}" >> "$GITHUB_ENV"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            echo "MARIN_FINELOG_IAP_AUDIENCE=${IAP_AUDIENCE}"
+            echo "MARIN_REVIEW_TRIGGER=ci"
+            echo "MARIN_REVIEW_PR_NUMBER=${PR_NUMBER}"
+            echo "MARIN_REVIEW_HEAD_SHA=${HEAD_SHA}"
+          } >> "$GITHUB_ENV"
 
       - name: Run Lint Review
         id: claude
