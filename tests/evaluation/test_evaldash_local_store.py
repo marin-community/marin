@@ -117,7 +117,7 @@ def test_ungraded_sample_does_not_count_as_incorrect_answer(store):
 
 
 def test_api_surface_over_fixtures(client):
-    assert client.get("/healthz").json()["store"] == "memory"
+    assert client.get("/health").json()["store"] == "memory"
 
     meta = client.get("/api/meta").json()
     assert meta["store"] == "memory"

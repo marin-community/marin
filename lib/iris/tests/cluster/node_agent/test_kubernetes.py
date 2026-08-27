@@ -277,6 +277,93 @@ def test_scraper_discovers_dcgm_pods_and_merges_gpu_readings():
     assert metrics.mem_total_bytes == 2162529861632
 
 
+def _seed_dcgm_pod(k8s: InMemoryK8sService, name: str, node: str, pod_ip: str | None) -> None:
+    """Seed one dcgm-exporter pod, optionally still waiting on its address."""
+    k8s.seed_namespaced_pod(
+        "cw-exporters",
+        name,
+        {
+            "metadata": {"name": name, "labels": {"app.kubernetes.io/name": "dcgm-exporter"}},
+            "spec": {"nodeName": node},
+            "status": {"podIP": pod_ip} if pod_ip else {},
+        },
+    )
+
+
+_TARGETS = [NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="g83d142")]
+
+
+def test_scraper_only_scrapes_the_exporter_on_its_own_node():
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-own", "g83d142", "10.9.9.9")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-other", "g99", "10.7.7.7")
+    fetched: list[str] = []
+
+    def record(url: str) -> str | None:
+        fetched.append(url)
+        return {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}.get(url)
+
+    scraper = NodeStatsScraper(k8s, fetch=record)
+    metrics = scraper.scrape([NodeTarget(name="g83d142", node_uid="node-uid-1", internal_ip="g83d142")])["g83d142"]
+
+    assert metrics.gpu_count == 2
+    assert "http://10.7.7.7:9400/metrics" not in fetched
+    # The node filter must reach the apiserver: listing the namespace and discarding
+    # the other nodes' exporters locally is what overloaded the control plane.
+    assert k8s.namespaced_pod_list_selectors == [
+        ("cw-exporters", {"app.kubernetes.io/name": "dcgm-exporter"}, "spec.nodeName=g83d142")
+    ]
+
+
+def test_scraper_rediscovers_an_exporter_that_had_no_address_yet():
+    """A scheduled-but-not-running exporter must not be cached; nothing would evict it."""
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", None)
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+
+    assert scraper.scrape(_TARGETS)["g83d142"].dcgm_available is False
+
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers["http://10.9.9.9:9400/metrics"] = DCGM_TEXT
+
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+
+def test_scraper_rediscovers_when_the_cached_address_stops_serving_this_node():
+    """An address that answers without this node's readings must not stay cached."""
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+    # The exporter restarts at a new address and something else now answers on the old
+    # one. The stale entry can only be evicted by noticing the readings stopped.
+    answers["http://10.9.9.9:9400/metrics"] = 'DCGM_FI_DEV_FB_USED{gpu="0"} not-a-number\n'
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.10")
+    answers["http://10.9.9.10:9400/metrics"] = DCGM_TEXT
+
+    scraper.scrape(_TARGETS)
+    assert scraper.scrape(_TARGETS)["g83d142"].gpu_count == 2
+
+
+def test_scraper_caches_dcgm_discovery_until_a_scrape_fails():
+    k8s = InMemoryK8sService(namespace="iris")
+    _seed_dcgm_pod(k8s, "dcgm-exporter-abc", "g83d142", "10.9.9.9")
+    answers = {"http://g83d142:9100/metrics": NODE_EXPORTER_TEXT, "http://10.9.9.9:9400/metrics": DCGM_TEXT}
+    scraper = NodeStatsScraper(k8s, fetch=lambda url: answers.get(url))
+    targets = _TARGETS
+
+    # The exporter stops answering at its cached address: that pass drops the entry,
+    # and the next one rediscovers.
+    del answers["http://10.9.9.9:9400/metrics"]
+    scraper.scrape(targets)
+    scraper.scrape(targets)
+    assert k8s.namespaced_pod_calls.count(("list", "cw-exporters")) == 2
+
+
 def test_scraper_missing_exporter_yields_empty_metrics():
     k8s = InMemoryK8sService(namespace="iris")
     scraper = NodeStatsScraper(k8s, fetch=_fetch_from({}))  # nothing answers

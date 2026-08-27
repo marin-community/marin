@@ -1061,8 +1061,9 @@ def wiki_filter_clauses(tags: list[str]) -> list[str]:
     return ["w.tags @> CAST(:tags AS text[])"] if tags else []
 
 
-@app.get("/healthz")
-def healthz(engine: Engine) -> dict[str, str]:
+# Cloud Run reserves some paths ending in "z" before they reach the container.
+@app.get("/health")
+def health(engine: Engine) -> dict[str, str]:
     with engine.connect() as conn:
         conn.execute(sqlalchemy.text("SELECT 1"))
     return {"status": "ok"}
