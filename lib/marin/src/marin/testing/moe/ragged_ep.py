@@ -104,7 +104,7 @@ class TransportKernel(StrEnum):
     ``DEVICE`` matches the hero and is the default. It needs a jaxlib that defines the two flags;
     older ones abort at import on an unknown ``XLA_FLAGS`` entry. ``STOCK`` clears them and takes
     the runtime default, the host-launched kernel, which still covers the expert-MLP kernels and
-    the offset arithmetic. The verdict records which one ran.
+    the offset arithmetic.
     """
 
     DEVICE = "device-kernel"
