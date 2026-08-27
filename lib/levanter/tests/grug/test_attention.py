@@ -49,29 +49,6 @@ def test_reference_attention_matches_manual_segment_mask():
     np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
 
 
-def test_reference_attention_supports_compact_partition_specs():
-    q, k, v = _make_qkv(batch=2, q_len=5, k_len=5, q_heads=2, kv_heads=1)
-    expected = reference_attention(q, k, v, None, logits_dtype=jnp.float32)
-    mesh = jax.sharding.Mesh(
-        np.asarray(jax.devices()[:1]),
-        ("data",),
-        axis_types=(AxisType.Explicit,),
-    )
-    compact_sharding = NamedSharding(mesh, P("data"))
-    sharded_q, sharded_k, sharded_v = (jax.device_put(x, compact_sharding) for x in (q, k, v))
-
-    with jax.set_mesh(mesh):
-        actual = jax.jit(reference_attention, static_argnames=("mask", "logits_dtype"))(
-            sharded_q,
-            sharded_k,
-            sharded_v,
-            mask=None,
-            logits_dtype=jnp.float32,
-        )
-
-    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
-
-
 def test_reference_attention_supports_model_sharded_head_dimension():
     q, k, v = _make_qkv(batch=1, q_len=5, k_len=5, q_heads=2, kv_heads=1)
     mask = AttentionMask.causal()

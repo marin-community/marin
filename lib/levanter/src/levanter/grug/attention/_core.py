@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, reshard
+from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
@@ -257,30 +257,8 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
-def _match_attention_batch_sharding(x: jax.Array, reference: jax.Array) -> jax.Array:
-    x_sharding = named_sharding_of(x)
-    reference_sharding = named_sharding_of(reference)
-    if x_sharding is None or reference_sharding is None or reference_sharding.mesh.empty:
-        return x
-
-    # JAX 0.11.1 requires dot_general batch dimensions to use the same sharding.
-    # Keep K/V sequence sharding, but match Q's batch, head, and contracted dimensions.
-    x_spec = (*x_sharding.spec, *((None,) * (x.ndim - len(x_sharding.spec))))
-    reference_spec = (
-        *reference_sharding.spec,
-        *((None,) * (reference.ndim - len(reference_sharding.spec))),
-    )
-    target_spec = P(
-        reference_spec[0],
-        x_spec[1],
-        reference_spec[2],
-        reference_spec[3],
-    )
-    return reshard(x, NamedSharding(reference_sharding.mesh, target_spec))
-
-
 def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | None:
-    """Describe the surviving dimensions when attention contracts a sharded head dimension."""
+    """Describe the score layout when attention input shardings are ambiguous."""
     q_sharding = named_sharding_of(q)
     k_sharding = named_sharding_of(k)
     if q_sharding is None or k_sharding is None or q_sharding.mesh != k_sharding.mesh:
@@ -288,7 +266,9 @@ def _reference_score_sharding(q: jax.Array, k: jax.Array) -> NamedSharding | Non
 
     q_spec = (*q_sharding.spec, *((None,) * (q.ndim - len(q_sharding.spec))))
     k_spec = (*k_sharding.spec, *((None,) * (k.ndim - len(k_sharding.spec))))
-    if q_spec[0] != k_spec[0] or q_spec[3] is None or q_spec[3] != k_spec[3]:
+    batch_sharding_matches = q_spec[0] == k_spec[0] and q_spec[2] == k_spec[2]
+    contracting_sharding_is_ambiguous = q_spec[3] is not None and k_spec[3] is not None
+    if batch_sharding_matches and not contracting_sharding_is_ambiguous:
         return None
     return NamedSharding(q_sharding.mesh, P(q_spec[0], q_spec[2], q_spec[1], k_spec[1]))
 
@@ -303,15 +283,16 @@ def reference_attention(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = _match_attention_batch_sharding(align_kv_heads(k, num_q_heads=num_q_heads), q)
-    v = _match_attention_batch_sharding(align_kv_heads(v, num_q_heads=num_q_heads), q)
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
+    score_sharding = _reference_score_sharding(q, k)
     scores = jnp.einsum(
         "bqhd,bkhd->bhqk",
         q * scale,
         k,
-        out_sharding=_reference_score_sharding(q, k),
+        out_sharding=score_sharding,
     )
 
     explicit = None
@@ -344,7 +325,12 @@ def reference_attention(
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
+    ctx = jnp.einsum(
+        "bhqk,bkhd->bqhd",
+        weights,
+        v,
+        out_sharding=named_sharding_of(q) if score_sharding is not None else None,
+    )
     return ctx.astype(v.dtype)
 
 
