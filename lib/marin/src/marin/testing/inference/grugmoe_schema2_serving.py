@@ -43,7 +43,7 @@ from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_g
 
 logger = logging.getLogger(__name__)
 
-EXPECTED_VLLM_SOURCE_COMMIT = "3caca1d1237434f427822beabc827ed70defeabe"
+EXPECTED_VLLM_SOURCE_COMMIT = "b2cbb9aed6a474201eb1a892970a43b1dfc9e2bb"
 REAL_MODEL_KEY = "rav-ladder-d1536"
 REAL_ARTIFACT_TREE_SHA256 = "8cc7d8f1f49a387bc51058d0deb3cfe47cb843126465cbc1b22f3fe3f7f7261b"
 REAL_RAW_METADATA_SHA256 = "128b0e2779b943fbef139132d4add4961e9e12cda3358b65951169940aa556fe"

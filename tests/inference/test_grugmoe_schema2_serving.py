@@ -46,7 +46,7 @@ def _entry(sequence: int, data: str, *, task: int = 0) -> TaskLogEntry:
 
 def test_runtime_evidence_survives_more_than_the_default_finelog_tail():
     pipeline_parallel_size = 1
-    expected_wheel = {"source_commit": "3caca1d"}
+    expected_wheel = {"source_commit": "b2cbb9a"}
     verified_wheel = {
         **expected_wheel,
         "compute_capability": "9.0",
