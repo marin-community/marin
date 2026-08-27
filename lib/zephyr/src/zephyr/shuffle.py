@@ -39,7 +39,6 @@ from typing import Any, ClassVar, Protocol
 import cloudpickle
 import humanfriendly
 import msgspec
-import psutil
 import pyarrow as pa
 import pyarrow.compute as pc
 from datafusion import DataFrame, DataFrameWriteOptions, ParquetWriterOptions, SessionContext, col, lit
@@ -120,11 +119,13 @@ _PAYLOAD_BYTES_SUM_COL = f"{_PAYLOAD_BYTES_COL}_sum"
 _PAYLOAD_ROWS_COL = f"{_PAYLOAD_BYTES_COL}_count"
 
 _PARQUET_WRITE_OPTIONS = DataFrameWriteOptions(single_file_output=True)
+_PARQUET_COMPRESSION = "zstd(1)"
 
 # Python items consumed before creating an Arrow table.
 _TABLE_ROW_COUNT = 10_000
-# Preserve the prior 12% effective flush point. A scatter flush has reached
-# 2.27x the buffered size at peak RSS: https://echo.oa.dev/wiki/68.
+# Leave headroom for Arrow concatenation, DataFusion sorting, and Parquet
+# encoding. A scatter flush has reached 2.27x the buffered size at peak RSS:
+# https://echo.oa.dev/wiki/68.
 _SCATTER_FLUSH_MEMORY_FRACTION = 0.12
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
@@ -140,10 +141,6 @@ def _task_memory_bytes() -> int:
         logger.warning("No task memory is available. Using a 1 GiB memory budget.")
         return 1024 * 1024 * 1024
     return memory_bytes
-
-
-def _process_rss_bytes() -> int:
-    return psutil.Process().memory_info().rss
 
 
 def _table_to_items(table: pa.Table | pa.RecordBatch) -> Iterator[Any]:
@@ -434,7 +431,7 @@ def _merge_sorted_frames(
         merged = _merged_frame(group, sort_key)
         merged.write_parquet_with_options(
             str(run),
-            ParquetWriterOptions(compression="zstd(1)"),
+            ParquetWriterOptions(compression=_PARQUET_COMPRESSION),
             _PARQUET_WRITE_OPTIONS,
         )
         return run
@@ -485,9 +482,9 @@ def _merge_sorted_frames(
 class ScatterReader:
     """All scatter chunks for one target shard, across all source shards.
 
-    ``_chunk_files`` lists every combined Parquet file the mappers wrote. Each
-    file holds rows for *all* target shards, so :meth:`get_frames` filters each
-    scan down to ``_target_shard``.
+    ``_chunk_files`` contains the one target-range Parquet file selected from
+    each mapper flush. :meth:`get_frames` filters each range down to
+    ``_target_shard``.
 
     Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
@@ -579,8 +576,8 @@ class ScatterReader:
         Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
         secondary sort). Performs a k-way merge across all chunks.
         Args:
-            external_sort_dir: If set and the shard exceeds the memory budget,
-                spill intermediate runs.
+            external_sort_dir: Stage-filesystem directory for intermediate runs
+                when the shard exceeds the memory budget.
 
         Yields:
             Deserialized Python items in merged sort order.
@@ -591,7 +588,7 @@ class ScatterReader:
         if self.shard_payload_bytes == 0:
             return
 
-        estimated_merge_memory_bytes = self.shard_payload_bytes
+        shard_payload_bytes = self.shard_payload_bytes
         overhead = _SCATTER_READ_DATAFUSION_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
         memory_bytes = _task_memory_bytes()
         merge_memory_bytes = int(memory_bytes * _SCATTER_READ_MEMORY_FRACTION)
@@ -603,14 +600,14 @@ class ScatterReader:
         context = datafusion_context(memory_limit_bytes=merge_memory_bytes, target_partitions=1)
         frames = self.get_frames(context)
 
-        needs_external_sort = estimated_merge_memory_bytes * overhead > merge_memory_bytes
+        needs_external_sort = shard_payload_bytes * overhead > merge_memory_bytes
         fan_in = max(2, math.ceil(math.sqrt(self.total_chunks))) if needs_external_sort else max(2, self.total_chunks)
         logger.info(
             "[shard %d] Merging %d chunks with fan_in=%d (%s memory needed, %s memory available)",
             self._target_shard,
             self.total_chunks,
             fan_in,
-            humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+            humanfriendly.format_size(shard_payload_bytes * overhead, binary=True),
             humanfriendly.format_size(merge_memory_bytes, binary=True),
         )
         batches = _merge_sorted_frames(
@@ -679,8 +676,6 @@ class ScatterWriter:
         # sidecar for reducer planning.
         self._shard_bytes: defaultdict[int, int] = defaultdict(int)
         self._shard_rows: defaultdict[int, int] = defaultdict(int)
-        self._total_bytes_written: int = 0
-        self._total_rows_written: int = 0
         self._n_chunks_written = 0
         self._n_flushes = 0
         # Throttles the per-flush progress log so high-fanout workloads don't log too often
@@ -739,8 +734,6 @@ class ScatterWriter:
 
             flushed_bytes = int(buffer.nbytes)
             total_flushed_bytes += flushed_bytes
-            self._total_bytes_written += flushed_bytes
-            self._total_rows_written += len(buffer)
             shard_sizes = (
                 pa.table(
                     {
@@ -768,7 +761,7 @@ class ScatterWriter:
             sorted_frame.write_parquet_with_options(
                 chunk_path,
                 ParquetWriterOptions(
-                    compression="zstd(1)",
+                    compression=_PARQUET_COMPRESSION,
                     max_row_group_size=row_group_size,
                 ),
                 _PARQUET_WRITE_OPTIONS,

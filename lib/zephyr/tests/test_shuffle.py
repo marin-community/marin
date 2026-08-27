@@ -108,7 +108,7 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         assert recovered == expected, f"shard {shard_idx} mismatch"
 
 
-def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
+def test_register_object_stores_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
     path = "s3://marin-us-east-02a/execution/stage0/shard-0000/scatter/c0000.parquet"
     stores = []
 
@@ -180,11 +180,12 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
             assert keys == sorted(keys), f"chunk for shard {shard_idx} not sorted"
 
 
-def test_avg_item_bytes_written(tmp_path):
+def test_avg_item_bytes_matches_serialized_payload_size(tmp_path):
     items = [{"k": 0, "v": i} for i in range(20)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    assert shard.avg_item_bytes > 0
+    expected = sum(len(cloudpickle.dumps(item)) for item in items) / len(items)
+    assert shard.avg_item_bytes == expected
 
 
 def test_merge_sorted_chunks_basic(tmp_path):

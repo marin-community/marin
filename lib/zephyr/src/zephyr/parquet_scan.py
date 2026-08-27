@@ -7,7 +7,7 @@ import os
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.parse import urlparse
 
 import pyarrow as pa
@@ -25,7 +25,7 @@ _HTTP_ENDPOINT_PREFIX = "http://"
 class ObjectStoreRegistry(Protocol):
     """The SessionContext surface needed to register remote stores."""
 
-    def register_object_store(self, scheme: str, store: Any, host: str | None = None) -> None: ...
+    def register_object_store(self, scheme: str, store: AmazonS3 | GoogleCloud, host: str | None = None) -> None: ...
 
 
 def datafusion_context(
