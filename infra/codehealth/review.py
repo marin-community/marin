@@ -81,10 +81,10 @@ from .review_tables import (
 logger = logging.getLogger("codehealth.review")
 
 DEFAULT_REPO = "marin-community/marin"
-# Use the lower-cost Codex model for bounded, schema-constrained comment
-# classification. The weekly refinement engine evaluates candidate rules
-# separately; this command only maintains the review-feedback tables.
-DEFAULT_MODEL = "gpt-5.6-luna"
+# Balance classification quality and cost for bounded, schema-constrained
+# comment batches.
+DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_AGENT_COMMAND = "codex exec"
 DEFAULT_BATCH_SIZE = 20
 # One headless Codex subprocess per batch, so concurrency caps simultaneous
@@ -129,10 +129,8 @@ class BatchedClassification(CommentClassification):
     id: int
 
 
-# A classifier turns a batch of comments into classifications keyed by their
-# `id` marker. Comments it cannot classify are simply absent from the result.
-# Pluggable so the backend (currently a headless `codex exec` session) can be
-# swapped without touching the batching/parallelism orchestration.
+# A classifier turns a complete batch into classifications keyed by `id`.
+# Pluggable so the backend can change without touching batching orchestration.
 Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
 
 
@@ -217,12 +215,6 @@ def _format_batch(items: list[CommentToClassify]) -> str:
 # Env markers that would bind a spawned classifier to its parent agent session.
 # Each batch runs as a fresh, isolated Codex session.
 AGENT_STRIPPED_ENV = (
-    "ANTHROPIC_API_KEY",
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_SSE_PORT",
     "CODEX_THREAD_ID",
     "LOOM_SESSION_ID",
     "LOOM_TOKEN",
@@ -274,7 +266,11 @@ def _parse_codex_batch(output: str) -> list[BatchedClassification] | None:
         return None
 
 
-def make_codex_classifier(model: str, agent_command: str = DEFAULT_AGENT_COMMAND) -> Classifier:
+def make_codex_classifier(
+    model: str,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    agent_command: str = DEFAULT_AGENT_COMMAND,
+) -> Classifier:
     """Build a sandboxed, schema-constrained Codex classifier."""
     env = _headless_env()
     base_command = shlex.split(agent_command)
@@ -295,6 +291,8 @@ def make_codex_classifier(model: str, agent_command: str = DEFAULT_AGENT_COMMAND
                 "--ignore-rules",
                 "--model",
                 model,
+                "--config",
+                f'model_reasoning_effort="{reasoning_effort}"',
                 "--output-schema",
                 str(schema_path),
                 "--output-last-message",
@@ -1114,6 +1112,13 @@ def cli() -> None:
 @click.option("--limit", type=click.IntRange(min=1), default=None, help="Max PRs to process; omit for all PRs")
 @click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Codex model id for the classifier")
 @click.option(
+    "--reasoning-effort",
+    default=DEFAULT_REASONING_EFFORT,
+    show_default=True,
+    type=click.Choice(["none", "low", "medium", "high", "xhigh", "max"]),
+    help="Codex reasoning effort for the classifier",
+)
+@click.option(
     "--agent-command",
     default=DEFAULT_AGENT_COMMAND,
     show_default=True,
@@ -1151,6 +1156,7 @@ def aggregate(
     days: int,
     limit: int,
     model: str,
+    reasoning_effort: str,
     agent_command: str,
     batch_size: int,
     concurrency: int,
@@ -1173,7 +1179,7 @@ def aggregate(
         logger.error("classifier agent %r not found on PATH (need a logged-in `codex` CLI)", agent_binary)
         sys.exit(2)
 
-    classifier = make_codex_classifier(model, agent_command)
+    classifier = make_codex_classifier(model, reasoning_effort, agent_command)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)

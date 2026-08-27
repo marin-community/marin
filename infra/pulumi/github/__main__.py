@@ -23,7 +23,6 @@ from iac.github.resources import credential_resource_plans, register_credentials
 LOOM_STACK = "organization/marin-loom/marin-loom"
 FORK_FERRY_FEDERATION = "fork-ferry"
 PR_REVIEW_FEDERATION = "pr-review"
-CODEHEALTH_FEDERATION = "codehealth"
 
 
 def main() -> None:
@@ -49,7 +48,6 @@ def main() -> None:
     profile_variables = {
         "fork-ferry-profile": ("LOOM_FORK_FERRY_PROFILE", FORK_FERRY_FEDERATION),
         "pr-review-profile": ("LOOM_PR_REVIEW_PROFILE", PR_REVIEW_FEDERATION),
-        "codehealth-profile": ("LOOM_CODEHEALTH_PROFILE", CODEHEALTH_FEDERATION),
     }
     resolved_profiles = {}
     for resource_name, (variable_name, federation_name) in profile_variables.items():
@@ -74,7 +72,6 @@ def main() -> None:
     pulumi.export("dependency_updater_enabled", True)
     pulumi.export("fork_ferry_profile", resolved_profiles[FORK_FERRY_FEDERATION])
     pulumi.export("pr_review_profile", resolved_profiles[PR_REVIEW_FEDERATION])
-    pulumi.export("codehealth_profile", resolved_profiles[CODEHEALTH_FEDERATION])
 
 
 main()

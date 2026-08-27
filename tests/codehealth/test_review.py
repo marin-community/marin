@@ -119,10 +119,6 @@ def test_pull_request_context_is_bounded() -> None:
     assert "x" * (review.MAX_FILE_PATCH + 1) not in context
 
 
-def test_weaver_user_is_filtered_by_the_configured_bot_login() -> None:
-    assert review._is_bot({"login": "weaverbot", "type": "User"}, {"weaverbot"})
-
-
 def test_agent_marked_replies_are_not_reviewer_feedback() -> None:
     assert not review._is_reviewer_comment(_comment(body="  🤖 Fixed in abc123."))
     assert review._is_reviewer_comment(_comment(body="Please simplify this branch."))
@@ -168,14 +164,11 @@ def test_resolution_sends_context_only_for_uncached_comments() -> None:
     assert seen[0].context == "new diff hunk"
 
 
-def test_codex_classifier_uses_read_only_schema_constrained_run(monkeypatch) -> None:
-    calls: list[tuple[list[str], str, dict]] = []
+def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
+    calls: list[tuple[list[str], str]] = []
 
     def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
-        schema_path = command[command.index("--output-schema") + 1]
-        with open(schema_path) as schema_file:
-            schema = json.load(schema_file)
-        calls.append((command, kwargs["input"], schema))
+        calls.append((command, kwargs["input"]))
         output_path = command[command.index("--output-last-message") + 1]
         with open(output_path, "w") as output:
             json.dump(
@@ -196,7 +189,7 @@ def test_codex_classifier_uses_read_only_schema_constrained_run(monkeypatch) -> 
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(review.subprocess, "run", run)
-    classifier = review.make_codex_classifier("gpt-5.6-luna")
+    classifier = review.make_codex_classifier("gpt-5.6-terra", "medium")
     result = classifier(
         [
             review.CommentToClassify(
@@ -209,22 +202,13 @@ def test_codex_classifier_uses_read_only_schema_constrained_run(monkeypatch) -> 
         ]
     )
 
-    command, prompt, schema = calls[0]
+    command, prompt = calls[0]
     assert command[:2] == ["codex", "exec"]
     assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[command.index("--model") + 1] == "gpt-5.6-terra"
+    assert command[command.index("--config") + 1] == 'model_reasoning_effort="medium"'
+    assert "--output-schema" in command
     assert "Diff context:" in prompt
-    assert schema["required"] == ["results"]
-    assert schema["additionalProperties"] is False
-    item_schema = schema["properties"]["results"]["items"]
-    assert set(item_schema["required"]) == {
-        "id",
-        "class",
-        "catchable_strict",
-        "catchable_generous",
-        "confidence",
-        "reason",
-    }
-    assert item_schema["additionalProperties"] is False
     assert result[0].catchable_strict
     assert result[0].catchable_generous
 

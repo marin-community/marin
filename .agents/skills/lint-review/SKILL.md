@@ -36,7 +36,11 @@ unforgivable error; so is fabricating one.
 2. **Run the review.** From the repo root:
 
    ```bash
-   ./infra/pre-commit.py --review --agent-command='codex exec'
+   head_sha="$(git rev-parse HEAD)"
+   MARIN_REVIEW_TRIGGER=ci \
+     MARIN_REVIEW_PR_NUMBER=<PR> \
+     MARIN_REVIEW_HEAD_SHA="$head_sha" \
+     ./infra/pre-commit.py --review --agent-command='codex exec'
    ```
 
    The command writes its raw per-arm prompts/outputs and the

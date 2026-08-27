@@ -23,10 +23,6 @@ concurrency:
   group: fork-ferry
   cancel-in-progress: false
 
-env:
-  # Loom deployment this repo federates to. Override with a repo variable to target a non-prod Loom.
-  LOOM_URL: ${{ vars.LOOM_URL || 'https://loom.oa.dev' }}
-
 jobs:
   ferry:
     runs-on: ubuntu-latest
@@ -58,7 +54,6 @@ jobs:
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
         uses: ./.github/actions/launch-loom-run
         with:
-          loom-url: ${{ env.LOOM_URL }}
           profile: ${{ vars.LOOM_FORK_FERRY_PROFILE }}
           idempotency-key: fork-ferry-${{ matrix.unit }}-${{ github.run_id }}
           channel: ${{ matrix.unit }}

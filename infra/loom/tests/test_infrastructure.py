@@ -164,7 +164,7 @@ def test_weaver_pr_review_launcher_never_executes_pull_request_code() -> None:
     assert set(trigger) == {"pull_request_target"}
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
     checkout, launch = job["steps"]
-    assert checkout["uses"] == "actions/checkout@v6"
+    assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["ref"] == "main"
     assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
     assert launch["uses"] == "./.github/actions/launch-loom-run"

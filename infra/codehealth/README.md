@@ -66,12 +66,12 @@ classifier. Review summaries and issue comments receive a bounded view of the
 pull request's changed-file patches. Both commands need `gh auth login`, and
 `aggregate` also needs a logged-in `codex` CLI.
 
-`Ops - Code-health Review Data` launches the aggregator through Loom every day.
-GitHub Actions exchanges OIDC for a short-lived Loom token; the repository
-stores no Weaver credential. The `codehealth` Loom profile owns Finelog access
-and treats skipped batches, GitHub fetch failures, and flush failures as run
-failures. Scheduled publication belongs to the refinement job that consumes
-these rows; `report` remains available for an operator with gist credentials.
+`Ops - Code-health Review Data` runs the aggregator directly every day. The
+runner uses the repository's CI Google credentials and SSH key to reach Finelog,
+and an OpenAI key mirrored from Secret Manager for classification. Skipped
+batches, GitHub fetch failures, and Finelog flush failures fail the job.
+Scheduled publication belongs to the refinement job that consumes these rows;
+`report` remains available for an operator with gist credentials.
 
 Run either command from the repository root:
 

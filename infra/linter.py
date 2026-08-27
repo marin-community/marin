@@ -298,10 +298,8 @@ def _git(args: list[str]) -> str | None:
 
 # A CI runner checks out the synthetic pull-request merge ref, so local git
 # state describes the merge commit rather than the branch under review. The
-# harness supplies the real identity through the environment because the
-# review runs inside a composite action whose inner step builds its own
-# argv, leaving no flag to thread these through. A developer's machine sets
-# none of them and falls back to local git.
+# review harness supplies the real identity through the environment. A
+# developer's machine sets none of them and falls back to local git.
 REVIEW_TRIGGER_ENV = "MARIN_REVIEW_TRIGGER"
 REVIEW_PR_NUMBER_ENV = "MARIN_REVIEW_PR_NUMBER"
 REVIEW_HEAD_SHA_ENV = "MARIN_REVIEW_HEAD_SHA"

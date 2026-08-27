@@ -4,7 +4,8 @@ description: Exchange GitHub OIDC for a short-lived Loom token and launch one ru
 inputs:
   loom-url:
     description: Loom deployment URL
-    required: true
+    required: false
+    default: https://loom.oa.dev
   profile:
     description: Profile bound to the calling workflow's Loom federation
     required: true
