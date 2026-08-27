@@ -10,8 +10,8 @@ import pytest
 from experiments.datakit.mixprior.data import SwarmObservations
 from experiments.datakit.mixprior.objective import (
     HINGE_TASKS,
+    UNCAPPED_TARGET_TASKS,
     VarianceNormalizedObjective,
-    objective_observations,
     pooled_replicate_sd,
 )
 
@@ -38,26 +38,23 @@ def test_objective_applies_capped_hinge_and_uncapped_linear_term(
 
 
 def test_objective_observations_uses_only_selected_metrics() -> None:
-    objective = _objective(list(HINGE_TASKS))
+    objective_metrics = tuple(task for task in HINGE_TASKS if task != "include_mean")
+    objective = _objective(list(HINGE_TASKS), objective_metrics)
     values = np.zeros((1, len(objective.labels)))
     swarm = SimpleNamespace(
         swarm_id="test",
         data=SimpleNamespace(labels=objective.labels, outcomes=values),
     )
-    objective_metrics = tuple(task for task in HINGE_TASKS if task != "include_mean")
-    observation_sd = {label: 0.1 for label in objective.labels}
-    baseline, baseline_variance = objective_observations(swarm, objective, objective_metrics, observation_sd)
+    baseline = objective.observations(swarm)
 
     values[:, objective.labels.index("include_mean")] = 10.0
-    without_include, without_include_variance = objective_observations(
-        swarm, objective, objective_metrics, observation_sd
-    )
-    assert np.array_equal(without_include, baseline)
-    assert np.array_equal(without_include_variance, baseline_variance)
+    without_include = objective.observations(swarm)
+    assert np.array_equal(without_include.values, baseline.values)
+    assert np.array_equal(without_include.variances, baseline.variances)
 
     values[:, objective.labels.index("boolq_0shot")] = 10.0
-    with_regression, _ = objective_observations(swarm, objective, objective_metrics, observation_sd)
-    assert with_regression < without_include
+    with_regression = objective.observations(swarm)
+    assert with_regression.values < without_include.values
 
 
 def test_repeated_seed_evaluations_estimate_observation_noise(
@@ -77,10 +74,15 @@ def test_objective_rejects_invalid_epsilon(epsilon: float) -> None:
             task_correlation=np.eye(1),
             reference_count=2,
             epsilon=epsilon,
+            metrics=("boolq_0shot",),
+            hinge_tasks=("boolq_0shot",),
+            uncapped_tasks=(),
+            observation_sd=np.ones(1),
         )
 
 
-def _objective(labels: list[str]) -> VarianceNormalizedObjective:
+def _objective(labels: list[str], metrics: tuple[str, ...] | None = None) -> VarianceNormalizedObjective:
+    metrics = tuple(labels) if metrics is None else metrics
     return VarianceNormalizedObjective(
         labels=labels,
         reference_mean=np.zeros(len(labels)),
@@ -88,4 +90,8 @@ def _objective(labels: list[str]) -> VarianceNormalizedObjective:
         task_correlation=np.eye(len(labels)),
         reference_count=2,
         epsilon=0.0,
+        metrics=metrics,
+        hinge_tasks=tuple(labels),
+        uncapped_tasks=tuple(task for task in UNCAPPED_TARGET_TASKS if task in labels),
+        observation_sd=np.full(len(metrics), 0.1),
     )

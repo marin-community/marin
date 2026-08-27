@@ -7,31 +7,105 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import NamedTuple, TypedDict, cast
 
 import numpy as np
-import torch
 
 from experiments.datakit.mixprior.campaign import Campaign
-from experiments.datakit.mixprior.data import (
-    AcquiredCandidate,
+from experiments.datakit.mixprior.data import read_record, record_sha256, sha256, write_record
+from experiments.datakit.mixprior.search import (
+    MIXTURE_DENOMINATOR,
+    CandidateSelection,
     PoolProvenance,
-    record_sha256,
-    sha256,
-    write_record,
+    quantize_mixtures,
+    validate_candidate_pool,
 )
+from experiments.datakit.mixprior.surrogate import ModelMetadata
 
 CANDIDATE_ARTIFACT = "candidate.parquet"
 POOL_ARTIFACT = "candidate_pool.npz"
-MODEL_ARTIFACT = "fitted_model.pt"
 ACQUISITION_ARTIFACT = "acquisition_values.npy"
-CYCLE_ARTIFACT = "cycle.parquet"
+BUNDLE_MANIFEST_ARTIFACT = "bundle_manifest.parquet"
 
 
-class ModelMetadata(TypedDict):
+class CandidateDecision(NamedTuple):
+    model_metadata: ModelMetadata
+    pool: np.ndarray
+    selection: CandidateSelection
+    diagnostics: dict[str, object]
+    proposal: PoolProvenance
+    pool_seeds: tuple[int, ...]
+
+
+class CandidateModelArtifact(TypedDict):
     kind: str
     device: str
-    details: dict[str, Any]
+    details: dict[str, object]
+    objective_sha256: str
+    phase_token_fractions: list[float]
+
+
+class RankedPoolRow(TypedDict):
+    pool_index: int
+    acquisition_value: float
+
+
+class CandidateAcquisitionArtifact(TypedDict):
+    function: str
+    selection_rule: str
+    pool_seeds: list[int]
+    acquisition_seed: int | None
+    pool_size: int
+    pool_weights_sha256: str
+    pool_artifact: str
+    pool_artifact_sha256: str
+    values_artifact: str
+    values_artifact_sha256: str
+    selected_pool_index: int
+    selected_acquisition_value: float
+    top_pool_rows: list[RankedPoolRow]
+    proposal: PoolProvenance
+    observed_target_mixtures_excluded: bool
+
+
+class CandidateConstraintsArtifact(TypedDict):
+    simplex_count: int
+    mixture_denominator: int
+
+
+class CandidateArtifact(TypedDict):
+    schema_version: int
+    candidate_id: str
+    campaign_manifest_sha256: str
+    dependency_lock_sha256: str
+    target_swarm: str
+    source_swarms: list[str]
+    candidate_store_uri: str
+    model: CandidateModelArtifact
+    acquisition: CandidateAcquisitionArtifact
+    constraints: CandidateConstraintsArtifact
+    mixture_components: list[str]
+    phase_weights: list[dict[str, float]]
+    diagnostics: dict[str, object]
+
+
+class BundleGenerationArtifact(TypedDict):
+    acquisition_function: str
+    selection_rule: str
+    pool_size: int
+    pool_seeds: list[int]
+    acquisition_seed: int | None
+
+
+class BundleManifest(TypedDict):
+    schema_version: int
+    campaign_uri: str
+    campaign_manifest_sha256: str
+    candidate_id: str
+    target_swarm: str
+    source_swarms: list[str]
+    generation: BundleGenerationArtifact
+    artifact_sha256: dict[str, str]
 
 
 def candidate_id(weights: np.ndarray) -> str:
@@ -47,21 +121,16 @@ def write_candidate_bundle(
     *,
     campaign_manifest: Path,
     campaign: Campaign,
-    model_payload: dict,
-    model_metadata: ModelMetadata,
-    pool: np.ndarray,
-    acquired: AcquiredCandidate,
-    selected_weights: np.ndarray,
-    diagnostics: dict,
-    phase_token_fractions: np.ndarray,
+    decision: CandidateDecision,
     output_dir: Path,
-    seed: int,
-    proposal: PoolProvenance,
-    acquisition_function: str,
-    selection_rule: str,
     dependency_lock: Path,
-) -> dict:
+) -> CandidateArtifact:
     """Write the selected candidate and the exact artifacts supporting it."""
+    model_metadata = decision.model_metadata
+    pool = decision.pool
+    acquired = decision.selection.acquired
+    selected_weights = decision.selection.weights
+    pool = validate_candidate_pool(pool, campaign.target.data.weights.shape[1:])
     if acquired.acquisition_values.shape != (len(pool),):
         raise ValueError("Acquisition values must align with the candidate pool")
     if acquired.pool_index < 0 or acquired.pool_index >= len(pool):
@@ -70,27 +139,17 @@ def write_candidate_bundle(
         raise ValueError("Selected acquisition value does not match its pool row")
     if not np.array_equal(selected_weights, pool[acquired.pool_index]):
         raise ValueError("Selected weights do not match the selected pool row")
-    if not proposal["parameters"]:
-        raise ValueError("Pool provenance requires at least one parameter")
-    if not model_metadata["details"]:
-        raise ValueError("Model metadata requires at least one detail")
     output_dir.mkdir(parents=True, exist_ok=False)
     pool_path = output_dir / POOL_ARTIFACT
-    model_path = output_dir / MODEL_ARTIFACT
     acquisition_path = output_dir / ACQUISITION_ARTIFACT
     candidate_path = output_dir / CANDIDATE_ARTIFACT
 
     np.savez_compressed(pool_path, weights=pool)
     np.save(acquisition_path, acquired.acquisition_values)
-    torch.save(model_payload, model_path)
 
-    objective_payload = {
-        "reference": campaign.objective.payload(),
-        "objective_metrics": list(campaign.objective_metrics),
-    }
     order = np.argsort(acquired.acquisition_values)[::-1][:10]
-    payload = {
-        "schema_version": 3,
+    payload: CandidateArtifact = {
+        "schema_version": 5,
         "candidate_id": candidate_id(selected_weights),
         "campaign_manifest_sha256": sha256(campaign_manifest),
         "dependency_lock_sha256": sha256(dependency_lock),
@@ -101,16 +160,14 @@ def write_candidate_bundle(
             "kind": model_metadata["kind"],
             "device": model_metadata["device"],
             "details": model_metadata["details"],
-            "objective_metrics": list(campaign.objective_metrics),
-            "objective_sha256": record_sha256(objective_payload),
-            "phase_token_fractions": phase_token_fractions.tolist(),
-            "artifact": MODEL_ARTIFACT,
-            "artifact_sha256": sha256(model_path),
+            "objective_sha256": record_sha256(campaign.objective_metadata),
+            "phase_token_fractions": (campaign.target.phase_budgets / campaign.target.phase_budgets.sum()).tolist(),
         },
         "acquisition": {
-            "function": acquisition_function,
-            "selection_rule": selection_rule,
-            "seed": seed,
+            "function": decision.selection.acquisition_function,
+            "selection_rule": decision.selection.selection_rule,
+            "pool_seeds": list(decision.pool_seeds),
+            "acquisition_seed": decision.selection.acquisition_seed,
             "pool_size": len(pool),
             "pool_weights_sha256": pool_sha256(pool),
             "pool_artifact": POOL_ARTIFACT,
@@ -126,12 +183,12 @@ def write_candidate_bundle(
                 }
                 for index in order
             ],
-            "proposal": proposal,
+            "proposal": decision.proposal,
+            "observed_target_mixtures_excluded": _excludes_observed(pool, campaign.target.data.weights),
         },
         "constraints": {
             "simplex_count": len(campaign.target.phase_budgets),
-            "max_cumulative_epochs": campaign.max_cumulative_epochs,
-            "observed_target_mixtures_excluded": _excludes_observed(pool, campaign.target.data.weights),
+            "mixture_denominator": MIXTURE_DENOMINATOR,
         },
         "mixture_components": campaign.target.data.mixture_components,
         "phase_weights": [
@@ -144,26 +201,26 @@ def write_candidate_bundle(
             )
             for phase in selected_weights
         ],
-        "diagnostics": diagnostics,
+        "diagnostics": decision.diagnostics,
     }
     write_record(candidate_path, payload)
     return payload
 
 
-def write_cycle_record(output_dir: Path, campaign_uri: str, candidate: dict) -> Path:
-    """Write the remote-input and generated-artifact record for one cycle."""
+def write_bundle_manifest(output_dir: Path, campaign_uri: str) -> Path:
+    """Write the remote input and hashes for the complete candidate bundle."""
+    candidate = cast(CandidateArtifact, read_record(output_dir / CANDIDATE_ARTIFACT))
     artifact_hashes = {
         name: sha256(output_dir / name)
         for name in (
             CANDIDATE_ARTIFACT,
             POOL_ARTIFACT,
-            MODEL_ARTIFACT,
             ACQUISITION_ARTIFACT,
         )
     }
     acquisition = candidate["acquisition"]
-    cycle = {
-        "schema_version": 2,
+    bundle_manifest: BundleManifest = {
+        "schema_version": 4,
         "campaign_uri": campaign_uri,
         "campaign_manifest_sha256": candidate["campaign_manifest_sha256"],
         "candidate_id": candidate["candidate_id"],
@@ -173,15 +230,17 @@ def write_cycle_record(output_dir: Path, campaign_uri: str, candidate: dict) -> 
             "acquisition_function": acquisition["function"],
             "selection_rule": acquisition["selection_rule"],
             "pool_size": acquisition["pool_size"],
-            "seed": acquisition["seed"],
+            "pool_seeds": acquisition["pool_seeds"],
+            "acquisition_seed": acquisition["acquisition_seed"],
         },
         "artifact_sha256": artifact_hashes,
     }
-    cycle_path = output_dir / CYCLE_ARTIFACT
-    write_record(cycle_path, cycle)
-    return cycle_path
+    manifest_path = output_dir / BUNDLE_MANIFEST_ARTIFACT
+    write_record(manifest_path, bundle_manifest)
+    return manifest_path
 
 
 def _excludes_observed(pool: np.ndarray, observed: np.ndarray) -> bool:
+    observed = quantize_mixtures(observed)
     observed_rows = {row.tobytes() for row in np.round(observed.reshape(len(observed), -1), decimals=12)}
     return all(row.tobytes() not in observed_rows for row in np.round(pool.reshape(len(pool), -1), decimals=12))

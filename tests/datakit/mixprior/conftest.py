@@ -16,7 +16,7 @@ from experiments.datakit.mixprior.data import (
     sha256,
     write_record,
 )
-from experiments.datakit.mixprior.objective import HINGE_TASKS, VarianceNormalizedObjective
+from experiments.datakit.mixprior.objective import HINGE_TASKS, UNCAPPED_TARGET_TASKS, VarianceNormalizedObjective
 
 
 @pytest.fixture(scope="module")
@@ -75,8 +75,12 @@ def objective(swarm_observations: SwarmObservations) -> VarianceNormalizedObject
     return VarianceNormalizedObjective.fit(
         swarm_observations.labels,
         swarm_observations.outcomes,
-        swarm_observations.frame.group.eq("marin_proportional").to_numpy(),
+        np.asarray(swarm_observations.groups) == "marin_proportional",
         epsilon=0.0,
+        metrics=tuple(swarm_observations.labels),
+        hinge_tasks=HINGE_TASKS,
+        uncapped_tasks=UNCAPPED_TARGET_TASKS,
+        observation_sd=np.full(len(swarm_observations.labels), 0.1),
     )
 
 
@@ -108,10 +112,7 @@ def tiny_campaign() -> Campaign:
         target=target,
         sources=(source,),
         objective=objective,
-        observation_sd={label: 0.05},
-        objective_metrics=(label,),
-        kernel_reference_swarm=target.swarm_id,
-        max_cumulative_epochs=8.0,
+        objective_metadata={"kind": "test"},
     )
 
 
@@ -125,8 +126,25 @@ def campaign_bundle(tmp_path: Path, swarm_observations: SwarmObservations) -> tu
     observations = swarm_dir / "observations.parquet"
     buckets = swarm_dir / "buckets.parquet"
     content_path = swarm_dir / "content.parquet"
-    frame = swarm_observations.frame.assign(swarm_id=swarm_id)
-    frame["observation_id"] = frame.run_name.map(lambda run_name: f"{swarm_id}:{run_name}")
+    frame = pd.DataFrame(
+        {
+            "observation_id": [f"{swarm_id}:{run_name}" for run_name in swarm_observations.run_names],
+            "swarm_id": swarm_id,
+            "run_name": swarm_observations.run_names,
+            "group": swarm_observations.groups,
+            "phase0_weights": [
+                dict(zip(swarm_observations.mixture_components, row[0], strict=True))
+                for row in swarm_observations.weights
+            ],
+            "phase1_weights": [
+                dict(zip(swarm_observations.mixture_components, row[1], strict=True))
+                for row in swarm_observations.weights
+            ],
+            "grouped_bpb": [
+                dict(zip(swarm_observations.labels, row, strict=True)) for row in swarm_observations.outcomes
+            ],
+        }
+    )
     frame.to_parquet(observations, index=False)
     write_record(
         buckets,
@@ -230,10 +248,8 @@ def campaign_bundle(tmp_path: Path, swarm_observations: SwarmObservations) -> tu
             "source_swarms": [],
             "objective_reference_swarm": swarm_id,
             "noise_reference_swarm": swarm_id,
-            "kernel_reference_swarm": swarm_id,
             "response_tasks": [task for task in HINGE_TASKS if task != "include_mean"],
             "objective_epsilon": 0.0,
-            "max_cumulative_epochs": 8.0,
         },
     )
     return manifest_path, observations
@@ -247,20 +263,19 @@ def _objective(labels: list[str]) -> VarianceNormalizedObjective:
         task_correlation=np.eye(len(labels)),
         reference_count=2,
         epsilon=0.0,
+        metrics=tuple(labels),
+        hinge_tasks=tuple(labels),
+        uncapped_tasks=tuple(labels),
+        observation_sd=np.full(len(labels), 0.05),
     )
 
 
 def _swarm(name: str, *, weights: np.ndarray, outcomes: np.ndarray) -> Swarm:
     cells = ["c00q0", "c00q1"]
     data = SwarmObservations(
-        frame=pd.DataFrame(
-            {
-                "group": ["bayesian_optimization"] * len(weights),
-                "run_name": [f"{name}-{index}" for index in range(len(weights))],
-                "swarm_id": [name] * len(weights),
-                "observation_id": [f"{name}:{index}" for index in range(len(weights))],
-            }
-        ),
+        observation_ids=[f"{name}:{index}" for index in range(len(weights))],
+        run_names=[f"{name}-{index}" for index in range(len(weights))],
+        groups=["bayesian_optimization"] * len(weights),
         mixture_components=cells,
         component_metadata=[
             {

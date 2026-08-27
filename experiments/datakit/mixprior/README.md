@@ -1,258 +1,183 @@
-# Transfer Bayesian optimization for data mixtures
+# Transfer Bayesian optimization for two-phase data mixtures
 
-This package fits a transfer Gaussian process (GP) to data-mixture observations
-and recommends one feasible two-phase mixture for a target swarm. Bayesian
-optimization uses the GP as its surrogate model and maximizes an acquisition
-function over a finite candidate set.
+This package fits one transfer Gaussian process to evaluated data mixtures and
+selects a new mixture for a target swarm. A swarm is a set of runs over one
+token store and training recipe. Historical swarms train the shared GP response;
+only target-swarm observations define the incumbent.
 
-The remote input is a campaign manifest. It selects the target and source
-swarms, assigns reference-data roles, defines the objective and constraints,
-and points to a swarm registry. The registry maps swarm and content-basis IDs to
-hash-verified manifests. A materialized campaign is the downloaded manifest,
-registry, and referenced artifacts.
-
-The published campaign is in the
-[`grug-moe-mix-swarm`](https://huggingface.co/datasets/marin-community/grug-moe-mix-swarm/tree/6110da69a96d1dcdc2f420187cd818b3a02944b3/registry/v1)
-dataset. Candidate generation requires no Marin storage or service credentials.
+The input campaign is published in the
+[`grug-moe-mix-swarm`](https://huggingface.co/datasets/marin-community/grug-moe-mix-swarm/tree/283eacf18b66b7888b59fd8f889d6be134aee879/registry/v1)
+dataset. Every URI pins a dataset commit and every referenced artifact has a
+SHA-256 digest. Candidate generation requires no Marin credentials.
 
 ## Run a campaign
 
 ```bash
 uv sync --package marin-core --extra mixprior --extra cpu --group test
 uv run --no-sync pytest -n 0 -q tests/datakit/mixprior
-uv run --no-sync python -m experiments.datakit.mixprior.run_cycle \
-  --campaign-uri hf://datasets/marin-community/grug-moe-mix-swarm@6110da69a96d1dcdc2f420187cd818b3a02944b3/registry/v1/transfer_campaign.parquet \
-  --campaign-sha256 57a4f13beccf5369e771d0692ffbedd7ce02e76277f8003a7dfe91a7174617ac \
+uv run --no-sync python -m experiments.datakit.mixprior.generate_from_huggingface \
+  --campaign-uri hf://datasets/marin-community/grug-moe-mix-swarm@283eacf18b66b7888b59fd8f889d6be134aee879/registry/v1/transfer_campaign.parquet \
+  --campaign-sha256 5ed5fb024590dd4707b802caf8fe728be1b8d73375c100139f884b0728f0cca2 \
   --output-dir work/rav-candidate \
-  --pool-size 65536 \
-  --seed 20260821
+  --pool-size-per-seed 65536 \
+  --pool-seed 111 \
+  --pool-seed 222 \
+  --pool-seed 333 \
+  --acquisition-seed 7
 ```
 
-Use `--extra gpu` instead of `--extra cpu` on an x86-64 Linux CUDA 13 host.
-The output directory must not exist. Downloads are anonymous, and each URI pins
-a Hugging Face dataset commit.
+Use `--extra gpu` on an x86-64 Linux CUDA 13 host. The output directory must not
+exist.
 
 The output directory contains:
 
 | Artifact | Contents |
 | --- | --- |
 | `candidate.parquet` | Selected phase weights, posterior diagnostics, constraints, and artifact hashes |
-| `candidate_pool.npz` | Every feasible candidate evaluated by the acquisition function |
-| `acquisition_values.npy` | Acquisition-function value for each candidate |
-| `fitted_model.pt` | Fitted surrogate-model class and state dictionary |
+| `candidate_pool.npz` | Every mixture evaluated by the acquisition function |
+| `acquisition_values.npy` | Acquisition value for every candidate-pool row |
 | `campaign/` | Materialized campaign and referenced swarm artifacts |
-| `cycle.parquet` | Remote campaign URI and generated-artifact hashes |
+| `bundle_manifest.parquet` | Remote campaign URI and generated-artifact hashes |
 
-Inspect the machine-readable records without loading the model:
+## Data and objective
+
+Each observation contains exactly two simplex-valued phase mixtures. The
+in-memory weight shape is `(observation, phase, mixture_component)`. Each swarm
+also records phase token budgets, component token counts, fixed Luxical content
+features, model parameters, and physical and simulated training tokens.
+
+The modeled objective is the negative variance-normalized hinge loss over BPB
+metrics. Higher objective values are better. The task lists are explicit fields
+of `VarianceNormalizedObjective`. Repeated mixtures estimate observation noise.
+
+## Quadratic-exposure GP
+
+For phase $s$ and mixture component $i$, define simulated epochs and available
+token share:
+
+$$
+e_{s,i}(w)=\frac{B_s w_{s,i}}{V_i},
+\qquad
+a_i=\frac{V_i}{\sum_j V_j}.
+$$
+
+$B_s$ is the phase token budget and $V_i$ is the component's available token
+count. The feature map preserves content and repetition separately:
+
+$$
+h_s(w)=
+\left[
+\sum_i a_i e_{s,i}\phi_i,
+\sum_i a_i e_{s,i}^2\phi_i
+\right],
+\qquad
+q_s(w)=\sum_i a_i e_{s,i}^2.
+$$
+
+$\phi_i$ is the component's fixed Luxical content vector. The learned prior mean
+is
+
+$$
+m(w)=c-\sum_s b_s q_s(w),
+\qquad b_s>0.
+$$
+
+The penalty is quadratic in simulated epochs. A scalar linear epoch term was
+removed because it is constant on a fixed-budget simplex:
+
+$$
+\sum_i a_i e_{s,i}
+=\frac{B_s}{\sum_j V_j}\sum_iw_{s,i}
+=\frac{B_s}{\sum_jV_j}.
+$$
+
+Content-specific benefit is learned by the GP response. The covariance is
+
+$$
+k(x,x')=
+\sum_{s,t}C_{st}k_c(h_s(x),h_t(x'))
++\mathbf 1[\operatorname{swarm}(x)=\operatorname{swarm}(x')]
+\sigma_r^2 k_r(h(x),h(x')).
+$$
+
+$C=LL^\top+\operatorname{diag}(v)$ is a learned positive-semidefinite phase
+covariance. $k_c$ and $k_r$ are Matérn-5/2 kernels. The first term transfers a
+phase-linked content response across swarms. The second lets each swarm learn a
+smooth deviation.
+
+Objective values and variances are standardized within each swarm before
+pooling. Predictions are transformed back to target-swarm units. Hyperparameters
+use the highest-marginal-likelihood converged fit from the prior mode and two
+fixed prior draws.
+
+## Replace one stage
+
+The package boundaries correspond to the operations an experiment may replace:
+
+| Operation | File | Boundary |
+| --- | --- | --- |
+| Load local campaign records | `campaign.py` | `Path -> Campaign` |
+| Compute objective observations | `objective.py` | `ScalarObjective` |
+| Map mixtures and construct the quadratic GP | `quadratic_exposure.py` | `quadratic_exposure_features` and `quadratic_exposure_gp` |
+| Standardize data, fit MAP starts, and predict | `surrogate.py` | `FittedSwarmGP` |
+| Sample a lattice pool and acquire candidates | `search.py` | `MixturePredictor` and `CandidateSelection` |
+| Compose a fitter with an acquisition | `generate_candidate.py` | `search_candidate` |
+| Persist a decision | `artifacts.py` | `CandidateDecision` |
+
+`quadratic_exposure_gp` constructs the package's one supported prior mean and
+covariance. Experiments on that form stay in `quadratic_exposure.py`. A new
+acquisition implements the selector signature and is passed to
+`search_candidate`; it does not modify the GP or artifact code.
+
+## Candidate search
+
+Candidate phases are nonnegative simplex vectors quantized to integer counts
+summing to 49,152. These are the only hard constraints.
+
+Half of each proposal draw is global symmetric Dirichlet sampling. The other
+half perturbs availability-proportional and observed designs. Three independently
+seeded 65,536-row pools are deduplicated before acquisition. Observed target
+mixtures are excluded.
+
+The command-line path uses `qLogNoisyExpectedImprovement` with 1,024 Sobol
+samples. Its baseline contains actual target-swarm observations. Historical
+observations train the transfer GP and do not enter the target baseline.
+`PosteriorMean` is also available for greedy selection.
+
+## Development replay
+
+The replay starts with three target observations, selects batches of five from
+a closed pool, reveals their outcomes, and refits. Historical observations stay
+available. Mean simple regret over twenty deterministic starts is:
+
+| Target pool | Acquisition | 8 evals | 13 evals | 18 evals | 20 evals |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 56-row Harrier | PosteriorMean | 1.296 | 0.000 | 0.000 | 0.000 |
+| 56-row Harrier | qLogNEI | 4.395 | 3.332 | 3.332 | 3.146 |
+| 115-row Harrier | PosteriorMean | 7.495 | 0.525 | 0.035 | 0.035 |
+| 115-row Harrier | qLogNEI | 108.862 | 98.569 | 98.555 | 32.805 |
+
+Mean chronological Spearman is 0.051 on the 56-row pool and 0.834 on the
+115-row pool. The low 56-row rank correlation coexists with low regret because
+the model elevates a high-value mixture without ordering the rest of the pool.
+
+The model and priors were developed while inspecting both pools. These numbers
+measure closed-pool development behavior. qLogNEI's poor replay trajectory also
+shows that the current posterior uncertainty is not calibrated well enough to
+justify the same claim as the PosteriorMean result.
+
+Run the diagnostics on a CUDA host:
 
 ```bash
-uv run --no-sync python - <<'PY'
-from pathlib import Path
-from pprint import pprint
-
-from experiments.datakit.mixprior.data import read_record
-
-root = Path("work/rav-candidate")
-pprint(read_record(root / "candidate.parquet"))
-pprint(read_record(root / "cycle.parquet"))
-PY
+uv run --no-sync python -m experiments.datakit.mixprior.benchmark rank
+uv run --no-sync python -m experiments.datakit.mixprior.benchmark regret --block 0
 ```
 
-## Bayesian-optimization terms
+## Current limitations
 
-- An **observation** is one evaluated two-phase mixture and its metric values.
-- An **objective metric** is an evaluation metric used to compute the scalar
-  objective. The published manifest calls these `response_tasks`; the loader
-  translates that compatibility field at the schema boundary.
-- An **objective value** is the scalar, higher-is-better value modeled by the
-  surrogate. Here it is the negative variance-normalized hinge loss.
-- The **surrogate model** is a transfer GP that returns a posterior distribution
-  over the objective.
-- The **incumbent** is the best observed objective value for the target swarm.
-- A **candidate** is an unevaluated feasible mixture.
-- The **candidate set** is the finite set over which the acquisition function is
-  optimized.
-- The **acquisition function** is `PosteriorMean`; the selected candidate is its
-  argmax over the candidate set.
-- `probability_of_improvement` is the posterior probability that the selected
-  candidate's objective exceeds the incumbent.
-- A **mixture component** is one weighted entry in a phase mixture. The external
-  registry schema calls these entries `cells` and their table `buckets`; loaders
-  translate those compatibility fields at the schema boundary.
-- A **phase token budget** is a token count. A **phase token fraction** is that
-  budget divided by the total token budget.
-- A **hinge tolerance** is the allowed standardized improvement before a
-  non-linear objective term is capped. The manifest stores it in the
-  compatibility field `objective_epsilon`.
-
-## Pipeline stages
-
-The default path has eight stages. Each accepts arrays or typed records, so an
-experiment can replace one stage while retaining the others.
-
-| Stage | Default entry point | Input | Output | Alternative |
-| --- | --- | --- | --- | --- |
-| Campaign loading | `campaign.download_campaign` and `campaign.load_campaign` | Pinned campaign URI or local campaign manifest | `Campaign` | Another transport or swarm selection |
-| Objective | `VarianceNormalizedObjective` and `objective.objective_observations` | Evaluation metrics and observation-noise estimates | Objective values and variances | Another scalar objective |
-| Feature map | `model.curriculum_features` | Phase weights, component content, phase token fractions | Surrogate features | Another cross-swarm representation |
-| Surrogate fit | `model.prepare_hellinger_transfer_data` and `model.fit_additive_hellinger_model` | Campaign | `HellingerTransferData` and `TransferPredictor` | Another surrogate or transfer kernel |
-| Candidate generation | `search.campaign_lognormal_pool_inputs` and `search.sample_lognormal_pool` | Target swarm and constraints | Feasible candidate set | Another proposal distribution or design |
-| Acquisition | `search.acquire_posterior_mean` and `search.build_candidate_selection` | Fitted surrogate and candidate features | `CandidateSelection` | Another acquisition function |
-| Diagnostics | `search.candidate_diagnostics` | Selected candidate and posterior | Diagnostic record | Another report |
-| Persistence | `artifacts.write_candidate_bundle` | Campaign, surrogate, candidates, selection, and diagnostics | Hash-linked Parquet bundle | Another audit format |
-
-Array shapes form the boundary between stages:
-
-- Mixture weights have shape `(candidate, phase, mixture_component)`.
-- Content matrices have shape `(mixture_component, shared_content_feature)`.
-- The modeled objective is the higher-is-better negative hinge loss.
-- Human-facing loss values are lower-is-better; conversions between loss and
-  objective value must negate the value explicitly.
-
-For example, a hand-authored candidate set can reuse the default objective,
-surrogate, acquisition function, diagnostics, and artifact format:
-
-```python
-from pathlib import Path
-
-import numpy as np
-import torch
-
-from experiments.datakit.mixprior.artifacts import write_candidate_bundle
-from experiments.datakit.mixprior.campaign import build_variance_normalized_campaign, load_campaign_inputs
-from experiments.datakit.mixprior.model import (
-    OBJECTIVE_NAME,
-    fit_additive_hellinger_model,
-    prepare_hellinger_transfer_data,
-)
-from experiments.datakit.mixprior.search import (
-    candidate_diagnostics,
-    default_model_metadata,
-    prepare_candidate_features,
-    select_posterior_mean,
-)
-
-manifest = Path("work/campaign/transfer_campaign.parquet")
-campaign = build_variance_normalized_campaign(load_campaign_inputs(manifest))
-model = fit_additive_hellinger_model(
-    prepare_hellinger_transfer_data(campaign), torch.device("cpu")
-)
-pool = np.load("my_feasible_pool.npy")
-candidates = prepare_candidate_features(campaign.target, pool)
-selection = select_posterior_mean(campaign, model, candidates)
-diagnostics = candidate_diagnostics(
-    campaign.target,
-    selection.weights,
-    selection.posterior,
-    objective_name=OBJECTIVE_NAME,
-    hinge_tolerance=campaign.objective.epsilon,
-    acquisition_function=selection.acquisition_function,
-    selection_rule=selection.selection_rule,
-)
-
-write_candidate_bundle(
-    campaign_manifest=manifest,
-    campaign=campaign,
-    model_payload=model.model_state(),
-    model_metadata=default_model_metadata(campaign, model),
-    pool=pool,
-    acquired=selection.acquired,
-    selected_weights=selection.weights,
-    diagnostics=diagnostics,
-    phase_token_fractions=candidates.phase_token_fractions,
-    output_dir=Path("work/custom-pool-candidate"),
-    seed=7,
-    proposal={"kind": "manual", "parameters": {"source": "my_feasible_pool.npy"}},
-    acquisition_function=selection.acquisition_function,
-    selection_rule=selection.selection_rule,
-    dependency_lock=Path("uv.lock"),
-)
-```
-
-`load_swarm` loads one swarm without constructing an objective.
-`build_campaign` accepts a caller-supplied objective and observation-noise
-mapping. `assemble_transfer_data` combines precomputed features with objective
-observations. `HellingerTransferData` also carries the kernel-calibration
-reference. `TransferPredictor` is the posterior-prediction interface used by
-acquisition. `build_candidate_selection` accepts the result of any acquisition
-function evaluated over a finite candidate set.
-
-## Objective
-
-The loss is a variance-normalized hinge loss over 20 evaluation metrics measured
-in bits per byte (BPB). The optimization objective is the negative loss, so it
-is maximized. `include_mean` is omitted because the legacy source swarm lacks
-that metric. Improvements on code and math contribute an uncapped linear term.
-Improvements on the remaining metrics are capped at the configured hinge
-tolerance; regressions remain linear.
-
-A pooled per-metric standard deviation from repeated-seed evaluations estimates
-observation noise. The scalar objective variance retains the observed
-correlation between metrics.
-
-| Swarm role | Rows | Contribution |
-| --- | ---: | --- |
-| Legacy source swarm | 804 | Shared GP and swarm-specific GP |
-| First Harrier reference swarm | 115 | Shared GP, swarm-specific GP, objective reference, and observation-noise estimate |
-| Second Harrier kernel-reference swarm | 56 | Shared GP, swarm-specific GP, and kernel calibration |
-| Rav target swarm | 3 | Target-specific GP and incumbent |
-
-## Feature map and transfer GP
-
-Each mixture component has a probability distribution over the shared
-1,000-feature Luxical basis. A phase mixture is projected into this basis and
-square-rooted:
-
-```text
-h_phase = sqrt(weights_phase @ component_content) * sqrt(phase_token_fraction)
-x = concat(h_phase)
-```
-
-Squared Euclidean distance between these features is twice the phase-token-
-weighted squared Hellinger distance. The fixed RBF length scale is calibrated
-from the kernel-reference swarm with `gamma_factor = 0.25`.
-
-The covariance is
-
-```text
-k((x, swarm), (x', swarm'))
-  = k_shared(x, x')
-  + 1[swarm = swarm'] k_swarm(x, x')
-```
-
-The shared kernel transfers content effects between swarms. The swarm-specific
-kernel gives each swarm an independent deviation from the shared GP. Model size,
-data source, and training-token horizon are provenance fields. They are constant
-within each swarm and are therefore not separately identifiable from the four
-swarm labels in this campaign.
-
-Every swarm uses the same Luxical basis. The root Hugging Face URI pins one
-dataset commit. Registry references verify every manifest, observation table,
-mixture-component table, content matrix, and basis lookup by relative path and
-SHA-256. Runtime loaders accept the external `mixture-observations-v1` schema.
-
-## Candidate generation and acquisition
-
-Proposal centers include the availability-proportional target design, observed
-target designs, and source observations whose mixture components match the
-target. Each random proposal retains a 2% availability-proportional floor and
-applies a log-normal perturbation with a scale sampled log-uniformly from 0.02
-to 2.0.
-
-Candidates must satisfy the simplex constraint for every phase and the maximum
-cumulative exposure constraint for every mixture component. Observed target
-designs are excluded.
-
-The fitted surrogate predicts the posterior mean over the fixed, seeded
-candidate set. `PosteriorMean` is maximized by taking the finite-set argmax.
-Candidate generation does not enforce an ordering between quality tiers,
-smoothness between phases, or a maximum distance from existing observations.
-
-## Limitations
-
-- Three Rav observations fit the target-specific GP.
-- The finite candidate set explores neighborhoods of its proposal centers, not
-  the complete Cartesian product of the phase simplices.
-- Architecture and training-horizon metadata do not support continuous
-  cross-swarm extrapolation.
-- The observation-noise estimate is shared across swarms.
+- The target swarm has three observations.
+- The finite candidate pool does not enumerate the full lattice.
+- The quadratic term is a soft prior. The GP residual can overturn it.
+- MAP fitting does not integrate hyperparameter uncertainty.
+- Observation noise is shared across swarms.
+- The replay does not measure information value in unobserved regions.

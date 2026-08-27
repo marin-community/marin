@@ -1,41 +1,72 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate one candidate from a materialized campaign."""
+"""Fit the quadratic exposure GP and persist one candidate decision."""
 
 from __future__ import annotations
 
-import argparse
-import logging
 from pathlib import Path
 
 import torch
 
-from experiments.datakit.mixprior.artifacts import CANDIDATE_ARTIFACT
-from experiments.datakit.mixprior.search import DEFAULT_POOL_SIZE, DEFAULT_SEED, generate_candidate
+from experiments.datakit.mixprior.artifacts import CandidateDecision, write_candidate_bundle
+from experiments.datakit.mixprior.campaign import Campaign, load_campaign
+from experiments.datakit.mixprior.diagnostics import candidate_diagnostics
+from experiments.datakit.mixprior.quadratic_exposure import fit_quadratic_exposure_model
+from experiments.datakit.mixprior.search import (
+    Acquisition,
+    campaign_pool_inputs,
+    sample_standard_candidate_pool,
+    select_candidate,
+)
 
-DEPENDENCY_LOCK = Path(__file__).parents[3] / "uv.lock"
 
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--campaign-manifest", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--pool-size", type=int, default=DEFAULT_POOL_SIZE)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    args = parser.parse_args()
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    payload = generate_candidate(
-        campaign_manifest=args.campaign_manifest,
-        output_dir=args.output_dir,
-        pool_size=args.pool_size,
-        seed=args.seed,
-        device=device,
-        dependency_lock=DEPENDENCY_LOCK,
+def search_candidate(
+    campaign: Campaign,
+    *,
+    acquisition: Acquisition,
+    pool_size_per_seed: int,
+    pool_seeds: tuple[int, ...],
+    device: torch.device,
+) -> CandidateDecision:
+    """Fit the quadratic exposure GP and acquire from the standard pool."""
+    model = fit_quadratic_exposure_model(campaign, device)
+    pool = sample_standard_candidate_pool(campaign_pool_inputs(campaign), pool_size_per_seed, pool_seeds)
+    selection = select_candidate(campaign, model, pool.weights, acquisition)
+    diagnostics = candidate_diagnostics(campaign.target, selection.weights, selection.posterior)
+    return CandidateDecision(
+        model.model_metadata,
+        pool.weights,
+        selection,
+        diagnostics,
+        pool.provenance,
+        pool.seeds,
     )
-    print(f"Wrote candidate {payload['candidate_id']} to {args.output_dir / CANDIDATE_ARTIFACT}")
 
 
-if __name__ == "__main__":
-    main()
+def generate_candidate(
+    *,
+    campaign_manifest: Path,
+    output_dir: Path,
+    dependency_lock: Path,
+    acquisition: Acquisition,
+    pool_size_per_seed: int,
+    pool_seeds: tuple[int, ...],
+    device: torch.device,
+) -> dict:
+    """Load a campaign, fit the quadratic GP, and persist its decision."""
+    campaign = load_campaign(campaign_manifest)
+    decision = search_candidate(
+        campaign,
+        acquisition=acquisition,
+        pool_size_per_seed=pool_size_per_seed,
+        pool_seeds=pool_seeds,
+        device=device,
+    )
+    return write_candidate_bundle(
+        campaign_manifest=campaign_manifest,
+        campaign=campaign,
+        decision=decision,
+        output_dir=output_dir,
+        dependency_lock=dependency_lock,
+    )

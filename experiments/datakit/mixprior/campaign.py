@@ -1,17 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load a Bayesian-optimization campaign from pinned swarm manifests."""
+"""Validate and assemble a local transfer-optimization campaign.
+
+A campaign assigns target, source, objective-reference, and noise-reference
+roles to registered swarms. Remote campaigns pin a Hugging
+Face commit; every referenced local artifact is checked against its SHA-256
+before it becomes a typed ``Campaign``.
+"""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
 
 import numpy as np
-from huggingface_hub import HfFileSystem
 
 from experiments.datakit.mixprior.data import (
     ArtifactReference,
@@ -24,14 +28,12 @@ from experiments.datakit.mixprior.data import (
     sha256,
 )
 from experiments.datakit.mixprior.objective import (
-    HingeObjective,
-    VarianceNormalizedObjective,
-    pooled_replicate_sd,
+    ScalarObjective,
+    fit_harrier_hinge_objective,
+    objective_metadata,
 )
 
-PROPORTIONAL_REFERENCE_GROUP = "marin_proportional"
 CAMPAIGN_MANIFEST = "transfer_campaign.parquet"
-HF_COMMIT_URI = re.compile(r"^hf://datasets/[^/@]+/[^/@]+@[0-9a-f]{40}/.+$")
 
 
 class SwarmReference(ArtifactReference):
@@ -55,10 +57,8 @@ class CampaignManifest(TypedDict):
     source_swarms: list[str]
     objective_reference_swarm: str
     noise_reference_swarm: str
-    kernel_reference_swarm: str
     response_tasks: list[str]
     objective_epsilon: float
-    max_cumulative_epochs: float
 
 
 class ContentBasisManifest(TypedDict):
@@ -89,22 +89,8 @@ class SwarmManifest(TypedDict):
 class Campaign:
     target: Swarm
     sources: tuple[Swarm, ...]
-    objective: HingeObjective
-    observation_sd: dict[str, float]
-    objective_metrics: tuple[str, ...]
-    kernel_reference_swarm: str
-    max_cumulative_epochs: float
-
-    def __post_init__(self) -> None:
-        missing_metrics = sorted(set(self.objective_metrics) - set(self.objective.labels))
-        if missing_metrics:
-            raise ValueError(f"Objective is missing metrics: {missing_metrics}")
-        missing_noise = sorted(set(self.objective_metrics) - set(self.observation_sd))
-        if missing_noise:
-            raise ValueError(f"Observation-noise estimates are missing metrics: {missing_noise}")
-        response_sd = np.asarray([self.observation_sd[label] for label in self.objective_metrics])
-        if np.any(response_sd <= 0) or not np.isfinite(response_sd).all():
-            raise ValueError("Observation standard deviations must be finite and positive")
+    objective: ScalarObjective
+    objective_metadata: dict[str, object]
 
 
 class CampaignInputs(NamedTuple):
@@ -114,8 +100,6 @@ class CampaignInputs(NamedTuple):
     noise_reference: Swarm
     objective_metrics: tuple[str, ...]
     hinge_tolerance: float
-    kernel_reference_swarm: str
-    max_cumulative_epochs: float
 
 
 def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
@@ -150,7 +134,6 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
     role_fields = (
         "objective_reference_swarm",
         "noise_reference_swarm",
-        "kernel_reference_swarm",
     )
     for field in role_fields:
         if manifest[field] not in loaded:
@@ -176,9 +159,6 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
     _checked_path(basis_path.parent, basis["lookup"])
 
     target_id = manifest["target_swarm"]
-    max_cumulative_epochs = float(manifest["max_cumulative_epochs"])
-    if not np.isfinite(max_cumulative_epochs) or max_cumulative_epochs <= 0:
-        raise ValueError("Maximum cumulative epochs must be finite and positive")
     return CampaignInputs(
         target=loaded[target_id],
         sources=tuple(loaded[swarm_id] for swarm_id in manifest["source_swarms"]),
@@ -186,39 +166,29 @@ def load_campaign_inputs(manifest_path: Path) -> CampaignInputs:
         noise_reference=loaded[manifest["noise_reference_swarm"]],
         objective_metrics=objective_metrics,
         hinge_tolerance=float(manifest["objective_epsilon"]),
-        kernel_reference_swarm=manifest["kernel_reference_swarm"],
-        max_cumulative_epochs=max_cumulative_epochs,
     )
 
 
 def build_variance_normalized_campaign(inputs: CampaignInputs) -> Campaign:
-    """Build the hinge objective and observation noise from reference data."""
-    objective_data = inputs.objective_reference.data
-    objective = VarianceNormalizedObjective.fit(
-        objective_data.labels,
-        objective_data.outcomes,
-        objective_data.frame.group.eq(PROPORTIONAL_REFERENCE_GROUP).to_numpy(),
+    objective = fit_harrier_hinge_objective(
+        inputs.objective_reference.data,
+        inputs.noise_reference.data,
+        metrics=inputs.objective_metrics,
         epsilon=inputs.hinge_tolerance,
     )
-    noise_data = inputs.noise_reference.data
-    reference_sd = pooled_replicate_sd(noise_data)
-    sd_by_label = dict(zip(noise_data.labels, reference_sd, strict=True))
-    return build_campaign(inputs, objective, sd_by_label)
+    return build_campaign(inputs, objective, objective_metadata(objective))
 
 
 def build_campaign(
     inputs: CampaignInputs,
-    objective: HingeObjective,
-    observation_sd: dict[str, float],
+    objective: ScalarObjective,
+    objective_metadata: dict[str, object],
 ) -> Campaign:
     return Campaign(
         target=inputs.target,
         sources=inputs.sources,
         objective=objective,
-        observation_sd=observation_sd,
-        objective_metrics=inputs.objective_metrics,
-        kernel_reference_swarm=inputs.kernel_reference_swarm,
-        max_cumulative_epochs=inputs.max_cumulative_epochs,
+        objective_metadata=objective_metadata,
     )
 
 
@@ -272,75 +242,4 @@ def _checked_path(root: Path, reference: ArtifactReference) -> Path:
         raise ValueError("Artifact path escapes its manifest root")
     if sha256(path) != reference["sha256"]:
         raise ValueError(f"Artifact hash mismatch: {path}")
-    return path
-
-
-def download_campaign(campaign_uri: str, campaign_sha256: str, destination: Path) -> Path:
-    """Materialize one commit-pinned campaign from Hugging Face."""
-    filesystem = HfFileSystem(token=False)
-    if not HF_COMMIT_URI.fullmatch(campaign_uri):
-        raise ValueError("Campaign URI must pin a 40-character Hugging Face commit")
-    campaign_root_uri = campaign_uri.rsplit("/", 1)[0]
-    destination.mkdir(parents=True, exist_ok=False)
-    manifest_path = destination / CAMPAIGN_MANIFEST
-    _download(filesystem, campaign_uri, manifest_path)
-    if sha256(manifest_path) != campaign_sha256:
-        raise ValueError("Campaign manifest hash mismatch")
-
-    manifest = cast(CampaignManifest, read_record(manifest_path))
-    registry_reference = manifest["registry"]
-    registry_path = destination / _safe_relative_path(registry_reference["path"])
-    _download_reference(filesystem, campaign_root_uri, destination, registry_reference, registry_path)
-    registry = cast(SwarmRegistry, read_record(registry_path))
-    swarms_by_id = {reference["swarm_id"]: reference for reference in registry["swarms"]}
-
-    basis_ids = set()
-    selected_ids = [manifest["target_swarm"], *manifest["source_swarms"]]
-    for swarm_id in selected_ids:
-        swarm_reference = swarms_by_id[swarm_id]
-        swarm_path = destination / _safe_relative_path(swarm_reference["path"])
-        _download_reference(filesystem, campaign_root_uri, destination, swarm_reference, swarm_path)
-        swarm = cast(SwarmManifest, read_record(swarm_path))
-        for reference in (swarm["observations"], swarm["buckets"], swarm["content"]):
-            artifact_path = swarm_path.parent / _safe_relative_path(reference["path"])
-            _download_reference(filesystem, campaign_root_uri, destination, reference, artifact_path)
-        content_path = swarm_path.parent / _safe_relative_path(swarm["content"]["path"])
-        basis_ids.add(read_record(content_path)["basis_id"])
-
-    bases_by_id = {reference["basis_id"]: reference for reference in registry["content_bases"]}
-    for basis_id in basis_ids:
-        basis_reference = bases_by_id[basis_id]
-        basis_path = destination / _safe_relative_path(basis_reference["path"])
-        _download_reference(filesystem, campaign_root_uri, destination, basis_reference, basis_path)
-        basis = cast(ContentBasisManifest, read_record(basis_path))
-        lookup_reference = basis["lookup"]
-        lookup_path = basis_path.parent / _safe_relative_path(lookup_reference["path"])
-        _download_reference(filesystem, campaign_root_uri, destination, lookup_reference, lookup_path)
-    return manifest_path
-
-
-def _download_reference(
-    filesystem: HfFileSystem,
-    campaign_root_uri: str,
-    campaign_directory: Path,
-    reference: ArtifactReference,
-    destination: Path,
-) -> None:
-    relative = destination.relative_to(campaign_directory).as_posix()
-    _download(filesystem, f"{campaign_root_uri}/{relative}", destination)
-    if sha256(destination) != reference["sha256"]:
-        raise ValueError(f"Downloaded artifact hash mismatch: {destination}")
-
-
-def _download(filesystem: HfFileSystem, source_uri: str, destination: Path) -> None:
-    if not HF_COMMIT_URI.fullmatch(source_uri):
-        raise ValueError("Campaign artifacts must use commit-pinned Hugging Face URIs")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    filesystem.get_file(source_uri, destination)
-
-
-def _safe_relative_path(value: str) -> PurePosixPath:
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"Campaign artifact path escapes its root: {value}")
     return path

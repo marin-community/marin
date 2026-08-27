@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parquet record schemas and canonical swarm observations."""
+"""Translate external Parquet records into validated two-phase swarm arrays."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+PHASE_COUNT = 2
 
 
 class ArtifactReference(TypedDict):
@@ -44,24 +46,15 @@ class ContentRecord(TypedDict):
 
 
 class SwarmObservations(NamedTuple):
-    frame: pd.DataFrame
+    observation_ids: list[str]
+    run_names: list[str]
+    groups: list[str]
     mixture_components: list[str]
     component_metadata: list[MixtureComponentMetadata]
     available_tokens: np.ndarray
     weights: np.ndarray
     labels: list[str]
     outcomes: np.ndarray
-
-
-class AcquiredCandidate(NamedTuple):
-    pool_index: int
-    acquisition_value: float
-    acquisition_values: np.ndarray
-
-
-class PoolProvenance(TypedDict):
-    kind: str
-    parameters: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -114,8 +107,10 @@ class Swarm:
         content = np.asarray(self.content_matrix, dtype=np.float64)
         if not self.swarm_id:
             raise ValueError("Swarm ID is required")
-        if budgets.shape != (self.data.weights.shape[1],) or np.any(budgets <= 0) or not np.isfinite(budgets).all():
-            raise ValueError("Phase budgets must match the observed curriculum phases")
+        if budgets.shape != (PHASE_COUNT,) or self.data.weights.shape[1] != PHASE_COUNT:
+            raise ValueError(f"A swarm must contain exactly {PHASE_COUNT} training phases")
+        if np.any(budgets <= 0) or not np.isfinite(budgets).all():
+            raise ValueError("Phase budgets must be finite and positive")
         if not np.isclose(budgets.sum(), self.provenance.simulated_training_tokens, rtol=1e-12):
             raise ValueError("Phase budgets must sum to simulated training tokens")
         if content.ndim != 2 or content.shape[0] != len(self.data.mixture_components):
@@ -189,6 +184,15 @@ def load_observations(parquet_path: Path, components_path: Path, swarm_id: str) 
 
     component_record = cast(MixtureComponentRecord, read_record(components_path))
     metadata = component_record["cells"]
+    required_metadata = {"cell", "domain", "quality", "available_tokens"}
+    for row in metadata:
+        missing_metadata = sorted(required_metadata - set(row))
+        if missing_metadata:
+            raise ValueError(f"Mixture component metadata is missing fields: {missing_metadata}")
+        if not isinstance(row["domain"], str) or not row["domain"]:
+            raise ValueError("Every mixture component must have a domain")
+        if not isinstance(row["quality"], int) or row["quality"] < 0:
+            raise ValueError("Every mixture component must have a non-negative integer quality tier")
     component_names = [row["cell"] for row in metadata]
     if len(component_names) != len(set(component_names)):
         raise ValueError("Mixture component names must be unique")
@@ -220,7 +224,9 @@ def load_observations(parquet_path: Path, components_path: Path, swarm_id: str) 
     if not np.isfinite(outcomes).all():
         raise ValueError("Observation BPBs must be finite and complete")
     return SwarmObservations(
-        frame,
+        observation_ids,
+        frame.run_name.tolist(),
+        frame.group.tolist(),
         component_names,
         metadata,
         available_tokens,

@@ -7,8 +7,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from experiments.datakit.mixprior.campaign import Campaign, download_campaign, load_campaign
+from experiments.datakit.mixprior.campaign import Campaign, load_campaign
 from experiments.datakit.mixprior.data import load_observations, write_record
+from experiments.datakit.mixprior.huggingface import download_campaign
 
 
 def test_canonical_observations_reject_missing_phase(tmp_path: Path) -> None:
