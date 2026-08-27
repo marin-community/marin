@@ -1012,4 +1012,3 @@ def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
             kept = flat_keep[group]
             # A prefix: every kept entry precedes every dropped one within the group.
             assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
-
