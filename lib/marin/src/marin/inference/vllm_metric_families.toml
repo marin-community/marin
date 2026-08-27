@@ -1,4 +1,8 @@
-# See docs/explanations/vllm-metric-forwarding.md for selection rationale and sample cost.
+# This standard set includes families consumed by Marin's inference dashboards or needed for
+# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
+# preemption. Selection is made per complete Prometheus family and was sized against Marin's
+# pinned GPU and TPU vLLM definitions using representative label cardinalities. Add a family
+# only for a concrete consumer, and recheck that the complete selected scrape fits the limit.
 families = [
   "vllm:e2e_request_latency_seconds",
   "vllm:generation_tokens",
