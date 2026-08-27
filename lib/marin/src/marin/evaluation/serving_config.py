@@ -14,6 +14,7 @@ from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
@@ -101,7 +102,7 @@ def auto_serve_overrides(
 ) -> tuple[tuple[str, ...], int | None]:
     """Inspect a model's config.json and fill portable vLLM defaults."""
     if "://" in model:
-        config_url = f"{model.rstrip('/')}/{_HF_CONFIG_FILENAME}"
+        config_url = prefix_join(model, _HF_CONFIG_FILENAME)
         fs, config_path = filesystem_for(config_url)
         with fs.open(config_path, "r") as handle:
             config = json.load(handle)
