@@ -77,7 +77,7 @@ def test_load_model_config_round_trips_native_vllm_topology(tmp_path):
                 location: s3://bucket/grug/
                 serve:
                   tensor_parallel_size: 1
-                  pipeline_parallel_size: 3
+                  pipeline_parallel_size: 2
                   data_parallel_size: 8
                   vllm_batch_invariant: true
                   vllm_use_flashinfer_sampler: false
@@ -86,7 +86,7 @@ def test_load_model_config_round_trips_native_vllm_topology(tmp_path):
         )
     )
 
-    assert config.serve.pipeline_parallel_size == 3
+    assert config.serve.pipeline_parallel_size == 2
     assert config.serve.data_parallel_size == 8
     assert config.serve.vllm_batch_invariant is True
     assert config.serve.vllm_use_flashinfer_sampler is False
@@ -159,7 +159,7 @@ def test_serve_config_vllm_args_explicit_flag_wins_over_typed_knob():
 def test_pipeline_parallel_config_leaves_all_topology_to_the_iris_launch():
     serve = ServeConfig(
         tensor_parallel_size=1,
-        pipeline_parallel_size=3,
+        pipeline_parallel_size=2,
         data_parallel_size=8,
         vllm_extra_args=("--enable-expert-parallel",),
     )
@@ -174,7 +174,7 @@ def test_pipeline_parallel_config_rejects_duplicate_topology_flags():
     with pytest.raises(ValueError, match="topology is owned by Marin"):
         ServeConfig(
             tensor_parallel_size=1,
-            pipeline_parallel_size=3,
+            pipeline_parallel_size=2,
             data_parallel_size=8,
             vllm_extra_args=("--pipeline-parallel-size=2",),
         )
@@ -217,7 +217,7 @@ def test_pipeline_parallel_gpu_lowering_emits_one_whole_node_per_stage():
         resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
         serve=ServeConfig(
             tensor_parallel_size=1,
-            pipeline_parallel_size=3,
+            pipeline_parallel_size=2,
             data_parallel_size=8,
             max_model_len=4096,
             vllm_batch_invariant=True,
@@ -235,10 +235,10 @@ def test_pipeline_parallel_gpu_lowering_emits_one_whole_node_per_stage():
         priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
-    assert lowered.iris.worker_resources.replicas == 3
+    assert lowered.iris.worker_resources.replicas == 2
     assert lowered.iris.worker_resources.device.chip_count() == 8
     assert lowered.model.tensor_parallel_size == 1
-    assert lowered.model.pipeline_parallel_size == 3
+    assert lowered.model.pipeline_parallel_size == 2
     assert lowered.model.data_parallel_size == 8
     assert "--pipeline-parallel-size" not in lowered.engine.extra_args
     assert "--data-parallel-size" not in lowered.engine.extra_args
@@ -254,7 +254,7 @@ def test_pipeline_parallel_gpu_lowering_requires_node_local_data_parallelism():
         resource_hint=ResourceHint(gpu={"H100": 8}, memory="32g"),
         serve=ServeConfig(
             tensor_parallel_size=1,
-            pipeline_parallel_size=3,
+            pipeline_parallel_size=2,
             data_parallel_size=4,
             auto_overrides=False,
         ),

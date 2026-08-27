@@ -217,9 +217,9 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     assert len(requests) == 1
 
 
-def test_pipeline_parallel_direct_inference_submits_one_three_task_gang(monkeypatch) -> None:
+def test_pipeline_parallel_direct_inference_submits_one_multi_task_gang(monkeypatch) -> None:
     class _Job:
-        job_id = "pp3-serve"
+        job_id = "pp2-serve"
         terminated = False
 
         def terminate(self) -> None:
@@ -245,12 +245,12 @@ def test_pipeline_parallel_direct_inference_submits_one_three_task_gang(monkeypa
         model=ServedModelConfig(
             weights="s3://bucket/model/",
             tensor_parallel_size=1,
-            pipeline_parallel_size=3,
+            pipeline_parallel_size=2,
             data_parallel_size=8,
         ),
         engine=VllmEngineConfig(),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=3),
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
             worker_environment=create_environment(docker_image="test"),
         ),
     )
@@ -260,25 +260,25 @@ def test_pipeline_parallel_direct_inference_submits_one_three_task_gang(monkeypa
 
     (request,) = submitted
     (service,) = request.entrypoint.callable_entrypoint.args
-    assert request.resources.replicas == 3
-    assert service.model.pipeline_parallel_size == 3
+    assert request.resources.replicas == 2
+    assert service.model.pipeline_parallel_size == 2
     assert service.instances == 1
     assert service.broker is None
     assert job.terminated
 
 
 def test_pipeline_parallel_config_rejects_mismatched_iris_task_count() -> None:
-    with pytest.raises(ValueError, match=r"requires 3 Iris task\(s\), got 2"):
+    with pytest.raises(ValueError, match=r"requires 2 Iris task\(s\), got 1"):
         RemoteInferenceConfig(
             model=ServedModelConfig(
                 weights="s3://bucket/model/",
                 tensor_parallel_size=1,
-                pipeline_parallel_size=3,
+                pipeline_parallel_size=2,
                 data_parallel_size=8,
             ),
             engine=VllmEngineConfig(),
             iris=IrisConfig(
-                worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
+                worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=1),
                 worker_environment=create_environment(docker_image="test"),
             ),
         )

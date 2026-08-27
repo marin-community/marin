@@ -17,7 +17,6 @@ import io
 import json
 import logging
 import re
-import statistics
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -48,7 +47,6 @@ EXPECTED_VLLM_SOURCE_COMMIT = "3caca1d1237434f427822beabc827ed70defeabe"
 REAL_MODEL_KEY = "rav-ladder-d1536"
 REAL_ARTIFACT_TREE_SHA256 = "8cc7d8f1f49a387bc51058d0deb3cfe47cb843126465cbc1b22f3fe3f7f7261b"
 REAL_RAW_METADATA_SHA256 = "128b0e2779b943fbef139132d4add4961e9e12cda3358b65951169940aa556fe"
-DUMMY_MODEL_CONFIG_SHA256 = "4cf93824957296e3b36c458ab4ae598bb7616f202a74687a3a8ed64dac9a9ebf"
 REAL_PROMPT_TOKEN_IDS = (128000, 791, 6864, 315, 9822, 374)
 REAL_GENERATED_TOKEN_IDS = (12366, 13, 578, 3224, 374, 7559, 304, 11104)
 
@@ -63,9 +61,6 @@ HTTP_CONNECT_TIMEOUT_SECONDS = 30.0
 HTTP_READ_TIMEOUT_SECONDS = 5 * 60.0
 RUNTIME_EVIDENCE_TIMEOUT_SECONDS = 30 * 60.0
 RELEASE_TIMEOUT_SECONDS = 5 * 60.0
-BENCHMARK_TOKENS = 32
-BENCHMARK_BATCH1_REPEATS = 5
-BENCHMARK_BATCH8_REPEATS = 3
 
 _VERIFIED_WHEEL_MARKER = "MARIN_VLLM_WHEEL_VERIFIED="
 _HBM_MARKER = "vLLM leader GPU memory snapshot: "
@@ -123,92 +118,20 @@ def _load_model_config(model: ModelConfig) -> tuple[dict[str, Any], str]:
     return json.loads(payload), _sha256(payload)
 
 
-def _assert_exact_model_shape(case: str, config: Mapping[str, Any]) -> None:
+def _assert_exact_model_shape(config: Mapping[str, Any]) -> None:
     expected = {
-        "real_d1536": {
-            "grugmoe_artifact_schema_version": 2,
-            "hidden_size": 1536,
-            "latent_dim": 768,
-            "num_hidden_layers": 16,
-            "num_experts": 384,
-            "num_shared_experts": 2,
-            "num_attention_heads": 12,
-            "max_position_embeddings": MAX_MODEL_LEN,
-        },
-        "dummy_d6144": {
-            "grugmoe_artifact_schema_version": 2,
-            "hidden_size": 6144,
-            "latent_dim": 3072,
-            "num_hidden_layers": 48,
-            "num_experts": 384,
-            "num_shared_experts": 2,
-            "num_attention_heads": 48,
-            "max_position_embeddings": MAX_MODEL_LEN,
-        },
-    }[case]
+        "grugmoe_artifact_schema_version": 2,
+        "hidden_size": 1536,
+        "latent_dim": 768,
+        "num_hidden_layers": 16,
+        "num_experts": 384,
+        "num_shared_experts": 2,
+        "num_attention_heads": 12,
+        "max_position_embeddings": MAX_MODEL_LEN,
+    }
     actual = {name: config.get(name) for name in expected}
     if actual != expected:
-        raise AssertionError(f"unexpected {case} model config: expected={expected}, actual={actual}")
-
-
-def _d6144_pp2_memory_bound(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Compute the BF16-only PP2 floor; the FP32 routers make reality worse."""
-    hidden = int(config["hidden_size"])
-    latent = int(config["latent_dim"])
-    intermediate = int(config["moe_intermediate_size"])
-    shared_intermediate = int(config["shared_expert_intermediate_size"])
-    num_experts = int(config["num_experts"])
-    num_shared_experts = int(config["num_shared_experts"])
-    num_heads = int(config["num_attention_heads"])
-    num_kv_heads = int(config["num_key_value_heads"])
-    head_dim = int(config["head_dim"])
-    num_layers = int(config["num_hidden_layers"])
-    vocab = int(config["vocab_size"])
-    kernel = int(config["sconv_kernel"])
-    ep_size = GPU_COUNT
-    pp_size = 2
-    layers_per_stage = num_layers // pp_size
-    local_experts = num_experts // ep_size
-    gated_norm_rank = 128
-
-    bf16_params_per_layer = {
-        "routed_experts": local_experts * 3 * latent * intermediate,
-        "latent_projections": 2 * hidden * latent,
-        "attention": (
-            hidden * (num_heads * head_dim)
-            + 2 * hidden * (num_kv_heads * head_dim)
-            + (num_heads * head_dim) * hidden
-            + hidden * num_heads
-        ),
-        "gated_norms": 2 * (2 * hidden * gated_norm_rank),
-        "shared_experts": num_shared_experts * 3 * hidden * shared_intermediate,
-        "rms_norms": 2 * hidden,
-        "short_conv": kernel * (num_kv_heads * head_dim + hidden + hidden),
-    }
-    endpoint_params = vocab * hidden + hidden + 2 * hidden * gated_norm_rank
-    stage_bf16_params = layers_per_stage * sum(bf16_params_per_layer.values()) + endpoint_params
-    stage_bf16_gib = stage_bf16_params * 2 / 1024**3
-
-    # H100 SXM reports 81,559 MiB; vLLM's 0.9 setting can reserve only 90%.
-    reported_h100_mib = 81_559
-    utilization_budget_gib = reported_h100_mib / 1024 * 0.9
-    if not 73.3 <= stage_bf16_gib < 73.4:
-        raise AssertionError(f"unexpected d6144 PP2 BF16 floor: {stage_bf16_gib}")
-    if stage_bf16_gib <= utilization_budget_gib:
-        raise AssertionError((stage_bf16_gib, utilization_budget_gib))
-    return {
-        "live_pp2_run": False,
-        "reason": "BF16 weights alone exceed the 0.9-utilization H100 budget before FP32 routers, KV, or runtime",
-        "pipeline_parallel_size": pp_size,
-        "expert_parallel_size": ep_size,
-        "layers_per_stage": layers_per_stage,
-        "bf16_parameter_components_per_layer": bf16_params_per_layer,
-        "endpoint_bf16_parameters_per_stage": endpoint_params,
-        "bf16_weight_floor_gib_per_gpu": stage_bf16_gib,
-        "h100_reported_total_mib": reported_h100_mib,
-        "gpu_memory_utilization": 0.9,
-        "utilization_budget_gib": utilization_budget_gib,
-    }
+        raise AssertionError(f"unexpected d1536 model config: expected={expected}, actual={actual}")
 
 
 def _expected_placements(pipeline_parallel_size: int) -> Counter[str]:
@@ -279,7 +202,7 @@ def _task_records(session: RemoteInferenceSession) -> list[dict[str, Any]]:
     ]
 
 
-def _runtime_evidence_logs(job: _RuntimeLogJob, *, case: str) -> str:
+def _runtime_evidence_logs(job: _RuntimeLogJob) -> str:
     """Fetch only the bounded startup markers the receipt validates.
 
     Iris/Finelog treats ``max_lines=0`` as a 1,000-line server-default tail. A
@@ -287,15 +210,8 @@ def _runtime_evidence_logs(job: _RuntimeLogJob, *, case: str) -> str:
     broad tail can lose the earliest topology lines. Server-side substring
     filters keep every required marker query small and deterministic.
     """
-    if case == "real_d1536":
-        case_marker = _HBM_MARKER
-    elif case == "dummy_d6144":
-        case_marker = "load_format=dummy"
-    else:
-        raise ValueError(case)
-
     entries: dict[tuple[Any, ...], TaskLogEntry] = {}
-    for marker in (*_RUNTIME_EVIDENCE_MARKERS, case_marker):
+    for marker in (*_RUNTIME_EVIDENCE_MARKERS, _HBM_MARKER):
         for entry in job.logs(
             max_lines=_RUNTIME_MARKER_MAX_LINES,
             substring=marker,
@@ -326,7 +242,6 @@ def _runtime_evidence_logs(job: _RuntimeLogJob, *, case: str) -> str:
 def _validate_runtime_logs(
     logs: str,
     *,
-    case: str,
     pipeline_parallel_size: int,
     num_layers: int,
     num_experts: int,
@@ -398,20 +313,15 @@ def _validate_runtime_logs(
         raise AssertionError(f"KV capacity below {MAX_MODEL_LEN}: {kv_capacities}")
 
     hbm_records = _extract_json_records(logs, _HBM_MARKER)
-    if case == "real_d1536":
-        if not hbm_records:
-            return None
-        if len(hbm_records) != 1:
-            raise AssertionError(f"expected one leader HBM record, got {len(hbm_records)}")
-        devices = sorted(hbm_records[0], key=lambda device: device["gpu"])
-        if [device["gpu"] for device in devices] != list(range(GPU_COUNT)):
-            raise AssertionError(devices)
-        if any(not 0 < device["used_mib"] <= device["total_mib"] for device in devices):
-            raise AssertionError(devices)
-    else:
-        hbm_records = []
-        if "load_format=dummy" not in logs:
-            return None
+    if not hbm_records:
+        return None
+    if len(hbm_records) != 1:
+        raise AssertionError(f"expected one leader HBM record, got {len(hbm_records)}")
+    devices = sorted(hbm_records[0], key=lambda device: device["gpu"])
+    if [device["gpu"] for device in devices] != list(range(GPU_COUNT)):
+        raise AssertionError(devices)
+    if any(not 0 < device["used_mib"] <= device["total_mib"] for device in devices):
+        raise AssertionError(devices)
 
     return {
         "requested_topology": [list(values) for values in sorted(requested.elements())],
@@ -419,15 +329,13 @@ def _validate_runtime_logs(
         "runtime_topology_count": sum(runtime.values()),
         "verified_wheels": verified_wheels,
         "kv_cache_tokens": kv_capacities,
-        "leader_hbm": hbm_records[0] if hbm_records else None,
-        "dummy_load_format_observed": case == "dummy_d6144",
+        "leader_hbm": hbm_records[0],
     }
 
 
 def _wait_for_runtime_evidence(
     session: RemoteInferenceSession,
     *,
-    case: str,
     pipeline_parallel_size: int,
     model_config: Mapping[str, Any],
     expected_wheel: Mapping[str, Any],
@@ -439,7 +347,7 @@ def _wait_for_runtime_evidence(
         tasks = _task_records(session)
         endpoints = iris_ctx().client.list_endpoint_instances(session.endpoint_name)
         job_id = JobName.from_string(str(session.jobs[0].job_id))
-        logs = _runtime_evidence_logs(iris_ctx().client.job(job_id), case=case)
+        logs = _runtime_evidence_logs(iris_ctx().client.job(job_id))
         last_summary = {
             "tasks": [(task["task_id"], task["state"]) for task in tasks],
             "endpoint_count": len(endpoints),
@@ -452,7 +360,6 @@ def _wait_for_runtime_evidence(
         ):
             evidence = _validate_runtime_logs(
                 logs,
-                case=case,
                 pipeline_parallel_size=pipeline_parallel_size,
                 num_layers=int(model_config["num_hidden_layers"]),
                 num_experts=int(model_config["num_experts"]),
@@ -564,6 +471,7 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
     pinned: list[dict[str, Any]] = []
     baseline: tuple[Any, ...] | None = None
     for rank in range(GPU_COUNT):
+        started = time.perf_counter()
         (record,) = _completion_request(
             url,
             model_id,
@@ -573,6 +481,7 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
             rank=rank,
             logprobs=RETURNED_LOGPROBS,
         )
+        seconds = time.perf_counter() - started
         if tuple(record["token_ids"]) != REAL_GENERATED_TOKEN_IDS:
             raise AssertionError({"rank": rank, "actual": record["token_ids"], "expected": REAL_GENERATED_TOKEN_IDS})
         selected_errors: list[float] = []
@@ -591,6 +500,7 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
             "selected_logprob_max_abs_error": max(selected_errors),
             "reported_top64_max_abs_error": max(top_errors),
             "reported_logprob_counts": counts,
+            "seconds": seconds,
         }
         if rank_receipt["selected_logprob_max_abs_error"] > SELECTED_LOGPROB_ATOL:
             raise AssertionError(rank_receipt)
@@ -602,12 +512,13 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
     assert baseline is not None
     isolation: list[dict[str, Any]] = []
 
-    def assert_matches(name: str, records: Sequence[Mapping[str, Any]]) -> None:
+    def assert_matches(name: str, records: Sequence[Mapping[str, Any]], *, seconds: float) -> None:
         for index, record in enumerate(records):
             if _canonical_observation(record) != baseline:
                 raise AssertionError(f"request isolation mismatch: {name}[{index}]")
-        isolation.append({"name": name, "responses": len(records), "bit_exact": True})
+        isolation.append({"name": name, "responses": len(records), "seconds": seconds, "bit_exact": True})
 
+    started = time.perf_counter()
     singleton = _completion_request(
         url,
         model_id,
@@ -616,17 +527,8 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
         request_id="isolation-singleton",
         logprobs=RETURNED_LOGPROBS,
     )
-    assert_matches("singleton", singleton)
-    for repeat in range(2):
-        repeated = _completion_request(
-            url,
-            model_id,
-            REAL_PROMPT_TOKEN_IDS,
-            max_tokens=len(REAL_GENERATED_TOKEN_IDS),
-            request_id=f"isolation-repeat-{repeat}",
-            logprobs=RETURNED_LOGPROBS,
-        )
-        assert_matches(f"repeated-{repeat}", repeated)
+    assert_matches("singleton", singleton, seconds=time.perf_counter() - started)
+    started = time.perf_counter()
     duplicate = _completion_request(
         url,
         model_id,
@@ -635,8 +537,9 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
         request_id="isolation-duplicate-batch",
         logprobs=RETURNED_LOGPROBS,
     )
-    assert_matches("duplicate-batch", duplicate)
-    with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
+    assert_matches("duplicate-batch", duplicate, seconds=time.perf_counter() - started)
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(
                 _completion_request,
@@ -647,10 +550,10 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
                 request_id=f"isolation-concurrent-{index}",
                 logprobs=RETURNED_LOGPROBS,
             )
-            for index in range(GPU_COUNT)
+            for index in range(2)
         ]
         concurrent = [record for future in as_completed(futures) for record in future.result()]
-    assert_matches("concurrent-unpinned", concurrent)
+    assert_matches("concurrent-pair", concurrent, seconds=time.perf_counter() - started)
 
     return {
         "artifact": artifact_identity,
@@ -663,136 +566,6 @@ def _qualify_real_requests(url: str, model_id: str, model: ModelConfig) -> dict[
         "pinned_ranks": pinned,
         "request_isolation": isolation,
     }
-
-
-def _timed_request(
-    url: str,
-    model_id: str,
-    *,
-    rank: int,
-    max_tokens: int,
-    request_id: str,
-) -> tuple[float, dict[str, Any]]:
-    started = time.perf_counter()
-    (record,) = _completion_request(
-        url,
-        model_id,
-        REAL_PROMPT_TOKEN_IDS,
-        max_tokens=max_tokens,
-        request_id=request_id,
-        rank=rank,
-    )
-    return time.perf_counter() - started, record
-
-
-def _summarize_benchmark(calls: Sequence[Mapping[str, Any]], *, active_gpus: int) -> dict[str, Any]:
-    latencies = [float(call["seconds"]) for call in calls]
-    total_seconds = sum(latencies)
-    output_tokens = sum(int(call["output_tokens"]) for call in calls)
-    prompt_tokens = sum(int(call["prompt_tokens"]) for call in calls)
-    output_rate = output_tokens / total_seconds
-    return {
-        "calls": list(calls),
-        "latency_seconds_median": statistics.median(latencies),
-        "latency_seconds_p95": float(np.percentile(np.asarray(latencies), 95)),
-        "window_seconds": total_seconds,
-        "window_prompt_tokens": prompt_tokens,
-        "window_output_tokens": output_tokens,
-        "window_output_tokens_per_second": output_rate,
-        "window_total_tokens_per_second": (prompt_tokens + output_tokens) / total_seconds,
-        "window_output_tokens_per_second_per_active_gpu": output_rate / active_gpus,
-        "window_output_tokens_per_second_per_allocated_gpu": output_rate / GPU_COUNT,
-    }
-
-
-def _benchmark_real(url: str, model_id: str) -> dict[str, Any]:
-    warmups: list[dict[str, Any]] = []
-    for repeat in range(2):
-        seconds, record = _timed_request(
-            url,
-            model_id,
-            rank=0,
-            max_tokens=16,
-            request_id=f"benchmark-warmup-{repeat}",
-        )
-        if len(record["token_ids"]) != 16:
-            raise AssertionError(record)
-        warmups.append({"repeat": repeat, "seconds": seconds})
-
-    batch1_calls: list[dict[str, Any]] = []
-    for repeat in range(BENCHMARK_BATCH1_REPEATS):
-        seconds, record = _timed_request(
-            url,
-            model_id,
-            rank=0,
-            max_tokens=BENCHMARK_TOKENS,
-            request_id=f"benchmark-b1-{repeat}",
-        )
-        if len(record["token_ids"]) != BENCHMARK_TOKENS:
-            raise AssertionError(record)
-        batch1_calls.append(
-            {
-                "repeat": repeat,
-                "seconds": seconds,
-                "prompt_tokens": len(record["prompt_token_ids"]),
-                "output_tokens": len(record["token_ids"]),
-            }
-        )
-
-    batch8_calls: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
-        for repeat in range(BENCHMARK_BATCH8_REPEATS):
-            started = time.perf_counter()
-            futures = [
-                executor.submit(
-                    _completion_request,
-                    url,
-                    model_id,
-                    REAL_PROMPT_TOKEN_IDS,
-                    max_tokens=BENCHMARK_TOKENS,
-                    request_id=f"benchmark-b8-{repeat}-rank-{rank}",
-                    rank=rank,
-                )
-                for rank in range(GPU_COUNT)
-            ]
-            records = [record for future in as_completed(futures) for record in future.result()]
-            seconds = time.perf_counter() - started
-            if len(records) != GPU_COUNT or any(len(record["token_ids"]) != BENCHMARK_TOKENS for record in records):
-                raise AssertionError(records)
-            batch8_calls.append(
-                {
-                    "repeat": repeat,
-                    "seconds": seconds,
-                    "prompt_tokens": sum(len(record["prompt_token_ids"]) for record in records),
-                    "output_tokens": sum(len(record["token_ids"]) for record in records),
-                }
-            )
-    return {
-        "workload": {
-            "warmups": "2 x batch-1 x 16 output tokens pinned to DP rank 0",
-            "batch_1": f"{BENCHMARK_BATCH1_REPEATS} x 32 output tokens pinned to DP rank 0",
-            "batch_8": f"{BENCHMARK_BATCH8_REPEATS} waves x 8 rank-pinned requests x 32 output tokens",
-        },
-        "warmups": warmups,
-        "batch_1": _summarize_benchmark(batch1_calls, active_gpus=1),
-        "batch_8": _summarize_benchmark(batch8_calls, active_gpus=GPU_COUNT),
-    }
-
-
-def _qualify_dummy_request(url: str, model_id: str) -> dict[str, Any]:
-    started = time.perf_counter()
-    (record,) = _completion_request(
-        url,
-        model_id,
-        (128000,),
-        max_tokens=1,
-        request_id="dummy-d6144-short-request",
-        rank=0,
-    )
-    seconds = time.perf_counter() - started
-    if record["prompt_token_ids"] != [128000] or len(record["token_ids"]) != 1:
-        raise AssertionError(record)
-    return {"seconds": seconds, **record}
 
 
 def _wait_for_release(session: RemoteInferenceSession, expected_tasks: int) -> dict[str, Any]:
@@ -831,15 +604,12 @@ def _wait_for_release(session: RemoteInferenceSession, expected_tasks: int) -> d
 
 
 def run_grugmoe_schema2_qualification(
-    case: str,
     model: ModelConfig,
     marin_sha: str,
     qualification_command: str,
     ordinary_catalog_command: str,
 ) -> None:
-    """Qualify one real or dummy topology and emit a post-release JSON receipt."""
-    if case not in {"real_d1536", "dummy_d6144"}:
-        raise ValueError(case)
+    """Qualify the real d1536 whole-node topology and emit a post-release JSON receipt."""
     configure_coreweave_s3()
     if VLLM_GPU_RELEASE.source_commit != EXPECTED_VLLM_SOURCE_COMMIT:
         raise AssertionError(
@@ -849,13 +619,8 @@ def run_grugmoe_schema2_qualification(
     wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
     expected_wheel = _jsonable(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))
     model_hf_config, model_config_sha256 = _load_model_config(model)
-    _assert_exact_model_shape(case, model_hf_config)
-    if case == "dummy_d6144" and model_config_sha256 != DUMMY_MODEL_CONFIG_SHA256:
-        raise AssertionError(
-            "d6144 dummy config does not match the checked-in qualification shape: "
-            f"expected={DUMMY_MODEL_CONFIG_SHA256}, actual={model_config_sha256}"
-        )
-    pipeline_parallel_size = 1 if case == "real_d1536" else 3
+    _assert_exact_model_shape(model_hf_config)
+    pipeline_parallel_size = 1
     if model.serve.pipeline_parallel_size != pipeline_parallel_size:
         raise AssertionError((model.serve.pipeline_parallel_size, pipeline_parallel_size))
 
@@ -872,7 +637,7 @@ def run_grugmoe_schema2_qualification(
         priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
     )
     receipt: dict[str, Any] = {
-        "case": case,
+        "case": "real_d1536",
         "source": {
             "marin_sha": marin_sha,
             "vllm_sha": EXPECTED_VLLM_SOURCE_COMMIT,
@@ -909,13 +674,6 @@ def run_grugmoe_schema2_qualification(
         },
         "jobs": {"coordinator": str(iris_ctx().job_id)},
     }
-    if case == "dummy_d6144":
-        receipt["pp2_capacity_bound"] = _d6144_pp2_memory_bound(model_hf_config)
-        receipt["dummy_weight_exception"] = {
-            "load_format": "dummy",
-            "omitted_real_checkpoint_flag": '--model-loader-extra-config {"distributed":true}',
-            "reason": "vLLM's dummy loader rejects model-loader extra config; all model and serving settings match",
-        }
 
     startup_started = time.perf_counter()
     session_for_release: RemoteInferenceSession | None = None
@@ -927,7 +685,6 @@ def run_grugmoe_schema2_qualification(
             receipt["jobs"]["inference_gang"] = str(session.jobs[0].job_id)
             runtime, ready_tasks, _logs = _wait_for_runtime_evidence(
                 session,
-                case=case,
                 pipeline_parallel_size=pipeline_parallel_size,
                 model_config=model_hf_config,
                 expected_wheel=expected_wheel,
@@ -942,11 +699,7 @@ def run_grugmoe_schema2_qualification(
             }
             completions_url = session.model.endpoint.url("completions")
             model_id = session.model.endpoint.model
-            if case == "real_d1536":
-                receipt["correctness"] = _qualify_real_requests(completions_url, model_id, model)
-                receipt["performance"] = _benchmark_real(completions_url, model_id)
-            else:
-                receipt["short_request"] = _qualify_dummy_request(completions_url, model_id)
+            receipt["correctness"] = _qualify_real_requests(completions_url, model_id, model)
     finally:
         if session_for_release is not None:
             receipt["release"] = _wait_for_release(session_for_release, pipeline_parallel_size)

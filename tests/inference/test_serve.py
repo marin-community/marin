@@ -514,13 +514,13 @@ def _pipeline_parallel_service() -> IrisServiceConfig:
         model=ServedModelConfig(
             weights="s3://bucket/grug/",
             tensor_parallel_size=1,
-            pipeline_parallel_size=3,
+            pipeline_parallel_size=2,
             data_parallel_size=8,
             chat_template_content="{{ messages }}",
         ),
         engine=VllmEngineConfig(),
         iris=IrisConfig(
-            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=3),
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
             worker_environment=create_environment(docker_image="test"),
         ),
         endpoint_name="/serve/grug",
@@ -534,7 +534,7 @@ def test_pipeline_parallel_leader_alone_registers_and_coordinates_shutdown(monke
     observed_prepare: dict[str, object] = {}
     launch = IrisVllmLaunch(
         task_index=0,
-        num_tasks=3,
+        num_tasks=2,
         extra_cli_args=("--node-rank", "0"),
         host_ip="10.0.0.1",
         gloo_interface="eth0",
@@ -595,7 +595,7 @@ def test_pipeline_parallel_leader_alone_registers_and_coordinates_shutdown(monke
     )
 
     assert events == [
-        ("launch-enter", {"pipeline_parallel_size": 3, "data_parallel_size": 8}),
+        ("launch-enter", {"pipeline_parallel_size": 2, "data_parallel_size": 8}),
         "local-enter",
         "followers-enter",
         "dashboard-enter",
@@ -617,7 +617,7 @@ def test_pipeline_parallel_follower_stops_before_acknowledging(monkeypatch):
     events: list[str] = []
     launch = IrisVllmLaunch(
         task_index=1,
-        num_tasks=3,
+        num_tasks=2,
         extra_cli_args=("--node-rank", "1", "--headless"),
         host_ip="10.0.0.2",
         gloo_interface="eth0",

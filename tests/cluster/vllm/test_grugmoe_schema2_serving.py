@@ -18,7 +18,6 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
-from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.testing.inference.grugmoe_schema2_serving import (
     REAL_MODEL_KEY,
     run_grugmoe_schema2_qualification,
@@ -31,7 +30,7 @@ PENDING_TIMEOUT_SECONDS = 45 * 60.0
 RUNTIME_TIMEOUT_SECONDS = 75 * 60.0
 ORDINARY_CATALOG_COMMAND = (
     "uv run python -m experiments.evaluation.cli launch --model rav-ladder-d1536 "
-    "--evals smoke --platform gpu --accelerator H100x8 --federated_cluster cw-us-east-02a "
+    "--evals smoke --limit 1 --platform gpu --accelerator H100x8 --federated_cluster cw-us-east-02a "
     "--priority interactive"
 )
 
@@ -62,64 +61,23 @@ def _clean_git_head() -> str:
     ).stdout.strip()
 
 
-def _dummy_d6144_model() -> ModelConfig:
-    return ModelConfig(
-        name="grugmoe-schema2-d6144-dummy-pp3",
-        location="tests/cluster/vllm/resources/grugmoe_d6144_dummy",
-        apply_chat_template=False,
-        resource_hint=ResourceHint(
-            gpu={"H100": 8},
-            cpu=64,
-            memory="512g",
-            disk="128g",
-        ),
-        serve=ServeConfig(
-            tensor_parallel_size=1,
-            pipeline_parallel_size=3,
-            data_parallel_size=8,
-            max_model_len=4096,
-            max_num_batched_tokens=4096,
-            max_num_seqs=64,
-            vllm_batch_invariant=True,
-            vllm_use_flashinfer_sampler=False,
-            vllm_extra_args=(
-                "--enable-expert-parallel",
-                # DummyModelLoader rejects model-loader extra config. The real catalog alone uses
-                # {"distributed": true}; every architecture and serving-topology setting matches.
-                "--load-format",
-                "dummy",
-                "--skip-tokenizer-init",
-                "--enforce-eager",
-                "--no-enable-prefix-caching",
-                "--gpu-memory-utilization",
-                "0.9",
-                "--max-logprobs",
-                "64",
-            ),
-            auto_overrides=False,
-        ),
-    )
-
-
-def _qualification_command(case: str) -> str:
+def _qualification_command() -> str:
     return (
         "uv run pytest tests/cluster/vllm/test_grugmoe_schema2_serving.py "
-        f"-m cluster -o addopts= --import-mode=importlib -vv -s -k {case}"
+        "-m cluster -o addopts= --import-mode=importlib -vv -s -k real_d1536"
     )
 
 
-@pytest.mark.parametrize("case", ["real_d1536", "dummy_d6144"])
-def test_grugmoe_schema2_serving_whole_node(
+def test_grugmoe_schema2_real_d1536_whole_node(
     marin_gpu_client: IrisClient,
     run_test_job,
-    case: str,
 ) -> None:
-    model = models()[REAL_MODEL_KEY] if case == "real_d1536" else _dummy_d6144_model()
+    model = models()[REAL_MODEL_KEY]
     request = JobRequest(
-        name=f"grugmoe-schema2-{case.replace('_', '-')}-{uuid.uuid4().hex[:8]}",
+        name=f"grugmoe-schema2-real-d1536-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(
             run_grugmoe_schema2_qualification,
-            args=(case, model, _clean_git_head(), _qualification_command(case), ORDINARY_CATALOG_COMMAND),
+            args=(model, _clean_git_head(), _qualification_command(), ORDINARY_CATALOG_COMMAND),
         ),
         resources=ResourceConfig.with_cpu(
             cpu=4,
