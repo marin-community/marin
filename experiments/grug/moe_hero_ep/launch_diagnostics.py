@@ -149,9 +149,7 @@ def build_diagnostic_run(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
         )
-    # The ragged transport's collectives address peers per GPU, so a task holding several GPUs in
-    # one process cannot run it. Rejecting it here costs a second; the same mistake reaching the
-    # cluster costs a 16-node allocation and a compile before it fails.
+    # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
     if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
         raise ValueError(
             f"{RAGGED_MOE_IMPLEMENTATION} needs one process per GPU: pass "
@@ -361,20 +359,14 @@ def build_diagnostic_run(
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=MasterParamMode.FP32_PINNED_HOST.value,
     show_default=True,
-    help=(
-        "Where the authoritative fp32 weights live. Disabling the master keeps them on device and "
-        "measured about 2 percent faster on the ragged transport, which does not need the memory relief."
-    ),
+    help=("Whether to keep fp32 weights in host pinned memory. Disabling the master keeps them on device."),
 )
 @click.option(
     "--processes-per-task",
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
     show_default=True,
-    help=(
-        "JAX processes per node. The default suits the pooled-wave hero; the ragged transport "
-        "needs one process per GPU, so pass the node's GPU count with it."
-    ),
+    help="JAX processes per node.",
 )
 @click.option(
     "--latent-dim",
