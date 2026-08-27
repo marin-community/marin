@@ -269,7 +269,7 @@ def _build_worker_attributes(
     if tpu_name:
         attributes[WellKnownAttribute.TPU_NAME] = job_pb2.AttributeValue(string_value=tpu_name)
         attributes[WellKnownAttribute.TPU_WORKER_ID] = job_pb2.AttributeValue(
-            int_value=int(tpu_worker_id) if tpu_worker_id else 0
+            int_value=resolve_tpu_worker_index(tpu_worker_id=tpu_worker_id, tpu_name=tpu_name)
         )
 
     # TPU topology attributes derived from variant
@@ -333,6 +333,30 @@ def construct_worker_id(slice_id: str, worker_index: int) -> str:
     return f"{slice_id}-worker-{worker_index}"
 
 
+def resolve_tpu_worker_index(*, tpu_worker_id: str, tpu_name: str = "", tpu_type: str = "") -> int:
+    """Resolve a host's within-slice TPU worker index from its probed metadata.
+
+    Every host in a TPU slice reports its index through the ``agent-worker-number``
+    GCP metadata attribute. When that value is blank on a TPU host, defaulting the
+    index to ``0`` makes the host collide with the real worker-0: both register
+    under the same ``{slice}-worker-0`` id, so the slice silently drops to N-1
+    distinct workers and gang scheduling never reaches the required count (#8743).
+    Fail loudly instead so the worker crashes, restarts, and re-probes.
+
+    Non-TPU hosts (no ``tpu_name`` and no ``tpu_type``) legitimately have no slice
+    index and resolve to ``0``.
+    """
+    if tpu_worker_id:
+        return int(tpu_worker_id)
+    if tpu_name or tpu_type:
+        raise ValueError(
+            f"TPU host (tpu_name={tpu_name!r}, tpu_type={tpu_type!r}) reported a blank "
+            "agent-worker-number; refusing to default to worker index 0, which would "
+            "collide with worker-0 and drop this host from the slice (#8743)."
+        )
+    return 0
+
+
 IRIS_WORKER_ID_ENV = "IRIS_WORKER_ID"
 
 
@@ -350,7 +374,9 @@ def infer_worker_id(hardware: HardwareProbe) -> str | None:
     if env_worker_id:
         return env_worker_id
     if hardware.tpu_name:
-        worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
+        worker_index = resolve_tpu_worker_index(
+            tpu_worker_id=hardware.tpu_worker_id, tpu_name=hardware.tpu_name, tpu_type=hardware.tpu_type
+        )
         return construct_worker_id(hardware.tpu_name, worker_index)
     if hardware.gce_instance_name:
         return construct_worker_id(hardware.gce_instance_name, 0)

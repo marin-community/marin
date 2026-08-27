@@ -18,6 +18,7 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
     probe_hardware,
+    resolve_tpu_worker_index,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
 
@@ -326,6 +327,37 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
     worker = Worker(config, container_runtime=None)
 
     assert worker._worker_id == "my-explicit-id"
+
+
+def test_resolve_tpu_worker_index_blank_on_tpu_raises():
+    """A TPU host with a blank agent-worker-number must not collapse to index 0."""
+    with pytest.raises(ValueError, match="blank"):
+        resolve_tpu_worker_index(tpu_worker_id="", tpu_name="some-tpu-slice")
+    with pytest.raises(ValueError, match="blank"):
+        resolve_tpu_worker_index(tpu_worker_id="", tpu_type="v4-2048")
+
+
+def test_resolve_tpu_worker_index_non_tpu_defaults_to_zero():
+    """Off a TPU slice there is no worker index, so a blank value resolves to 0."""
+    assert resolve_tpu_worker_index(tpu_worker_id="") == 0
+    assert resolve_tpu_worker_index(tpu_worker_id="3", tpu_name="some-tpu-slice") == 3
+
+
+def test_worker_id_blank_tpu_worker_index_raises(tmp_path, monkeypatch):
+    """A TPU host that probes blank TPU metadata must fail rather than register as
+    worker-0, which would collide with the real worker-0 and drop the slice to N-1
+    distinct workers (#8743)."""
+    hardware = _make_hardware(tpu_worker_id="", tpu_name="some-tpu-slice", tpu_type="v4-2048")
+    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
+
+    config = WorkerConfig(
+        cache_dir=tmp_path / "cache",
+        slice_id="marin-tpu_v4_2048-us-central2-b-xxxx",
+        worker_id=None,
+        default_task_image="mock-image",
+    )
+    with pytest.raises(ValueError, match="blank"):
+        Worker(config, container_runtime=None)
 
 
 # --- Network metrics ---
