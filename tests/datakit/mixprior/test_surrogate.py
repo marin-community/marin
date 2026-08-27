@@ -33,7 +33,7 @@ def test_training_data_standardizes_each_swarm() -> None:
             ]
         ),
     )
-    assert np.array_equal(data.standardized_objective_values[:, 0], [-1.0, 1.0, -1.0, 1.0])
-    assert np.allclose(data.standardized_objective_variances[:, 0], [0.1, 0.2, 0.1, 0.2])
+    assert np.array_equal(data.standardized_objective_values, [-1.0, 1.0, -1.0, 1.0])
+    assert np.allclose(data.standardized_objective_variances, [0.1, 0.2, 0.1, 0.2])
     assert data.outcome_scales["target"] == (2.0, 1.0)
     assert data.outcome_scales["source"] == (12.0, 2.0)

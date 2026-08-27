@@ -3,16 +3,21 @@
 
 from dataclasses import replace
 
+import jax
+import jax.numpy as jnp
 import numpy as np
-import pytest
-import torch
 
 from experiments.datakit.mixprior.campaign import Campaign
 from experiments.datakit.mixprior.quadratic_exposure import (
-    QuadraticExposurePenaltyMean,
+    GP_JITTER,
+    HARM_CURVATURE_INITIAL,
+    fit_quadratic_exposure_model,
+    initial_parameters,
+    negative_log_posterior,
+    quadratic_exposure_covariance,
     quadratic_exposure_features,
-    quadratic_exposure_gp,
     quadratic_exposure_layout,
+    quadratic_exposure_mean,
 )
 
 
@@ -55,55 +60,70 @@ def test_quadratic_exposure_features_ignore_component_order(tiny_campaign: Campa
     )
 
 
-def test_quadratic_penalty_grows_with_epoch_concentration() -> None:
+def test_quadratic_mean_uses_epoch_exposure() -> None:
     layout = quadratic_exposure_layout(content_dim=1)
-    mean = QuadraticExposurePenaltyMean(layout, torch.empty((), dtype=torch.double))
-    mean.harm_curvature = torch.tensor([0.2, 1e-9])
-    inputs = torch.zeros((3, layout.feature_count + 1), dtype=torch.double)
-    inputs[:, layout.quadratic_exposure.start] = torch.tensor([0.0, 1.0, 4.0])
+    inputs = np.zeros((3, layout.feature_count + 1), dtype=np.float64)
+    inputs[:, layout.quadratic_exposure.start] = [0.0, 1.0, 4.0]
 
-    values = mean(inputs)
+    values = np.asarray(quadratic_exposure_mean(jnp.asarray(initial_parameters(1.0)), jnp.asarray(inputs)))
+    expected = -HARM_CURVATURE_INITIAL[0] * np.asarray([0.0, 1.0, 4.0])
 
-    assert values[0] > values[1] > values[2]
-    assert values[0] - values[1] < values[1] - values[2]
+    assert np.allclose(values, expected)
 
 
-def test_quadratic_gp_covariance_is_psd_with_finite_gradients(tiny_campaign: Campaign) -> None:
+def test_quadratic_covariance_is_psd_with_finite_gradients(tiny_campaign: Campaign) -> None:
     features = quadratic_exposure_features(tiny_campaign.target, tiny_campaign.target.data.weights)
-    X = torch.as_tensor(
-        np.concatenate([features, np.zeros((len(features), 1))], axis=1),
-        dtype=torch.double,
-    ).requires_grad_()
-    model = quadratic_exposure_gp(
-        train_X=X.detach(),
-        train_Y=torch.tensor([[-1.0], [1.0]], dtype=torch.double),
-        train_Yvar=torch.full((2, 1), 0.1, dtype=torch.double),
-        content_dim=2,
-        num_swarms=1,
-        initial_lengthscale=1.0,
+    inputs = jnp.asarray(np.concatenate([features, np.zeros((len(features), 1))], axis=1))
+    parameters = jnp.asarray(initial_parameters(1.0))
+
+    gram = quadratic_exposure_covariance(parameters, inputs, inputs)
+    gradient = jax.grad(lambda values: jnp.square(quadratic_exposure_covariance(parameters, values, values)).sum())(
+        inputs
     )
 
-    gram = model.covar_module(X).to_dense()
-    (gradient,) = torch.autograd.grad(gram.square().sum(), X)
-
-    assert torch.allclose(gram, gram.T, atol=1e-12, rtol=0.0)
-    assert torch.linalg.eigvalsh(gram.detach()).min() >= -1e-10
-    assert torch.isfinite(gradient).all()
+    assert np.allclose(gram, gram.T, atol=1e-12, rtol=0.0)
+    assert np.linalg.eigvalsh(np.asarray(gram)).min() >= -1e-10
+    assert np.isfinite(gradient).all()
 
 
-def test_quadratic_gp_rejects_unknown_swarm_index(tiny_campaign: Campaign) -> None:
-    features = quadratic_exposure_features(tiny_campaign.target, tiny_campaign.target.data.weights)
-    X = torch.as_tensor(
-        np.concatenate([features, np.full((len(features), 1), 2.0)], axis=1),
-        dtype=torch.double,
-    )
-
-    with pytest.raises(ValueError, match="outside"):
-        quadratic_exposure_gp(
-            train_X=X,
-            train_Y=torch.tensor([[-1.0], [1.0]], dtype=torch.double),
-            train_Yvar=torch.full((2, 1), 0.1, dtype=torch.double),
-            content_dim=2,
-            num_swarms=1,
-            initial_lengthscale=1.0,
+def test_negative_log_posterior_compiles_to_same_value(tiny_campaign: Campaign) -> None:
+    target_features = quadratic_exposure_features(tiny_campaign.target, tiny_campaign.target.data.weights)
+    source_features = quadratic_exposure_features(tiny_campaign.sources[0], tiny_campaign.sources[0].data.weights)
+    inputs = jnp.asarray(
+        np.concatenate(
+            [
+                np.concatenate([target_features, np.zeros((2, 1))], axis=1),
+                np.concatenate([source_features, np.ones((2, 1))], axis=1),
+            ]
         )
+    )
+    values = jnp.asarray([-1.0, 1.0, -1.0, 1.0])
+    variances = jnp.full(4, 0.1)
+    parameters = jnp.asarray(initial_parameters(1.0))
+
+    eager = negative_log_posterior(parameters, inputs, values, variances, 1.0)
+    compiled = jax.jit(negative_log_posterior, static_argnums=4)(parameters, inputs, values, variances, 1.0)
+
+    assert np.isfinite(eager)
+    assert np.allclose(eager, compiled, atol=GP_JITTER, rtol=0.0)
+
+
+def test_fitted_model_predicts_and_acquires(tiny_campaign: Campaign) -> None:
+    model = fit_quadratic_exposure_model(tiny_campaign, jax.devices("cpu")[0])
+    weights = tiny_campaign.target.data.weights
+
+    moments = model.predict(tiny_campaign.target, weights)
+    improvement = model.noisy_expected_improvement(
+        tiny_campaign.target,
+        weights,
+        weights,
+        sample_count=32,
+        seed=7,
+    )
+
+    assert moments.mean.shape == (2,)
+    assert moments.latent_variance.shape == (2,)
+    assert np.isfinite(moments.mean).all()
+    assert np.all(moments.latent_variance >= 0)
+    assert improvement.shape == (2,)
+    assert np.all(improvement >= 0)

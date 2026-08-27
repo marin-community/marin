@@ -1,31 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare, fit, and evaluate transfer GPs over data mixtures."""
+"""Prepare transfer-GP training data and fit compiled JAX objectives."""
 
 from __future__ import annotations
 
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any, NamedTuple, Protocol, TypedDict
 
+import jax
 import numpy as np
-import torch
-from botorch.fit import fit_gpytorch_mll_torch
-from botorch.models import SingleTaskGP
-from botorch.optim.core import OptimizationResult
-from gpytorch.kernels import Kernel
-from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.priors import LogNormalPrior
+from jax.scipy.optimize import minimize
 
 from experiments.datakit.mixprior.campaign import Campaign
 from experiments.datakit.mixprior.data import Swarm
 
-FIT_STEP_LIMIT = 10_000
-FIT_PROGRESS_INTERVAL = 250
+FIT_STEP_LIMIT = 1_000
 logger = logging.getLogger(__name__)
+
+jax.config.update("jax_enable_x64", True)
 
 
 class ModelMetadata(TypedDict):
@@ -47,14 +42,19 @@ class MixturePredictor(Protocol):
     def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments: ...
 
 
-class BotorchMixturePredictor(MixturePredictor, Protocol):
+class JaxMixturePredictor(MixturePredictor, Protocol):
     @property
     def model_metadata(self) -> ModelMetadata: ...
 
-    @property
-    def botorch_model(self) -> SingleTaskGP: ...
-
-    def candidate_tensor(self, swarm: Swarm, weights: np.ndarray) -> torch.Tensor: ...
+    def noisy_expected_improvement(
+        self,
+        swarm: Swarm,
+        weights: np.ndarray,
+        reference_weights: np.ndarray,
+        *,
+        sample_count: int,
+        seed: int,
+    ) -> np.ndarray: ...
 
 
 class SwarmTrainingRows(NamedTuple):
@@ -81,7 +81,7 @@ class TrainingData(NamedTuple):
 class MapInitialization(NamedTuple):
     name: str
     seed: int
-    initialize: Callable[[SingleTaskGP, int], None]
+    parameters: np.ndarray
 
 
 class MapFitSummary(NamedTuple):
@@ -96,73 +96,14 @@ class MapFitSummary(NamedTuple):
 
 
 class MapFit(NamedTuple):
-    model: SingleTaskGP
+    parameters: np.ndarray
     restarts: tuple[MapFitSummary, ...]
     elapsed: float
 
 
-@dataclass(frozen=True)
-class FittedSwarmGP:
-    _model: SingleTaskGP
-    feature_map: FeatureMap
-    swarm_indices: dict[str, int]
-    outcome_scales: dict[str, SwarmOutcomeScale]
-    model_metadata: ModelMetadata
-
-    @property
-    def device(self) -> torch.device:
-        return self._model.train_inputs[0].device
-
-    @property
-    def botorch_model(self) -> SingleTaskGP:
-        return self._model
-
-    def candidate_tensor(self, swarm: Swarm, weights: np.ndarray) -> torch.Tensor:
-        if swarm.swarm_id not in self.swarm_indices:
-            raise ValueError(f"Swarm {swarm.swarm_id!r} was not included when this model was fit")
-        features = self.feature_map(swarm, weights)
-        swarm_column = np.full((len(features), 1), self.swarm_indices[swarm.swarm_id], dtype=np.float64)
-        return torch.as_tensor(
-            np.concatenate([features, swarm_column], axis=1),
-            dtype=torch.double,
-            device=self.device,
-        )
-
-    def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
-        with torch.no_grad():
-            posterior = self._model.posterior(self.candidate_tensor(swarm, weights))
-        scale = self.outcome_scales[swarm.swarm_id]
-        return PredictiveMoments(
-            mean=scale.mean + scale.scale * posterior.mean.detach().cpu().numpy().reshape(-1),
-            latent_variance=scale.scale**2 * posterior.variance.detach().cpu().numpy().reshape(-1),
-        )
-
-
-class SameSwarmKernel(Kernel):
-    """Unit covariance for rows from the same swarm and zero otherwise."""
-
-    def forward(
-        self,
-        x1: torch.Tensor,
-        x2: torch.Tensor,
-        diag: bool = False,
-        last_dim_is_batch: bool = False,
-        **_params: object,
-    ) -> torch.Tensor:
-        if last_dim_is_batch:
-            raise ValueError("Same-swarm covariance does not batch over input dimensions")
-        if diag:
-            return (x1[..., 0] == x2[..., 0]).to(x1.dtype)
-        return (x1[..., :, None, 0] == x2[..., None, :, 0]).to(x1.dtype)
-
-
-def lognormal_prior_with_mode(
-    value: torch.Tensor | float,
-    log_sd: float,
-    like: torch.Tensor,
-) -> LogNormalPrior:
-    mode = torch.as_tensor(value, dtype=like.dtype, device=like.device)
-    return LogNormalPrior(torch.log(mode) + log_sd**2, torch.full_like(mode, log_sd))
+def default_device() -> jax.Device:
+    devices = jax.devices()
+    return next((device for device in devices if device.platform == "gpu"), devices[0])
 
 
 def prepare_training_data(campaign: Campaign, feature_map: FeatureMap) -> TrainingData:
@@ -208,8 +149,8 @@ def assemble_training_data(rows: list[SwarmTrainingRows]) -> TrainingData:
         index = swarm_indices[row.swarm_id]
         swarm_column = np.full((len(values), 1), index, dtype=np.float64)
         train_X.append(np.concatenate([row.features, swarm_column], axis=1))
-        train_Y.append(((values - mean) / scale)[:, None])
-        train_Yvar.append((variances / scale**2)[:, None])
+        train_Y.append((values - mean) / scale)
+        train_Yvar.append(variances / scale**2)
         observation_counts[row.swarm_id] = len(values)
         outcome_scales[row.swarm_id] = SwarmOutcomeScale(mean, scale)
 
@@ -223,48 +164,39 @@ def assemble_training_data(rows: list[SwarmTrainingRows]) -> TrainingData:
     )
 
 
-def draw_parameters_from_priors(model: SingleTaskGP, seed: int) -> None:
-    torch.manual_seed(seed)
-    for _, module, prior, _, setting_closure in model.named_priors():
-        if setting_closure is None:
-            raise ValueError("Every GP prior must define how to initialize its parameter")
-        setting_closure(module, prior.sample())
-
-
 def fit_map_restarts(
-    build_model: Callable[[], SingleTaskGP],
+    objective: Callable[[jax.Array], jax.Array],
     initializations: tuple[MapInitialization, ...],
+    device: jax.Device,
 ) -> MapFit:
-    """Fit declared MAP starts and retain the model with the highest MLL."""
+    """Fit fixed MAP starts with JAX BFGS and retain the lowest objective."""
     if not initializations:
         raise ValueError("At least one MAP initialization is required")
+    compiled_objective = jax.jit(objective)
     started_all = time.monotonic()
     summaries = []
-    best_model = None
-    best_mll = -float("inf")
-    best_index = -1
-    for index, initialization in enumerate(initializations):
-        model = build_model()
-        initialization.initialize(model, initialization.seed)
-        mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    candidates = []
+    for initialization in initializations:
         started = time.monotonic()
-        result = fit_gpytorch_mll_torch(mll, step_limit=FIT_STEP_LIMIT, callback=_log_fit_progress)
-        if result.step >= FIT_STEP_LIMIT:
-            raise RuntimeError(f"GP MAP fit did not converge after {FIT_STEP_LIMIT} steps")
+        result = minimize(
+            compiled_objective,
+            jax.device_put(initialization.parameters, device),
+            method="BFGS",
+            tol=1e-7,
+            options={"maxiter": FIT_STEP_LIMIT},
+        )
+        objective_value = float(result.fun)
         elapsed = time.monotonic() - started
-        model.train()
-        mll.train()
-        with torch.no_grad():
-            value = float(mll(model(*model.train_inputs), model.train_targets).detach().cpu())
-        model.eval()
+        if np.isfinite(objective_value):
+            candidates.append((objective_value, np.asarray(result.x)))
         summaries.append(
             MapFitSummary(
                 initialization.name,
                 initialization.seed,
-                value,
-                float(result.fval),
-                result.status.name,
-                result.step,
+                -objective_value,
+                objective_value,
+                f"status={int(result.status)}, success={bool(result.success)}",
+                int(result.nit),
                 elapsed,
                 False,
             )
@@ -274,19 +206,12 @@ def fit_map_restarts(
             initialization.name,
             initialization.seed,
             elapsed,
-            result.step,
-            value,
+            int(result.nit),
+            -objective_value,
         )
-        if value > best_mll:
-            best_model = model
-            best_mll = value
-            best_index = index
-    if best_model is None:
-        raise AssertionError("MAP fitting produced no model")
+    if not candidates:
+        raise RuntimeError("Every GP MAP restart produced a non-finite objective")
+    best_objective, best_parameters = min(candidates, key=lambda candidate: candidate[0])
+    best_index = next(index for index, summary in enumerate(summaries) if summary.optimizer_objective == best_objective)
     summaries[best_index] = summaries[best_index]._replace(selected=True)
-    return MapFit(best_model, tuple(summaries), time.monotonic() - started_all)
-
-
-def _log_fit_progress(_parameters: dict[str, torch.Tensor], result: OptimizationResult) -> None:
-    if result.step % FIT_PROGRESS_INTERVAL == 0:
-        logger.info("GP fit step %s/%s: objective %.6f", result.step, FIT_STEP_LIMIT, result.fval)
+    return MapFit(best_parameters, tuple(summaries), time.monotonic() - started_all)

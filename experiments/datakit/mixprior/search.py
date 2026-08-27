@@ -11,14 +11,11 @@ from statistics import NormalDist
 from typing import NamedTuple, TypedDict
 
 import numpy as np
-import torch
-from botorch.acquisition.logei import qLogNoisyExpectedImprovement
-from botorch.sampling.normal import SobolQMCNormalSampler
 
 from experiments.datakit.mixprior.campaign import Campaign
 from experiments.datakit.mixprior.data import Swarm, canonical_mixture_rows
 from experiments.datakit.mixprior.surrogate import (
-    BotorchMixturePredictor,
+    JaxMixturePredictor,
     MixturePredictor,
 )
 
@@ -27,9 +24,9 @@ DEFAULT_POOL_SEEDS = (111, 222, 333)
 DEFAULT_ACQUISITION_SEED = 7
 POSTERIOR_MEAN_NAME = "PosteriorMean"
 POSTERIOR_MEAN_SELECTION_RULE = "argmax over the finite candidate set"
-LOG_NEI_NAME = "qLogNoisyExpectedImprovement"
-LOG_NEI_SAMPLES = 1_024
-LOG_NEI_SELECTION_RULE = f"argmax log noisy expected improvement with {LOG_NEI_SAMPLES:,} Sobol samples"
+NOISY_EI_NAME = "MonteCarloNoisyExpectedImprovement"
+NOISY_EI_SAMPLES = 1_024
+NOISY_EI_SELECTION_RULE = f"argmax noisy expected improvement with {NOISY_EI_SAMPLES:,} Gaussian samples"
 PROPORTIONAL_FLOOR = 0.02
 PERTURBATION_SCALE_RANGE = (0.02, 2.0)
 GLOBAL_PROPOSAL_FRACTION = 0.5
@@ -58,7 +55,7 @@ class AcquiredCandidate(NamedTuple):
 
 
 AcquisitionScorer = Callable[
-    [BotorchMixturePredictor, Swarm, np.ndarray, int | None, np.ndarray | None],
+    [JaxMixturePredictor, Swarm, np.ndarray, int | None, np.ndarray | None],
     AcquiredCandidate,
 ]
 
@@ -284,40 +281,38 @@ def acquire_posterior_mean(
     )
 
 
-def acquire_log_nei(
-    model: BotorchMixturePredictor,
+def acquire_noisy_expected_improvement(
+    model: JaxMixturePredictor,
     target: Swarm,
     weights: np.ndarray,
     seed: int,
     pending_weights: np.ndarray | None = None,
 ) -> AcquiredCandidate:
-    """Evaluate one-point log noisy expected improvement over a finite pool."""
-    baseline = model.candidate_tensor(target, target.data.weights)
-    pending = None if pending_weights is None else model.candidate_tensor(target, pending_weights)
-    sampler = SobolQMCNormalSampler(torch.Size([LOG_NEI_SAMPLES]), seed=seed)
-    acquisition = qLogNoisyExpectedImprovement(
-        model=model.botorch_model,
-        X_baseline=baseline,
-        X_pending=pending,
-        sampler=sampler,
-        prune_baseline=True,
-        incremental=True,
-    )
+    """Evaluate one-point noisy expected improvement over a finite pool."""
+    reference_weights = target.data.weights
+    if pending_weights is not None:
+        reference_weights = np.concatenate([reference_weights, pending_weights])
     values = []
-    with torch.no_grad():
-        for start in range(0, len(weights), ACQUISITION_CHUNK_SIZE):
-            stop = min(start + ACQUISITION_CHUNK_SIZE, len(weights))
-            candidates = model.candidate_tensor(target, weights[start:stop])
-            values.append(acquisition(candidates.unsqueeze(-2)).detach().cpu().numpy().reshape(-1))
-            if stop == len(weights) or stop % PROGRESS_ROWS == 0:
-                logger.info("Scored %s/%s pool rows with log NEI", f"{stop:,}", f"{len(weights):,}")
+    for start in range(0, len(weights), ACQUISITION_CHUNK_SIZE):
+        stop = min(start + ACQUISITION_CHUNK_SIZE, len(weights))
+        values.append(
+            model.noisy_expected_improvement(
+                target,
+                weights[start:stop],
+                reference_weights,
+                sample_count=NOISY_EI_SAMPLES,
+                seed=seed + start,
+            )
+        )
+        if stop == len(weights) or stop % PROGRESS_ROWS == 0:
+            logger.info("Scored %s/%s pool rows with noisy EI", f"{stop:,}", f"{len(weights):,}")
     acquisition_values = np.concatenate(values)
     pool_index = int(np.argmax(acquisition_values))
     return AcquiredCandidate(pool_index, float(acquisition_values[pool_index]), acquisition_values)
 
 
 def _posterior_mean_score(
-    model: BotorchMixturePredictor,
+    model: JaxMixturePredictor,
     target: Swarm,
     weights: np.ndarray,
     _seed: int | None,
@@ -326,16 +321,16 @@ def _posterior_mean_score(
     return acquire_posterior_mean(model, target, weights)
 
 
-def _log_nei_score(
-    model: BotorchMixturePredictor,
+def _noisy_ei_score(
+    model: JaxMixturePredictor,
     target: Swarm,
     weights: np.ndarray,
     seed: int | None,
     pending_weights: np.ndarray | None,
 ) -> AcquiredCandidate:
     if seed is None:
-        raise ValueError("Log NEI requires an acquisition seed")
-    return acquire_log_nei(model, target, weights, seed, pending_weights)
+        raise ValueError("Noisy EI requires an acquisition seed")
+    return acquire_noisy_expected_improvement(model, target, weights, seed, pending_weights)
 
 
 POSTERIOR_MEAN = Acquisition(
@@ -346,13 +341,13 @@ POSTERIOR_MEAN = Acquisition(
 )
 
 
-def log_nei(seed: int) -> Acquisition:
-    return Acquisition(LOG_NEI_NAME, LOG_NEI_SELECTION_RULE, seed, _log_nei_score)
+def noisy_expected_improvement(seed: int) -> Acquisition:
+    return Acquisition(NOISY_EI_NAME, NOISY_EI_SELECTION_RULE, seed, _noisy_ei_score)
 
 
 def acquire_candidate(
     acquisition: Acquisition,
-    model: BotorchMixturePredictor,
+    model: JaxMixturePredictor,
     target: Swarm,
     weights: np.ndarray,
     pending_weights: np.ndarray | None = None,
@@ -362,7 +357,7 @@ def acquire_candidate(
 
 def select_candidate(
     campaign: Campaign,
-    model: BotorchMixturePredictor,
+    model: JaxMixturePredictor,
     weights: np.ndarray,
     acquisition: Acquisition,
 ) -> CandidateSelection:

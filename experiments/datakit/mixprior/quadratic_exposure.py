@@ -1,46 +1,49 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Quadratic exposure prior and phase-linked content covariance."""
+"""Compiled JAX GP with quadratic epoch exposure and phase-linked content."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from functools import partial
 from typing import NamedTuple
 
+import jax
+import jax.numpy as jnp
 import numpy as np
-import torch
-from botorch.models import SingleTaskGP
-from botorch.models.transforms.outcome import Standardize
-from gpytorch.constraints import Positive
-from gpytorch.kernels import AdditiveKernel, Kernel, MaternKernel, ScaleKernel
-from gpytorch.means import ConstantMean, Mean
-from gpytorch.priors import LogNormalPrior, NormalPrior
-from linear_operator.operators import LinearOperator
+from jax.scipy.linalg import cho_solve, solve_triangular
 
 from experiments.datakit.mixprior.campaign import Campaign
 from experiments.datakit.mixprior.data import PHASE_COUNT, Swarm
 from experiments.datakit.mixprior.surrogate import (
-    FittedSwarmGP,
     MapFit,
     MapInitialization,
     ModelMetadata,
-    SameSwarmKernel,
+    PredictiveMoments,
+    SwarmOutcomeScale,
     TrainingData,
-    draw_parameters_from_priors,
     fit_map_restarts,
-    lognormal_prior_with_mode,
     prepare_training_data,
 )
 
-MATERN_NU = 2.5
-LENGTHSCALE_PRIOR_LOG_SD = 1.0
-HARM_CURVATURE_INITIAL = (0.01, 0.015)
+HARM_CURVATURE_INITIAL = np.asarray((0.01, 0.015), dtype=np.float64)
+PHASE_DIAGONAL_INITIAL = 0.25
 RESIDUAL_OUTPUTSCALE_INITIAL = 0.25
+LENGTHSCALE_PRIOR_LOG_SD = 1.0
+HARM_CURVATURE_PRIOR_LOG_SD = 1.5
+GP_JITTER = 1e-6
+POSITIVE_FLOOR = 1e-8
 
-
-def keep_initialization(_model: SingleTaskGP, _seed: int) -> None:
-    pass
+CONSTANT_INDEX = 0
+HARM_CURVATURE_SLICE = slice(1, 3)
+CONTENT_LENGTHSCALE_INDEX = 3
+PHASE_FACTOR_SLICE = slice(4, 6)
+PHASE_DIAGONAL_SLICE = slice(6, 8)
+RESIDUAL_LENGTHSCALE_INDEX = 8
+RESIDUAL_OUTPUTSCALE_INDEX = 9
+PARAMETER_COUNT = 10
 
 
 class QuadraticExposureLayout(NamedTuple):
@@ -84,126 +87,258 @@ def quadratic_exposure_features(swarm: Swarm, weights: np.ndarray) -> np.ndarray
     )
 
 
-class QuadraticExposurePenaltyMean(Mean):
-    """Soft prior against concentrating a phase on repeatedly sampled data."""
+def _positive(raw: jax.Array) -> jax.Array:
+    return jax.nn.softplus(raw) + POSITIVE_FLOOR
 
-    def __init__(self, layout: QuadraticExposureLayout, like: torch.Tensor) -> None:
-        super().__init__()
-        self.layout = layout
-        self.constant = ConstantMean()
-        self.register_parameter("raw_harm_curvature", torch.nn.Parameter(like.new_zeros(PHASE_COUNT)))
-        self.register_constraint("raw_harm_curvature", Positive())
-        self.harm_curvature = torch.as_tensor(HARM_CURVATURE_INITIAL, dtype=like.dtype, device=like.device)
-        self.register_prior(
-            "harm_curvature_prior",
-            lognormal_prior_with_mode(torch.as_tensor(HARM_CURVATURE_INITIAL), 1.5, like),
-            lambda module: module.harm_curvature,
-            lambda module, value: setattr(module, "harm_curvature", value),
+
+def _inverse_positive(value: np.ndarray | float) -> np.ndarray:
+    value = np.asarray(value, dtype=np.float64) - POSITIVE_FLOOR
+    return np.log(np.expm1(value))
+
+
+def quadratic_parameter_values(parameters: jax.Array) -> dict[str, jax.Array]:
+    return {
+        "constant": parameters[CONSTANT_INDEX],
+        "harm_curvature": _positive(parameters[HARM_CURVATURE_SLICE]),
+        "content_lengthscale": _positive(parameters[CONTENT_LENGTHSCALE_INDEX]),
+        "phase_factor": parameters[PHASE_FACTOR_SLICE],
+        "phase_diagonal": _positive(parameters[PHASE_DIAGONAL_SLICE]),
+        "residual_lengthscale": _positive(parameters[RESIDUAL_LENGTHSCALE_INDEX]),
+        "residual_outputscale": _positive(parameters[RESIDUAL_OUTPUTSCALE_INDEX]),
+    }
+
+
+def initial_parameters(initial_lengthscale: float) -> np.ndarray:
+    parameters = np.zeros(PARAMETER_COUNT, dtype=np.float64)
+    parameters[HARM_CURVATURE_SLICE] = _inverse_positive(HARM_CURVATURE_INITIAL)
+    parameters[CONTENT_LENGTHSCALE_INDEX] = _inverse_positive(initial_lengthscale)
+    parameters[PHASE_FACTOR_SLICE] = 1.0
+    parameters[PHASE_DIAGONAL_SLICE] = _inverse_positive(PHASE_DIAGONAL_INITIAL)
+    parameters[RESIDUAL_LENGTHSCALE_INDEX] = _inverse_positive(initial_lengthscale)
+    parameters[RESIDUAL_OUTPUTSCALE_INDEX] = _inverse_positive(RESIDUAL_OUTPUTSCALE_INITIAL)
+    return parameters
+
+
+def draw_initial_parameters(initial_lengthscale: float, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    parameters = initial_parameters(initial_lengthscale)
+    parameters[CONSTANT_INDEX] = rng.normal()
+    parameters[HARM_CURVATURE_SLICE] = _inverse_positive(
+        rng.lognormal(
+            np.log(HARM_CURVATURE_INITIAL) + HARM_CURVATURE_PRIOR_LOG_SD**2,
+            HARM_CURVATURE_PRIOR_LOG_SD,
         )
-
-    @property
-    def harm_curvature(self) -> torch.Tensor:
-        return self.raw_harm_curvature_constraint.transform(self.raw_harm_curvature)
-
-    @harm_curvature.setter
-    def harm_curvature(self, value: torch.Tensor | float) -> None:
-        constrained = torch.as_tensor(
-            value,
-            dtype=self.raw_harm_curvature.dtype,
-            device=self.raw_harm_curvature.device,
+    )
+    parameters[CONTENT_LENGTHSCALE_INDEX] = _inverse_positive(
+        rng.lognormal(
+            math.log(initial_lengthscale),
+            LENGTHSCALE_PRIOR_LOG_SD,
         )
-        self.initialize(raw_harm_curvature=self.raw_harm_curvature_constraint.inverse_transform(constrained))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        quadratic = x[..., self.layout.quadratic_exposure]
-        return self.constant.forward(x) - (self.harm_curvature * quadratic).sum(dim=-1)
-
-
-def draw_quadratic_initialization(model: SingleTaskGP, seed: int) -> None:
-    draw_parameters_from_priors(model, seed)
-    mean = model.mean_module
-    if not isinstance(mean, QuadraticExposurePenaltyMean):
-        raise TypeError("Quadratic exposure GP must use QuadraticExposurePenaltyMean")
-    mean.constant.initialize(constant=torch.randn_like(mean.constant.constant))
-
-
-MAP_INITIALIZATIONS = (
-    MapInitialization("prior_mode", 0, keep_initialization),
-    MapInitialization("prior_draw", 11, draw_quadratic_initialization),
-    MapInitialization("prior_draw", 22, draw_quadratic_initialization),
-)
-
-
-class PhaseContentKernel(Kernel):
-    """Share a content response across phases with learned phase covariance."""
-
-    def __init__(
-        self,
-        phase_exposure_content: tuple[slice, ...],
-        initial_lengthscale: float,
-        like: torch.Tensor,
-    ) -> None:
-        super().__init__()
-        self.phase_exposure_content = phase_exposure_content
-        phase_count = len(phase_exposure_content)
-        self.content_kernel = MaternKernel(
-            nu=MATERN_NU,
-            lengthscale_prior=LogNormalPrior(
-                like.new_tensor(math.log(initial_lengthscale)),
-                like.new_tensor(LENGTHSCALE_PRIOR_LOG_SD),
-            ),
+    )
+    parameters[PHASE_FACTOR_SLICE] = rng.normal(1.0, 1.0, PHASE_COUNT)
+    parameters[RESIDUAL_LENGTHSCALE_INDEX] = _inverse_positive(
+        rng.lognormal(
+            math.log(initial_lengthscale) + LENGTHSCALE_PRIOR_LOG_SD**2,
+            LENGTHSCALE_PRIOR_LOG_SD,
         )
-        self.content_kernel.lengthscale = initial_lengthscale
-        self.phase_factor = torch.nn.Parameter(like.new_ones(phase_count, 1))
-        self.register_prior(
-            "phase_factor_prior",
-            NormalPrior(like.new_tensor(1.0), like.new_tensor(1.0)),
-            "phase_factor",
+    )
+    parameters[RESIDUAL_OUTPUTSCALE_INDEX] = _inverse_positive(
+        rng.lognormal(
+            math.log(RESIDUAL_OUTPUTSCALE_INITIAL) + LENGTHSCALE_PRIOR_LOG_SD**2,
+            LENGTHSCALE_PRIOR_LOG_SD,
         )
-        self.register_parameter("raw_phase_diagonal", torch.nn.Parameter(like.new_zeros(phase_count)))
-        self.register_constraint("raw_phase_diagonal", Positive())
-        self.phase_diagonal = 0.25
+    )
+    return parameters
 
-    @property
-    def phase_diagonal(self) -> torch.Tensor:
-        return self.raw_phase_diagonal_constraint.transform(self.raw_phase_diagonal)
 
-    @phase_diagonal.setter
-    def phase_diagonal(self, value: torch.Tensor | float) -> None:
-        constrained = torch.as_tensor(
-            value,
-            dtype=self.raw_phase_diagonal.dtype,
-            device=self.raw_phase_diagonal.device,
+def quadratic_initializations(initial_lengthscale: float) -> tuple[MapInitialization, ...]:
+    return (
+        MapInitialization("prior_mode", 0, initial_parameters(initial_lengthscale)),
+        MapInitialization("prior_draw", 11, draw_initial_parameters(initial_lengthscale, 11)),
+        MapInitialization("prior_draw", 22, draw_initial_parameters(initial_lengthscale, 22)),
+    )
+
+
+def quadratic_exposure_mean(parameters: jax.Array, features: jax.Array) -> jax.Array:
+    values = quadratic_parameter_values(parameters)
+    feature_count = features.shape[-1] - 1
+    quadratic = features[..., feature_count - PHASE_COUNT : feature_count]
+    return values["constant"] - quadratic @ values["harm_curvature"]
+
+
+def _squared_distance(first: jax.Array, second: jax.Array) -> jax.Array:
+    squared = jnp.sum(jnp.square(first), axis=1)[:, None]
+    squared += jnp.sum(jnp.square(second), axis=1)[None, :]
+    squared -= 2.0 * first @ second.T
+    return jnp.maximum(squared, 0.0)
+
+
+def _matern52(first: jax.Array, second: jax.Array, lengthscale: jax.Array) -> jax.Array:
+    scaled_distance = jnp.sqrt(5.0 * _squared_distance(first, second) + 1e-30) / lengthscale
+    return (1.0 + scaled_distance + jnp.square(scaled_distance) / 3.0) * jnp.exp(-scaled_distance)
+
+
+def quadratic_exposure_covariance(parameters: jax.Array, first: jax.Array, second: jax.Array) -> jax.Array:
+    values = quadratic_parameter_values(parameters)
+    feature_count = first.shape[-1] - 1
+    phase_width = (feature_count - PHASE_COUNT) // PHASE_COUNT
+    phase_covariance = jnp.outer(values["phase_factor"], values["phase_factor"])
+    phase_covariance += jnp.diag(values["phase_diagonal"])
+
+    shared = jnp.zeros((len(first), len(second)), dtype=first.dtype)
+    for first_phase in range(PHASE_COUNT):
+        first_slice = slice(first_phase * phase_width, (first_phase + 1) * phase_width)
+        for second_phase in range(PHASE_COUNT):
+            second_slice = slice(second_phase * phase_width, (second_phase + 1) * phase_width)
+            shared += phase_covariance[first_phase, second_phase] * _matern52(
+                first[:, first_slice],
+                second[:, second_slice],
+                values["content_lengthscale"],
+            )
+
+    response_slice = slice(0, PHASE_COUNT * phase_width)
+    same_swarm = first[:, feature_count, None] == second[None, :, feature_count]
+    residual = values["residual_outputscale"] * _matern52(
+        first[:, response_slice],
+        second[:, response_slice],
+        values["residual_lengthscale"],
+    )
+    return shared + residual * same_swarm
+
+
+def _lognormal_log_probability(value: jax.Array, log_mean: jax.Array, log_sd: float) -> jax.Array:
+    standardized = (jnp.log(value) - log_mean) / log_sd
+    return -jnp.log(value * log_sd * math.sqrt(2.0 * math.pi)) - 0.5 * jnp.square(standardized)
+
+
+def quadratic_log_prior(parameters: jax.Array, initial_lengthscale: float) -> jax.Array:
+    values = quadratic_parameter_values(parameters)
+    log_probability = jnp.sum(
+        _lognormal_log_probability(
+            values["harm_curvature"],
+            jnp.log(jnp.asarray(HARM_CURVATURE_INITIAL)) + HARM_CURVATURE_PRIOR_LOG_SD**2,
+            HARM_CURVATURE_PRIOR_LOG_SD,
         )
-        self.initialize(raw_phase_diagonal=self.raw_phase_diagonal_constraint.inverse_transform(constrained))
+    )
+    log_probability += _lognormal_log_probability(
+        values["content_lengthscale"],
+        jnp.log(jnp.asarray(initial_lengthscale)),
+        LENGTHSCALE_PRIOR_LOG_SD,
+    )
+    log_probability += jnp.sum(-0.5 * jnp.square(values["phase_factor"] - 1.0))
+    log_probability += _lognormal_log_probability(
+        values["residual_lengthscale"],
+        jnp.log(jnp.asarray(initial_lengthscale)) + LENGTHSCALE_PRIOR_LOG_SD**2,
+        LENGTHSCALE_PRIOR_LOG_SD,
+    )
+    log_probability += _lognormal_log_probability(
+        values["residual_outputscale"],
+        jnp.log(jnp.asarray(RESIDUAL_OUTPUTSCALE_INITIAL)) + LENGTHSCALE_PRIOR_LOG_SD**2,
+        LENGTHSCALE_PRIOR_LOG_SD,
+    )
+    return log_probability
 
-    @property
-    def phase_covariance(self) -> torch.Tensor:
-        return self.phase_factor @ self.phase_factor.transpose(-1, -2) + torch.diag(self.phase_diagonal)
 
-    def forward(
-        self,
-        x1: torch.Tensor,
-        x2: torch.Tensor,
-        diag: bool = False,
-        last_dim_is_batch: bool = False,
-        **params: object,
-    ) -> LinearOperator | torch.Tensor:
-        if last_dim_is_batch:
-            raise ValueError("Phase-content covariance does not batch over input dimensions")
-        result = None
-        for first, first_slice in enumerate(self.phase_exposure_content):
-            for second, second_slice in enumerate(self.phase_exposure_content):
-                value = self.phase_covariance[first, second] * self.content_kernel(
-                    x1[..., first_slice],
-                    x2[..., second_slice],
-                    diag=diag,
-                    **params,
-                )
-                result = value if result is None else result + value
-        if result is None:
-            raise AssertionError("Phase-content covariance requires at least one phase")
-        return result
+def negative_log_posterior(
+    parameters: jax.Array,
+    train_X: jax.Array,
+    train_Y: jax.Array,
+    train_Yvar: jax.Array,
+    initial_lengthscale: float,
+) -> jax.Array:
+    covariance = quadratic_exposure_covariance(parameters, train_X, train_X)
+    covariance += jnp.diag(train_Yvar + GP_JITTER)
+    cholesky = jnp.linalg.cholesky(covariance)
+    residual = train_Y - quadratic_exposure_mean(parameters, train_X)
+    alpha = cho_solve((cholesky, True), residual)
+    negative_log_likelihood = 0.5 * residual @ alpha
+    negative_log_likelihood += jnp.sum(jnp.log(jnp.diag(cholesky)))
+    negative_log_likelihood += 0.5 * len(train_X) * math.log(2.0 * math.pi)
+    return negative_log_likelihood - quadratic_log_prior(parameters, initial_lengthscale)
+
+
+def _factor_training_covariance(
+    parameters: jax.Array,
+    train_X: jax.Array,
+    train_Y: jax.Array,
+    train_Yvar: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    covariance = quadratic_exposure_covariance(parameters, train_X, train_X)
+    covariance += jnp.diag(train_Yvar + GP_JITTER)
+    cholesky = jnp.linalg.cholesky(covariance)
+    residual = train_Y - quadratic_exposure_mean(parameters, train_X)
+    return cholesky, cho_solve((cholesky, True), residual)
+
+
+@jax.jit
+def _posterior_marginals(
+    parameters: jax.Array,
+    train_X: jax.Array,
+    cholesky: jax.Array,
+    alpha: jax.Array,
+    test_X: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    cross_covariance = quadratic_exposure_covariance(parameters, test_X, train_X)
+    mean = quadratic_exposure_mean(parameters, test_X) + cross_covariance @ alpha
+    solved = solve_triangular(cholesky, cross_covariance.T, lower=True)
+    prior_variance = jnp.diag(quadratic_exposure_covariance(parameters, test_X, test_X))
+    variance = prior_variance - jnp.sum(jnp.square(solved), axis=0)
+    return mean, jnp.maximum(variance, 0.0)
+
+
+@partial(jax.jit, static_argnames=("sample_count",))
+def _noisy_expected_improvement(
+    parameters: jax.Array,
+    train_X: jax.Array,
+    cholesky: jax.Array,
+    alpha: jax.Array,
+    reference_X: jax.Array,
+    candidate_X: jax.Array,
+    key: jax.Array,
+    *,
+    sample_count: int,
+) -> jax.Array:
+    reference_train = quadratic_exposure_covariance(parameters, reference_X, train_X)
+    candidate_train = quadratic_exposure_covariance(parameters, candidate_X, train_X)
+    solved_reference = solve_triangular(cholesky, reference_train.T, lower=True)
+    solved_candidate = solve_triangular(cholesky, candidate_train.T, lower=True)
+
+    reference_mean = quadratic_exposure_mean(parameters, reference_X) + reference_train @ alpha
+    candidate_mean = quadratic_exposure_mean(parameters, candidate_X) + candidate_train @ alpha
+    reference_covariance = quadratic_exposure_covariance(parameters, reference_X, reference_X)
+    reference_covariance -= solved_reference.T @ solved_reference
+    candidate_reference = quadratic_exposure_covariance(parameters, candidate_X, reference_X)
+    candidate_reference -= solved_candidate.T @ solved_reference
+    candidate_variance = jnp.diag(quadratic_exposure_covariance(parameters, candidate_X, candidate_X))
+    candidate_variance -= jnp.sum(jnp.square(solved_candidate), axis=0)
+
+    candidate_count = len(candidate_X)
+    reference_count = len(reference_X)
+    joint_mean = jnp.concatenate(
+        [
+            jnp.broadcast_to(reference_mean, (candidate_count, reference_count)),
+            candidate_mean[:, None],
+        ],
+        axis=1,
+    )
+    joint_covariance = jnp.zeros(
+        (candidate_count, reference_count + 1, reference_count + 1),
+        dtype=train_X.dtype,
+    )
+    joint_covariance = joint_covariance.at[:, :reference_count, :reference_count].set(reference_covariance)
+    joint_covariance = joint_covariance.at[:, -1, :reference_count].set(candidate_reference)
+    joint_covariance = joint_covariance.at[:, :reference_count, -1].set(candidate_reference)
+    joint_covariance = joint_covariance.at[:, -1, -1].set(candidate_variance)
+    joint_covariance += GP_JITTER * jnp.eye(reference_count + 1)[None]
+    joint_cholesky = jnp.linalg.cholesky(joint_covariance)
+    standard_normal = jax.random.normal(
+        key,
+        (candidate_count, sample_count, reference_count + 1),
+        dtype=train_X.dtype,
+    )
+    samples = joint_mean[:, None, :] + jnp.einsum("cij,csj->csi", joint_cholesky, standard_normal)
+    incumbent = jnp.max(samples[:, :, :reference_count], axis=2)
+    return jnp.mean(jnp.maximum(samples[:, :, -1] - incumbent, 0.0), axis=1)
 
 
 def moment_lengthscale(features: np.ndarray, layout: QuadraticExposureLayout) -> float:
@@ -217,84 +352,85 @@ def moment_lengthscale(features: np.ndarray, layout: QuadraticExposureLayout) ->
     return float(np.sqrt(np.median(positive)))
 
 
-def quadratic_exposure_covariance(
-    layout: QuadraticExposureLayout,
-    initial_lengthscale: float,
-    like: torch.Tensor,
-) -> Kernel:
-    shared = PhaseContentKernel(layout.phase_exposure_content, initial_lengthscale, like)
-    phase_dims = tuple(range(layout.phase_exposure_content[0].start, layout.phase_exposure_content[-1].stop))
-    residual_response = MaternKernel(
-        nu=MATERN_NU,
-        active_dims=phase_dims,
-        lengthscale_prior=lognormal_prior_with_mode(initial_lengthscale, LENGTHSCALE_PRIOR_LOG_SD, like),
-    )
-    residual_response.lengthscale = initial_lengthscale
-    same_swarm = SameSwarmKernel(active_dims=(layout.feature_count,)).to(dtype=like.dtype, device=like.device)
-    residual = ScaleKernel(
-        residual_response * same_swarm,
-        outputscale_prior=lognormal_prior_with_mode(RESIDUAL_OUTPUTSCALE_INITIAL, 1.0, like),
-    )
-    residual.outputscale = RESIDUAL_OUTPUTSCALE_INITIAL
-    return (shared + residual).to(dtype=like.dtype, device=like.device)
+@dataclass(frozen=True)
+class FittedQuadraticExposureGP:
+    parameters: jax.Array
+    train_X: jax.Array
+    cholesky: jax.Array
+    alpha: jax.Array
+    swarm_indices: dict[str, int]
+    outcome_scales: dict[str, SwarmOutcomeScale]
+    model_metadata: ModelMetadata
 
+    def candidate_array(self, swarm: Swarm, weights: np.ndarray) -> jax.Array:
+        if swarm.swarm_id not in self.swarm_indices:
+            raise ValueError(f"Swarm {swarm.swarm_id!r} was not included when this model was fit")
+        features = quadratic_exposure_features(swarm, weights)
+        swarm_column = np.full((len(features), 1), self.swarm_indices[swarm.swarm_id], dtype=np.float64)
+        values = np.concatenate([features, swarm_column], axis=1)
+        return jax.device_put(values, self.parameters.device)
 
-def quadratic_exposure_gp(
-    train_X: torch.Tensor,
-    train_Y: torch.Tensor,
-    train_Yvar: torch.Tensor,
-    *,
-    content_dim: int,
-    num_swarms: int,
-    initial_lengthscale: float,
-) -> SingleTaskGP:
-    layout = quadratic_exposure_layout(content_dim)
-    if train_X.shape[-1] != layout.feature_count + 1:
-        raise ValueError(f"Expected {layout.feature_count + 1} GP input columns, got {train_X.shape[-1]}")
-    swarm_indices = train_X[:, layout.feature_count]
-    if not torch.all(swarm_indices == swarm_indices.round()):
-        raise ValueError("Swarm indices must be integers")
-    if torch.any(swarm_indices < 0) or torch.any(swarm_indices >= num_swarms):
-        raise ValueError("Swarm indices are outside the configured range")
-    model = SingleTaskGP(
-        train_X=train_X,
-        train_Y=train_Y,
-        train_Yvar=train_Yvar,
-        mean_module=QuadraticExposurePenaltyMean(layout, train_X),
-        covar_module=quadratic_exposure_covariance(layout, initial_lengthscale, train_X),
-        outcome_transform=Standardize(m=1),
-    )
-    return model.to(dtype=train_X.dtype, device=train_X.device)
+    def predict(self, swarm: Swarm, weights: np.ndarray) -> PredictiveMoments:
+        mean, variance = _posterior_marginals(
+            self.parameters,
+            self.train_X,
+            self.cholesky,
+            self.alpha,
+            self.candidate_array(swarm, weights),
+        )
+        scale = self.outcome_scales[swarm.swarm_id]
+        return PredictiveMoments(
+            mean=scale.mean + scale.scale * np.asarray(mean),
+            latent_variance=scale.scale**2 * np.asarray(variance),
+        )
+
+    def noisy_expected_improvement(
+        self,
+        swarm: Swarm,
+        weights: np.ndarray,
+        reference_weights: np.ndarray,
+        *,
+        sample_count: int,
+        seed: int,
+    ) -> np.ndarray:
+        values = _noisy_expected_improvement(
+            self.parameters,
+            self.train_X,
+            self.cholesky,
+            self.alpha,
+            self.candidate_array(swarm, reference_weights),
+            self.candidate_array(swarm, weights),
+            jax.random.key(seed),
+            sample_count=sample_count,
+        )
+        return self.outcome_scales[swarm.swarm_id].scale * np.asarray(values)
 
 
 def quadratic_model_metadata(
     campaign: Campaign,
     training: TrainingData,
-    model: SingleTaskGP,
+    parameters: jax.Array,
+    initial_lengthscale: float,
     fit: MapFit,
+    device: jax.Device,
 ) -> ModelMetadata:
-    layout = quadratic_exposure_layout(campaign.target.content_matrix.shape[1])
-    initial_lengthscale = moment_lengthscale(training.features[:, : layout.feature_count], layout)
-    mean = model.mean_module
-    covariance = model.covar_module
-    if not isinstance(mean, QuadraticExposurePenaltyMean):
-        raise TypeError("Quadratic exposure GP must use QuadraticExposurePenaltyMean")
-    if not isinstance(covariance, AdditiveKernel) or not isinstance(covariance.kernels[0], PhaseContentKernel):
-        raise TypeError("Quadratic exposure GP must use shared phase and same-swarm covariance")
-    shared = covariance.kernels[0]
+    values = quadratic_parameter_values(parameters)
+    phase_factor = values["phase_factor"]
+    phase_covariance = jnp.outer(phase_factor, phase_factor) + jnp.diag(values["phase_diagonal"])
     return {
         "kind": "quadratic_exposure_transfer_gp",
-        "device": str(model.train_inputs[0].device),
+        "device": str(device),
         "details": {
+            "backend": "compiled vanilla JAX",
             "mean": "learned phase-specific quadratic penalty on token-mass-weighted epochs",
-            "harm_curvature_initial": list(HARM_CURVATURE_INITIAL),
-            "harm_curvature": mean.harm_curvature.detach().cpu().tolist(),
+            "harm_curvature_initial": HARM_CURVATURE_INITIAL.tolist(),
+            "harm_curvature": np.asarray(values["harm_curvature"]).tolist(),
             "covariance": "phase-linked content response plus same-swarm Matern-5/2 residual",
             "initial_lengthscale": initial_lengthscale,
-            "content_lengthscale": float(shared.content_kernel.lengthscale.detach().cpu().reshape(-1)[0]),
-            "phase_covariance": shared.phase_covariance.detach().cpu().tolist(),
-            "outcome_transform": "per-swarm affine standardization followed by BoTorch Standardize",
-            "hyperparameter_inference": "highest-MLL converged MAP fit from three fixed starts",
+            "content_lengthscale": float(values["content_lengthscale"]),
+            "phase_covariance": np.asarray(phase_covariance).tolist(),
+            "outcome_transform": "per-swarm affine standardization",
+            "hyperparameter_inference": "lowest-negative-log-posterior JAX BFGS fit from three fixed starts",
             "map_restarts": [summary._asdict() for summary in fit.restarts],
             "observation_counts": training.observation_counts,
             "fit_seconds": fit.elapsed,
@@ -302,28 +438,41 @@ def quadratic_model_metadata(
     }
 
 
-def fit_quadratic_exposure_model(campaign: Campaign, device: torch.device) -> FittedSwarmGP:
+def fit_quadratic_exposure_model(campaign: Campaign, device: jax.Device) -> FittedQuadraticExposureGP:
     training = prepare_training_data(campaign, quadratic_exposure_features)
-    X = torch.as_tensor(training.features, dtype=torch.double, device=device)
-    Y = torch.as_tensor(training.standardized_objective_values, dtype=torch.double, device=device)
-    Yvar = torch.as_tensor(training.standardized_objective_variances, dtype=torch.double, device=device)
+    train_X = jax.device_put(training.features, device)
+    train_Y = jax.device_put(training.standardized_objective_values, device)
+    train_Yvar = jax.device_put(training.standardized_objective_variances, device)
     layout = quadratic_exposure_layout(campaign.target.content_matrix.shape[1])
     initial_lengthscale = moment_lengthscale(training.features[:, : layout.feature_count], layout)
-    fit = fit_map_restarts(
-        lambda: quadratic_exposure_gp(
-            X,
-            Y,
-            Yvar,
-            content_dim=campaign.target.content_matrix.shape[1],
-            num_swarms=len(training.swarm_indices),
-            initial_lengthscale=initial_lengthscale,
-        ),
-        MAP_INITIALIZATIONS,
+    objective = partial(
+        negative_log_posterior,
+        train_X=train_X,
+        train_Y=train_Y,
+        train_Yvar=train_Yvar,
+        initial_lengthscale=initial_lengthscale,
     )
-    return FittedSwarmGP(
-        _model=fit.model,
-        feature_map=quadratic_exposure_features,
+    fit = fit_map_restarts(objective, quadratic_initializations(initial_lengthscale), device)
+    parameters = jax.device_put(fit.parameters, device)
+    cholesky, alpha = jax.jit(_factor_training_covariance)(
+        parameters,
+        train_X,
+        train_Y,
+        train_Yvar,
+    )
+    return FittedQuadraticExposureGP(
+        parameters=parameters,
+        train_X=train_X,
+        cholesky=cholesky,
+        alpha=alpha,
         swarm_indices=training.swarm_indices,
         outcome_scales=training.outcome_scales,
-        model_metadata=quadratic_model_metadata(campaign, training, fit.model, fit),
+        model_metadata=quadratic_model_metadata(
+            campaign,
+            training,
+            parameters,
+            initial_lengthscale,
+            fit,
+            device,
+        ),
     )

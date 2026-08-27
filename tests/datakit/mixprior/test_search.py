@@ -3,14 +3,13 @@
 
 import numpy as np
 import pytest
-import torch
 
 from experiments.datakit.mixprior.campaign import Campaign
 from experiments.datakit.mixprior.data import Swarm
 from experiments.datakit.mixprior.search import (
     MIXTURE_DENOMINATOR,
     CandidatePoolInputs,
-    acquire_log_nei,
+    acquire_noisy_expected_improvement,
     acquire_posterior_mean,
     quantize_mixtures,
     sample_candidate_pool,
@@ -25,11 +24,21 @@ class LinearPredictor:
         return PredictiveMoments(mean=weights[:, 0, 0], latent_variance=np.full(len(weights), 0.1))
 
 
-class TensorPredictor:
-    botorch_model = object()
+class AcquisitionPredictor:
+    def __init__(self) -> None:
+        self.reference_weights = np.empty((0, 2, 2))
 
-    def candidate_tensor(self, _swarm: Swarm, weights: np.ndarray) -> torch.Tensor:
-        return torch.as_tensor(weights.reshape(len(weights), -1), dtype=torch.double)
+    def noisy_expected_improvement(
+        self,
+        _swarm: Swarm,
+        weights: np.ndarray,
+        reference_weights: np.ndarray,
+        *,
+        sample_count: int,
+        seed: int,
+    ) -> np.ndarray:
+        self.reference_weights = reference_weights
+        return weights[:, 0, 0]
 
 
 def test_transfer_data_uses_caller_feature_map(tiny_campaign: Campaign) -> None:
@@ -135,28 +144,8 @@ def test_posterior_mean_selects_best_pool_row(tiny_campaign: Campaign) -> None:
     assert acquired.pool_index == 0
 
 
-def test_log_nei_baseline_contains_only_observed_target_rows(
-    tiny_campaign: Campaign,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = {}
-
-    class RecordingLogNei:
-        def __init__(
-            self,
-            *,
-            X_baseline: torch.Tensor,
-            X_pending: torch.Tensor | None,
-            **kwargs: object,
-        ) -> None:
-            captured["baseline"] = X_baseline
-            captured["pending"] = X_pending
-
-        def __call__(self, candidates: torch.Tensor) -> torch.Tensor:
-            return torch.arange(len(candidates), dtype=candidates.dtype)
-
-    monkeypatch.setattr("experiments.datakit.mixprior.search.qLogNoisyExpectedImprovement", RecordingLogNei)
-    model = TensorPredictor()
+def test_noisy_expected_improvement_uses_observed_and_pending_rows(tiny_campaign: Campaign) -> None:
+    model = AcquisitionPredictor()
     pool = np.asarray(
         [
             [[0.25, 0.75], [0.25, 0.75]],
@@ -165,8 +154,10 @@ def test_log_nei_baseline_contains_only_observed_target_rows(
     )
 
     pending = pool[:1]
-    acquire_log_nei(model, tiny_campaign.target, pool, seed=7, pending_weights=pending)  # type: ignore[arg-type]
+    acquired = acquire_noisy_expected_improvement(model, tiny_campaign.target, pool, seed=7, pending_weights=pending)
 
-    expected = model.candidate_tensor(tiny_campaign.target, tiny_campaign.target.data.weights)
-    assert torch.equal(captured["baseline"], expected)
-    assert torch.equal(captured["pending"], model.candidate_tensor(tiny_campaign.target, pending))
+    assert acquired.pool_index == 1
+    assert np.array_equal(
+        model.reference_weights,
+        np.concatenate([tiny_campaign.target.data.weights, pending]),
+    )

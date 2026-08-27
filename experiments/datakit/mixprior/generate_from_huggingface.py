@@ -11,8 +11,6 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import torch
-
 from experiments.datakit.mixprior.artifacts import write_bundle_manifest
 from experiments.datakit.mixprior.generate_candidate import generate_candidate
 from experiments.datakit.mixprior.huggingface import download_campaign
@@ -20,8 +18,9 @@ from experiments.datakit.mixprior.search import (
     DEFAULT_ACQUISITION_SEED,
     DEFAULT_POOL_SEEDS,
     DEFAULT_POOL_SIZE,
-    log_nei,
+    noisy_expected_improvement,
 )
+from experiments.datakit.mixprior.surrogate import default_device
 
 DEPENDENCY_LOCK = Path(__file__).parents[3] / "uv.lock"
 
@@ -40,15 +39,14 @@ def main() -> None:
     with TemporaryDirectory(prefix="mixprior-") as temporary:
         campaign_dir = Path(temporary) / "campaign"
         manifest_path = download_campaign(args.campaign_uri, args.campaign_sha256, campaign_dir)
-        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         candidate = generate_candidate(
             campaign_manifest=manifest_path,
             output_dir=args.output_dir,
             dependency_lock=DEPENDENCY_LOCK,
-            acquisition=log_nei(args.acquisition_seed),
+            acquisition=noisy_expected_improvement(args.acquisition_seed),
             pool_size_per_seed=args.pool_size_per_seed,
             pool_seeds=tuple(args.pool_seed or DEFAULT_POOL_SEEDS),
-            device=device,
+            device=default_device(),
         )
         shutil.copytree(campaign_dir, args.output_dir / "campaign")
 

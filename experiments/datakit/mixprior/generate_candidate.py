@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import torch
+import jax
 
 from experiments.datakit.mixprior.artifacts import CandidateArtifact, CandidateDecision, write_candidate_bundle
 from experiments.datakit.mixprior.campaign import Campaign, load_campaign
@@ -27,7 +27,7 @@ def search_candidate(
     acquisition: Acquisition,
     pool_size_per_seed: int,
     pool_seeds: tuple[int, ...],
-    device: torch.device,
+    device: jax.Device,
 ) -> CandidateDecision:
     """Fit the quadratic exposure GP and acquire from the standard pool."""
     model = fit_quadratic_exposure_model(campaign, device)
@@ -52,7 +52,7 @@ def generate_candidate(
     acquisition: Acquisition,
     pool_size_per_seed: int,
     pool_seeds: tuple[int, ...],
-    device: torch.device,
+    device: jax.Device,
 ) -> CandidateArtifact:
     """Load a campaign, fit the quadratic GP, and persist its decision."""
     campaign = load_campaign(campaign_manifest)

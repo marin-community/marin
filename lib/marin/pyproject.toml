@@ -171,11 +171,6 @@ datakit = [
     "duckdb>=1.0.0",
 ]
 
-mixprior = [
-    "botorch>=0.18.1",
-    "gpytorch>=1.15.2",
-]
-
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"

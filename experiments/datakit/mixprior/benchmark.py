@@ -11,8 +11,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import jax
 import numpy as np
-import torch
 from rigging.filesystem.storage_path import StoragePath
 from scipy.stats import spearmanr
 
@@ -25,9 +25,9 @@ from experiments.datakit.mixprior.search import (
     POSTERIOR_MEAN,
     Acquisition,
     acquire_candidate,
-    log_nei,
+    noisy_expected_improvement,
 )
-from experiments.datakit.mixprior.surrogate import BotorchMixturePredictor
+from experiments.datakit.mixprior.surrogate import JaxMixturePredictor, default_device
 
 CAMPAIGN_URI = (
     "hf://datasets/marin-community/grug-moe-mix-swarm"
@@ -117,7 +117,7 @@ def aggregate_replicates(campaign: Campaign, target: Swarm) -> tuple[Swarm, Aggr
 def rank_replay(
     campaign: Campaign,
     name: str,
-    device: torch.device,
+    device: jax.Device,
 ) -> list[dict[str, float | int]]:
     target, sources = transition(campaign, name)
     actual = campaign.objective.observations(target).values
@@ -150,7 +150,7 @@ def anchor_indices(target: Swarm) -> list[int]:
 
 def acquisition_batch(
     acquisition: Acquisition,
-    model: BotorchMixturePredictor,
+    model: JaxMixturePredictor,
     observed: Swarm,
     target: Swarm,
     remaining: list[int],
@@ -177,7 +177,7 @@ def regret_replay(
     sources: tuple[Swarm, ...],
     initial: list[int],
     acquisition: Acquisition,
-    device: torch.device,
+    device: jax.Device,
 ) -> dict[str, object]:
     objective = campaign.objective.observations(target).values
     best_possible = float(objective.max())
@@ -209,7 +209,8 @@ def regret_replay(
 
 
 def run_rank(campaign: Campaign) -> dict[str, object]:
-    results = {name: rank_replay(campaign, name, torch.device("cuda")) for name in REPLAY_TRANSITIONS}
+    device = default_device()
+    results = {name: rank_replay(campaign, name, device) for name in REPLAY_TRANSITIONS}
     return {
         "results": results,
         "mean_spearman": {name: float(np.mean([row["spearman"] for row in rows])) for name, rows in results.items()},
@@ -225,8 +226,8 @@ def run_regret(campaign: Campaign, block: int) -> dict[str, object]:
         anchors = anchor_indices(target)
         initial = [anchors[(block + offset) % len(anchors)] for offset in range(3)]
         results[name] = [
-            regret_replay(replay_campaign, target, sources, initial, acquisition, torch.device("cuda"))
-            for acquisition in (POSTERIOR_MEAN, log_nei(10_000 + block))
+            regret_replay(replay_campaign, target, sources, initial, acquisition, default_device())
+            for acquisition in (POSTERIOR_MEAN, noisy_expected_improvement(10_000 + block))
         ]
     return {"block": block, "results": results}
 
@@ -238,8 +239,6 @@ def main() -> None:
     parser.add_argument("--output")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    torch.set_num_threads(4)
-
     with TemporaryDirectory(prefix="mixprior-benchmark-") as temporary:
         manifest = download_campaign(CAMPAIGN_URI, CAMPAIGN_SHA256, Path(temporary) / "campaign")
         campaign = load_campaign(manifest)
