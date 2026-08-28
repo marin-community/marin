@@ -43,8 +43,10 @@ d6144 run restored step 164 with a 735 GiB fleet peak against a 940 GiB request.
 
 ### Transport
 
-Both arms restored the live hero's step-6000 checkpoint on one NVL72 rack and ran back to back,
-with the transport the only variable and fp32 weights on device in both:
+[#8549](https://github.com/marin-community/marin/pull/8549) compared the ragged and pooled-wave
+transports head to head: both runs restored the live hero's step-6000 checkpoint on one NVL72
+rack and ran back to back, with the transport the only variable and fp32 weights on device in
+both:
 
 | | ragged | pooled-wave |
 | --- | --- | --- |
