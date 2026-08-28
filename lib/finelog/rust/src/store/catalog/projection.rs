@@ -1,4 +1,4 @@
-//! Projection from transactional catalog rows to the published object catalog.
+//! Projection from transactional catalog rows to the published table state.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -9,7 +9,7 @@ use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
     CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, TableVersionSegments,
 };
-use crate::store::catalog::object_catalog::OBJECT_CATALOG_FORMAT_VERSION;
+use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
 use crate::store::catalog::Catalog;
 use crate::store::types::{basename, segment_relative_key, SegmentLocation};
 
@@ -150,7 +150,7 @@ pub fn namespace_catalog(
         .and_then(|policy| policy.max_query_time_ms)
         .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
     Ok(NamespaceCatalog {
-        format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
+        format_version: Some(TABLE_STATE_FORMAT_VERSION),
         namespace: Some(namespace.to_string()),
         catalog_generation: Some(status.catalog_generation),
         active_table_spec_version: Some(status.active_version()),

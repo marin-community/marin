@@ -202,6 +202,17 @@ pub trait ObjectStore: Send + Sync {
         )))
     }
 
+    /// The filename [`ObjectStore::local_path`] resolves this object to.
+    ///
+    /// Derived from the object's identity alone: recovery names objects it has
+    /// not localized without reading or downloading them.
+    fn planned_local_path(&self, id: &ObjectId) -> Result<PathBuf, StatsError> {
+        Err(StatsError::Internal(format!(
+            "object store has no local file for {:?}",
+            id.as_str()
+        )))
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

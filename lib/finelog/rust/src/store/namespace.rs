@@ -727,9 +727,31 @@ impl Namespace {
         let key_column = resolve_key_column(&schema)?;
 
         let local_recovery_started = Instant::now();
-        let (next_seq, adopted, init_persisted) = match &data_dir {
-            None => (1_i64, VecDeque::new(), -1_i64),
-            Some(dir) => {
+        let (next_seq, adopted, init_persisted) = match (&data_dir, object_table.is_some()) {
+            (None, _) => (1_i64, VecDeque::new(), -1_i64),
+            // An object-backed table's contents come from its durable state,
+            // never from files present in the local object cache. Recovery
+            // seeds sequence allocation from the catalog projection of that
+            // state and adopts nothing from disk; a query localizes the objects
+            // it selects.
+            (Some(dir), true) => {
+                std::fs::create_dir_all(dir).map_err(|e| {
+                    StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
+                })?;
+                let rows = catalog.list_segments(name)?;
+                let max_persisted = rows
+                    .iter()
+                    .filter(|row| row.row_count > 0)
+                    .map(|row| row.max_seq)
+                    .max()
+                    .unwrap_or(-1);
+                (
+                    crate::store::adopt::recover_next_seq(&rows),
+                    VecDeque::new(),
+                    max_persisted,
+                )
+            }
+            (Some(dir), false) => {
                 std::fs::create_dir_all(dir).map_err(|e| {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
@@ -829,6 +851,14 @@ impl Namespace {
     /// Whether this namespace has a remote offload target configured.
     pub fn has_remote(&self) -> bool {
         self.object_table.is_some()
+    }
+
+    /// Whether this process still owns the table's durable state. A fenced
+    /// object-backed table rejects writes until a restart re-claims it.
+    pub(crate) fn write_ready(&self) -> bool {
+        self.object_table
+            .as_ref()
+            .is_none_or(ObjectTable::writes_ready)
     }
 
     pub(crate) async fn materialize_query_segments(&self) -> Result<(), StatsError> {
@@ -3835,18 +3865,19 @@ mod tests {
         let legacy_object_store = Arc::new(crate::store::object_store::LegacyObjectStore::new(
             &provider,
         ));
-        let object_catalog = Arc::new(crate::store::catalog::object_catalog::ObjectCatalog::new(
-            object_store.clone(),
-        ))
-            as Arc<dyn crate::store::catalog::published::PublishedCatalog>;
+        let state_store = Arc::new(
+            crate::store::catalog::object_state_store::ObjectTableStateStore::new(
+                object_store.clone(),
+            ),
+        ) as Arc<dyn crate::store::catalog::state_store::TableStateStore>;
         let object_table = Some(ObjectTable::new(
             name.to_string(),
             data_dir.clone().unwrap(),
             Arc::clone(&catalog),
             object_store,
             legacy_object_store,
-            object_catalog,
-            1,
+            state_store,
+            crate::store::table_state::WriterFence::new(1),
         ));
         Namespace::open(
             name,

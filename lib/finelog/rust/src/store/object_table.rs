@@ -1,7 +1,8 @@
 //! Object-backed table controller.
 //!
 //! `Namespace` owns buffering and query state. This controller owns canonical
-//! object writes, local materialization, and published catalogs for one table.
+//! object writes, local materialization, and the durable state commits of one
+//! table, which it makes under this process's writer fence.
 //! Transitional migration code receives the legacy layout only as an opaque
 //! [`ObjectStore`] implementation.
 
@@ -16,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::projection::namespace_catalog;
-use crate::store::catalog::published::PublishedCatalog;
+use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::object_store::{ObjectId, ObjectReference, ObjectStore};
 use crate::store::segment::segment_bounds;
@@ -37,8 +38,16 @@ pub struct ObjectTable {
     catalog: Arc<Catalog>,
     store: Arc<dyn ObjectStore>,
     legacy_store: Arc<dyn ObjectStore>,
-    published_catalog: Arc<dyn PublishedCatalog>,
-    writer_epoch: u64,
+    state_store: Arc<dyn TableStateStore>,
+    fence: WriterFence,
+    /// The state this writer last observed selected, and the commit token it
+    /// presents. Absent until this process claims the table.
+    selected: std::sync::Mutex<Option<StoredTableState>>,
+    /// Set once this process owns durable writes for the table.
+    claimed: AtomicBool,
+    /// Cleared when another writer fences this one. A fenced table stops
+    /// accepting writes; only a restart can re-claim it.
+    writes_ready: AtomicBool,
     /// Set while a locally committed revision is not known to be published.
     publication_owed: AtomicBool,
 }
@@ -51,8 +60,8 @@ impl ObjectTable {
         catalog: Arc<Catalog>,
         store: Arc<dyn ObjectStore>,
         legacy_store: Arc<dyn ObjectStore>,
-        published_catalog: Arc<dyn PublishedCatalog>,
-        writer_epoch: u64,
+        state_store: Arc<dyn TableStateStore>,
+        fence: WriterFence,
     ) -> Self {
         Self {
             table,
@@ -60,8 +69,11 @@ impl ObjectTable {
             catalog,
             store,
             legacy_store,
-            published_catalog,
-            writer_epoch,
+            state_store,
+            fence,
+            selected: std::sync::Mutex::new(None),
+            claimed: AtomicBool::new(false),
+            writes_ready: AtomicBool::new(true),
             publication_owed: AtomicBool::new(false),
         }
     }
@@ -71,7 +83,43 @@ impl ObjectTable {
     }
 
     pub fn writer_fence(&self) -> WriterFence {
-        WriterFence::new(self.writer_epoch)
+        self.fence
+    }
+
+    /// Whether this writer still owns the table's durable state.
+    pub fn writes_ready(&self) -> bool {
+        self.writes_ready.load(Ordering::SeqCst)
+    }
+
+    /// Stop accepting writes for this table until a restart recovers it.
+    pub fn mark_unready(&self, reason: &str) {
+        self.writes_ready.store(false, Ordering::SeqCst);
+        tracing::error!(
+            table = %self.table,
+            fence = %self.fence,
+            reason,
+            "table stops accepting writes"
+        );
+    }
+
+    /// Take ownership of durable writes before the first commit.
+    ///
+    /// A table with a published HEAD is claimed by swapping its recorded fence.
+    /// A table that was never published is claimed by its first commit, whose
+    /// HEAD creation fails if another writer got there first.
+    pub async fn claim_writer(&self) -> Result<(), StatsError> {
+        if self.claimed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Some(published) = self.state_store.load(&self.table).await? {
+            let claimed = self
+                .state_store
+                .claim_writer(&self.table, self.fence, &published)
+                .await?;
+            *self.selected.lock().unwrap() = Some(claimed);
+        }
+        self.claimed.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Record that a committed revision must still reach HEAD.
@@ -101,21 +149,35 @@ impl ObjectTable {
     /// overwrite the state another writer selected.
     pub async fn publish_state(&self) -> Result<TableSnapshot, CommitError> {
         self.mark_publication_owed();
+        self.claim_writer()
+            .await
+            .map_err(CommitError::PublicationDeferred)?;
         let state = TableState::new(
             namespace_catalog(&self.catalog, &self.table, &self.table_dir)
                 .map_err(CommitError::PublicationDeferred)?,
         );
+        let expected = self.selected.lock().unwrap().clone();
         let outcome = self
-            .published_catalog
-            .publish(&self.table, state.catalog().clone(), self.writer_epoch)
+            .state_store
+            .commit(
+                &self.table,
+                self.fence,
+                expected.as_ref(),
+                state.catalog().clone(),
+            )
             .await;
         let published = match outcome {
-            Ok(published) => TableSnapshot::from_published(&published),
+            Ok(committed) => {
+                let snapshot = TableSnapshot::from_stored(&committed);
+                *self.selected.lock().unwrap() = Some(committed);
+                snapshot
+            }
             Err(error) => match self.resolve_lost_publication(&state, error).await {
                 Ok(published) => published,
                 Err(error) => {
                     if matches!(error, CommitError::Fenced(_)) {
                         self.publication_owed.store(false, Ordering::SeqCst);
+                        self.mark_unready(&error.to_string());
                     }
                     return Err(error);
                 }
@@ -125,30 +187,28 @@ impl ObjectTable {
         Ok(published)
     }
 
+    /// Settle a commit whose outcome the state store did not report against the
+    /// state HEAD now selects.
     async fn resolve_lost_publication(
         &self,
         attempted: &TableState,
         error: StatsError,
     ) -> Result<TableSnapshot, CommitError> {
         let published = self
-            .published_catalog
+            .state_store
             .load(&self.table)
             .await
             .map_err(|head_error| {
                 CommitError::PublicationDeferred(StatsError::AmbiguousCommit(format!(
-                    "publishing {:?} failed with {error}; reading HEAD to resolve it failed with {head_error}",
+                    "committing {:?} failed with {error}; reading HEAD to resolve it failed with {head_error}",
                     self.table
                 )))
-            })?
-            .as_ref()
-            .map(TableSnapshot::from_published);
-        resolve_publication(
-            &self.table,
-            attempted,
-            self.writer_fence(),
-            published.as_ref(),
-            error,
-        )
+            })?;
+        let snapshot = published.as_ref().map(TableSnapshot::from_stored);
+        let resolved =
+            resolve_publication(&self.table, attempted, self.fence, snapshot.as_ref(), error)?;
+        *self.selected.lock().unwrap() = published;
+        Ok(resolved)
     }
 
     pub async fn write_parquet(&self, bytes: Bytes) -> Result<WrittenObject, StatsError> {
@@ -305,16 +365,16 @@ impl ObjectTable {
     pub async fn gc_published(
         &self,
         now_ms: i64,
-        catalog_retention_ms: u64,
+        state_retention_ms: u64,
         orphan_grace_ms: u64,
     ) -> Result<usize, StatsError> {
-        self.published_catalog
-            .gc_obsolete_catalogs(
+        self.state_store
+            .gc_obsolete_states(
                 &self.table,
                 now_ms,
-                catalog_retention_ms,
+                state_retention_ms,
                 orphan_grace_ms,
-                self.writer_epoch,
+                self.fence,
             )
             .await
     }
@@ -352,86 +412,88 @@ mod tests {
     use crate::proto::finelog::stats::{
         ColumnType, NamespaceCatalog, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
-    use crate::store::catalog::object_catalog::ObjectCatalog;
-    use crate::store::catalog::published::CatalogSnapshot;
+    use crate::store::catalog::object_state_store::ObjectTableStateStore;
+    use crate::store::catalog::state_store::{StoredTableState, TableHead};
     use crate::store::object_store::build_remote_object_store;
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
     use crate::store::table_spec::canonical_json_bytes;
 
     const TABLE: &str = "iris.worker";
 
-    /// How a publication is lost between this writer and the object store.
+    /// How a commit is lost between this writer and the object store.
     #[derive(Clone, Copy)]
-    enum LostPublication {
+    enum LostCommit {
         /// HEAD swapped, but the caller only sees an ambiguous failure.
         AppliedButUnreported,
         /// HEAD never swapped and the store said so definitively.
         NeverApplied,
     }
 
-    /// A published catalog whose publications always fail, either after or
-    /// without applying to the object store underneath.
-    struct LosingPublisher {
-        inner: ObjectCatalog,
-        loss: LostPublication,
+    /// A state store whose commits always fail, either after or without
+    /// applying to the object store underneath.
+    struct LosingStateStore {
+        inner: ObjectTableStateStore,
+        loss: LostCommit,
     }
 
     #[async_trait]
-    impl PublishedCatalog for LosingPublisher {
-        async fn load(&self, table: &str) -> Result<Option<CatalogSnapshot>, StatsError> {
+    impl TableStateStore for LosingStateStore {
+        async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
+            self.inner.list().await
+        }
+
+        async fn load(&self, table: &str) -> Result<Option<StoredTableState>, StatsError> {
             self.inner.load(table).await
         }
 
         async fn claim_writer(
             &self,
             table: &str,
-            writer_epoch: u64,
-            snapshot: &CatalogSnapshot,
-        ) -> Result<CatalogSnapshot, StatsError> {
-            self.inner.claim_writer(table, writer_epoch, snapshot).await
+            fence: WriterFence,
+            selected: &StoredTableState,
+        ) -> Result<StoredTableState, StatsError> {
+            self.inner.claim_writer(table, fence, selected).await
         }
 
-        async fn publish(
+        async fn commit(
             &self,
             table: &str,
-            catalog: NamespaceCatalog,
-            writer_epoch: u64,
-        ) -> Result<CatalogSnapshot, StatsError> {
+            fence: WriterFence,
+            expected: Option<&StoredTableState>,
+            next: NamespaceCatalog,
+        ) -> Result<StoredTableState, StatsError> {
             match self.loss {
-                LostPublication::AppliedButUnreported => {
-                    self.inner
-                        .publish_selected(table, catalog, writer_epoch)
-                        .await?;
+                LostCommit::AppliedButUnreported => {
+                    self.inner.commit(table, fence, expected, next).await?;
                     Err(StatsError::AmbiguousCommit(
                         "HEAD swap response was lost".to_string(),
                     ))
                 }
-                LostPublication::NeverApplied => Err(StatsError::SchemaConflict(
+                LostCommit::NeverApplied => Err(StatsError::SchemaConflict(
                     "object pointer changed concurrently".to_string(),
                 )),
             }
         }
 
-        async fn delete_head(&self, table: &str) -> Result<(), StatsError> {
-            self.inner.delete_head(table).await
+        async fn tombstone(
+            &self,
+            table: &str,
+            fence: WriterFence,
+            expected: &StoredTableState,
+        ) -> Result<StoredTableState, StatsError> {
+            self.inner.tombstone(table, fence, expected).await
         }
 
-        async fn gc_obsolete_catalogs(
+        async fn gc_obsolete_states(
             &self,
             table: &str,
             now_ms: i64,
-            catalog_retention_ms: u64,
+            state_retention_ms: u64,
             orphan_grace_ms: u64,
-            writer_epoch: u64,
+            fence: WriterFence,
         ) -> Result<usize, StatsError> {
             self.inner
-                .gc_obsolete_catalogs(
-                    table,
-                    now_ms,
-                    catalog_retention_ms,
-                    orphan_grace_ms,
-                    writer_epoch,
-                )
+                .gc_obsolete_states(table, now_ms, state_retention_ms, orphan_grace_ms, fence)
                 .await
         }
     }
@@ -460,41 +522,41 @@ mod tests {
         Arc::new(catalog)
     }
 
-    /// An object table at revision 1 whose publications are always lost, plus
-    /// direct access to the object catalog underneath it.
+    /// An object table whose commits are always lost, plus direct access to
+    /// the state store underneath it.
     fn losing_object_table(
         tag: &str,
-        writer_epoch: u64,
-        loss: LostPublication,
-    ) -> (ObjectTable, ObjectCatalog) {
+        fence: u64,
+        loss: LostCommit,
+    ) -> (ObjectTable, ObjectTableStateStore) {
         let remote_dir = crate::test_support::unique_dir(tag);
         let remote = Arc::new(
             build_remote_object_store(remote_dir.to_str().unwrap())
                 .unwrap()
                 .unwrap(),
         );
-        let published = ObjectCatalog::new(remote.clone());
+        let states = ObjectTableStateStore::new(remote.clone());
         let table = ObjectTable::new(
             TABLE.to_string(),
             remote_dir,
             registered_catalog(),
             remote.clone(),
             remote,
-            Arc::new(LosingPublisher {
-                inner: published.clone(),
+            Arc::new(LosingStateStore {
+                inner: states.clone(),
                 loss,
             }),
-            writer_epoch,
+            WriterFence::new(fence),
         );
-        (table, published)
+        (table, states)
     }
 
     #[tokio::test]
-    async fn a_publication_that_lost_its_response_is_durable_when_head_names_it() {
-        let (table, _published) = losing_object_table(
+    async fn a_commit_that_lost_its_response_is_durable_when_head_names_it() {
+        let (table, _states) = losing_object_table(
             "object_table_lost_response",
             11,
-            LostPublication::AppliedButUnreported,
+            LostCommit::AppliedButUnreported,
         );
 
         let published = table.publish_state().await.unwrap();
@@ -502,18 +564,20 @@ mod tests {
         assert_eq!(published.revision().get(), 1);
         assert_eq!(published.fence(), WriterFence::new(11));
         assert!(!table.publication_owed());
+        assert!(table.writes_ready());
     }
 
     #[tokio::test]
-    async fn a_publication_the_store_never_applied_stays_owed_at_the_same_revision() {
-        let (table, _published) =
-            losing_object_table("object_table_unapplied", 11, LostPublication::NeverApplied);
+    async fn a_commit_the_store_never_applied_stays_owed_at_the_same_revision() {
+        let (table, _states) =
+            losing_object_table("object_table_unapplied", 11, LostCommit::NeverApplied);
 
         let error = table.publish_state().await.unwrap_err();
 
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
         assert!(error.is_committed());
         assert!(table.publication_owed());
+        assert!(table.writes_ready());
         assert_eq!(
             table
                 .catalog
@@ -524,17 +588,102 @@ mod tests {
         );
     }
 
+    /// Claiming a table another writer published takes ownership of exactly the
+    /// state HEAD selects.
     #[tokio::test]
-    async fn a_foreign_writer_at_the_attempted_revision_fences_this_one() {
-        let (table, published) =
-            losing_object_table("object_table_fenced", 11, LostPublication::NeverApplied);
+    async fn claiming_an_existing_head_retains_the_selected_state() {
+        let (table, states) =
+            losing_object_table("object_table_claim", 11, LostCommit::NeverApplied);
         let state = namespace_catalog(&table.catalog, TABLE, &table.table_dir).unwrap();
-        published.publish(TABLE, 12, state, None).await.unwrap();
+        states
+            .commit(TABLE, WriterFence::new(12), None, state.clone())
+            .await
+            .unwrap();
 
-        let error = table.publish_state().await.unwrap_err();
+        table.claim_writer().await.unwrap();
+
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+        assert_eq!(selected.fence(), WriterFence::new(11));
+        assert_eq!(selected.catalog, state);
+    }
+
+    /// A second process claims a table this writer already published, then this
+    /// writer commits again from a state it loaded after the claim.
+    #[tokio::test]
+    async fn a_replacement_claim_fences_every_later_commit_from_the_stale_writer() {
+        let remote_dir = crate::test_support::unique_dir("object_table_replacement_claim");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let states = Arc::new(ObjectTableStateStore::new(remote.clone()));
+        let catalog = registered_catalog();
+        let stale = ObjectTable::new(
+            TABLE.to_string(),
+            remote_dir.clone(),
+            Arc::clone(&catalog),
+            remote.clone(),
+            remote.clone(),
+            states.clone(),
+            WriterFence::new(11),
+        );
+        stale.publish_state().await.unwrap();
+
+        let replacement = ObjectTable::new(
+            TABLE.to_string(),
+            remote_dir,
+            Arc::clone(&catalog),
+            remote.clone(),
+            remote,
+            states.clone(),
+            WriterFence::new(12),
+        );
+        replacement.claim_writer().await.unwrap();
+
+        // The stale writer advances its local revision and republishes.
+        catalog.set_forward_cursor("hub", TABLE, 7).unwrap();
+        let error = stale.publish_state().await.unwrap_err();
 
         assert!(matches!(error, CommitError::Fenced(_)));
-        // A fenced writer must not republish over the state HEAD selects.
-        assert!(!table.publication_owed());
+        assert!(!stale.writes_ready());
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+        assert_eq!(selected.fence(), WriterFence::new(12));
+        assert_eq!(selected.revision().get(), 1);
+    }
+
+    /// The local projection is rebuildable; losing it never disturbs the state
+    /// HEAD selects.
+    #[tokio::test]
+    async fn a_lost_local_projection_leaves_the_committed_state_selected() {
+        let remote_dir = crate::test_support::unique_dir("object_table_lost_projection");
+        let remote = Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let states = Arc::new(ObjectTableStateStore::new(remote.clone()));
+        let catalog = registered_catalog();
+        let table = ObjectTable::new(
+            TABLE.to_string(),
+            remote_dir,
+            Arc::clone(&catalog),
+            remote.clone(),
+            remote,
+            states.clone(),
+            WriterFence::new(11),
+        );
+        let committed = table.publish_state().await.unwrap();
+        assert_eq!(committed.revision().get(), 1);
+
+        catalog.delete(TABLE).unwrap();
+
+        // The projection is gone, so no next state can be built, and the
+        // committed revision remains the selected one.
+        let error = table.publish_state().await.unwrap_err();
+        assert!(matches!(error, CommitError::PublicationDeferred(_)));
+        let selected = states.load(TABLE).await.unwrap().unwrap();
+        assert_eq!(selected.revision().get(), 1);
+        assert_eq!(selected.fence(), WriterFence::new(11));
     }
 }

@@ -14,7 +14,7 @@
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
-use crate::store::catalog::published::CatalogSnapshot;
+use crate::store::catalog::state_store::{BackendToken, StoredTableState};
 use crate::store::catalog::Catalog;
 use crate::store::object_store::ObjectVersion;
 use crate::store::object_table::ObjectTable;
@@ -55,6 +55,10 @@ impl WriterFence {
 
     pub fn new(value: u64) -> Self {
         Self(value)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
     }
 }
 
@@ -142,14 +146,16 @@ impl TableSnapshot {
         Self { state, token }
     }
 
-    /// Adapt the snapshot returned by the published-catalog boundary.
-    pub fn from_published(snapshot: &CatalogSnapshot) -> Self {
-        let state = TableState::new(snapshot.catalog.clone());
-        let token = CommitToken::published(
-            TableRevision::new(snapshot.head.catalog_generation.unwrap_or(0)),
-            WriterFence::new(snapshot.head.writer_epoch.unwrap_or(0)),
-            snapshot.head_version.clone(),
-        );
+    /// Adapt the state a [`TableStateStore`](crate::store::catalog::state_store::TableStateStore)
+    /// selected.
+    pub fn from_stored(stored: &StoredTableState) -> Self {
+        let state = TableState::new(stored.catalog.clone());
+        let token = match stored.token() {
+            BackendToken::Head(version) => {
+                CommitToken::published(stored.revision(), stored.fence(), version.clone())
+            }
+            BackendToken::Local(revision) => CommitToken::local(*revision, stored.fence()),
+        };
         Self { state, token }
     }
 
@@ -333,12 +339,12 @@ impl<'a> TableCommit<'a> {
 
 /// Settle a publication whose outcome the object store did not report.
 ///
-/// `published` is the state HEAD selects after the failure. The attempted
-/// state is durable when HEAD names it, or when this writer has already
-/// published a later revision that contains it. HEAD behind the attempted
-/// revision means the publication did not apply and must be retried at the
-/// same revision. A different writer at or past the attempted revision has
-/// fenced this one.
+/// `published` is the state HEAD selects after the failure. HEAD recording
+/// another writer's fence means this writer no longer owns the table, whatever
+/// revision HEAD holds. Otherwise the attempted state is durable when HEAD
+/// names it, or when this writer has already published a later revision that
+/// contains it; HEAD behind the attempted revision means the publication did
+/// not apply and must be retried at the same revision.
 pub fn resolve_publication(
     table: &str,
     attempted: &TableState,
@@ -349,7 +355,7 @@ pub fn resolve_publication(
     let Some(published) = published else {
         return Err(CommitError::PublicationDeferred(error));
     };
-    if published.revision() >= attempted.revision() && published.fence() != fence {
+    if published.fence() != fence {
         return Err(CommitError::Fenced(StatsError::SchemaConflict(format!(
             "table {table:?} is published at revision {} by writer {}, fencing writer {fence}",
             published.revision(),
@@ -374,11 +380,11 @@ pub fn resolve_publication(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::catalog::object_catalog::OBJECT_CATALOG_FORMAT_VERSION;
+    use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
 
     fn state(revision: u64, active_version: u64) -> TableState {
         TableState::new(NamespaceCatalog {
-            format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
+            format_version: Some(TABLE_STATE_FORMAT_VERSION),
             namespace: Some("iris.worker".to_string()),
             catalog_generation: Some(revision),
             active_table_spec_version: Some(active_version),
@@ -450,6 +456,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CommitError::PublicationDeferred(_)));
+    }
+
+    #[test]
+    fn a_writer_that_owns_head_behind_the_attempted_revision_fences_this_one() {
+        let attempted = state(7, 2);
+        let error = resolve_publication(
+            "iris.worker",
+            &attempted,
+            WriterFence::new(11),
+            Some(&snapshot(state(6, 2), 12)),
+            lost_response(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, CommitError::Fenced(_)));
     }
 
     #[test]

@@ -128,6 +128,9 @@ class ObjectQueryClient:
         except (TypeError, json.JSONDecodeError) as error:
             raise StatsError(f"invalid catalog JSON for namespace {namespace!r}: {error}") from error
 
+        if head.get("tombstoned"):
+            raise StatsError(f"namespace {namespace!r} was deleted")
+
         head_format = _integer(head.get("formatVersion"), "HEAD.formatVersion")
         catalog_format = _integer(catalog.get("formatVersion"), "catalog.formatVersion")
         if head_format != 1 or catalog_format != 1:

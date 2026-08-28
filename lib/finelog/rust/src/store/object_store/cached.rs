@@ -163,6 +163,10 @@ impl ObjectStore for CachedObjectStore {
         self.materialize(reference).await
     }
 
+    fn planned_local_path(&self, id: &ObjectId) -> Result<PathBuf, StatsError> {
+        self.cache.path(id)
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

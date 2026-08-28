@@ -151,13 +151,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
     let loaded_object_tables = store
-        .load_published_tables()
+        .recover_tables()
         .await
-        .map_err(|e| format!("failed to load published object catalogs: {e}"))?;
+        .map_err(|e| format!("failed to recover table state: {e}"))?;
     if loaded_object_tables > 0 {
         tracing::info!(
             namespaces = loaded_object_tables,
-            "loaded published object catalogs before serving"
+            "recovered table state before serving"
         );
     }
     if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {

@@ -276,6 +276,9 @@ message NamespaceCatalog {
   // directly. It covers rows through direct_query_high_water only.
   repeated CatalogSegment direct_query_segments = 12;
   int64 direct_query_high_water = 13;
+  // Set by the revision that deletes the table. A tombstoned state is durable
+  // history; it is never a live table.
+  bool tombstoned = 14;
 }
 
 message CatalogHead {
@@ -285,6 +288,9 @@ message CatalogHead {
   uint64 catalog_generation = 4;
   uint64 active_table_spec_version = 5;
   ObjectRef catalog = 6;
+  // Mirrors NamespaceCatalog.tombstoned so a deleted table is recognizable
+  // from HEAD alone.
+  bool tombstoned = 7;
 }
 
 // ============================================================================

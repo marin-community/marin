@@ -34,6 +34,19 @@ use crate::store::types::{NamespaceStats, SegmentRow};
 /// Sidecar filename.
 pub const CATALOG_DB_FILENAME: &str = "_finelog_catalog.sqlite";
 
+/// Every table keyed by `namespace`, ordered so the `namespaces` row that
+/// defines the namespace is removed last.
+const NAMESPACE_OWNED_TABLES: [&str; 8] = [
+    "segments",
+    "storage_policies",
+    "table_specs",
+    "object_segments",
+    "table_migrations",
+    "table_heads",
+    "forward_state",
+    "namespaces",
+];
+
 /// A live namespace value.
 #[derive(Debug, Clone)]
 pub struct RegisteredNamespace {
@@ -410,7 +423,7 @@ impl Catalog {
         let remote_generation = snapshot.catalog_generation.unwrap_or(0);
         if remote_generation == 0 {
             return Err(StatsError::Internal(format!(
-                "published object catalog for {namespace:?} has no generation"
+                "published table state for {namespace:?} has no revision"
             )));
         }
         let mut inner = self.inner.lock().unwrap();
@@ -1554,41 +1567,17 @@ impl Catalog {
         Ok(out)
     }
 
-    /// Remove the namespace, its segment rows, and its policy row. Idempotent.
+    /// Remove every row `name` owns in one transaction, so a failure part way
+    /// through leaves the namespace whole rather than half deleted. Idempotent.
     pub fn delete(&self, name: &str) -> Result<(), StatsError> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .conn
-            .execute("DELETE FROM segments WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM storage_policies WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM table_specs WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM object_segments WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM table_migrations WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM table_heads WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM forward_state WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
-        inner
-            .conn
-            .execute("DELETE FROM namespaces WHERE namespace = ?1", [name])
-            .map_err(sqlite_err)?;
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        for table in NAMESPACE_OWNED_TABLES {
+            transaction
+                .execute(&format!("DELETE FROM {table} WHERE namespace = ?1"), [name])
+                .map_err(sqlite_err)?;
+        }
+        transaction.commit().map_err(sqlite_err)?;
         Ok(())
     }
 
@@ -2222,6 +2211,59 @@ mod tests {
         assert_eq!(cat.get_policy("a").unwrap().max_segments, Some(7));
         cat.upsert_policy("a", &StoragePolicy::default()).unwrap();
         assert!(cat.get_policy("a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failing_delete_leaves_every_namespace_row_in_place() {
+        let cat = Catalog::open(None).unwrap();
+        cat.upsert("a", &worker_stored()).unwrap();
+        let v1 = table_spec(1, 128);
+        cat.register_table_spec("a", &v1, &spec_hash(&v1), false)
+            .unwrap();
+        cat.upsert_policy(
+            "a",
+            &StoragePolicy {
+                max_segments: Some(3),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        cat.upsert_segment(&SegmentRow {
+            namespace: "a".to_string(),
+            path: "a.parquet".to_string(),
+            level: 1,
+            min_seq: 1,
+            max_seq: 3,
+            row_count: 3,
+            byte_size: 100,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: crate::store::types::SegmentLocation::Local,
+        })
+        .unwrap();
+        cat.set_forward_cursor("hub", "a", 3).unwrap();
+
+        // Fails the last of the delete's statement groups, after the groups that
+        // clear the dependent tables have already run.
+        cat.inner
+            .lock()
+            .unwrap()
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER pin_namespace BEFORE DELETE ON namespaces
+                 BEGIN SELECT RAISE(ABORT, 'namespace pinned'); END",
+            )
+            .unwrap();
+
+        assert!(cat.delete("a").is_err());
+
+        assert_eq!(cat.list_segments("a").unwrap().len(), 1);
+        assert_eq!(cat.get_policy("a").unwrap().max_segments, Some(3));
+        assert_eq!(cat.table_spec_status("a").unwrap().active_version(), 1);
+        assert_eq!(cat.forward_cursor("hub", "a").unwrap(), Some(3));
+        assert!(cat.list_all().unwrap().iter().any(|(name, _)| name == "a"));
     }
 
     #[test]

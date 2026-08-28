@@ -32,8 +32,9 @@ use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
-use crate::store::catalog::object_catalog::ObjectCatalog;
-use crate::store::catalog::published::PublishedCatalog;
+use crate::store::catalog::object_state_store::ObjectTableStateStore;
+use crate::store::catalog::sqlite_state_store::SqliteTableStateStore;
+use crate::store::catalog::state_store::TableStateStore;
 use crate::store::catalog::{
     Catalog, PublishedObjectSegment, RegisteredNamespace, TableSpecStatus,
 };
@@ -52,7 +53,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::table_spec::ValidatedTableSpec;
-use crate::store::table_state::{TableCommit, TableRevision, TableSnapshot};
+use crate::store::table_state::{TableCommit, TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
@@ -183,8 +184,12 @@ pub struct Store {
     catalog: Arc<Catalog>,
     object_store: Option<Arc<dyn ObjectStore>>,
     legacy_object_store: Option<Arc<dyn ObjectStore>>,
-    object_catalog: Option<Arc<dyn PublishedCatalog>>,
-    writer_epoch: u64,
+    /// Durable state authority for object-backed tables. Absent when no remote
+    /// object store is configured.
+    object_state_store: Option<Arc<dyn TableStateStore>>,
+    /// Durable state authority for legacy tables.
+    legacy_state_store: Arc<dyn TableStateStore>,
+    fence: WriterFence,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
     /// Concurrent first registrations must not build and displace separate engines.
@@ -310,9 +315,12 @@ impl Store {
             )?) as Arc<dyn ObjectStore>),
             _ => None,
         };
-        let object_catalog = object_store
-            .clone()
-            .map(|storage| Arc::new(ObjectCatalog::new(storage)) as Arc<dyn PublishedCatalog>);
+        let fence = WriterFence::new(writer_epoch()?);
+        let object_state_store = object_store.clone().map(|storage| {
+            Arc::new(ObjectTableStateStore::new(storage)) as Arc<dyn TableStateStore>
+        });
+        let legacy_state_store = Arc::new(SqliteTableStateStore::new(Arc::clone(&catalog), fence))
+            as Arc<dyn TableStateStore>;
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
         // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
         // earlier server populated, the sqlite sidecar is empty, so the disk
@@ -321,7 +329,7 @@ impl Store {
         // `namespaces` + `segments` rows BEFORE `rehydrate_from_catalog` reads
         // them back to build the engines. No-op in in-memory mode + on the done
         // sentinel (subsequent boots). Object-backed recovery loads the published
-        // catalog explicitly in `load_published_tables`.
+        // state explicitly in `recover_tables`.
         let catalog_adoption_started = Instant::now();
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
         let catalog_adoption_ms = catalog_adoption_started.elapsed().as_millis() as u64;
@@ -332,8 +340,9 @@ impl Store {
             catalog,
             object_store,
             legacy_object_store,
-            object_catalog,
-            writer_epoch: writer_epoch()?,
+            object_state_store,
+            legacy_state_store,
+            fence,
             engines: Mutex::new(HashMap::new()),
             namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -395,150 +404,272 @@ impl Store {
         }
     }
 
-    /// Rebuild namespaces, TableSpecs, segment pointers, and sequence fences
-    /// from remote HEAD/catalog snapshots before the server accepts traffic.
+    /// Load and claim every table's durable state before the server accepts
+    /// traffic.
     ///
-    /// Returns the number of namespaces loaded from a newer published generation.
-    pub async fn load_published_tables(&self) -> Result<usize, StatsError> {
-        let Some(object_catalog) = &self.object_catalog else {
-            return Ok(0);
-        };
-        let remote = self.object_store.as_ref().ok_or_else(|| {
-            StatsError::Internal("object catalog configured without a remote store".to_string())
-        })?;
-        let mut loaded_count = 0;
-        for namespace in remote.list_tables().await? {
-            validate_namespace_name(&namespace, self.data_dir.as_deref())?;
-            let Some(snapshot) = object_catalog.load(&namespace).await? else {
-                continue;
-            };
-            let snapshot = object_catalog
-                .claim_writer(&namespace, self.writer_epoch, &snapshot)
-                .await?;
-            let remote_generation = snapshot.catalog.catalog_generation.unwrap_or(0);
+    /// Returns the number of object-backed tables whose local projection was
+    /// rebuilt from their durable state.
+    pub async fn recover_tables(&self) -> Result<usize, StatsError> {
+        self.claim_legacy_tables().await?;
+        self.recover_object_tables().await
+    }
+
+    /// Claim the writer fence for every table whose authority is SQLite.
+    ///
+    /// The claim confirms this process owns the data directory it already
+    /// flocked. A table with a versioned specification is object-backed and is
+    /// claimed against its object HEAD instead.
+    async fn claim_legacy_tables(&self) -> Result<(), StatsError> {
+        for head in self.legacy_state_store.list().await? {
             if self
                 .catalog
-                .table_spec_status(&namespace)?
+                .table_spec_status(&head.table)?
                 .catalog_generation
-                == remote_generation
+                > 0
             {
                 continue;
             }
-            let schema_spec =
-                snapshot
-                    .catalog
-                    .retained_table_specs
-                    .iter()
-                    .find(|spec| spec.version == snapshot.catalog.active_table_spec_version)
-                    .or_else(|| {
-                        snapshot.catalog.retained_table_specs.iter().find(|spec| {
-                            spec.version == snapshot.catalog.desired_table_spec_version
-                        })
-                    })
-                    .or_else(|| snapshot.catalog.retained_table_specs.last())
-                    .ok_or_else(|| {
-                        StatsError::Internal(format!(
-                            "object catalog for {namespace:?} has no retained TableSpec"
-                        ))
-                    })?;
-            let schema_proto = schema_spec.logical_schema.as_option().ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object catalog TableSpec for {namespace:?} has no logical schema"
-                ))
-            })?;
-            let schema_bytes = schema_proto.encode_to_vec();
-            let schema_view = SchemaView::decode_view(&schema_bytes).map_err(|error| {
-                StatsError::Internal(format!(
-                    "decode recovered logical schema for {namespace:?}: {error}"
-                ))
-            })?;
-            let schema = stored_form(schema_from_proto_view(&schema_view)?);
-            let policy = schema_spec
-                .operating_policy
-                .as_option()
-                .and_then(|operating| operating.local_cache.as_option())
-                .map(StoragePolicy::from_proto_owned)
-                .unwrap_or_default();
-            let mut published_segments = HashMap::<String, PublishedObjectSegment>::new();
-            for version in &snapshot.catalog.version_segments {
-                for segment in version
-                    .live_segments
-                    .iter()
-                    .chain(version.retired_segments.iter())
-                {
-                    let source = segment.source.as_option().ok_or_else(|| {
-                        StatsError::Internal(format!(
-                            "object catalog segment for {namespace:?} has no source"
-                        ))
-                    })?;
-                    let table_spec_version = segment
-                        .table_spec_version
-                        .unwrap_or(version.table_spec_version.unwrap_or(0));
-                    let reference = crate::store::object_store::ObjectReference::try_from(source)?;
-                    reference.id.table_relative(&namespace).ok_or_else(|| {
-                        StatsError::Internal(format!(
-                            "object catalog segment for {namespace:?} references another table"
-                        ))
-                    })?;
-                    let object_store = self.object_store.as_ref().ok_or_else(|| {
-                        StatsError::Internal(
-                            "object catalog configured without an object store".to_string(),
-                        )
-                    })?;
-                    let local_path = object_store.local_path(&reference).await?;
-                    let partition = segment
-                        .partition_json
-                        .as_deref()
-                        .map(serde_json::from_str)
-                        .transpose()
-                        .map_err(|error| {
-                            StatsError::Internal(format!(
-                                "object catalog segment for {namespace:?} has invalid partition metadata: {error}"
-                            ))
-                        })?;
-                    let path = local_path.to_string_lossy().into_owned();
-                    published_segments.entry(path.clone()).or_insert_with(|| {
-                        PublishedObjectSegment {
-                            row: crate::store::types::SegmentRow {
-                                namespace: namespace.clone(),
-                                path,
-                                level: segment.level.unwrap_or(0),
-                                min_seq: segment.min_seq.unwrap_or(0),
-                                max_seq: segment.max_seq.unwrap_or(0),
-                                row_count: segment.row_count.unwrap_or(0),
-                                byte_size: i64::try_from(reference.version.byte_size)
-                                    .unwrap_or(i64::MAX),
-                                created_at_ms: segment.created_at_ms.unwrap_or(0),
-                                min_key_value: segment.min_key_value.clone(),
-                                max_key_value: segment.max_key_value.clone(),
-                                partition,
-                                location: crate::store::types::SegmentLocation::Remote,
-                            },
-                            table_spec_version,
-                            source: source.clone(),
-                            migration_backfill: segment.migration_backfill.unwrap_or(false),
-                            migration_source_id: segment.migration_source_id.clone(),
-                            migration_source_rows: segment.migration_source_rows,
-                        }
-                    });
+            let Some(selected) = self.legacy_state_store.load(&head.table).await? else {
+                continue;
+            };
+            self.legacy_state_store
+                .claim_writer(&head.table, self.fence, &selected)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Recover object-backed tables from their durable state before the server
+    /// accepts traffic.
+    ///
+    /// Each head is loaded metadata-only and claimed under this process's
+    /// fence; no data object is read, downloaded, or localized here. The local
+    /// SQLite projection is rebuilt from the loaded state when it is behind
+    /// HEAD, and rolls forward when it holds an unpublished revision this
+    /// writer now owns. A tombstoned head deletes the local projection; a table
+    /// whose claim fails stays unready and rejects writes.
+    ///
+    /// Returns the number of tables whose projection was rebuilt from HEAD.
+    async fn recover_object_tables(&self) -> Result<usize, StatsError> {
+        let Some(state_store) = &self.object_state_store else {
+            return Ok(0);
+        };
+        let mut loaded_count = 0;
+        for head in state_store.list().await? {
+            let namespace = head.table;
+            validate_namespace_name(&namespace, self.data_dir.as_deref())?;
+            if head.tombstoned {
+                self.discard_tombstoned_table(&namespace).await?;
+                continue;
+            }
+            let Some(selected) = state_store.load(&namespace).await? else {
+                continue;
+            };
+            let claimed = match state_store
+                .claim_writer(&namespace, self.fence, &selected)
+                .await
+            {
+                Ok(claimed) => claimed,
+                Err(error) => {
+                    self.mark_table_unready(&namespace, &error.to_string());
+                    continue;
                 }
+            };
+            if self
+                .recover_claimed_table(&namespace, claimed.catalog)
+                .await?
+            {
+                loaded_count += 1;
             }
-            let published_segments: Vec<_> = published_segments.into_values().collect();
-            self.catalog.replace_with_published_snapshot(
-                &namespace,
-                schema.clone(),
-                policy.clone(),
-                &snapshot.catalog,
-                &published_segments,
-            )?;
-            let prior = self.engines.lock().unwrap().remove(&namespace);
-            if let Some(prior) = prior {
-                prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
-            }
-            self.build_engine(&namespace, schema, policy)?;
-            loaded_count += 1;
         }
         Ok(loaded_count)
+    }
+
+    /// Drop the local projection of a table whose durable state is tombstoned.
+    async fn discard_tombstoned_table(&self, namespace: &str) -> Result<(), StatsError> {
+        if !self.catalog.contains(namespace) {
+            return Ok(());
+        }
+        let engine = self.engines.lock().unwrap().remove(namespace);
+        if let Some(engine) = engine {
+            engine.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+        }
+        self.catalog.delete(namespace)?;
+        tracing::info!(namespace, "discarded the projection of a deleted table");
+        Ok(())
+    }
+
+    /// Stop accepting writes for `namespace` until a restart recovers it.
+    fn mark_table_unready(&self, namespace: &str, reason: &str) {
+        let engine = self.engines.lock().unwrap().get(namespace).cloned();
+        if let Some(object_table) = engine.as_deref().and_then(Namespace::object_table) {
+            object_table.mark_unready(reason);
+        }
+    }
+
+    /// Bring the local projection in line with the claimed durable state.
+    ///
+    /// Returns whether the projection was rebuilt. A local revision ahead of
+    /// HEAD is this writer's own unpublished state under the same claimed
+    /// fence, so it rolls forward through the table's next publication instead
+    /// of being replaced.
+    async fn recover_claimed_table(
+        &self,
+        namespace: &str,
+        state: crate::proto::finelog::stats::NamespaceCatalog,
+    ) -> Result<bool, StatsError> {
+        let remote_revision = state.catalog_generation.unwrap_or(0);
+        let local_revision = self
+            .catalog
+            .table_spec_status(namespace)?
+            .catalog_generation;
+        if local_revision > remote_revision {
+            let engine = self.engines.lock().unwrap().get(namespace).cloned();
+            let object_table = engine.as_deref().and_then(Namespace::object_table);
+            object_table
+                .ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "namespace {namespace:?} holds revision {local_revision} with no object table"
+                    ))
+                })?
+                .mark_publication_owed();
+            tracing::info!(
+                namespace,
+                local_revision,
+                remote_revision,
+                "rolling an unpublished local revision forward under the claimed fence"
+            );
+            return Ok(false);
+        }
+        if local_revision == remote_revision {
+            return Ok(false);
+        }
+        let schema_spec = state
+            .retained_table_specs
+            .iter()
+            .find(|spec| spec.version == state.active_table_spec_version)
+            .or_else(|| {
+                state
+                    .retained_table_specs
+                    .iter()
+                    .find(|spec| spec.version == state.desired_table_spec_version)
+            })
+            .or_else(|| state.retained_table_specs.last())
+            .ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "table state for {namespace:?} has no retained TableSpec"
+                ))
+            })?;
+        let schema_proto = schema_spec.logical_schema.as_option().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "table state TableSpec for {namespace:?} has no logical schema"
+            ))
+        })?;
+        let schema_bytes = schema_proto.encode_to_vec();
+        let schema_view = SchemaView::decode_view(&schema_bytes).map_err(|error| {
+            StatsError::Internal(format!(
+                "decode recovered logical schema for {namespace:?}: {error}"
+            ))
+        })?;
+        let schema = stored_form(schema_from_proto_view(&schema_view)?);
+        let policy = schema_spec
+            .operating_policy
+            .as_option()
+            .and_then(|operating| operating.local_cache.as_option())
+            .map(StoragePolicy::from_proto_owned)
+            .unwrap_or_default();
+        let object_store = self.object_store.as_ref().ok_or_else(|| {
+            StatsError::Internal("table state store configured without an object store".to_string())
+        })?;
+        let mut published_segments = HashMap::<String, PublishedObjectSegment>::new();
+        for version in &state.version_segments {
+            for segment in version
+                .live_segments
+                .iter()
+                .chain(version.retired_segments.iter())
+            {
+                let source = segment.source.as_option().ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "table state segment for {namespace:?} has no source"
+                    ))
+                })?;
+                let table_spec_version = segment
+                    .table_spec_version
+                    .unwrap_or(version.table_spec_version.unwrap_or(0));
+                let reference = crate::store::object_store::ObjectReference::try_from(source)?;
+                reference.id.table_relative(namespace).ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "table state segment for {namespace:?} references another table"
+                    ))
+                })?;
+                // Recovery names the file a later query would localize; it
+                // never downloads or opens it.
+                let local_path = object_store.planned_local_path(&reference.id)?;
+                let partition = segment
+                    .partition_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|error| {
+                        StatsError::Internal(format!(
+                            "table state segment for {namespace:?} has invalid partition metadata: {error}"
+                        ))
+                    })?;
+                let path = local_path.to_string_lossy().into_owned();
+                published_segments
+                    .entry(path.clone())
+                    .or_insert_with(|| PublishedObjectSegment {
+                        row: crate::store::types::SegmentRow {
+                            namespace: namespace.to_string(),
+                            path,
+                            level: segment.level.unwrap_or(0),
+                            min_seq: segment.min_seq.unwrap_or(0),
+                            max_seq: segment.max_seq.unwrap_or(0),
+                            row_count: segment.row_count.unwrap_or(0),
+                            byte_size: i64::try_from(reference.version.byte_size)
+                                .unwrap_or(i64::MAX),
+                            created_at_ms: segment.created_at_ms.unwrap_or(0),
+                            min_key_value: segment.min_key_value.clone(),
+                            max_key_value: segment.max_key_value.clone(),
+                            partition,
+                            location: crate::store::types::SegmentLocation::Remote,
+                        },
+                        table_spec_version,
+                        source: source.clone(),
+                        migration_backfill: segment.migration_backfill.unwrap_or(false),
+                        migration_source_id: segment.migration_source_id.clone(),
+                        migration_source_rows: segment.migration_source_rows,
+                    });
+            }
+        }
+        let published_segments: Vec<_> = published_segments.into_values().collect();
+        // The claimed state stays authoritative whatever the projection does:
+        // it is rebuildable, so a failure leaves the table unready rather than
+        // undoing or blocking the durable revision.
+        if let Err(error) = self.catalog.replace_with_published_snapshot(
+            namespace,
+            schema.clone(),
+            policy.clone(),
+            &state,
+            &published_segments,
+        ) {
+            tracing::error!(
+                namespace,
+                %error,
+                remote_revision,
+                "rebuilding the local projection from the claimed state failed"
+            );
+            self.mark_table_unready(namespace, &error.to_string());
+            return Ok(false);
+        }
+        let prior = self.engines.lock().unwrap().remove(namespace);
+        if let Some(prior) = prior {
+            prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+        }
+        // The rebuilt engine seeds its sequence high-water mark from the
+        // projection of the claimed state.
+        self.build_engine(namespace, schema, policy)?;
+        Ok(true)
     }
 
     fn rehydrate_from_catalog(&self) -> Result<(), StatsError> {
@@ -596,17 +727,17 @@ impl Store {
             ns_dir.clone(),
             self.object_store.clone(),
             self.legacy_object_store.clone(),
-            self.object_catalog.clone(),
+            self.object_state_store.clone(),
         ) {
-            (Some(table_dir), Some(store), Some(legacy_store), Some(catalog)) => {
+            (Some(table_dir), Some(store), Some(legacy_store), Some(state_store)) => {
                 Some(ObjectTable::new(
                     name.to_string(),
                     table_dir,
                     Arc::clone(&self.catalog),
                     store,
                     legacy_store,
-                    catalog,
-                    self.writer_epoch,
+                    state_store,
+                    self.fence,
                 ))
             }
             _ => None,
@@ -640,6 +771,19 @@ impl Store {
             .ok_or_else(|| {
                 StatsError::NamespaceNotFound(format!("namespace {name:?} is not registered"))
             })
+    }
+
+    /// The live engine for `name`, rejected when another writer owns the
+    /// table's durable state. A fenced table serves reads and takes no writes
+    /// until a restart re-claims it.
+    fn require_writable_engine(&self, name: &str) -> Result<Arc<Namespace>, StatsError> {
+        let engine = self.require_engine(name)?;
+        if !engine.write_ready() {
+            return Err(StatsError::SchemaConflict(format!(
+                "namespace {name:?} is fenced by another writer and is not accepting writes"
+            )));
+        }
+        Ok(engine)
     }
 
     /// Register the privileged `log` namespace's schema in the catalog, or
@@ -999,7 +1143,7 @@ impl Store {
         let mut ignored_columns = BTreeSet::new();
         for partition in routed {
             let destination = partition.destination.logical_namespace;
-            let engine = self.require_engine(&destination)?;
+            let engine = self.require_writable_engine(&destination)?;
             let (mut aligned, ignored) = alignment.align(&partition.batch, engine.schema())?;
             if let Some(origin) = origin_cluster {
                 stamp_cluster_column(&mut aligned, origin);
@@ -1036,7 +1180,7 @@ impl Store {
         origin_cluster: Option<&str>,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let engine = self.require_engine(name)?;
+        let engine = self.require_writable_engine(name)?;
         let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
@@ -1306,10 +1450,11 @@ impl Store {
         self.catalog.list_segments(name)
     }
 
-    /// Remove `name` from the registry and delete its legacy local table state.
+    /// Remove `name` from the registry and delete its local table state.
     ///
-    /// Object-backed tables also lose their remote HEAD so retained immutable history
-    /// cannot restore the table. Rejects the privileged `log` namespace.
+    /// An object-backed table publishes a tombstone revision under this
+    /// writer's fence, so a later load reports the table deleted rather than
+    /// never published. Rejects the privileged `log` namespace.
     pub fn drop_table(&self, name: &str) -> Result<(), StatsError> {
         if name == LOG_NAMESPACE_NAME {
             return Err(StatsError::InvalidNamespace(format!(
@@ -1339,12 +1484,18 @@ impl Store {
                 }
             }
             if object_generation > 0 {
-                let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
+                let state_store = self.object_state_store.as_ref().ok_or_else(|| {
                     StatsError::Internal(format!(
-                        "namespace {name:?} has an object generation without a published catalog"
+                        "namespace {name:?} has an object generation without a state store"
                     ))
                 })?;
-                tokio::runtime::Handle::current().block_on(object_catalog.delete_head(name))?;
+                tokio::runtime::Handle::current().block_on(async {
+                    let Some(selected) = state_store.load(name).await? else {
+                        return Ok::<(), StatsError>(());
+                    };
+                    state_store.tombstone(name, self.fence, &selected).await?;
+                    Ok(())
+                })?;
             }
             self.catalog.delete(name)?;
             if let Some(dir) = &self.data_dir {
@@ -1645,7 +1796,7 @@ mod tests {
             .unwrap();
         let retry = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(retry.state().catalog(), after_flush.state().catalog());
-        let recovered = ObjectCatalog::new(Arc::new(
+        let recovered = ObjectTableStateStore::new(Arc::new(
             build_remote_object_store(remote_dir.to_str().unwrap())
                 .unwrap()
                 .unwrap(),
@@ -1664,7 +1815,7 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let with_cursor = ObjectCatalog::new(Arc::new(
+        let with_cursor = ObjectTableStateStore::new(Arc::new(
             build_remote_object_store(remote_dir.to_str().unwrap())
                 .unwrap()
                 .unwrap(),
@@ -1688,15 +1839,18 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
+    /// A revision committed locally but never published belongs to the writer
+    /// that claims the table next: recovery rolls it forward instead of
+    /// replacing it with the state HEAD selects.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn remote_head_supersedes_an_unpublished_sqlite_version() {
+    async fn an_unpublished_local_revision_rolls_forward_under_a_fresh_claim() {
         let PublishedObjectTableFixture {
             store,
             data_dir,
             remote_dir,
             paths,
             ..
-        } = published_object_table("unpublished_sqlite_version").await;
+        } = published_object_table("unpublished_local_revision").await;
         let unpublished = store
             .register_versioned_table("iris.worker", object_backed_spec(2))
             .unwrap();
@@ -1712,71 +1866,134 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert_eq!(
-            reopened
-                .table_spec_status("iris.worker")
-                .unwrap()
-                .desired_version(),
-            2
-        );
-        assert_eq!(reopened.load_published_tables().await.unwrap(), 1);
+
+        // The local revision is ahead of HEAD, so nothing is rebuilt from it.
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
         let recovered_status = reopened.table_spec_status("iris.worker").unwrap();
         assert_eq!(recovered_status.active_version(), 1);
-        assert_eq!(recovered_status.desired_version(), 0);
+        assert_eq!(recovered_status.desired_version(), 2);
+        // Recovery localized nothing.
+        assert!(!Path::new(&paths[0]).exists());
         assert!(reopened
             .query_snapshot("iris.worker")
             .unwrap()
             .paths
             .is_empty());
+
+        // The claimed fence owns that revision, so publishing it advances HEAD.
+        let published = reopened
+            .publish_object_catalog("iris.worker")
+            .await
+            .unwrap();
+        assert_eq!(
+            published.state().catalog().desired_table_spec_version,
+            Some(2)
+        );
+        assert_eq!(
+            published.revision().get(),
+            recovered_status.catalog_generation
+        );
+
         reopened
             .require_engine("iris.worker")
             .unwrap()
             .materialize_query_segments()
             .await
             .unwrap();
-        let reopened_paths = reopened.query_snapshot("iris.worker").unwrap().paths;
-        assert_eq!(reopened_paths, paths);
+        assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
         reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
+    /// Object recovery reads durable state only. Files left in the local object
+    /// cache are never evidence that a segment is live.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn recovery_adopts_an_existing_cache_file_into_an_empty_query_view() {
+    async fn a_cached_file_creates_no_visibility_during_recovery() {
         let PublishedObjectTableFixture {
             store,
             data_dir,
             remote_dir,
             paths,
             ..
-        } = published_object_table("existing_cache_recovery").await;
+        } = published_object_table("cached_file_recovery").await;
         store.shutdown(Duration::from_secs(1)).await;
         drop(store);
-        let cached_reopen = Store::new(
+        assert!(Path::new(&paths[0]).exists());
+
+        let reopened = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
-        cached_reopen
-            .require_engine("iris.worker")
-            .unwrap()
-            .activate_query_version(0)
-            .unwrap();
-        assert!(cached_reopen
+        assert!(reopened
             .query_snapshot("iris.worker")
             .unwrap()
             .paths
             .is_empty());
-        assert_eq!(cached_reopen.load_published_tables().await.unwrap(), 0);
-        cached_reopen.materialize_query_objects().await.unwrap();
-        assert_eq!(
-            cached_reopen.query_snapshot("iris.worker").unwrap().paths,
-            paths
-        );
-        cached_reopen.shutdown(Duration::from_secs(1)).await;
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
+        assert!(reopened
+            .query_snapshot("iris.worker")
+            .unwrap()
+            .paths
+            .is_empty());
+
+        // Visibility follows the selected query path, not the cache contents.
+        reopened.materialize_query_objects().await.unwrap();
+        assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
+        reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A replacement process claims the table's fence. The original store may
+    /// no longer publish, and stops accepting writes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replacement_claim_leaves_the_original_store_unready_for_writes() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            batch_schema,
+            ..
+        } = published_object_table("replacement_claim").await;
+        let replacement_dir = crate::test_support::unique_dir("replacement_claim_target");
+        let replacement = Store::new(
+            Some(replacement_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        assert_eq!(replacement.recover_tables().await.unwrap(), 1);
+
+        let error = store
+            .publish_object_catalog("iris.worker")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)));
+
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w-fenced"])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![9])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let rejected = store.write_rows("iris.worker", &ipc, None).unwrap_err();
+        assert!(matches!(rejected, StatsError::SchemaConflict(_)));
+        // The replacement still owns the table and keeps writing.
+        replacement.write_rows("iris.worker", &ipc, None).unwrap();
+
+        store.shutdown(Duration::from_secs(1)).await;
+        replacement.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(replacement_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
@@ -1799,7 +2016,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert_eq!(recovered_store.load_published_tables().await.unwrap(), 1);
+        assert_eq!(recovered_store.recover_tables().await.unwrap(), 1);
         assert_eq!(
             recovered_store
                 .table_spec_status("iris.worker")
@@ -2806,9 +3023,18 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(!remote_dir
-            .join("_finelog/tables/iris.worker/HEAD.json")
-            .exists());
+        // The drop publishes a tombstone revision. HEAD survives so a later
+        // load distinguishes a deleted table from one that never published.
+        let deleted = ObjectTableStateStore::new(Arc::new(
+            build_remote_object_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        ))
+        .load("iris.worker")
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(deleted.is_tombstoned());
         assert!(remote_dir
             .join("_finelog/tables/iris.worker/catalogs")
             .exists());
@@ -2821,11 +3047,29 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert_eq!(recovered.load_published_tables().await.unwrap(), 0);
+        assert_eq!(recovered.recover_tables().await.unwrap(), 0);
         assert!(matches!(
             recovered.get_table_schema("iris.worker"),
             Err(StatsError::NamespaceNotFound(_))
         ));
+
+        // Reopening the original data directory discards the projection the
+        // tombstoned table left behind.
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        assert_eq!(reopened.recover_tables().await.unwrap(), 0);
+        assert!(matches!(
+            reopened.get_table_schema("iris.worker"),
+            Err(StatsError::NamespaceNotFound(_))
+        ));
+        reopened.shutdown(Duration::from_secs(1)).await;
 
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(recovered_data_dir).ok();
