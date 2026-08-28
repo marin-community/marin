@@ -365,7 +365,7 @@ def build_diagnostic_run(
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
     show_default=True,
-    help=("Whether to keep fp32 weights in host pinned memory. Disabling the master keeps them on device."),
+    help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
 )
 @click.option(
     "--processes-per-task",

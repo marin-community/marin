@@ -38,11 +38,11 @@ HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
 # The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
-HERO_MASTER_PARAM_MODE = MasterParamMode.DISABLED
+HERO_MASTER_PARAM_MODE = MasterParamMode.DEVICE
 # An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
-    MasterParamMode.DISABLED: "params=float32,compute=bfloat16,output=bfloat16",
+    MasterParamMode.DEVICE: "params=float32,compute=bfloat16,output=bfloat16",
 }
 HERO_QB_HIST_BINS = 10_000
 # A two-tray loader benchmark found that 1 GB kept 18.6x throughput headroom. The process cache

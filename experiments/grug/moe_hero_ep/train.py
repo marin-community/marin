@@ -112,9 +112,13 @@ class WatchMode(StrEnum):
 
 
 class MasterParamMode(StrEnum):
-    """Storage mode for optimizer master parameters."""
+    """Where the authoritative fp32 weights live.
 
-    DISABLED = "disabled"
+    DEVICE keeps them as the device params themselves, with no separate master copy;
+    FP32_PINNED_HOST keeps a pinned-host fp32 master while the device params are its bf16 cast.
+    """
+
+    DEVICE = "device"
     FP32_PINNED_HOST = "fp32_pinned_host"
 
 
@@ -170,7 +174,7 @@ def template_for_candidate_layout(
     unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
     """
     has_master = checkpoint_stores_master(candidate)
-    if has_master == (run_mode != MasterParamMode.DISABLED):
+    if has_master == (run_mode != MasterParamMode.DEVICE):
         return state
     if not has_master:
         raise ValueError(
@@ -263,7 +267,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
@@ -669,7 +673,7 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
@@ -784,7 +788,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -955,7 +959,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, candidate, config.trainer.master_param_mode
             ),
         )
-        if config.trainer.master_param_mode == MasterParamMode.DISABLED:
+        if config.trainer.master_param_mode == MasterParamMode.DEVICE:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)

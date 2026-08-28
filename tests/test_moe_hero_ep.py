@@ -82,7 +82,7 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         1_000_000_000,
         jnp.float32,
         jnp.bfloat16,
-        train.MasterParamMode.DISABLED,
+        train.MasterParamMode.DEVICE,
     )
 
 
@@ -357,7 +357,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
     assert not train.checkpoint_stores_master(master_less)
-    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DISABLED) is state
+    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
         train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
 
@@ -367,7 +367,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     )
     assert train.checkpoint_stores_master(master_bearing)
     assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
-    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DISABLED)
+    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
     assert migrating.params is None and migrating.master_params is state.params
 
 
@@ -411,9 +411,7 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
     checkpoint_root = tmp_path / "checkpoints"
     save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
 
-    template = build(
-        jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DISABLED
-    )
+    template = build(jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DEVICE)
     with set_mesh(mesh):
         restored = train.take_master_as_params(
             restore_grug_state_from_checkpoint(
@@ -423,7 +421,7 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
                 mesh=None,
                 allow_partial=False,
                 template_for_candidate=lambda candidate: train.template_for_candidate_layout(
-                    template, candidate, train.MasterParamMode.DISABLED
+                    template, candidate, train.MasterParamMode.DEVICE
                 ),
             )
         )
