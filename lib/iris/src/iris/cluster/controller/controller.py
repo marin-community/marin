@@ -102,8 +102,9 @@ from iris.cluster.controller.scheduling.meta_scheduler import (
 )
 from iris.cluster.controller.scheduling.policy import (
     RoutingInputs,
+    build_cluster_scheduling_context,
     build_routing_inputs,
-    build_scheduling_context,
+    build_worker_scheduling_context,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
@@ -184,8 +185,7 @@ class _TickInputs:
     while ``scheduling_contexts`` carries each backend's owned worker partition;
     ``reconcile_requests`` carries each ``CLUSTER_VIEW`` backend's dispatch drain
     (worker-daemon backends source their own reconcile snapshot, so they have no
-    entry); ``timeout_rows`` is the global execution-timeout sweep. Workers are
-    read by each backend, never here.
+    entry); ``timeout_rows`` is the global execution-timeout sweep.
     """
 
     routing: RoutingInputs | None = None
@@ -460,7 +460,6 @@ class Controller:
         # starts the emitter thread, so it is built in start(), closed in stop().
         self._task_state_collector: TaskStateCollector | None = None
 
-        # A DB reopen reseeds the worker-daemon backends present in the catalog.
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
         self._endpoint_service = EndpointServiceImpl(
@@ -1011,14 +1010,12 @@ class Controller:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
 
         Phase order is schedule -> reconcile -> autoscale. The controller routes
-        pending tasks to each backend (by ``backend_id``) and threads the per-user
-        budget; each backend sources its own workers and runs its
-        ``schedule``/``reconcile``/``autoscale`` over them, and the per-backend
-        results merge into one end-of-tick write transaction. With a single backend
-        every job routes to it, so behavior matches the single-backend path exactly.
-        A wake runs a schedule-only mini-tick; autoscale always pairs with
-        a fresh schedule so it provisions against this tick's residual demand.
-        Execution-timeout finalization and health-driven teardown stay global.
+        pending tasks, partitions workers, and threads the per-user budget before
+        calling each backend's scheduler. Worker-daemon backends source their own
+        reconcile and autoscale observations. Per-backend results merge into one
+        end-of-tick write transaction. With a single backend every job routes to it.
+        A wake runs a schedule-only mini-tick; autoscale always pairs with a fresh
+        schedule so it provisions against this tick's residual demand.
         """
         now = Timestamp.now()
 
@@ -1163,16 +1160,16 @@ class Controller:
                 if inputs.routing.pending_task_rows:
                     for backend_id in self._backend_ids:
                         backend = self._backends[backend_id]
-                        inputs.scheduling_contexts[backend_id] = build_scheduling_context(
-                            snap,
-                            backend.health,
-                            snap.caches[WorkerAttrsProjection],
-                            self._config.user_budget_defaults,
-                            owns_scale_group=lambda scale_group, bid=backend_id: (
-                                self.backend_id_for_scale_group(scale_group) == bid
-                            ),
-                            routing=inputs.routing,
-                        )
+                        if backend.health is None:
+                            inputs.scheduling_contexts[backend_id] = build_cluster_scheduling_context(inputs.routing)
+                        else:
+                            inputs.scheduling_contexts[backend_id] = build_worker_scheduling_context(
+                                snap,
+                                backend.health,
+                                snap.caches[WorkerAttrsProjection],
+                                inputs.routing,
+                                lambda scale_group, bid=backend_id: self.backend_id_for_scale_group(scale_group) == bid,
+                            )
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
@@ -1525,13 +1522,16 @@ class Controller:
             routing = build_routing_inputs(snap, self._config.user_budget_defaults)
             backend = self._representative_backend
             backend_id = backend.descriptor.backend_id
-            context = build_scheduling_context(
-                snap,
-                backend.health,
-                snap.caches[WorkerAttrsProjection],
-                self._config.user_budget_defaults,
-                owns_scale_group=lambda scale_group: self.backend_id_for_scale_group(scale_group) == backend_id,
-                routing=routing,
+            context = (
+                build_cluster_scheduling_context(routing)
+                if backend.health is None
+                else build_worker_scheduling_context(
+                    snap,
+                    backend.health,
+                    snap.caches[WorkerAttrsProjection],
+                    routing,
+                    lambda scale_group: self.backend_id_for_scale_group(scale_group) == backend_id,
+                )
             )
 
         if trace:

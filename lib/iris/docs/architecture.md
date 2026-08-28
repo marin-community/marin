@@ -120,10 +120,9 @@ The controller owns the database and loop cadences. It builds a complete,
 single-use `ScheduleRequest` for each backend from one read snapshot, including
 the backend's worker partition, routed pending tasks, running attempts, and the
 threaded user budget. `schedule` is a DB-less decision. Reconcile and autoscale
-still use the transitional `BackendRuntime`/`DbBackendWorkerStore`; those phases
-will become DB-less when controller-owned liveness and teardown land. The
-controller stores worker records and task assignments; the backend owns the
-provider-specific observation and actuation that produces task-state effects.
+use `BackendRuntime`/`DbBackendWorkerStore` and are not DB-less. The controller
+stores worker records and task assignments; the backend owns the provider-specific
+observation and actuation that produces task-state effects.
 Every backend implements the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 

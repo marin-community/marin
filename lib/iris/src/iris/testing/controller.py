@@ -45,9 +45,9 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
+    STANDARD_WORKER_BACKEND_CAPABILITIES,
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
     BackendDescriptor,
     BackendRuntime,
     DeviceCapacity,
@@ -127,15 +127,10 @@ def worker_backend_descriptor(
     return BackendDescriptor(
         backend_id=backend_id,
         display_name="worker",
-        capabilities=frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+        capabilities=STANDARD_WORKER_BACKEND_CAPABILITIES,
         advertised_attributes=advertised_attributes or {},
         scale_groups=scale_groups,
     )
-
-
-def run_worker_daemon_schedule(scheduler: Scheduler, request: ScheduleRequest) -> ScheduleResult:
-    """Run the worker-daemon scheduling pipeline over a controller-built request."""
-    return run_scheduling_decision(scheduler, request)
 
 
 def run_worker_daemon_reconcile(
@@ -193,8 +188,7 @@ class FakeProvider:
         # through ``schedule`` now, so the fake must run the real pipeline for
         # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
-        # Attached by the controller, exactly as for RpcTaskBackend; the fake
-        # sources its own workers through it rather than the controller slicing one.
+        # Attached by the controller for reconcile, status, and teardown.
         self._store: BackendWorkerStore | None = None
         # This backend's own liveness tracker (the controller builds its worker
         # store over this same object), mirroring RpcTaskBackend.
@@ -217,7 +211,7 @@ class FakeProvider:
         return vm_pb2.AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, request)
+        return run_scheduling_decision(self._scheduler, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
@@ -320,7 +314,7 @@ class MockController:
         # it and the controller's union reads back through it. Tests that inspect a
         # specific ``state._health`` point this at that tracker.
         self.provider.health = WorkerHealthTracker()
-        self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+        self.capabilities = STANDARD_WORKER_BACKEND_CAPABILITIES
         self.scale_group_to_backend: dict[str, str] = {}
         self.last_unroutable_jobs: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}

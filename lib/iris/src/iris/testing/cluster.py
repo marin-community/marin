@@ -10,7 +10,7 @@ from finelog.client import LogClient
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp
-from iris.cluster.controller.backend import BackendCapability
+from iris.cluster.controller.backend import CLUSTER_VIEW_BACKEND_CAPABILITIES, STANDARD_WORKER_BACKEND_CAPABILITIES
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -129,7 +129,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     ctrl = MockController()
-    ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+    ctrl.capabilities = CLUSTER_VIEW_BACKEND_CAPABILITIES
     ctrl.provider = k8s_provider
 
     service = ControllerServiceImpl(
@@ -149,7 +149,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     state = ControllerTestState(db, health=health)
 
     ctrl = MockController()
-    ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    ctrl.capabilities = STANDARD_WORKER_BACKEND_CAPABILITIES
     # Share the harness tracker so the service registers into and reads liveness
     # through the same object this harness's ControllerTestState exposes.
     ctrl.provider.health = health

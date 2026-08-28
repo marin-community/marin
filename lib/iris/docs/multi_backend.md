@@ -22,7 +22,7 @@ flowchart TB
     Above -- "schedule(tasks routed here + budget)" --> Below
     Below -- "effects (task-state projection) + status" --> Above
     subgraph Below["BELOW the line — BACKEND"]
-        b["placement decision · provider observation<br/>worker liveness (transitional)<br/>capacity actuation"]
+        b["placement decision · provider observation<br/>worker liveness<br/>capacity actuation"]
     end
 ```
 
@@ -32,17 +32,15 @@ each backend from one transaction snapshot. The backend decides placement and
 performs provider-specific I/O. The controller commits the returned effects.
 
 Worker liveness and teardown still live in worker-daemon backends through a
-scale-group-scoped controller-DB store. That is transitional boundary debt, not
-part of the final ownership model. Kubernetes backends have no Iris workers and
-observe or actuate pods directly.
+scale-group-scoped controller-DB store. Kubernetes backends have no Iris workers
+and observe or actuate pods directly.
 
 ## Current storage boundary
 
 All current backends run in the controller process and share its database. The
 controller supplies scheduling state explicitly. The worker-daemon backend still
 uses `DbBackendWorkerStore` for reconcile, status, autoscale, and teardown, and
-holds its own `WorkerHealthTracker`. A later stage moves those reads and lifecycle
-decisions into controller-owned requests and commits.
+holds its own `WorkerHealthTracker`.
 
 ## The contract
 
@@ -63,8 +61,8 @@ ID, capabilities, advertised attributes, and scale groups. The composition root
 calls `controller.register_backend(backend)` before `start()`; no parallel
 backend map or routing config is passed to the controller.
 
-**Owned by the backend today:** its `WorkerHealthTracker`, transitional
-`DbBackendWorkerStore`, and `Autoscaler`. A worker-daemon backend constructs its own tracker and seeds it
+**Owned by a worker-daemon backend:** its `WorkerHealthTracker`,
+`DbBackendWorkerStore`, and `Autoscaler`. It constructs its own tracker and seeds it
 from its scale-group-scoped worker view; worker registration routes to the owning
 backend's tracker by scale group. **Owned by the controller:** the database, the
 meta-scheduler, the per-user budget, and the loop cadence; it reaches per-worker
@@ -120,5 +118,5 @@ skipped.
 The `default` worker backend and Kubernetes backends are in-process direct method
 calls. Adding another backend kind means implementing `TaskBackend`, supplying
 one immutable descriptor, and registering the object before controller start.
-The phase request/result boundary could support a remote adapter later, but Iris
-does not currently implement one.
+The phase request/result boundary admits a remote adapter; Iris implements only
+in-process adapters.

@@ -12,6 +12,7 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.backend import (
+    CLUSTER_VIEW_BACKEND_CAPABILITIES,
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
@@ -60,7 +61,7 @@ class ScriptedTaskBackend:
     effects and never reads or writes controller tables.
     """
 
-    _capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
+    _capabilities: ClassVar[frozenset[BackendCapability]] = CLUSTER_VIEW_BACKEND_CAPABILITIES
     autoscaler = None
     health: WorkerHealthTracker | None = None
 

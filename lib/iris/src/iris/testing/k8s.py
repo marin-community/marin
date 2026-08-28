@@ -6,7 +6,7 @@
 from copy import deepcopy
 
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
-from iris.cluster.controller.backend import BackendCapability, BackendDescriptor
+from iris.cluster.controller.backend import CLUSTER_VIEW_BACKEND_CAPABILITIES, BackendDescriptor
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -27,7 +27,7 @@ def k8s_backend_descriptor(*, advertised_attributes: dict[str, set[str]] | None 
     return BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="kubernetes",
-        capabilities=frozenset({BackendCapability.CLUSTER_VIEW}),
+        capabilities=CLUSTER_VIEW_BACKEND_CAPABILITIES,
         advertised_attributes=advertised_attributes or {},
     )
 

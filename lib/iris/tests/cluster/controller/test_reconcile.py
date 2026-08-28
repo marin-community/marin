@@ -34,6 +34,7 @@ from iris.cluster.controller.backend import (
     ScheduleRequest,
     ScheduleResult,
     plans_from_snapshot,
+    run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
@@ -74,7 +75,6 @@ from iris.testing.controller import (
     reconcile_once,
     register_worker,
     run_worker_daemon_reconcile,
-    run_worker_daemon_schedule,
     store_from_runtime,
     submit_job,
     worker_backend_descriptor,
@@ -1318,7 +1318,7 @@ class _ScriptedProvider:
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, request)
+        return run_scheduling_decision(self._scheduler, request)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1403,7 +1403,7 @@ class _UnreachableProvider:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, request)
+        return run_scheduling_decision(self._scheduler, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         assert self._store is not None, "_UnreachableProvider.reconcile called before worker store attached"

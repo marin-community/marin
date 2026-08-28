@@ -179,10 +179,8 @@ class RpcTaskBackend:
     # composer at construction after it builds the autoscaler from the provider
     # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
-    # This backend's worker store, built in ``bind_runtime`` from the controller-owned
-    # ``BackendRuntime`` joined with this backend's own health tracker. The backend
-    # reads its own workers and reaps its dead ones through this; the controller never
-    # hands it a worker snapshot or a raw DB.
+    # Reconcile, status, autoscale, and teardown use this scale-group-scoped store.
+    # Scheduling receives its complete worker workspace from the controller.
     _store: BackendWorkerStore | None = field(default=None, init=False, repr=False)
     # Wall-clock window a worker may stay continuously unreachable before this
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.

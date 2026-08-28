@@ -771,9 +771,8 @@ def _sort_pending_tasks_by_resolved_band(
 class RoutingInputs:
     """Controller-owned per-tick scheduling state: pending tasks + budgets.
 
-    Carries no worker data — the controller routes and budgets from this, then
-    each backend sources its own workers and assembles its full scheduling
-    context from this plus its worker view.
+    Carries no worker data. The controller joins this with each registered
+    backend's worker partition to build its scheduling context.
     """
 
     pending_task_rows: list[PendingTask]
@@ -796,32 +795,26 @@ def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInput
     )
 
 
-def build_scheduling_context(
+def build_worker_scheduling_context(
     snap: Tx,
-    health: WorkerHealthTracker | None,
+    health: WorkerHealthTracker,
     worker_attrs: WorkerAttrsSource,
-    defaults: UserBudgetDefaults,
+    routing: RoutingInputs,
+    owns_scale_group: Callable[[str], bool],
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-    *,
-    owns_scale_group: Callable[[str], bool] | None = None,
-    routing: RoutingInputs | None = None,
 ) -> SchedulingContext:
-    """Build a ``SchedulingContext`` from the caller's read snapshot ``snap``.
+    """Join one worker backend's partition with controller routing state.
 
     All scheduling-tick DB reads live here. Every query shares the caller's
     transaction snapshot.
     """
-    routing = routing or build_routing_inputs(snap, defaults)
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
-        workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs) if health is not None else []
-        usage_by_worker = reads.resource_usage_by_worker(snap) if health is not None else {}
-        owned = reads.owned_worker_ids(snap, owns_scale_group) if owns_scale_group is not None else None
-        if owned is not None:
-            workers = [worker for worker in workers if worker.worker_id in owned]
+        workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
+        usage_by_worker = reads.resource_usage_by_worker(snap)
+        owned = reads.owned_worker_ids(snap, owns_scale_group)
+        workers = [worker for worker in workers if worker.worker_id in owned]
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-        running = _running_tasks_with_band_and_value(snap) if health is not None else []
-        if owned is not None:
-            running = [task for task in running if task.worker_id in owned]
+        running = [task for task in _running_tasks_with_band_and_value(snap) if task.worker_id in owned]
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     return SchedulingContext(
@@ -835,8 +828,26 @@ def build_scheduling_context(
         user_spend=routing.user_spend,
         user_budget_limits=routing.user_budget_limits,
         requested_bands=routing.requested_bands,
-        user_budget_defaults=defaults,
+        user_budget_defaults=routing.user_budget_defaults,
         running_for_preemption=running,
+    )
+
+
+def build_cluster_scheduling_context(routing: RoutingInputs) -> SchedulingContext:
+    """Carry routed work through a backend whose substrate owns placement."""
+    return SchedulingContext(
+        workers=[],
+        building_counts={},
+        max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_tasks=[],
+        jobs={},
+        pending_task_rows=routing.pending_task_rows,
+        user_spend=routing.user_spend,
+        user_budget_limits=routing.user_budget_limits,
+        requested_bands=routing.requested_bands,
+        user_budget_defaults=routing.user_budget_defaults,
+        running_for_preemption=[],
     )
 
 

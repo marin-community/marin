@@ -12,8 +12,8 @@ three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.recon
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
 complete, backend-partitioned scheduling workspace, so scheduling never reads
-controller storage. Reconcile and autoscale still use a transitional,
-scale-group-scoped store while their DB ownership is moved in later stages.
+controller storage. Reconcile and autoscale use a scale-group-scoped store over
+the controller database.
 
 :attr:`TaskBackend.descriptor` is the backend's immutable identity, routing, and
 capability declaration. Capabilities drive the dashboard tab list and on-demand
@@ -94,6 +94,10 @@ class BackendCapability(StrEnum):
     """The backend places tasks on its own cluster (Cluster tab; exec by task/pod)."""
 
 
+STANDARD_WORKER_BACKEND_CAPABILITIES = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+CLUSTER_VIEW_BACKEND_CAPABILITIES = frozenset({BackendCapability.CLUSTER_VIEW})
+
+
 @dataclass(frozen=True, slots=True)
 class BackendDescriptor:
     """Immutable declaration used to register one execution backend."""
@@ -120,7 +124,6 @@ class DashboardBackendDescriptor:
 
 
 def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
-    """Build dashboard metadata from a registered backend."""
     descriptor = backend.descriptor
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
@@ -398,8 +401,8 @@ def apply_placements(
 
 @dataclass(frozen=True)
 class BackendRuntime:
-    """The controller-owned values a worker-daemon backend builds its
-    transitional :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
+    """Controller-owned values used to build a scoped
+    :class:`~iris.cluster.controller.backend_store.BackendWorkerStore`.
 
     Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
@@ -416,8 +419,7 @@ class TaskBackend(Protocol):
 
     The controller supplies a complete scheduling workspace and threads the
     per-user budget. Implementations dispatch backend-specific I/O and return
-    plain data. Reconcile/autoscale retain a transitional controller-DB store;
-    schedule is DB-less.
+    plain data. Reconcile/autoscale use a controller-DB store; schedule is DB-less.
     """
 
     descriptor: BackendDescriptor

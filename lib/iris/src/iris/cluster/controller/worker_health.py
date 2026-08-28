@@ -7,8 +7,7 @@ Each worker-daemon backend currently owns one tracker for its scale groups. A
 reconcile tick classifies its I/O outcomes as :class:`WorkerHealthEvent`s and
 folds them through :meth:`WorkerHealthTracker.apply`, which accumulates counters
 and applies termination thresholds. The controller reaches the tracker through
-the registered backend for scheduling and worker RPCs. Moving tracker ownership
-into the controller is a later backend-boundary stage. ``apply`` is the sole
+the registered backend for scheduling and worker RPCs. ``apply`` is the sole
 liveness-accounting mutation site; the other writes are startup seeding, worker
 registration, and removal.
 

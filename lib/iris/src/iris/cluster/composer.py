@@ -36,7 +36,12 @@ from iris.cluster.config import (
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import BackendCapability, BackendDescriptor, TaskBackend
+from iris.cluster.controller.backend import (
+    CLUSTER_VIEW_BACKEND_CAPABILITIES,
+    STANDARD_WORKER_BACKEND_CAPABILITIES,
+    BackendDescriptor,
+    TaskBackend,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.reconcile.loader import TransitionReader
@@ -297,11 +302,7 @@ def _backend_subconfig(config: IrisClusterConfig, backend: BackendConfig) -> Iri
 
 
 def _backend_descriptor(backend_id: str, config: BackendConfig) -> BackendDescriptor:
-    capabilities = (
-        frozenset({BackendCapability.CLUSTER_VIEW})
-        if config.kind == "k8s"
-        else frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    )
+    capabilities = CLUSTER_VIEW_BACKEND_CAPABILITIES if config.kind == "k8s" else STANDARD_WORKER_BACKEND_CAPABILITIES
     return BackendDescriptor(
         backend_id=backend_id,
         display_name=backend_id,

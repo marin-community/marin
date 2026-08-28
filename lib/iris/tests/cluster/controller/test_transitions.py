@@ -41,7 +41,11 @@ from iris.cluster.controller.reconcile.snapshot import (
     pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
-from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
+from iris.cluster.controller.scheduling.policy import (
+    build_routing_inputs,
+    build_worker_scheduling_context,
+    compute_demand_entries,
+)
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -124,8 +128,15 @@ def _demand_entries(state: ControllerTestState):
     Mirrors the production demand path: build the per-tick scheduling context
     from the live DB and run the single demand computation over it.
     """
+    defaults = UserBudgetDefaults()
     with state._db.read_snapshot() as snap:
-        ctx = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults())
+        ctx = build_worker_scheduling_context(
+            snap,
+            state._health,
+            state._worker_attrs,
+            build_routing_inputs(snap, defaults),
+            lambda _scale_group: True,
+        )
     return compute_demand_entries(ctx, Scheduler(), {})
 
 

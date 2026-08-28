@@ -33,7 +33,7 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
-from iris.cluster.controller.backend import BackendCapability, BackendDescriptor
+from iris.cluster.controller.backend import STANDARD_WORKER_BACKEND_CAPABILITIES, BackendDescriptor
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
@@ -183,7 +183,7 @@ class E2ECluster:
             descriptor=BackendDescriptor(
                 backend_id=DEFAULT_BACKEND_ID,
                 display_name="worker",
-                capabilities=frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+                capabilities=STANDARD_WORKER_BACKEND_CAPABILITIES,
             ),
             stub_factory=RpcWorkerStubFactory(),
         )
