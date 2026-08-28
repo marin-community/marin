@@ -33,7 +33,7 @@ def datafusion_context(
     memory_limit_bytes: int | None = None,
     target_partitions: int | None = None,
 ) -> SessionContext:
-    """Create a memory-bounded DataFusion context with native disk spill disabled."""
+    """Create a DataFusion context with optional memory limit and no disk spill."""
     if target_partitions is None:
         target_partitions = max(1, pa.cpu_count())
     if target_partitions <= 0:

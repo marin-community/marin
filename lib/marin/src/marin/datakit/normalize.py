@@ -60,6 +60,7 @@ EMPTY_TEXT_FILTERED_COUNTER = "normalize/empty_text_filtered"
 _INPUT_BATCH_ROWS = 8192
 _SCHEMA_SAMPLE_FILES = 2
 _COMPACTED_COL = "__normalize_compacted"
+_EMPTY_TEXT_COL = "__normalize_empty_text"
 _DUPLICATE_COL = "__normalize_duplicate"
 
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
@@ -206,23 +207,15 @@ def _id_array(values: pa.Array) -> pa.Array:
     return pa.array([None if value is None else generate_id(value) for value in values.to_pylist()], type=pa.string())
 
 
-def _count_empty_text(batch: pa.RecordBatch, *, text_field: str) -> pa.RecordBatch:
-    if text_field not in batch.schema.names:
-        empty = len(batch)
-    else:
-        empty = sum(
-            value is None or _text_from_value(value).strip() == "" for value in batch.column(text_field).to_pylist()
-        )
+def _finalize_normalized_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+    empty = int(pc.sum(batch.column(_EMPTY_TEXT_COL)).as_py() or 0)
     if empty:
         counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, empty)
-    return batch
-
-
-def _finalize_normalized_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
     compacted = int(pc.sum(batch.column(_COMPACTED_COL)).as_py() or 0)
     if compacted:
         counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, compacted)
-    return batch.select([name for name in batch.schema.names if name != _COMPACTED_COL])
+    batch = batch.filter(pc.invert(batch.column(_EMPTY_TEXT_COL)))
+    return batch.select([name for name in batch.schema.names if name not in {_COMPACTED_COL, _EMPTY_TEXT_COL}])
 
 
 def _normalize_query(
@@ -231,13 +224,13 @@ def _normalize_query(
     text_field: str,
     id_field: str | None,
     max_whitespace_run_chars: int,
-    bare: bool,
-    drop_fields: tuple[str, ...],
+    kept_fields: tuple[str, ...],
 ):
     if text_field not in schema.names:
         return sql(
             f"SELECT CAST(NULL AS VARCHAR) AS id, CAST(NULL AS VARCHAR) AS text, "
-            f"false AS {quote_identifier(_COMPACTED_COL)} FROM input WHERE false"
+            f"false AS {quote_identifier(_COMPACTED_COL)}, "
+            f"true AS {quote_identifier(_EMPTY_TEXT_COL)} FROM input"
         )
 
     text_sql = quote_identifier(text_field)
@@ -245,13 +238,7 @@ def _normalize_query(
     compacted_text_col = quote_identifier("__normalize_text")
     whitespace_pattern = rf"(\s{{{max_whitespace_run_chars}}})\s+"
 
-    excluded = set(drop_fields) | {"id", "text", "source_id"}
-    if id_field is not None:
-        excluded.add(id_field)
-    if text_field != "text":
-        excluded.add(text_field)
-    kept = [] if bare else [name for name in schema.names if name not in excluded]
-    projection = [quote_identifier(name) for name in kept]
+    projection = [quote_identifier(name) for name in kept_fields]
     projection.extend(
         [
             f"normalize_id({compacted_text_col}) AS id",
@@ -261,6 +248,9 @@ def _normalize_query(
     if id_field is not None and id_field in schema.names:
         projection.append(f"{quote_identifier(id_field)} AS source_id")
     projection.append(f"{compacted_text_col} != {raw_text_col} AS {quote_identifier(_COMPACTED_COL)}")
+    projection.append(
+        f"{raw_text_col} IS NULL OR regexp_like({raw_text_col}, '^\\s*$') " f"AS {quote_identifier(_EMPTY_TEXT_COL)}"
+    )
 
     return sql(
         f"""
@@ -270,7 +260,6 @@ def _normalize_query(
         ), compacted AS (
             SELECT *, regexp_replace({raw_text_col}, '{whitespace_pattern}', '$1', 'g') AS {compacted_text_col}
             FROM normalized
-            WHERE {raw_text_col} IS NOT NULL AND NOT regexp_like({raw_text_col}, '^\\s*$')
         )
         SELECT {", ".join(projection)}
         FROM compacted
@@ -429,13 +418,18 @@ def _build_pipeline(
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
     input_schema = _infer_input_schema(files)
+    excluded = set(drop_fields) | {"id", "text", "source_id"}
+    if id_field is not None:
+        excluded.add(id_field)
+    if text_field != "text":
+        excluded.add(text_field)
+    kept_fields = () if bare else tuple(name for name in input_schema.names if name not in excluded)
     normalize_query = _normalize_query(
         input_schema,
         text_field=text_field,
         id_field=id_field,
         max_whitespace_run_chars=max_whitespace_run_chars,
-        bare=bare,
-        drop_fields=drop_fields,
+        kept_fields=kept_fields,
     )
     duplicate_sql = (
         f"row_number() OVER (PARTITION BY id ORDER BY id) > 1 AS {quote_identifier(_DUPLICATE_COL)}"
@@ -446,7 +440,6 @@ def _build_pipeline(
     return (
         Dataset.from_list(files)
         .flat_map(functools.partial(_iter_input_batches, schema=input_schema))
-        .map(functools.partial(_count_empty_text, text_field=text_field))
         .sql(normalize_query.text, scalar_functions=normalize_query.scalar_functions)
         .map(_finalize_normalized_batch)
         .group_by(

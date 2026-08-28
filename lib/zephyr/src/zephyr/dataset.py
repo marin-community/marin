@@ -474,8 +474,7 @@ class Dataset(Generic[T]):
         """Apply a DataFusion SQL query independently to each Arrow batch.
 
         The input batch is available as the table ``input``. The query may
-        filter, project, join, unnest, or otherwise transform that batch and
-        yields Arrow record batches without materializing Python rows.
+        filter, project, join, unnest, or otherwise transform that batch.
 
         Args:
             query: DataFusion SQL statement that reads from ``input``.
@@ -959,20 +958,21 @@ class Dataset(Generic[T]):
         A Python reducer receives ``(key, iterator_of_items)`` and returns a
         single result or an iterator of results for that group. A
         :class:`~zephyr.sql.SqlQuery` runs once over the merged target shard;
-        its input is the table ``input`` and its output stays in Arrow batches.
+        its input is the table ``input`` and it returns Arrow batches.
 
         Arrow-batch inputs require ``zephyr.expr.col(...)`` for ``key`` and
-        ``sort_by``. Their columns are written directly into shuffle Parquet
-        files without serializing each row through Python.
+        ``sort_by``.
 
         Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
         Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
-            key: Function extracting grouping key from item (must be hashable)
-            reducer: Function from (key, Iterator[items]) -> result
-            sort_by: Optional function extracting a sort key from each item. When provided,
-                items within each group are delivered to the reducer sorted by this key.
+            key: Function extracting a hashable grouping key, or a column
+                expression for Arrow-batch inputs.
+            reducer: Python function from ``(key, Iterator[items])`` to results,
+                or a SQL query over the merged ``input`` table.
+            sort_by: Optional function or column expression selecting the sort
+                key. Python reducers receive each group in this order.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
             combiner: Optional local pre-aggregation applied during scatter. Receives
                 (key, Iterator[items]) and yields reduced items of the same type. Must be

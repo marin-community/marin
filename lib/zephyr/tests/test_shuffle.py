@@ -78,6 +78,38 @@ def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
     return scatter_paths
 
 
+def _configure_fake_gcs_sort(tmp_path, monkeypatch):
+    remote_root = tmp_path / "gcs"
+
+    def remote_path(url: str):
+        parsed = urlparse(url)
+        assert (parsed.scheme, parsed.netloc) == ("gs", "bucket")
+        return remote_root / parsed.path.lstrip("/")
+
+    class FakeStoragePath:
+        def __init__(self, url: str):
+            self.url = url
+
+        def __truediv__(self, name: str):
+            return FakeStoragePath(f"{self.url.rstrip('/')}/{name}")
+
+        def __str__(self) -> str:
+            return self.url
+
+        def mkdirs(self) -> None:
+            remote_path(self.url).mkdir(parents=True, exist_ok=True)
+
+        def rm(self) -> None:
+            remote_path(self.url).unlink()
+
+    monkeypatch.setattr("zephyr.shuffle.StoragePath", FakeStoragePath)
+    monkeypatch.setattr(
+        "zephyr.parquet_scan.GoogleCloud",
+        lambda bucket_name: DataFusionLocalFileSystem(prefix=str(remote_root)),
+    )
+    return remote_root
+
+
 # ---------------------------------------------------------------------------
 # Roundtrip
 # ---------------------------------------------------------------------------
@@ -180,14 +212,6 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
             chunk = list(_table_to_items(frame.to_arrow_table()))
             keys = [_key(x) for x in chunk]
             assert keys == sorted(keys), f"chunk for shard {shard_idx} not sorted"
-
-
-def test_avg_item_bytes_matches_serialized_payload_size(tmp_path):
-    items = [{"k": 0, "v": i} for i in range(20)]
-    scatter_paths = _build_shard(tmp_path, items, num_output_shards=1)
-    shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    expected = sum(len(cloudpickle.dumps(item)) for item in items) / len(items)
-    assert shard.avg_item_bytes == expected
 
 
 def test_merge_sorted_chunks_basic(tmp_path):
@@ -327,34 +351,7 @@ def test_merge_sorted_chunks_external_runs_use_gcs_urls(tmp_path, monkeypatch):
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
 
-    remote_root = tmp_path / "gcs"
-
-    def remote_path(url: str):
-        parsed = urlparse(url)
-        assert (parsed.scheme, parsed.netloc) == ("gs", "bucket")
-        return remote_root / parsed.path.lstrip("/")
-
-    class FakeStoragePath:
-        def __init__(self, url: str):
-            self.url = url
-
-        def __truediv__(self, name: str):
-            return FakeStoragePath(f"{self.url.rstrip('/')}/{name}")
-
-        def __str__(self) -> str:
-            return self.url
-
-        def mkdirs(self) -> None:
-            remote_path(self.url).mkdir(parents=True, exist_ok=True)
-
-        def rm(self) -> None:
-            remote_path(self.url).unlink()
-
-    monkeypatch.setattr("zephyr.shuffle.StoragePath", FakeStoragePath)
-    monkeypatch.setattr(
-        "zephyr.parquet_scan.GoogleCloud",
-        lambda bucket_name: DataFusionLocalFileSystem(prefix=str(remote_root)),
-    )
+    remote_root = _configure_fake_gcs_sort(tmp_path, monkeypatch)
 
     # Force Zephyr's explicit external sort with a payload estimate above the merge budget.
     shard.shard_payload_bytes = 1_000_000
@@ -384,34 +381,7 @@ def test_sql_reduce_external_runs_use_gcs_urls(tmp_path, monkeypatch):
         scatter_paths.extend(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    remote_root = tmp_path / "gcs"
-
-    def remote_path(url: str):
-        parsed = urlparse(url)
-        assert (parsed.scheme, parsed.netloc) == ("gs", "bucket")
-        return remote_root / parsed.path.lstrip("/")
-
-    class FakeStoragePath:
-        def __init__(self, url: str):
-            self.url = url
-
-        def __truediv__(self, name: str):
-            return FakeStoragePath(f"{self.url.rstrip('/')}/{name}")
-
-        def __str__(self) -> str:
-            return self.url
-
-        def mkdirs(self) -> None:
-            remote_path(self.url).mkdir(parents=True, exist_ok=True)
-
-        def rm(self) -> None:
-            remote_path(self.url).unlink()
-
-    monkeypatch.setattr("zephyr.shuffle.StoragePath", FakeStoragePath)
-    monkeypatch.setattr(
-        "zephyr.parquet_scan.GoogleCloud",
-        lambda bucket_name: DataFusionLocalFileSystem(prefix=str(remote_root)),
-    )
+    remote_root = _configure_fake_gcs_sort(tmp_path, monkeypatch)
     shard.shard_payload_bytes = 1_000_000
 
     with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
@@ -511,7 +481,7 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
 
 
 def test_scatter_bounds_parquet_row_groups(tmp_path):
-    num_targets = 1024
+    num_targets = _SCATTER_MAX_ROW_GROUPS_PER_CHUNK * 16
     data_path = f"{tmp_path}/shard-0000/scatter/"
     table = pa.table(
         {
@@ -534,11 +504,12 @@ def test_scatter_bounds_parquet_row_groups(tmp_path):
     scatter_paths = list(writer.close())
 
     parquet = pq.ParquetFile(f"{data_path}c0004.parquet")
-    assert parquet.metadata.num_row_groups <= _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
+    assert parquet.metadata.num_row_groups == _SCATTER_MAX_ROW_GROUPS_PER_CHUNK
 
-    reader = ScatterReader.from_sidecars(scatter_paths, target_shard=513)
+    target_shard = num_targets // 2 + 1
+    reader = ScatterReader.from_sidecars(scatter_paths, target_shard=target_shard)
     assert reader.total_chunks == 1
-    assert _read_shard(reader) == [{"k": 513}]
+    assert _read_shard(reader) == [{"k": target_shard}]
 
 
 def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):

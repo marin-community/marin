@@ -61,7 +61,7 @@ def _cc_input_batches(
     items: Iterator[CCInput | ArrowBatch],
     _shard: ShardInfo,
 ) -> Iterator[pa.RecordBatch]:
-    """Canonicalize CC inputs to Arrow batches without unpacking batch inputs."""
+    """Return connected-component inputs as validated Arrow batches."""
 
     def validate(batch: pa.RecordBatch) -> pa.RecordBatch:
         id_values = batch.column("id")
@@ -220,7 +220,8 @@ def connected_components(
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
 
     Args:
-        ds: Input dataset containing 'bucket' and 'ids' fields, most likely from MinHash LSH output
+        ds: Input dataset of row records or Arrow batches containing ``bucket``,
+            ``id``, and ``file_idx`` fields, typically from MinHash LSH output.
         ctx: ZephyrContext to use for execution.
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm

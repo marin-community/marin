@@ -165,15 +165,6 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(
-    shard: ScatterReader,
-    key_fn: Callable | ColumnExpr,
-    reducer_fn: Callable | SqlQuery,
-    external_sort_dir: str,
-) -> Iterator:
-    yield from shard.reduce(external_sort_dir, key_fn, reducer_fn)
-
-
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
     for item in stream:
         yield {k: item[k] for k in columns if k in item}
@@ -791,7 +782,7 @@ def run_stage(
             # reads all per-mapper sidecars in parallel, filters for its own
             # target shard, then merges the sorted chunks and reduces per key.
             reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
-            stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
+            stream = reader.reduce(external_sort_dir, op.key_fn, op.reducer_fn)
             op_index += 1
 
         elif isinstance(op, Fold):
