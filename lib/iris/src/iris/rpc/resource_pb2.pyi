@@ -36,12 +36,14 @@ class GetResponse(_message.Message):
     def __init__(self, resource: _Optional[_Union[Resource, _Mapping]] = ...) -> None: ...
 
 class ListResponse(_message.Message):
-    __slots__ = ("resources", "page")
+    __slots__ = ("resources", "page", "metadata")
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     resources: _containers.RepeatedCompositeFieldContainer[Resource]
     page: PageInfo
-    def __init__(self, resources: _Optional[_Iterable[_Union[Resource, _Mapping]]] = ..., page: _Optional[_Union[PageInfo, _Mapping]] = ...) -> None: ...
+    metadata: _any_pb2.Any
+    def __init__(self, resources: _Optional[_Iterable[_Union[Resource, _Mapping]]] = ..., page: _Optional[_Union[PageInfo, _Mapping]] = ..., metadata: _Optional[_Union[_any_pb2.Any, _Mapping]] = ...) -> None: ...
 
 class BatchGetResponse(_message.Message):
     __slots__ = ("resources",)

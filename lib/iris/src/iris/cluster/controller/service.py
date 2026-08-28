@@ -249,6 +249,7 @@ def _build_resource_registry(service: "ControllerServiceImpl") -> ResourceRegist
         request_type=controller_pb2.Controller.ListBackendsRequest,
         response_type=controller_pb2.Controller.ListBackendsResponse,
         resources=lambda response: response.backends,
+        metadata=_backend_list_metadata,
         dashboard_readable=True,
     )
     registry.list(
@@ -270,6 +271,15 @@ def _job_state_snapshots(
         job_pb2.JobStateSnapshot(job_id=job_id, state=response.states[job_id])
         for job_id in request.job_ids
         if job_id in response.states
+    )
+
+
+def _backend_list_metadata(
+    response: controller_pb2.Controller.ListBackendsResponse,
+) -> controller_pb2.Controller.BackendListMetadata:
+    return controller_pb2.Controller.BackendListMetadata(
+        unroutable_job_count=response.unroutable_job_count,
+        unroutable_sample=response.unroutable_sample,
     )
 
 

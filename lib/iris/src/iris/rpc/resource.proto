@@ -26,10 +26,15 @@ message ResourceRequest {
 }
 
 message Resource {
+  // The registered detail or summary view for this noun. A detail view may be
+  // composite (for example, Task status plus its resource limits); callers use
+  // the registered type URL rather than assuming every noun has one flat row.
   google.protobuf.Any body = 1;
 }
 
 message PageInfo {
+  // Number of resources matching the query before paging. For an unpaged
+  // binding, this equals the number returned and has_more is false.
   int64 total_count = 1;
   bool has_more = 2;
 }
@@ -41,6 +46,8 @@ message GetResponse {
 message ListResponse {
   repeated Resource resources = 1;
   PageInfo page = 2;
+  // Optional noun-owned aggregate data that is not a resource row.
+  google.protobuf.Any metadata = 3;
 }
 
 message BatchGetResponse {

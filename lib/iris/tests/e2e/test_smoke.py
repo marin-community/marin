@@ -367,6 +367,8 @@ def test_resource_reads_match_controller_views(smoke_cluster):
             resource.body.Unpack(backend)
             for resource, backend in zip(backend_response.resources, generic_backends, strict=True)
         )
+        backend_metadata = controller_pb2.Controller.BackendListMetadata()
+        assert backend_response.metadata.Unpack(backend_metadata)
     finally:
         resources.close()
 
@@ -388,6 +390,8 @@ def test_resource_reads_match_controller_views(smoke_cluster):
         (backend.backend_id, backend.name, backend.kind, tuple(backend.capabilities), tuple(backend.scale_groups))
         for backend in legacy_backends.backends
     ]
+    assert backend_metadata.unroutable_job_count == legacy_backends.unroutable_job_count
+    assert backend_metadata.unroutable_sample == legacy_backends.unroutable_sample
 
 
 def _resource_request(resource_type: str, message: Message) -> resource_pb2.ResourceRequest:

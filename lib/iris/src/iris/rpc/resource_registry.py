@@ -83,13 +83,17 @@ def list_codec(
     response_type: type[Response],
     resources: Callable[[Response], Iterable[Message]],
     page: Callable[[Response], resource_pb2.PageInfo] | None = None,
+    metadata: Callable[[Response], Message] | None = None,
 ) -> ResourceCodec[Request, Response]:
     def encode(_request: Request, response: Response) -> Message:
         bodies = tuple(resources(response))
-        return resource_pb2.ListResponse(
+        result = resource_pb2.ListResponse(
             resources=[_resource(body) for body in bodies],
             page=page(response) if page is not None else resource_pb2.PageInfo(total_count=len(bodies)),
         )
+        if metadata is not None:
+            result.metadata.CopyFrom(_pack(metadata(response)))
+        return result
 
     return ResourceCodec(ResourceVerb.LIST, request_type, response_type, resource_pb2.ListResponse, encode)
 
@@ -142,11 +146,12 @@ class ResourceRegistryBuilder:
         response_type: type[Response],
         resources: Callable[[Response], Iterable[Message]],
         page: Callable[[Response], resource_pb2.PageInfo] | None = None,
+        metadata: Callable[[Response], Message] | None = None,
         dashboard_readable: bool,
     ) -> None:
         self._bind(
             path,
-            list_codec(request_type, response_type, resources, page),
+            list_codec(request_type, response_type, resources, page, metadata),
             handler,
             dashboard_readable=dashboard_readable,
         )
@@ -223,6 +228,10 @@ def _type_url(message_type: type[Message]) -> str:
 
 
 def _resource(body: Message) -> resource_pb2.Resource:
+    return resource_pb2.Resource(body=_pack(body))
+
+
+def _pack(message: Message) -> AnyMessage:
     packed = AnyMessage()
-    packed.Pack(body)
-    return resource_pb2.Resource(body=packed)
+    packed.Pack(message)
+    return packed
