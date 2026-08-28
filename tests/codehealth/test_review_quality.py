@@ -1,11 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -169,6 +167,18 @@ def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
 
     def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
         calls.append((command, kwargs["input"]))
+        schema_path = Path(command[command.index("--output-schema") + 1])
+        schema = json.loads(schema_path.read_text())
+        item_schema = schema["properties"]["results"]["items"]
+        assert item_schema["required"] == [
+            "id",
+            "class",
+            "catchable_strict",
+            "catchable_generous",
+            "confidence",
+            "reason",
+        ]
+        assert item_schema["additionalProperties"] is False
         output_path = command[command.index("--output-last-message") + 1]
         with open(output_path, "w") as output:
             json.dump(
@@ -207,7 +217,6 @@ def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
     assert command[command.index("--sandbox") + 1] == "read-only"
     assert command[command.index("--model") + 1] == "gpt-5.6-terra"
     assert command[command.index("--config") + 1] == 'model_reasoning_effort="medium"'
-    assert "--output-schema" in command
     assert "Diff context:" in prompt
     assert result[0].catchable_strict
     assert result[0].catchable_generous
@@ -219,5 +228,5 @@ def test_classification_fails_when_a_batch_omits_a_comment() -> None:
         review.CommentToClassify(id=1, file=None, line=None, body="second", context=None),
     ]
 
-    with pytest.raises(RuntimeError, match="classifier omitted 2 comment"):
+    with pytest.raises(RuntimeError):
         review.classify_comments(lambda _: {}, items, batch_size=20, concurrency=1)

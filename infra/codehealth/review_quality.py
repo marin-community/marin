@@ -688,17 +688,17 @@ def resolve_classifications(
     classifier: Classifier,
     batch_size: int,
     concurrency: int,
-) -> list[CommentClassification | None]:
+) -> list[CommentClassification]:
     """Classify `comments`, returning one verdict per comment aligned with the
     input. A comment is reused from `cache` when the same (comment_type,
     comment_id) was seen before with identical (truncated) text; the rest are
     sent to `classifier` in parallel batches."""
-    final: list[CommentClassification | None] = [None] * len(comments)
+    resolved: dict[int, CommentClassification] = {}
     pending: list[tuple[int, Comment]] = []
     for i, c in enumerate(comments):
         cached = cache.get((c.comment_type, c.comment_id))
         if cached and cached[0] == c.body[:500]:
-            final[i] = cached[1]
+            resolved[i] = cached[1]
         else:
             pending.append((i, c))
     logger.info(
@@ -715,8 +715,8 @@ def resolve_classifications(
     ]
     fresh = classify_comments(classifier, items, batch_size, concurrency)
     for j, (i, _) in enumerate(pending):
-        final[i] = fresh.get(j)
-    return final
+        resolved[i] = fresh[j]
+    return [resolved[i] for i in range(len(comments))]
 
 
 def overlap_count(bot_findings: list[dict], human_comments: list[Comment], window: int = 5) -> int:
@@ -1221,9 +1221,9 @@ def aggregate(
 
     # Regroup by PR, preserving flat-list ordering.
     idx = 0
-    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification | None]]] = {}
+    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification]]] = {}
     for pr in prs:
-        pairs: list[tuple[Comment, CommentClassification | None]] = []
+        pairs: list[tuple[Comment, CommentClassification]] = []
         for c in human_by_pr[pr["number"]]:
             pairs.append((c, final_cls[idx]))
             idx += 1
@@ -1237,8 +1237,6 @@ def aggregate(
         strict_cnt = generous_cnt = 0
 
         for c, cls in classified_by_pr[n]:
-            if cls is None:
-                continue
             by_class[cls.klass] = by_class.get(cls.klass, 0) + 1
             if cls.catchable_strict:
                 strict_cnt += 1

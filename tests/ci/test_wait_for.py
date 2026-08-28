@@ -153,7 +153,7 @@ def test_loom_placeholder_text_from_human_remains_significant() -> None:
 
 
 @pytest.mark.parametrize("author", [wait_for.LOOM_BOT, wait_for.WEAVER_USER])
-def test_weaver_clean_review_is_not_significant(author: str) -> None:
+def test_known_review_bot_clean_review_is_not_significant(author: str) -> None:
     body = """## Code review
 
 No issues found. Checked for bugs and AGENTS.md compliance.
