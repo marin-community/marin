@@ -120,6 +120,9 @@ def restore_grug_state_from_checkpoint(
         return state
 
     candidates = _checkpoint_candidates(checkpoint_search_paths)
+    # A bare search root is always a candidate, so this is what separates "nothing has been
+    # written yet" from "checkpoints exist here".
+    written = [candidate for candidate in candidates if candidate not in checkpoint_search_paths]
     last_error: FileNotFoundError | None = None
 
     for candidate in candidates:
@@ -141,8 +144,8 @@ def restore_grug_state_from_checkpoint(
                 "Checkpoint candidate %s could not be loaded (%s). Trying an older checkpoint.", candidate, exc
             )
 
+    search_path_summary = ", ".join(checkpoint_search_paths)
     if load_checkpoint_setting is True:
-        search_path_summary = ", ".join(checkpoint_search_paths)
         attempted = ", ".join(candidates)
         if last_error is None:
             raise FileNotFoundError(f"Could not find checkpoint under any of: {search_path_summary}")
@@ -150,7 +153,15 @@ def restore_grug_state_from_checkpoint(
             f"Could not load a checkpoint from search paths {search_path_summary}. Attempted: {attempted}"
         ) from last_error
 
-    logger.info("Checkpoint not found under %s. Starting from scratch.", checkpoint_search_paths)
+    if written:
+        # An optional resume that finds checkpoints and reads none of them is a failed resume, not
+        # a first launch. Restarting at step 0 would overwrite them and still report a plausible MFU.
+        raise FileNotFoundError(
+            f"{len(written)} checkpoint(s) exist under {search_path_summary} but none could be loaded: "
+            f"{', '.join(written)}"
+        ) from last_error
+
+    logger.info("No checkpoint under %s. Starting from scratch.", checkpoint_search_paths)
     return state
 
 

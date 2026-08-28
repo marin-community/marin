@@ -207,6 +207,47 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
         )
 
 
+def test_a_resume_that_finds_checkpoints_and_reads_none_fails_instead_of_restarting(tmp_path: Path):
+    """Optional resume, so nothing requested a restore -- but checkpoints are here and unreadable.
+
+    Starting over would overwrite them and report a plausible MFU from step 0, which is the whole
+    reason a silent fall-through is worse than a crash.
+    """
+    checkpoint_root = tmp_path / "checkpoints"
+    _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        raise FileNotFoundError(path)
+
+    with pytest.raises(FileNotFoundError, match="none could be loaded"):
+        restore_grug_state_from_checkpoint(
+            {"state": "init"},
+            checkpoint_search_paths=[str(checkpoint_root)],
+            load_checkpoint_setting=None,
+            mesh=None,
+            allow_partial=False,
+            _load_fn=fake_load,
+        )
+
+
+def test_a_first_launch_with_no_checkpoints_starts_from_scratch(tmp_path: Path):
+    """The empty-root case the ladders hit on every first launch; it must not be an error."""
+
+    def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
+        raise FileNotFoundError(path)
+
+    restored = restore_grug_state_from_checkpoint(
+        {"state": "init"},
+        checkpoint_search_paths=[str(tmp_path / "checkpoints")],
+        load_checkpoint_setting=None,
+        mesh=None,
+        allow_partial=False,
+        _load_fn=fake_load,
+    )
+
+    assert restored == {"state": "init"}
+
+
 def test_restore_discovers_candidates_across_search_paths(tmp_path: Path):
     permanent_root = tmp_path / "checkpoints"
     temp_root = tmp_path / "checkpoints-temp"
