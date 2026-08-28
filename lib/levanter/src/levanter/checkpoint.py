@@ -1026,26 +1026,49 @@ def load_checkpoint_or_initialize(
         loaded_state = equinox.filter(state_shape, lambda _: False)
 
         if do_load is not False:
-            # now we can load the checkpoint
-            try:
-                if discover_latest:
-                    checkpoint_path = latest_checkpoint_path(checkpoint_search_paths[0], *checkpoint_search_paths[1:])
-                else:
-                    if len(checkpoint_search_paths) != 1:
-                        raise ValueError("discover_latest=False requires exactly one checkpoint search path")
-                    checkpoint_path = checkpoint_search_paths[0]
+            if discover_latest:
+                candidates = discover_checkpoint_candidates(checkpoint_search_paths[0], *checkpoint_search_paths[1:])
+                # Newest first, so a torn or unreadable newest checkpoint falls back to older ones.
+                candidate_paths = [candidate.path for candidate in reversed(candidates)]
+            else:
+                if len(checkpoint_search_paths) != 1:
+                    raise ValueError("discover_latest=False requires exactly one checkpoint search path")
+                candidate_paths = list(checkpoint_search_paths)
 
-                loaded_state = load_checkpoint(
-                    filtered_state_shape,
-                    checkpoint_path,
-                    subpath=subpath,
-                    axis_mapping=axis_mapping,
-                    mesh=mesh,
-                    allow_partial=allow_partial,
-                )
-            except FileNotFoundError:
+            last_error: Optional[FileNotFoundError] = None
+            loaded_any = False
+            for checkpoint_path in candidate_paths:
+                try:
+                    loaded_state = load_checkpoint(
+                        filtered_state_shape,
+                        checkpoint_path,
+                        subpath=subpath,
+                        axis_mapping=axis_mapping,
+                        mesh=mesh,
+                        allow_partial=allow_partial,
+                    )
+                    loaded_any = True
+                    break
+                except FileNotFoundError as error:
+                    last_error = error
+                    logger.warning(
+                        "Checkpoint %s could not be loaded (%s). Trying an older checkpoint.", checkpoint_path, error
+                    )
+
+            if not loaded_any:
+                written = candidate_paths if discover_latest else [p for p in candidate_paths if is_checkpoint_path(p)]
+                if written:
+                    # Checkpoints exist but none loaded. Initializing from scratch would overwrite
+                    # them and report plausible progress from step 0, so fail even when the load
+                    # was optional.
+                    raise FileNotFoundError(
+                        f"{len(written)} checkpoint(s) exist under {checkpoint_search_paths} but none "
+                        f"could be loaded: {', '.join(written)}"
+                    ) from last_error
                 if do_load is True:
-                    raise
+                    raise FileNotFoundError(
+                        f"Could not discover checkpoint under any of: {checkpoint_search_paths}"
+                    ) from last_error
                 logger.info(f"Checkpoint not found in {checkpoint_search_paths}. Initializing from scratch.")
 
         state = init_and_merge(loaded_state, *args, **kwargs)
