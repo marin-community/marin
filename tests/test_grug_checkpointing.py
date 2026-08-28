@@ -207,12 +207,8 @@ def test_restore_raises_when_required_and_no_checkpoint_loads(tmp_path: Path):
         )
 
 
-def test_a_resume_that_finds_checkpoints_and_reads_none_fails_instead_of_restarting(tmp_path: Path):
-    """Optional resume, so nothing requested a restore -- but checkpoints are here and unreadable.
-
-    Starting over would overwrite them and report a plausible MFU from step 0, which is the whole
-    reason a silent fall-through is worse than a crash.
-    """
+def test_restore_raises_when_only_unreadable_checkpoints_present(tmp_path: Path):
+    """When checkpoints are present but all fail to load, raise instead of silently starting from step 0."""
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
 
