@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker liveness folded from backend-observed events.
+"""In-memory worker liveness derived from backend-observed events.
 
 Each worker-daemon backend currently owns one tracker for its scale groups. A
 reconcile tick classifies its I/O outcomes as :class:`WorkerHealthEvent`s and
-folds them through :meth:`WorkerHealthTracker.apply`, which accumulates counters
+applies them through :meth:`WorkerHealthTracker.apply`, which accumulates counters
 and applies termination thresholds. The controller reaches the tracker through
 the registered backend for scheduling and worker RPCs. ``apply`` is the sole
 liveness-accounting mutation site; the other writes are startup seeding, worker
@@ -81,7 +81,7 @@ class WorkerHealthEventKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class WorkerHealthEvent:
-    """One backend-observed health signal the controller folds via :meth:`apply`."""
+    """One backend-observed health signal the controller applies via :meth:`apply`."""
 
     worker_id: WorkerId
     kind: WorkerHealthEventKind
@@ -122,7 +122,7 @@ def _mark_reached(state: WorkerLiveness, now_ms: int) -> None:
 
     Refreshes the heartbeat, asserts healthy/active, and clears the
     consecutive-failure counter. Shared by the lifecycle seed
-    (:meth:`WorkerHealthTracker.heartbeat`) and the steady-state REACHED fold
+    (:meth:`WorkerHealthTracker.heartbeat`) and steady-state REACHED handling
     (:meth:`WorkerHealthTracker.apply`) so the two cannot drift.
     """
     state.last_heartbeat_ms = now_ms
@@ -187,7 +187,7 @@ class WorkerHealthTracker:
                 state = self._states.get(event.worker_id)
                 if state is None:
                     # apply() only updates known workers; creation is reserved for
-                    # register/heartbeat. A stray observation — e.g. a REACHED folded
+                    # register/heartbeat. A stray observation — e.g. a REACHED applied
                     # from an impostor at a dead worker's recycled address — must not
                     # conjure a fresh, schedulable liveness entry and re-animate a
                     # forgotten worker.

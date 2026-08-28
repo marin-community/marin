@@ -16,16 +16,14 @@ from iris.cluster.controller.backend import (
     BackendKind,
     BackendRuntime,
     DeviceCapacity,
-    DirectTaskObservation,
     ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    WorkerFleetObservation,
 )
-from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, WorkerId
@@ -129,7 +127,7 @@ class ScriptedTaskBackend:
         for task_id, attempt_id in sorted(self._desired.keys() - desired.keys()):
             self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.descriptor.backend_id))
 
-        updates: list[ObservedTaskUpdate] = []
+        updates: list[TaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired.keys()):
             self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.descriptor.backend_id))
@@ -146,7 +144,7 @@ class ScriptedTaskBackend:
                 updates.append(self._task_update(task_id, observed_attempt_id, desired[(task_id, attempt_id)], queued))
 
         self._desired = desired
-        return DirectTaskObservation(updates=updates)
+        return ReconcileObservation(task_updates=updates)
 
     def _pop_observation(self, task_id: str) -> ScriptedObservation | None:
         queue = self._queued.get(task_id)
@@ -163,9 +161,9 @@ class ScriptedTaskBackend:
         attempt_id: int,
         attempt_uid: str,
         observation: ScriptedObservation,
-    ) -> ObservedTaskUpdate:
+    ) -> TaskUpdate:
         self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.descriptor.backend_id))
-        return ObservedTaskUpdate(
+        return TaskUpdate(
             attempt_uid=AttemptUid(attempt_uid),
             task_id=JobName.from_wire(task_id),
             attempt_id=attempt_id,
@@ -232,9 +230,9 @@ class UnavailableTaskBackend(ScriptedTaskBackend):
     def __init__(self, **kwargs) -> None:
         super().__init__(kind=BackendKind.WORKER, **kwargs)
 
-    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         self.calls.append("reconcile")
-        return WorkerFleetObservation()
+        return ReconcileObservation()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")

@@ -1850,7 +1850,7 @@ class ControlSnapshot:
       backend that owns placement (built only when that backend reconciles).
 
     Worker liveness is never persisted and never read off the snapshot: the
-    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and applies
     backend-observed health events into it. The tracker is passed to
     :func:`load_control_snapshot` only to select the live worker set.
     """

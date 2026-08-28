@@ -143,21 +143,23 @@ attributes, and scale groups.
 The controller builds each `ScheduleRequest` completely from one read snapshot:
 workers, pending tasks, running attempts, and the per-user budget.
 `TaskBackend.schedule` is therefore DB-less and performs a pure decision. The
-worker reconcile/autoscale path still binds `DbBackendWorkerStore` through
-`BackendRuntime`, so those phases are not yet DB-less.
+worker backend binds `DbBackendWorkerStore` through `BackendRuntime` for its
+worker roster, reconciliation plans, and autoscaler state.
 
 `BackendDescriptor.kind` is `WORKER` or `KUBERNETES`. The controller calls the
 three phases uniformly. Kubernetes reconcile receives the dispatch queue drain;
 worker reconcile sources worker state through the bound store. Dashboard
 capability strings are derived presentation data.
 
-Backends return neutral `ReconcileObservation` values, never controller effects.
-After backend I/O, `reconcile/coordinator.py` reloads current state, fences exact
-Attempt UIDs, applies lifecycle policy, and folds worker liveness. Worker-daemon
+Backends return one neutral `ReconcileObservation` shape: exact task updates and
+optional worker-health events, never controller effects. After backend I/O,
+`ops/reconcile.py` applies the observation once: `ops/task.py` reloads current
+state, fences exact Attempt UIDs, and runs one lifecycle-policy path before
+worker liveness is updated. Worker-daemon
 backends still construct the shared `WorkerHealthTracker` and reach the DB through
 `DbBackendWorkerStore`. There is no ping loop: reconcile RPC outcomes are the
 liveness signal.
-Kubernetes backends have no Iris workers and no controller transition reader.
+Kubernetes backends have no Iris workers or worker-health tracker.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for

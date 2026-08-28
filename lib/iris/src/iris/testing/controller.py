@@ -51,12 +51,12 @@ from iris.cluster.controller.backend import (
     BackendRuntime,
     DeviceCapacity,
     ProviderUnsupportedError,
+    ReconcileObservation,
     ReconcileRequest,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
     TaskTarget,
-    WorkerFleetObservation,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -69,7 +69,6 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     task_attempts_table,
@@ -184,7 +183,7 @@ class FakeProvider:
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, request)
 
-    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs), then
@@ -192,9 +191,8 @@ class FakeProvider:
         assert self._store is not None, "FakeProvider.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
-        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return WorkerFleetObservation(worker_results=worker_results, transport_events=events)
+        return ReconcileObservation(worker_health_events=events)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()

@@ -32,6 +32,17 @@ class TaskUpdate:
     task_id: JobName
     attempt_id: int
     new_state: int
+    # Controller-authored transition tests and commands may omit identity metadata;
+    # the backend-observation boundary rejects a missing Attempt UID.
+    attempt_uid: AttemptUid | None = None
+    # Present only when the observation came from an Iris worker.
+    worker_id: WorkerId | None = None
+    # A worker can observe setup execution before RUNNING; Kubernetes admission
+    # leaves this absent until the workload actually runs.
+    execution_started_at: Timestamp | None = None
+    # State seen when the provider operation began. If the controller has moved
+    # the task since then, the observation is stale and must not be applied.
+    observed_task_state: int | None = None
     error: str | None = None
     exit_code: int | None = None
     container_id: str | None = None
@@ -49,13 +60,6 @@ class TaskUpdate:
     node_name: str | None = None
     terminal_reason: str | None = None
     output_archive: job_pb2.TaskOutputArchive | None = None
-
-
-@dataclass(frozen=True, kw_only=True)
-class ObservedTaskUpdate(TaskUpdate):
-    """A provider observation fenced to one exact Attempt incarnation."""
-
-    attempt_uid: AttemptUid
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,9 +5,9 @@
 
 The worker-daemon backend used by the GCP/TPU, CoreWeave-bare-metal, manual, and
 local clusters. The Iris scheduler assigns task→worker; this backend fans the
-per-worker Reconcile RPC out to worker daemons and returns raw runtime and
-transport observations. The controller reloads current state, applies Iris
-transition and liveness policy, commits effects, and requests teardown.
+per-worker Reconcile RPC out to worker daemons and translates replies into exact
+task and reachability observations. The controller reloads current state,
+applies Iris transition and liveness policy, commits effects, and requests teardown.
 """
 
 import asyncio
@@ -30,16 +30,20 @@ from iris.cluster.controller.backend import (
     BackendRuntime,
     DeviceCapacity,
     ProviderError,
+    ReconcileObservation,
     ReconcileRequest,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    WorkerFleetObservation,
     plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import (
+    WorkerReconcilePlan,
+    WorkerReconcileResult,
+    task_updates_from_result,
+)
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
     DEFAULT_UNREACHABLE_GRACE,
@@ -164,7 +168,7 @@ class RpcTaskBackend:
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.
     unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
     # This backend constructs the liveness tracker shared by its worker store;
-    # the controller folds reconcile observations through it.
+    # the controller applies reconcile health observations through it.
     health: WorkerHealthTracker = field(init=False, repr=False)
     # One shared scheduler instance reused across cycles; the controller supplies
     # the complete per-tick workspace.
@@ -187,7 +191,7 @@ class RpcTaskBackend:
 
         Run at controller start and after a DB reopen (checkpoint restore): each
         owned worker is heartbeat-seeded so it comes up ACTIVE, then accrues
-        failures through the reconcile fold and is reaped once over threshold.
+        failures through controller health accounting and is reaped once over threshold.
         """
         assert self._store is not None, "RpcTaskBackend.seed_liveness called before worker store attached"
         worker_ids = self._store.worker_ids()
@@ -262,7 +266,7 @@ class RpcTaskBackend:
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
         return run_scheduling_decision(self._scheduler, request, zone_capabilities)
 
-    def _observe_fleet(self) -> WorkerFleetObservation:
+    def _observe_fleet(self) -> ReconcileObservation:
         """Source this backend's placement, fan the Reconcile RPC out, classify liveness.
 
         The reconcile snapshot (worker addresses + reconcile rows + job specs) comes
@@ -278,8 +282,9 @@ class RpcTaskBackend:
           UNREACHABLE so the worker is eventually reaped, but the connection is
           fine so the stub is kept.
 
-        Pure observation — it never decides a worker dead; :meth:`reconcile` folds
-        these signals into liveness.
+        The backend translates worker-protocol replies into exact task state and
+        reachability facts. It never decides a worker dead or applies Iris task
+        policy; the controller handles both after this I/O returns.
         """
         assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
@@ -289,14 +294,17 @@ class RpcTaskBackend:
             return await self._reconcile_one(sem, plan, snapshot.worker_addresses[plan.worker_id])
 
         results = _fan_out(plans, self.parallelism, _one)
+        observed_at = Timestamp.now()
 
-        worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
-        transport_events: list[WorkerHealthEvent] = []
-        for plan, result in worker_results:
+        task_updates = []
+        worker_health_events: list[WorkerHealthEvent] = []
+        for plan, result in zip(plans, results, strict=True):
             address = snapshot.worker_addresses[plan.worker_id]
             if result.error is not None:
-                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                logger.warning("Reconcile RPC failed for worker %s at %s: %s", plan.worker_id, address, result.error)
+                worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
+                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
             elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
                 # Misrouted reconcile: a *different* live worker answered at this
                 # address. GCP recycles a deleted worker's internal IP onto a new
@@ -312,20 +320,23 @@ class RpcTaskBackend:
                     address,
                     result.responder_worker_id,
                 )
-                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
             elif not result.self_healthy:
-                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
             else:
-                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return WorkerFleetObservation(worker_results=worker_results, transport_events=transport_events)
+                worker_health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+                task_updates.extend(task_updates_from_result(plan, result, observed_at=observed_at))
+        return ReconcileObservation(task_updates=task_updates, worker_health_events=worker_health_events)
 
-    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
-        """Return raw worker runtime and transport observations.
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
+        """Return exact task state and worker reachability observations.
 
         ``request`` is the Kubernetes dispatch shape and is unused here; the
-        worker backend sources its fleet plan from the bound store. No Iris
-        transition or liveness policy runs in this method.
+        worker backend sources its fleet plan from the bound store and translates
+        the worker protocol into the shared backend observation vocabulary. No
+        Iris transition or liveness policy runs in this method.
         """
         assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
         return self._observe_fleet()

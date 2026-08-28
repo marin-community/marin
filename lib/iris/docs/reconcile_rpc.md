@@ -31,8 +31,8 @@ sequenceDiagram
     participant Pure as reconcile/worker.py<br/>build_reconcile_plans()
     participant Prov as RpcTaskBackend<br/>reconcile()
     participant W as Worker
-    participant Coord as reconcile/coordinator.py
-    participant Apply as ReconcileState
+    participant Apply as Controller reconcile operation
+    participant State as ReconcileState
 
     Loop->>Prov: ReconcileRequest
     Prov->>Store: reconcile snapshot
@@ -40,12 +40,14 @@ sequenceDiagram
     Pure-->>Prov: list[WorkerReconcilePlan]
     Prov->>W: Reconcile(ReconcileRequest)
     W-->>Prov: ReconcileResponse(observed, health)
-    Prov-->>Loop: WorkerFleetObservation
-    Loop->>Coord: fold observation
-    Coord->>Store: fresh transition snapshot
-    Coord->>Apply: per-worker (plan, result)
-    Apply-->>Coord: transition effects
-    Coord-->>Loop: effects + teardown work
+    Prov-->>Loop: ReconcileObservation<br/>(exact task updates + health events)
+    Loop->>Apply: apply_observation()
+    Apply->>Store: fresh transition snapshot
+    Apply->>State: exact task updates
+    State-->>Apply: transition effects
+    Apply->>Apply: apply health events
+    Apply-->>Loop: effects + reaped workers
+    Loop->>Prov: teardown(reaped workers), after commit
 ```
 
 ## Pure compute vs. transport
@@ -58,12 +60,13 @@ to produce one `WorkerReconcilePlan` per worker (the
 `ReconcileRequest` proto is built once inside the plan). The plans flow
 through `RpcTaskBackend.reconcile`
 ([`backends/rpc/backend.py`](../src/iris/cluster/backends/rpc/backend.py))
-which fans them out concurrently, capped by
-`self.parallelism`, and returns a neutral `WorkerFleetObservation`. The
-controller-owned coordinator reloads current state after that I/O; the apply layer
-([`ReconcileState.reconcile`](../src/iris/cluster/controller/reconcile/batches.py))
-consumes those results and exact Attempt UIDs prevent late observations from
-mutating a recreated workload.
+which fans them out concurrently, capped by `self.parallelism`. The backend
+translates worker-protocol responses into the same `TaskUpdate` records returned
+by a direct provider and returns `ReconcileObservation`. The controller-owned
+[`apply_observation`](../src/iris/cluster/controller/ops/reconcile.py) applies
+task and worker-health facts once; its task operation reloads current state after
+that I/O, and exact Attempt UIDs prevent late observations from mutating a
+recreated workload.
 
 ## Worker side
 

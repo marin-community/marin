@@ -14,15 +14,15 @@ from iris.cluster.controller.backend import (
     BackendDescriptor,
     BackendKind,
     BackendRuntime,
-    DirectTaskObservation,
     ProviderUnsupportedError,
+    ReconcileObservation,
     ReconcileRequest,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate, TaskUpdate
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import delete_job, set_user_budget
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
@@ -54,10 +54,10 @@ class FakeDirectProvider:
             kind=BackendKind.KUBERNETES,
         )
         self.sync_calls: list[ReconcileRequest] = []
-        self.sync_result = DirectTaskObservation()
+        self.sync_result = ReconcileObservation()
         self.closed = False
 
-    def reconcile(self, request: ReconcileRequest) -> DirectTaskObservation:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         self.sync_calls.append(request)
         return self.sync_result
 
@@ -459,7 +459,7 @@ def test_drain_executing_goes_to_running_tasks(state):
 
 
 # =============================================================================
-# Transition-level tests: apply_dispatch_updates
+# Transition-level tests: apply_reconcile_updates
 # =============================================================================
 
 
@@ -624,7 +624,7 @@ def test_apply_ignores_stale_attempt(state):
         commit_observed_dispatch_updates(
             cur,
             [
-                ObservedTaskUpdate(
+                TaskUpdate(
                     attempt_uid=AttemptUid(batch.tasks_to_run[0].attempt_uid),
                     task_id=task_id,
                     attempt_id=attempt_id + 99,
@@ -658,7 +658,7 @@ def test_apply_ignores_observation_from_recreated_job(state):
         commit_observed_dispatch_updates(
             cur,
             [
-                ObservedTaskUpdate(
+                TaskUpdate(
                     attempt_uid=AttemptUid(original.attempt_uid),
                     task_id=task_id,
                     attempt_id=0,

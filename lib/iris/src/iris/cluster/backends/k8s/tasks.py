@@ -42,14 +42,14 @@ from iris.cluster.controller.backend import (
     BackendDescriptor,
     BackendRuntime,
     DeviceCapacity,
-    DirectTaskObservation,
     ProviderError,
+    ReconcileObservation,
     ReconcileRequest,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
-from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import (
@@ -1197,7 +1197,7 @@ def _pod_failure_state(pod: dict) -> int:
     return job_pb2.TASK_STATE_FAILED
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> ObservedTaskUpdate:
+def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     A control-plane disruption (Kueue preemption, node drain, API eviction) is
@@ -1225,7 +1225,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     }
 
     if phase == "Pending":
-        return ObservedTaskUpdate(
+        return TaskUpdate(
             attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
@@ -1235,7 +1235,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         )
 
     if phase == "Running":
-        return ObservedTaskUpdate(
+        return TaskUpdate(
             attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
@@ -1245,7 +1245,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         )
 
     if phase == "Succeeded":
-        return ObservedTaskUpdate(
+        return TaskUpdate(
             attempt_uid=AttemptUid(entry.attempt_uid),
             task_id=task_id,
             attempt_id=attempt_id,
@@ -1265,7 +1265,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         else _pod_failure_state(pod)
     )
     terminal_reason = _extract_terminal_reason(pod)
-    return ObservedTaskUpdate(
+    return TaskUpdate(
         attempt_uid=AttemptUid(entry.attempt_uid),
         task_id=task_id,
         attempt_id=attempt_id,
@@ -1294,7 +1294,7 @@ def _extract_exit_code(pod: dict) -> int | None:
     return None
 
 
-def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> ObservedTaskUpdate:
+def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
     terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
@@ -2466,9 +2466,9 @@ class K8sTaskProvider:
     def seed_liveness(self) -> None:
         """No-op: a cluster backend tracks no Iris worker liveness to seed."""
 
-    def reconcile(self, request: ReconcileRequest) -> DirectTaskObservation:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         """Converge Pods and return exact task-attempt observations."""
-        return DirectTaskObservation(updates=self.sync(request))
+        return ReconcileObservation(task_updates=self.sync(request))
 
     def collect_garbage(self) -> None:
         """Run one garbage-collection pass for eligible Kubernetes resources."""
@@ -2481,7 +2481,7 @@ class K8sTaskProvider:
         """No-op: a cluster backend tracks no Iris workers to garbage-collect."""
         return 0
 
-    def sync(self, request: ReconcileRequest) -> list[ObservedTaskUpdate]:
+    def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -2505,7 +2505,7 @@ class K8sTaskProvider:
         if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
             self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
 
-        apply_failures: list[ObservedTaskUpdate] = []
+        apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
             try:
                 self._apply_pod(run_req)
@@ -2517,7 +2517,7 @@ class K8sTaskProvider:
                 # remaining applies/polls). Fail the task terminally with the reason
                 # instead of the retryable WORKER_FAILED used for transient apply loss.
                 apply_failures.append(
-                    ObservedTaskUpdate(
+                    TaskUpdate(
                         attempt_uid=AttemptUid(run_req.attempt_uid),
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
@@ -2533,7 +2533,7 @@ class K8sTaskProvider:
                 # without charging the preemption budget) and the next sync
                 # re-applies. The raw k8s error is logged above.
                 apply_failures.append(
-                    ObservedTaskUpdate(
+                    TaskUpdate(
                         attempt_uid=AttemptUid(run_req.attempt_uid),
                         task_id=JobName.from_wire(run_req.task_id),
                         attempt_id=run_req.attempt_id,
@@ -3113,7 +3113,7 @@ class K8sTaskProvider:
         entry: RunningTaskEntry,
         pod_name: str,
         pod: dict,
-    ) -> ObservedTaskUpdate | None:
+    ) -> TaskUpdate | None:
         policy = self.pods.task_outputs
         if policy is None or pod.get("status", {}).get("phase") != "Running" or not _task_container_terminated(pod):
             return None
@@ -3150,7 +3150,7 @@ class K8sTaskProvider:
         cached_pods: list[dict],
         workloads: list[dict] | None = None,
         nodes: list[dict] | None = None,
-    ) -> list[ObservedTaskUpdate]:
+    ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
         Uses the pre-fetched active-pods list (terminal pods excluded by field
@@ -3185,7 +3185,7 @@ class K8sTaskProvider:
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         nodes_by_name = {node.get("metadata", {}).get("name", ""): node for node in nodes or []}
         workload_index = _kueue_workload_index(workloads or [])
-        updates: list[ObservedTaskUpdate] = []
+        updates: list[TaskUpdate] = []
 
         # Resolve running tasks whose pod has left the active list (completed or
         # vanished) by scanning terminal pods, instead of a per-pod GET each. Only
@@ -3243,7 +3243,7 @@ class K8sTaskProvider:
                 if count < _POD_UNRESOLVED_GRACE_CYCLES:
                     metadata = pod.get("metadata", {}) if pod is not None else {}
                     updates.append(
-                        ObservedTaskUpdate(
+                        TaskUpdate(
                             attempt_uid=AttemptUid(entry.attempt_uid),
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
@@ -3271,7 +3271,7 @@ class K8sTaskProvider:
                         else job_pb2.TASK_STATE_WORKER_FAILED
                     )
                     updates.append(
-                        ObservedTaskUpdate(
+                        TaskUpdate(
                             attempt_uid=AttemptUid(entry.attempt_uid),
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,
@@ -3286,7 +3286,7 @@ class K8sTaskProvider:
                     terminal_reason = disruption_reason or _POD_UNKNOWN_TERMINAL_REASON
                     metadata = pod.get("metadata", {})
                     updates.append(
-                        ObservedTaskUpdate(
+                        TaskUpdate(
                             attempt_uid=AttemptUid(entry.attempt_uid),
                             task_id=entry.task_id,
                             attempt_id=entry.attempt_id,

@@ -35,13 +35,12 @@ from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
-    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
@@ -191,26 +190,17 @@ class ScheduleResult:
 
 
 @dataclass(frozen=True)
-class WorkerFleetObservation:
-    """Raw worker RPC outcomes from one reconcile fan-out.
+class ReconcileObservation:
+    """Backend facts from one bounded reconciliation pass.
 
-    The backend reports transport/runtime facts only. The controller reloads a
-    fresh transition snapshot, resolves exact Attempt UIDs, applies Iris state
-    policy, and folds liveness after this I/O returns.
+    Every backend reports exact task-attempt state through ``task_updates``.
+    Backends that communicate with Iris workers may additionally report worker
+    reachability through ``worker_health_events``. The controller applies both
+    collections without inspecting the backend implementation or kind.
     """
 
-    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = field(default_factory=list)
-    transport_events: list[WorkerHealthEvent] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class DirectTaskObservation:
-    """Exact task-attempt observations from a direct execution provider."""
-
-    updates: list[ObservedTaskUpdate] = field(default_factory=list)
-
-
-type ReconcileObservation = WorkerFleetObservation | DirectTaskObservation
+    task_updates: list[TaskUpdate] = field(default_factory=list)
+    worker_health_events: list[WorkerHealthEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -486,10 +476,10 @@ class TaskBackend(Protocol):
     def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         """Converge external execution and return neutral observations.
 
-        Bounded I/O only. Worker-daemon backends return raw per-worker RPC
-        outcomes and transport reachability. Kubernetes backends apply/poll Pods
-        and return exact task-attempt observations. The controller owns snapshot
-        reload, state-machine policy, liveness folding, and persistence.
+        Bounded I/O only. Every backend normalizes its execution mechanism into
+        exact task-attempt updates and optional worker-health events. The
+        controller owns snapshot reload, state-machine policy, liveness
+        accounting, and persistence.
         """
         ...
 

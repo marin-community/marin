@@ -55,6 +55,7 @@ from iris.cluster.backends.rpc.backend import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller import ops, reads
+from iris.cluster.controller.backend import plans_from_snapshot
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
@@ -64,8 +65,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.ops.task import Assignment, apply_reconcile_updates
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import (  # noqa: F401
@@ -80,6 +80,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     WorkerReconcileResult,
     build_reconcile_plans,
+    task_updates_from_result,
 )
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
@@ -490,47 +491,36 @@ def clone_db(source: ControllerDB) -> ControllerDB:
 # ---------------------------------------------------------------------------
 
 
+def _apply_worker_results(
+    source: CursorTransitionReader,
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
+    *,
+    now: Timestamp,
+):
+    updates = [
+        update for plan, result in plan_results for update in task_updates_from_result(plan, result, observed_at=now)
+    ]
+    return apply_reconcile_updates(source, updates, now=now)
+
+
 def _build_reconcile_inputs(
     db: ControllerDB,
 ) -> list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]:
     """Per active worker: a (plan, result) pair where the plan lists the worker's
     attempts as desired and the result reports each RUNNING. Drives the
-    production reconcile-observation verb (``ops.worker.apply_reconcile``).
+    production reconcile-observation verb (``ops.task.apply_reconcile_updates``).
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
     with db.read_snapshot() as tx:
-        workers = reads.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
-    active_states = list(ACTIVE_TASK_STATES)
+        plans = plans_from_snapshot(reads.load_control_snapshot(tx, health, scan_timeouts=False))
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
-    for w in workers:
-        with db.read_snapshot() as tx:
-            rows = tx.execute(
-                select(task_attempts_table.c.attempt_uid)
-                .select_from(
-                    task_attempts_table.join(
-                        tasks_table,
-                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                    )
-                )
-                .where(
-                    tasks_table.c.current_worker_id == w.worker_id,
-                    tasks_table.c.state.in_(active_states),
-                )
-            ).all()
-        uids = [row.attempt_uid for row in rows]
-        desired = [
-            worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()) for uid in uids
-        ]
+    for plan in plans:
         observations = [
-            worker_pb2.Worker.AttemptObservation(attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING) for uid in uids
+            worker_pb2.Worker.AttemptObservation(attempt_uid=row.attempt_uid, state=job_pb2.TASK_STATE_RUNNING)
+            for row in plan.attempts
         ]
-        plan = WorkerReconcilePlan(
-            worker_id=w.worker_id,
-            request=worker_pb2.Worker.ReconcileRequest(worker_id=str(w.worker_id), desired=desired),
-        )
-        result = WorkerReconcileResult(worker_id=w.worker_id, observations=observations, error=None)
+        result = WorkerReconcileResult(worker_id=plan.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))
     return plan_results
 
@@ -1668,7 +1658,7 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_reconcile on a victim thread while configurable
+    """Run task-observation apply on a victim thread while configurable
     write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
@@ -1693,7 +1683,7 @@ def _run_apply_under_contention(
                 t0 = time.perf_counter()
                 with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
-                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    effects = _apply_worker_results(CursorTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -2686,11 +2676,11 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     # is what t2..t3 times. The stub implements only the fan-out read surface (it
     # never folds liveness or tears down), so it is cast to the full BackendWorkerStore.
     provider._store = cast(BackendWorkerStore, _PrebuiltWorkerSource(snapshot))
-    worker_results = provider._observe_fleet().worker_results
+    observation = provider._observe_fleet()
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:
-        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        effects = apply_reconcile_updates(CursorTransitionReader(cur), observation.task_updates, now=now)
         commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000

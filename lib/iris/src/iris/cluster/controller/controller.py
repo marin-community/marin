@@ -75,18 +75,15 @@ from iris.cluster.controller.native_proxy_metrics import (
     install_native_proxy_metrics,
     uninstall_native_proxy_metrics,
 )
-from iris.cluster.controller.ops.task import (
-    Assignment,
-    finalize,
-)
+from iris.cluster.controller.ops.reconcile import apply_observation
+from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile import ControllerEffects, dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.coordinator import ReconcileFold, fold_reconcile
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
@@ -619,7 +616,7 @@ class Controller:
         The unified control tick drives schedule -> reconcile -> autoscale;
         the reconcile phase is the sole reconcile + liveness channel — it
         reconciles every active worker (worker-daemon backends) or drains + syncs
-        pods (cluster backends), folds the backend's observed health events, and
+        pods (cluster backends), applies the backend's observed health events, and
         tears down workers that cross the failure threshold.
         """
         if self._backend is None:
@@ -897,7 +894,7 @@ class Controller:
         """Single driver: schedule -> reconcile -> autoscale as phases of one tick.
 
         Each iteration builds one read snapshot, runs the phases that are due (or,
-        on a wake, a schedule-only mini-tick), folds backend-observed health, and
+        on a wake, a schedule-only mini-tick), applies backend-observed health, and
         commits through a single end-of-tick write transaction. Wakes every
         ``poll_interval`` (the reconcile cadence) or sooner on a submit/wake, so
         the per-phase cadences match the legacy three-loop structure.
@@ -975,17 +972,21 @@ class Controller:
         if run_schedule and inputs.queued_federation:
             federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
-        recon_result: ReconcileFold | None = None
+        recon_effects: ControllerEffects | None = None
+        reaped_workers: list[WorkerId] = []
         timeout_decisions: list[TerminalDecision] = []
         if run_reconcile:
             timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
             observation = self.backend.reconcile(inputs.reconcile_request)
-            recon_result = fold_reconcile(
+            application = apply_observation(
                 DbTransitionReader(self._db),
-                observation,
+                observation.task_updates,
+                observation.worker_health_events,
                 worker_health=self.backend.health,
                 now=Timestamp.now(),
             )
+            recon_effects = application.effects
+            reaped_workers = application.reaped_workers
 
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
@@ -995,7 +996,7 @@ class Controller:
         confirmed_promotions = self._commit_tick(
             sched_result=sched_result,
             backend_pins=backend_pins,
-            recon_result=recon_result,
+            recon_effects=recon_effects,
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
             auto_result=auto_result,
@@ -1032,9 +1033,9 @@ class Controller:
 
         # Reaped workers are torn down only after their task transitions commit,
         # so teardown's fresh snapshot sees finalized attempts and skips them.
-        if recon_result is not None and recon_result.dead_workers:
+        if reaped_workers:
             self.backend.teardown(
-                recon_result.dead_workers,
+                reaped_workers,
                 reason=_WORKER_RECONCILE_TEARDOWN_REASON,
             )
 
@@ -1114,7 +1115,7 @@ class Controller:
         *,
         sched_result: ScheduleResult | None,
         backend_pins: list[tuple[JobName, str]],
-        recon_result: ReconcileFold | None,
+        recon_effects: ControllerEffects | None,
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_result: AutoscaleResult | None,
@@ -1138,7 +1139,7 @@ class Controller:
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions or backend_pins
         )
-        has_recon = recon_result is not None and not recon_result.effects.is_empty
+        has_recon = recon_effects is not None and not recon_effects.is_empty
         if not (
             has_sched
             or has_recon
@@ -1166,8 +1167,8 @@ class Controller:
             for promotion in federation_promotions:
                 if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
                     confirmed.append(promotion)
-            if has_recon and recon_result is not None:
-                commit_effects(cur, recon_result.effects)
+            if has_recon and recon_effects is not None:
+                commit_effects(cur, recon_effects)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, now=now)
             if pending_kicks:

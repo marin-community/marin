@@ -468,7 +468,7 @@ def test_sync_mirrors_attempt_terminal_reason(tmp_path, log_client):
 
 def _dispatch_building(peer_state, task_id: JobName, attempt_id: int, status_message: str | None) -> None:
     """Land a direct-provider (k8s-style) BUILDING observation on the peer, carrying
-    ``status_message``. Models the K8sTaskProvider path (``record_updates``), which —
+    ``status_message``. Models the K8sTaskProvider observation path, which —
     unlike the worker-observation wire — carries the message."""
     with peer_state._db.transaction() as cur:
         commit_dispatch_updates(
