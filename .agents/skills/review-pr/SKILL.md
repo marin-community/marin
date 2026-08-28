@@ -6,13 +6,13 @@ allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), 
 
 Provide a code review for the given pull request.
 
-**Agent assumptions (applies to all agents and subagents):**
+**Agent assumptions (applies to all agents and sub-agents):**
 - All tools are functional. Do not test tools or make exploratory calls.
 - Only call a tool if it is required to complete the task.
 
 Follow these steps precisely:
 
-1. Launch a fast scout agent to check if any of the following are true:
+1. Launch a fast scout sub-agent to check if any of the following are true:
    - The PR is closed
    - The PR is a draft
    - The PR does not need code review (e.g. automated PR, trivial obviously-correct change)
@@ -24,11 +24,11 @@ Follow these steps precisely:
 
    If any condition is true, stop. Still review agent-generated PRs.
 
-2. Launch a fast scout agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
+2. Launch a fast scout sub-agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
    - The root CLAUDE.md and AGENTS.md files, if they exist
    - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
-3. Launch a deep-review agent to view the PR and return a summary of the changes. The
+3. Launch a deep-review sub-agent to view the PR and return a summary of the changes. The
    same agent also checks the PR title and description against
    `.agents/skills/writing-style/pull-requests.md` and returns any problems it
    finds:
@@ -55,11 +55,11 @@ Follow these steps precisely:
    the absence of markdown. Flag descriptions that read like a filled-in form or
    implementation report rather than a commit message.
 
-4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
+4. Launch four sub-agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "instruction-following", "bug").
 
-   Agents 1 + 2: deep-review CLAUDE.md/AGENTS.md compliance agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
+   Sub-agents 1 and 2: deep-review instruction-following reviewers. Audit changes against scoped CLAUDE.md and AGENTS.md instructions. When evaluating a file, only consider instruction files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
 
-   Agents 3 + 4: deep-review bug agents (parallel). Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
+   Sub-agents 3 and 4: deep-review bug reviewers. Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
 
    **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
    - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
@@ -73,13 +73,38 @@ Follow these steps precisely:
 
    If you are not certain an issue is real, do not flag it. False positives erode trust.
 
-   Tell each subagent the PR title and description for author-intent context.
+   Tell each sub-agent the PR title and description for author-intent context.
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use deep-review subagents for both bugs/logic and CLAUDE.md violations.
+5. Review maintainability with at most four limited-attention sub-agents. Rank
+   changed, human-authored areas by design impact. Prefer public interfaces,
+   invariants, state transitions, abstraction boundaries, policy, and prose that
+   makes novel claims. Skip generated files, formatting, mechanical renames,
+   data-only changes, and repetitive call-site edits.
 
-6. Filter out any issues not validated in step 5. The remainder is the high-signal review list.
+   Give each sub-agent one selected file or cohesive hunk, with only its path and a
+   small amount of local context. Do not give it the PR description, related
+   files, or review summaries, and do not let it open more context.
+
+   Prefer shallow, concrete code that can be copied, deleted, and recombined
+   locally. Treat small duplication as useful when it keeps variants independent.
+   Flag abstractions that force unrelated variants through shared layers or
+   coordinated edits.
+
+   Ask the sub-agent to privately simulate reasonable future changes near the edited
+   code. Use the exercise to find hidden assumptions, distant coupling, or
+   unneeded abstraction and indirection that constrain future work. The final
+   finding must identify the structural obstacle and explain how it reduces
+   flexibility. Omit the hypothetical edit from the review. Do not flag
+   unfamiliar code, personal taste, or broad requests to simplify. Return only
+   the strongest finding, or no finding.
+
+6. Validate each finding from step 5 against the PR description and broader code
+   context. Confirm that it is real, impactful, introduced by the PR, and still
+   blocks a plausible future change. Omit the simulated change from the final
+   review. The high-signal review list is the issues from step 4 plus the
+   validated findings from step 5.
 
 7. Emit a stats event for this review (best-effort — never retry, never
    surface failures to the user). This step runs unconditionally, *before*
@@ -104,7 +129,7 @@ Follow these steps precisely:
    EOF
    ```
 
-   - `<category>` is one of: `bug`, `claude-md-adherence`.
+   - `<category>` is one of: `bug`, `instruction-following`, `maintainability`.
    - One `findings` row per validated issue. Pass `"findings": []` if there
      were none — the empty row in the `invocations` table is the
      "tool ran with no signal" datapoint we want. `finding_count` is derived
@@ -112,7 +137,7 @@ Follow these steps precisely:
 
 8. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.
-   - If no issues were found, state: "No issues found. Checked for bugs and CLAUDE.md compliance."
+   - If no issues were found, state: "No issues found."
    - Separately, report any PR-description problems from step 3.
 
    If `--comment` argument was NOT provided, stop here. Do not post any GitHub comments.
@@ -140,14 +165,7 @@ Follow these steps precisely:
 
     **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
 
-Use this list when evaluating issues in Steps 4 and 5 (these are false positives, do NOT flag):
-
-- Pre-existing issues
-- Something that appears to be a bug but is actually correct
-- Pedantic nitpicks that a senior engineer would not flag
-- Issues that a linter will catch (do not run the linter to verify)
-- General code quality concerns (e.g., lack of test coverage, general security issues) unless explicitly required in CLAUDE.md
-- Issues mentioned in CLAUDE.md but explicitly silenced in the code (e.g., via a lint ignore comment)
+Do not flag pre-existing issues or nitpicks.
 
 Notes:
 
@@ -161,7 +179,7 @@ Notes:
 
 ## Code review
 
-No issues found. Checked for bugs and CLAUDE.md compliance.
+No issues found.
 
 <!-- marin-correctness-review -->
 
