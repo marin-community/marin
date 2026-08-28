@@ -6,13 +6,13 @@ caveat.
 
 ## Use Plain Technical English
 
-Apply Orwell's rules of writing and Simple Technical English. Prefer short,
-active sentences, common concrete words, one action or claim per sentence, and
-one term for each concept. Cut words that add no fact. Avoid stale metaphors and
-idioms. Keep specialized terms when they improve precision, and explain
-unfamiliar terms. If a term's origin or exact meaning is unclear, omit it or
-research it until you can explain it to other readers. Repeating jargon solely
-because another source used it hides uncertainty and spreads undefined
+Apply Orwell's rules of writing and Simplified Technical English (ASD-STE100).
+Prefer short, active sentences, common concrete words, one action or claim per
+sentence, and one term for each concept. Cut words that add no fact. Avoid stale
+metaphors and idioms. Keep specialized terms when they improve precision, and
+explain unfamiliar terms. If a term's origin or exact meaning is unclear, omit
+it or research it until you can explain it to other readers. Repeating jargon
+solely because another source used it hides uncertainty and spreads undefined
 language. Break a rule when following it would make the prose less clear or
 accurate.
 
