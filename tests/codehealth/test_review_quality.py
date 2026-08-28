@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from infra.codehealth import review
+from infra.codehealth import review_quality as review
 
 
 def _pull_request() -> dict:

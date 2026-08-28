@@ -162,7 +162,7 @@ config:
       ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
-      workflowRef: marin-community/marin/.github/workflows/ops-weaver-review.yaml@refs/heads/main
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-review.yaml@refs/heads/main
       profile: pr-review
       serviceTag: pr-review
       event: pull_request_target

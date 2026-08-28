@@ -1,11 +1,11 @@
 name: "Ops - Fork Ferry"
 
-# Ask Weaver to refresh each supported fork unit weekly. The refresh-fork skill owns the migration;
-# this workflow only names the forks and launches one Weaver session per unit.
+# Ask Loom to refresh each supported fork unit weekly. The refresh-fork skill owns the migration;
+# this workflow only names the forks and launches one Loom session per unit.
 #
 # The trigger is a Loom run, not a GitHub issue: the job mints a GitHub Actions OIDC token
 # (audience = Loom), exchanges it for a short-lived Loom token at /api/auth/federate, and POSTs
-# /api/runs. Loom trusts this workflow through a `githubFederation` mapping (repository + workflow
+# /api/runs/create. Loom trusts this workflow through a `githubFederation` mapping (repository + workflow
 # ref -> a profile), the same federated path the Grafana operator bridge uses from GCE. No stored
 # PAT and no coordination issues.
 
@@ -50,7 +50,7 @@ jobs:
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
 
-      - name: Launch a Weaver refresh session for ${{ matrix.unit }}
+      - name: Launch a Loom refresh session for ${{ matrix.unit }}
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
         uses: ./.github/actions/launch-loom-run
         with:

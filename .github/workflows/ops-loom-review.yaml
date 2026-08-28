@@ -1,7 +1,7 @@
-name: "Ops - Weaver Review"
+name: "Ops - Loom Review"
 
 # This workflow runs from the trusted default branch and never checks out or
-# executes pull-request code. The Weaver session starts from the immutable head
+# executes pull-request code. The Loom session starts from the immutable head
 # SHA after Loom verifies this workflow's OIDC identity.
 on:
   pull_request_target:
@@ -43,7 +43,7 @@ jobs:
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
 
-      - name: Launch Weaver review
+      - name: Launch Loom review
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}

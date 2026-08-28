@@ -64,4 +64,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run --frozen python -m infra.codehealth.review aggregate --days 7
+        run: uv run --frozen python -m infra.codehealth.review_quality aggregate --days 7

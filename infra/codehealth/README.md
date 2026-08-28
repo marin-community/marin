@@ -12,8 +12,8 @@ holds the row types and is the single definition of the layout.
 | --- | --- | --- |
 | `codehealth.autolint.invocations` | `pre-commit.py --review` / `/code-review` / `/review-pr` run | `log_stats.py` |
 | `codehealth.autolint.findings` | finding emitted by a run | `log_stats.py` |
-| `codehealth.autolint.human_comments` | classified human review comment | `review.py aggregate` |
-| `codehealth.autolint.pr_review_outcomes` | pull request, rolling up the two above | `review.py aggregate` |
+| `codehealth.autolint.human_comments` | classified human review comment | `review_quality.py aggregate` |
+| `codehealth.autolint.pr_review_outcomes` | pull request, rolling up the two above | `review_quality.py aggregate` |
 
 `invocations` and `findings` join on `invocation_id`. A run that emitted nothing
 still gets an `invocations` row with `finding_count = 0`: that is the signal that
@@ -22,7 +22,7 @@ computed from the table.
 
 The comment tables are append-only and the aggregator re-emits a pull request's
 rows whenever its window covers that pull request again, so a read collapses to
-the newest row per natural key using the server-assigned `seq`. `review.py`
+the newest row per natural key using the server-assigned `seq`. `review_quality.py`
 exposes that as `LATEST_HUMAN_COMMENTS_SQL` and `LATEST_PR_OUTCOMES_SQL`; a
 query that reads the namespace directly will see superseded rows.
 
@@ -57,10 +57,10 @@ identity to `linter.py` through `MARIN_REVIEW_TRIGGER`, `MARIN_REVIEW_PR_NUMBER`
 and `MARIN_REVIEW_HEAD_SHA`. Unset, they fall back to `local` and local git,
 which is correct on a developer's machine.
 
-`review.py aggregate` classifies comments from human reviewers on recently
+`review_quality.py aggregate` classifies comments from human reviewers on recently
 merged pull requests. Bot comments and agent-authored comments carrying Marin's
 required `🤖` prefix are excluded. The command appends the two comment tables;
-`review.py report` renders all four
+`review_quality.py report` renders all four
 into a markdown digest. Inline comments carry their GitHub diff hunk into the
 classifier. Review summaries and issue comments receive a bounded view of the
 pull request's changed-file patches. Both commands need `gh auth login`, and
@@ -76,8 +76,8 @@ Scheduled publication belongs to the refinement job that consumes these rows;
 Run either command from the repository root:
 
 ```bash
-uv run python -m infra.codehealth.review aggregate --days 7
-uv run python -m infra.codehealth.review report --days 30
+uv run python -m infra.codehealth.review_quality aggregate --days 7
+uv run python -m infra.codehealth.review_quality report --days 30
 ```
 
 ## Access

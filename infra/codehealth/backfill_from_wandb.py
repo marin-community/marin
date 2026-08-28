@@ -7,7 +7,7 @@ The code-health tables lived in a single persistent W&B run
 (``marin-community/marin-review-stats``) as four flat ``wandb.Table``
 artifacts, re-logged in full on every append. This replays them into the
 ``codehealth.autolint.*`` Finelog namespaces that ``log_stats.py`` and
-``review.py`` now write directly.
+``review_quality.py`` now writes directly.
 
 Defaults to a dry run that reports what it would write. Run it once against
 each target; a second run appends the same rows again, because Finelog

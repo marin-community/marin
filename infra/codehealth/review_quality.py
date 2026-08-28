@@ -78,7 +78,7 @@ from .review_tables import (
     row_count,
 )
 
-logger = logging.getLogger("codehealth.review")
+logger = logging.getLogger("codehealth.review_quality")
 
 DEFAULT_REPO = "marin-community/marin"
 # Balance classification quality and cost for bounded, schema-constrained

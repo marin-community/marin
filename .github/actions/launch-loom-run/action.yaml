@@ -75,8 +75,11 @@ runs:
           | if $channel == "" then . else .channel = $channel end
           | if $base == "" then . else .session.base = $base end
           | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end')
+        # Workload federation and runs.create are API-only operations in Loom's
+        # command registry, so automation uses their canonical REST endpoints.
         curl --fail-with-body --silent --show-error \
-          -X POST "$LOOM_URL/api/runs" \
+          -X POST \
           -H "Authorization: Bearer $loom_token" \
           -H 'Content-Type: application/json' \
-          -d "$request"
+          -d "$request" \
+          "$LOOM_URL/api/runs/create"
