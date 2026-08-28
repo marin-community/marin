@@ -41,14 +41,15 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_TAG,
     harrier_mix_2026_08_18_data_config,
 )
-from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_mfu_test import (
+from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_MIXED_PRECISION,
+    HERO_TENSORSTORE_CACHE_BYTES,
     HeroThroughputResult,
-    _validation_datasets,
+    validation_datasets,
 )
-from experiments.grug.moe_hero_ep.launch_scaling_ladder import TENSORSTORE_CACHE_BYTES, TOKENS_PER_ACTIVE_PARAM
+from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
+from experiments.grug.moe_hero_ep.launch_scaling_ladder import TOKENS_PER_ACTIVE_PARAM
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import (
     _EP_CAPACITY_FACTOR,
     SEQ_LEN,
@@ -188,7 +189,7 @@ def build_h100_ladder_run(
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
-    validation = [*_validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
+    validation = [*validation_datasets(), *uncheatable_datasets(tokenizer=marin_tokenizer).values()]
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
@@ -255,7 +256,7 @@ def build_h100_ladder_run(
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),
-            tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
+            tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
             eval=GrugEvalConfig(

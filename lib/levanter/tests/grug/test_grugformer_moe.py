@@ -35,9 +35,8 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
-    _compact_by_keep_mask,
-    _expand_from_keep_mask,
-    _shard_a2a_params,
+    _clip_receiver_group_sizes,
+    _expert_granular_a2a_params,
     moe_mlp,
 )
 from levanter.utils.activation import ActivationFunctionEnum
@@ -60,6 +59,12 @@ def _make_dense_mesh() -> Mesh:
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:
+    """An expert-parallel mesh, or None when the runtime has too few devices to build one.
+
+    Callers skip on None. Under CI's single CPU device that silences every test below that runs a
+    backend end to end, so those tests assert nothing on a green run. The repository has no marker
+    or fixture for declaring a device requirement; #8704 tracks adding one.
+    """
     devices = jax.devices()
     if len(devices) < 2 or len(devices) % 2 != 0:
         return None
@@ -940,24 +945,136 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(implem
     assert result.returncode == 0, result.stderr
 
 
-def test_shard_a2a_params_uses_sender_side_output_offsets():
-    shard_counts = jnp.array(
-        [
-            [1, 7, 2],
-            [3, 5, 4],
-            [6, 8, 9],
-        ],
-        dtype=jnp.int32,
-    )
+def _simulate_ragged_a2a(operands, outputs, params):
+    """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
 
-    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
-        shard_counts, jnp.array(1, dtype=jnp.int32)
-    )
+    Checks the receiver's ``recv_sizes`` against what each sender actually writes. The real
+    collective sizes incoming transfers from that vector, so building it from the wrong direction
+    -- the easiest mistake in this arithmetic, since the two are transposes of one another -- moves
+    the right bytes here but mis-sizes the receive on a real multi-shard run.
+    """
+    num_shards = len(operands)
+    for sender in range(num_shards):
+        in_off, send, out_off, _ = (np.asarray(a) for a in params[sender])
+        slices_per_device = len(in_off) // num_shards
+        for i in range(len(in_off)):
+            dst = i // slices_per_device
+            n = send[i]
+            recv = np.asarray(params[dst].recv_sizes)[sender * slices_per_device + i % slices_per_device]
+            assert recv == n, f"recv_sizes {recv} != send_sizes {n} for update {i} from {sender} to {dst}"
+            outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
 
-    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([3, 5, 4], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 3, 8], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([7, 5, 8], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
+
+def test_expert_granular_a2a_params_roundtrip_with_drops():
+    """Dispatch packs receivers expert-major with sender order inside each expert, and the
+    return direction restores each accepted row to its unclipped sorted position, leaving
+    dropped rows at the output operand's values -- all under forced capacity clipping."""
+    shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
+    num_experts = shards * local_experts
+    assignments = tokens * topk
+    capacity = int(0.7 * assignments)  # force drops
+
+    rng = np.random.default_rng(0)
+    selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
+    payload = rng.normal(size=(shards, assignments, hidden)).astype(np.float32)
+    sorted_payload = np.stack([payload[s][np.argsort(selected[s].reshape(-1), kind="stable")] for s in range(shards)])
+    group_sizes = np.stack(
+        [np.bincount(selected[s].reshape(-1), minlength=num_experts) for s in range(shards)]
+    ).astype(np.int32)
+    starts = np.cumsum(group_sizes, axis=1) - group_sizes
+
+    clipped = np.asarray(
+        _clip_receiver_group_sizes(
+            jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=capacity
+        )
+    )
+    assert clipped.sum() < group_sizes.sum()  # drops actually happen
+
+    params = [
+        _expert_granular_a2a_params(
+            jnp.asarray(group_sizes),
+            jnp.asarray(clipped),
+            jnp.asarray(s),
+            local_expert_size=local_experts,
+        )
+        for s in range(shards)
+    ]
+
+    received = [np.zeros((capacity, hidden), np.float32) for _ in range(shards)]
+    _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+    for receiver in range(shards):
+        rows = [
+            sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]]
+            for e in range(local_experts)
+            for g in [receiver * local_experts + e]
+            for s in range(shards)
+        ]
+        expected = np.concatenate(rows, axis=0)
+        np.testing.assert_array_equal(received[receiver][: len(expected)], expected)
+        np.testing.assert_array_equal(received[receiver][len(expected) :], 0)
+
+    returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
+    _simulate_ragged_a2a(received, returned, [p[1] for p in params])
+    for s in range(shards):
+        expected = np.zeros_like(sorted_payload[s])
+        for g in range(num_experts):
+            expected[starts[s, g] : starts[s, g] + clipped[s, g]] = sorted_payload[s][
+                starts[s, g] : starts[s, g] + clipped[s, g]
+            ]
+        np.testing.assert_array_equal(returned[s], expected)
+
+
+def test_expert_granular_a2a_params_chunked_masking_composes():
+    """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
+    reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
+    and the chained returns cover exactly the per-chunk accepted prefixes."""
+    shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
+    num_experts = shards * local_experts
+    assignments = tokens * topk
+    capacity = int(0.7 * assignments)
+    chunks = 3
+    chunk_capacity = -(-capacity // chunks)
+    chunk_of_expert = (np.arange(num_experts) % local_experts) // (local_experts // chunks)
+
+    rng = np.random.default_rng(0)
+    selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
+    payload = rng.normal(size=(shards, assignments, hidden)).astype(np.float32)
+    sorted_payload = np.stack([payload[s][np.argsort(selected[s].reshape(-1), kind="stable")] for s in range(shards)])
+    group_sizes = np.stack(
+        [np.bincount(selected[s].reshape(-1), minlength=num_experts) for s in range(shards)]
+    ).astype(np.int32)
+    starts = np.cumsum(group_sizes, axis=1) - group_sizes
+
+    returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
+    accepted = np.zeros((shards, num_experts), np.int32)
+    for chunk in range(chunks):
+        masked = np.where(chunk_of_expert[None, :] == chunk, group_sizes, 0)
+        clipped = np.asarray(
+            _clip_receiver_group_sizes(
+                jnp.asarray(masked), local_expert_size=local_experts, receiver_capacity=chunk_capacity
+            )
+        )
+        accepted += clipped
+        params = [
+            _expert_granular_a2a_params(
+                jnp.asarray(group_sizes),
+                jnp.asarray(clipped),
+                jnp.asarray(s),
+                local_expert_size=local_experts,
+            )
+            for s in range(shards)
+        ]
+        received = [np.zeros((chunk_capacity, hidden), np.float32) for _ in range(shards)]
+        _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+        _simulate_ragged_a2a(received, returned, [p[1] for p in params])
+
+    for s in range(shards):
+        expected = np.zeros_like(sorted_payload[s])
+        for g in range(num_experts):
+            expected[starts[s, g] : starts[s, g] + accepted[s, g]] = sorted_payload[s][
+                starts[s, g] : starts[s, g] + accepted[s, g]
+            ]
+        np.testing.assert_array_equal(returned[s], expected)
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
@@ -1140,64 +1257,6 @@ def test_functional_moe_mlp_accepts_enum_and_callable_activation():
         mesh=None,
     )
     np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
-
-
-def test_compact_and_expand_from_keep_mask_roundtrip():
-    inputs = jnp.array(
-        [
-            [1.0, 10.0],
-            [2.0, 20.0],
-            [3.0, 30.0],
-            [4.0, 40.0],
-            [5.0, 50.0],
-        ],
-        dtype=jnp.float32,
-    )
-    keep_mask = jnp.array([True, False, True, True, False])
-
-    compacted = _compact_by_keep_mask(inputs, keep_mask)
-    expanded = _expand_from_keep_mask(compacted, keep_mask)
-
-    np.testing.assert_allclose(
-        np.asarray(compacted),
-        np.asarray(
-            [
-                [1.0, 10.0],
-                [3.0, 30.0],
-                [4.0, 40.0],
-                [0.0, 0.0],
-                [0.0, 0.0],
-            ],
-        ),
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(
-        np.asarray(expanded),
-        np.asarray(
-            [
-                [1.0, 10.0],
-                [0.0, 0.0],
-                [3.0, 30.0],
-                [4.0, 40.0],
-                [0.0, 0.0],
-            ],
-        ),
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(
-        np.asarray(expanded)[np.asarray(keep_mask)],
-        np.asarray(inputs)[np.asarray(keep_mask)],
-        rtol=0,
-        atol=0,
-    )
-    np.testing.assert_allclose(
-        np.asarray(expanded)[~np.asarray(keep_mask)],
-        np.zeros((2, 2), dtype=np.float32),
-        rtol=0,
-        atol=0,
-    )
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():

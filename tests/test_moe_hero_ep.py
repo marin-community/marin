@@ -22,6 +22,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
+from marin.testing.moe import ragged_ep
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
@@ -199,13 +200,20 @@ def test_expert_bank_override_must_support_three_waves():
         launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
-def _runtime_env_config(*, processes_per_task=1, watch_mode=train.WatchMode.INLINE, watch_interval=1):
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    moe_implementation="fixed_pooled_wave_all_to_all",
+):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
         trainer=SimpleNamespace(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
+        model=SimpleNamespace(moe_implementation=moe_implementation),
         resources=object(),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
@@ -965,3 +973,42 @@ def test_baseline_eval_hook_runs_once_after_the_first_step():
     fired.clear()
     run_steps([5001, 5002])  # a resumed run
     assert fired == []
+
+
+def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
+    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
+    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
+    rng = np.random.default_rng(0)
+    tokens_per_shard = 8
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    selected = rng.integers(0, ragged_ep.NUM_EXPERTS, size=(tokens, ragged_ep.TOPK))
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, ragged_ep.NO_DROP_CAPACITY)
+
+    assert keep.shape == selected.shape
+    assert keep.all()
+
+
+def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
+    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
+    # which is what lets the transport read them in place. The mask has to agree.
+    rng = np.random.default_rng(1)
+    tokens_per_shard = 16
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    topk, num_experts = ragged_ep.TOPK, ragged_ep.NUM_EXPERTS
+    # Skew hard toward the low experts so the gate actually bites.
+    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, 1.0)
+
+    dropped = int((1.0 - keep).sum())
+    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
+    for shard in range(ragged_ep.EP_SIZE):
+        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
+        flat_selected = selected[lo:hi].reshape(-1)
+        flat_keep = keep[lo:hi].reshape(-1)
+        for expert in range(num_experts):
+            group = np.flatnonzero(flat_selected == expert)
+            kept = flat_keep[group]
+            # A prefix: every kept entry precedes every dropped one within the group.
+            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
