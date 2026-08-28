@@ -118,9 +118,9 @@ def restore_grug_state_from_checkpoint(
 ) -> StateT:
     """Restore the newest loadable checkpoint under the search paths, else return ``state``.
 
-    ``template_for_candidate`` maps a candidate path to the template it is read with. A template
+    ``template_for_candidate`` maps a candidate path to the exemplar it is read with. An exemplar
     is the pytree whose leaves name what restore loads. Pass the hook when the state layout
-    differs between checkpoint generations, so each candidate is read with the template matching
+    differs between checkpoint generations, so each candidate is read with an exemplar matching
     its layout; ``None`` reads every candidate with ``state``. Raising ``FileNotFoundError`` from
     the hook skips to the next-older candidate; any other exception aborts the restore, so a hook
     can refuse a checkpoint outright rather than quietly fall past it.
