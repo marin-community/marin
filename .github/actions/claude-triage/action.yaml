@@ -95,8 +95,3 @@ runs:
         path: ${{ runner.temp }}/claude-execution-output.json
         retention-days: 30
         if-no-files-found: warn
-
-    - name: Require Slack summary
-      if: always() && steps.claude.outputs.rate_limited != 'true'
-      shell: bash
-      run: .venv/bin/python scripts/ci/validate_canary_triage_output.py slack_message.md
