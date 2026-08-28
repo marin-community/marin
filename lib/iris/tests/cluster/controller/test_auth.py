@@ -646,6 +646,26 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
     assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
 
 
+def test_dashboard_role_can_list_registered_job_resources(service):
+    policy = RequestAuthPolicy.enforcing(
+        verifier=MockVerifier({}),
+        iap_assertion_verifier=_StubAssertionVerifier(),
+    )
+    dashboard = ControllerDashboard(service, auth_provider="iap", auth_policy=policy)
+
+    response = TestClient(dashboard.app).post(
+        "/iris.resource.ResourceService/List",
+        json={
+            "resourceType": "job",
+            "input": {"@type": "type.googleapis.com/iris.cluster.Controller.ListJobsRequest"},
+        },
+        headers={"x-goog-iap-jwt-assertion": "signed.assertion.jwt"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"page": {"totalCount": "0", "hasMore": False}}
+
+
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
     interceptor = _dashboard_interceptor(iap_assertion_verifier=_StubAssertionVerifier())
     ran = []

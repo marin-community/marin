@@ -771,6 +771,11 @@ message Controller {
     repeated UnroutableJob unroutable_sample = 3;
   }
 
+  message BackendListMetadata {
+    int32 unroutable_job_count = 1;
+    repeated UnroutableJob unroutable_sample = 2;
+  }
+
   message ListPeersRequest {}
 
   // A federation peer: a remote Iris controller this cluster may delegate whole
