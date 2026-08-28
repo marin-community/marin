@@ -235,15 +235,7 @@ def _apply_hero_ep_runtime_defaults(
 
 
 def verify_ragged_pjrt() -> None:
-    """Raise unless this process runs Marin's patched GPU PJRT plugin.
-
-    The fork's ragged all-to-all delta lives in the plugin binary and nothing else observes it:
-    ``jax.__version__`` reports the stock generation, and the stock plugin runs the same flags
-    correctly at a materially lower throughput. Without this check the difference between the
-    patched and the stock runtime is a number on a dashboard rather than a failure. The patched
-    wheel installs through the gpu extra's aarch64 source in lib/marin/pyproject.toml, so it is
-    GB200-only: any other fleet syncs the stock wheel and fails here at startup.
-    """
+    """Raise unless this process runs Marin's patched GPU PJRT plugin."""
     try:
         installed = importlib.metadata.version(PJRT_DISTRIBUTION)
     except importlib.metadata.PackageNotFoundError as missing:
