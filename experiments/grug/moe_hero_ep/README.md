@@ -23,9 +23,9 @@ data-parallel rack uses one 64-device expert mesh.
   reaches the stock plugin fails at startup.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
-  is refused rather than silently restored from its bf16 compute copy: convert it once with
-  `convert_master_checkpoint.py`, which promotes the stored fp32 master into the params offline.
-  The reverse (synthesizing a master) is refused too.
+  migrates in process on restore: its stored fp32 master is read directly into the run's params
+  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
+  (synthesizing a master) is refused.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
   command buffers. The ragged transport fixes collective overlap at 1 and turns the latency-hiding
   scheduler off, for memory rather than scheduling.

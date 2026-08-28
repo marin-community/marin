@@ -113,14 +113,16 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
-    validate_candidate: Callable[[str], None] | None = None,
+    template_for_candidate: Callable[[str], StateT] | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
     """Restore the newest loadable checkpoint under the search paths, else return ``state``.
 
-    ``validate_candidate`` runs before each candidate is read. Raising ``FileNotFoundError`` skips
-    to the next-older candidate; any other exception aborts the restore, for a caller that must
-    refuse a checkpoint outright rather than quietly fall past it.
+    ``template_for_candidate`` reads each candidate with its own exemplar, for a caller whose state
+    layout differs between checkpoint generations; ``None`` reads every candidate with ``state``.
+    Raising ``FileNotFoundError`` from the hook skips to the next-older candidate; any other
+    exception aborts the restore, for a caller that must refuse a checkpoint outright rather than
+    quietly fall past it.
     """
     if not checkpoint_search_paths:
         if load_checkpoint_setting:
@@ -138,10 +140,8 @@ def restore_grug_state_from_checkpoint(
 
     for candidate in candidates:
         try:
-            if validate_candidate is not None:
-                validate_candidate(candidate)
             loaded = _load_candidate_state(
-                state=state,
+                state=state if template_for_candidate is None else template_for_candidate(candidate),
                 candidate=candidate,
                 mesh=mesh,
                 allow_partial=allow_partial,

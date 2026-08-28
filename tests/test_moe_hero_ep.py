@@ -20,18 +20,17 @@ import jmp
 import numpy as np
 import optax
 import pytest
-from click.testing import CliRunner
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.checkpoint import save_checkpoint
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY
-from experiments.grug.moe_hero_ep import convert_master_checkpoint, grugmuon_hero, model, train
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -346,22 +345,24 @@ def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
     assert filename.endswith("aarch64.whl")
 
 
-def test_a_checkpoint_layout_mismatch_is_refused_in_both_directions(tmp_path):
-    """Reading a master-bearing checkpoint with a master-less exemplar silently returns the bf16
-    copy, and synthesizing a master from stored weights is unsupported; both must fail loudly."""
+def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
+    """A run wanting a master cannot synthesize one from a master-less checkpoint; refuse loudly.
+
+    The same-layout cases pass the exemplar through unchanged.
+    """
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
-    train.refuse_master_layout_mismatch(master_less, train.MasterParamMode.DISABLED)
+    assert not train.checkpoint_stores_master(master_less)
+    assert train.exemplar_for_candidate({"x": 1}, master_less, train.MasterParamMode.DISABLED) == {"x": 1}
     with pytest.raises(ValueError, match="Synthesizing a master"):
-        train.refuse_master_layout_mismatch(master_less, train.MasterParamMode.FP32_PINNED_HOST)
+        train.exemplar_for_candidate({"x": 1}, master_less, train.MasterParamMode.FP32_PINNED_HOST)
 
     master_bearing = str(tmp_path / "step-2")
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
-    train.refuse_master_layout_mismatch(master_bearing, train.MasterParamMode.FP32_PINNED_HOST)
-    with pytest.raises(ValueError, match="convert_master_checkpoint"):
-        train.refuse_master_layout_mismatch(master_bearing, train.MasterParamMode.DISABLED)
+    assert train.checkpoint_stores_master(master_bearing)
+    assert train.exemplar_for_candidate({"x": 1}, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) == {"x": 1}
 
 
 def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
@@ -374,15 +375,14 @@ def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_p
         checkpoint_path=checkpoint,
     )
 
-    with pytest.raises(ValueError, match="convert_master_checkpoint"):
-        train.refuse_master_layout_mismatch(checkpoint, train.MasterParamMode.DISABLED)
+    assert train.checkpoint_stores_master(checkpoint)
 
 
-def test_the_converter_promotes_the_master_into_a_master_less_restore(tmp_path, monkeypatch):
-    """Convert once offline; the converted checkpoint restores exactly, fp32, into a master-less run.
+def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
+    """Restore reads the stored fp32 master directly into the run's fp32 params template.
 
-    Reading the source with a master-less exemplar instead succeeds and returns bf16 weights, so a
-    test that only checked the restore did not raise would pass against the bug this guards.
+    Reading with the run's own exemplar instead succeeds and returns bf16 weights, so a test that
+    only checked the restore did not raise would pass against the bug this migration exists for.
     """
     cfg = _latent_config()
     mesh = _explicit_mesh(1, 1, 1, 1)
@@ -402,22 +402,25 @@ def test_the_converter_promotes_the_master_into_a_master_less_restore(tmp_path, 
     written = build(
         jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
     )
-    source = str(tmp_path / "step-1")
-    save_checkpoint(written, step=1, checkpoint_path=source)
-    converted = str(tmp_path / "step-1-fp32params")
-
-    result = CliRunner().invoke(convert_master_checkpoint.main, [source, "--output", converted])
-    assert result.exit_code == 0, result.output
-
-    with pytest.raises(ValueError, match="convert_master_checkpoint"):
-        train.refuse_master_layout_mismatch(source, train.MasterParamMode.DISABLED)
-    train.refuse_master_layout_mismatch(converted, train.MasterParamMode.DISABLED)
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
 
     template = build(
         jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DISABLED
     )
     with set_mesh(mesh):
-        restored = load_checkpoint(template, converted)
+        restored = train.adopt_restored_master(
+            restore_grug_state_from_checkpoint(
+                template,
+                checkpoint_search_paths=[str(checkpoint_root)],
+                load_checkpoint_setting=True,
+                mesh=None,
+                allow_partial=False,
+                template_for_candidate=lambda candidate: train.exemplar_for_candidate(
+                    template, candidate, train.MasterParamMode.DISABLED
+                ),
+            )
+        )
 
     assert restored.master_params is None
     got = jax.tree.leaves(restored.params)

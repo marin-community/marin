@@ -371,18 +371,19 @@ def test_restore_supports_legacy_wrapped_and_current_checkpoint_formats(tmp_path
 
 
 def test_a_refused_candidate_aborts_the_restore_instead_of_falling_back(tmp_path: Path):
-    """A validator refusal must not quietly skip to an older checkpoint.
+    """A template hook's refusal must not quietly skip to an older checkpoint.
 
     Falling back would resume from stale state while the newest checkpoint sits unread, which is
-    exactly the silent outcome the validator exists to prevent.
+    exactly the silent outcome the hook exists to prevent.
     """
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
     _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
 
-    def refuse_newest(candidate: str) -> None:
+    def refuse_newest(candidate: str):
         if candidate.endswith("step-100"):
             raise ValueError("wrong layout")
+        return {"state": "init"}
 
     with pytest.raises(ValueError, match="wrong layout"):
         restore_grug_state_from_checkpoint(
@@ -391,20 +392,21 @@ def test_a_refused_candidate_aborts_the_restore_instead_of_falling_back(tmp_path
             load_checkpoint_setting=None,
             mesh=None,
             allow_partial=False,
-            validate_candidate=refuse_newest,
+            template_for_candidate=refuse_newest,
             _load_fn=lambda state, path, **kwargs: {"loaded_from": path},
         )
 
 
 def test_an_unverifiable_candidate_is_skipped_like_an_unreadable_one(tmp_path: Path):
-    """A validator ``FileNotFoundError`` (e.g. no manifest) falls through to an older candidate."""
+    """A template hook's ``FileNotFoundError`` (e.g. no manifest) falls through to an older candidate."""
     checkpoint_root = tmp_path / "checkpoints"
     _write_checkpoint_metadata(checkpoint_root / "step-100", step=100, timestamp="2026-03-17T10:00:00")
     _write_checkpoint_metadata(checkpoint_root / "step-90", step=90, timestamp="2026-03-17T09:00:00")
 
-    def unverifiable_newest(candidate: str) -> None:
+    def unverifiable_newest(candidate: str):
         if candidate.endswith("step-100"):
             raise FileNotFoundError("no manifest")
+        return {"state": "init"}
 
     loaded = restore_grug_state_from_checkpoint(
         {"state": "init"},
@@ -412,7 +414,7 @@ def test_an_unverifiable_candidate_is_skipped_like_an_unreadable_one(tmp_path: P
         load_checkpoint_setting=None,
         mesh=None,
         allow_partial=False,
-        validate_candidate=unverifiable_newest,
+        template_for_candidate=unverifiable_newest,
         _load_fn=lambda state, path, **kwargs: {"loaded_from": path},
     )
 
