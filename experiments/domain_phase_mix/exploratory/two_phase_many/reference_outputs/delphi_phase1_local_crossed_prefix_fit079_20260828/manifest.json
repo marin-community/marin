@@ -1,0 +1,315 @@
+{
+  "common_fit_branch_ids": [
+    "local_anchor_fit079",
+    "local_plus_37",
+    "local_minus_37",
+    "local_plus_32",
+    "local_minus_32",
+    "local_plus_24",
+    "local_minus_24",
+    "local_plus_30",
+    "local_plus_10",
+    "local_plus_20"
+  ],
+  "common_random_numbers": {
+    "anchor_repeat_data_seed": 974001,
+    "continuation_trainer_seed": 0,
+    "fit_data_seed": 974000,
+    "local_sentinel_action_id": "local_plus_24",
+    "local_sentinel_repeat_data_seed": 974002
+  },
+  "contract_version": "delphi_phase1_local_crossed_prefix_fit079_20260828_v5",
+  "controls_per_prefix": 3,
+  "descriptive_analysis": {
+    "boundary_contrasts": [
+      "BPB(local_plus_30) - BPB(local_anchor_fit079)",
+      "BPB(local_plus_10) - BPB(local_anchor_fit079)",
+      "BPB(local_plus_20) - BPB(local_anchor_fit079)"
+    ],
+    "boundary_limitation": "Boundary moves are Hellinger-matched to interior rays but differ by 10-16x in total variation and up to roughly 200x in materialized exposure. Null or cross-family differences are descriptive and must not be interpreted as a boundary mechanism test.",
+    "interior_even_contrasts": "For each paired interior ray j and state s, 0.5 * (BPB(plus_j) + BPB(minus_j)) - BPB(local_anchor_fit079).",
+    "state_by_action_interactions": "descriptive; one run is available per action-state cell"
+  },
+  "estimand": "cross-prefix transfer of the validated fit079 action and a sparse local mechanism screen",
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_3e18_phase1_local_crossed_prefix_fit079_screen10_20260828",
+  "fit_branches_per_prefix": 10,
+  "fit_rows": 90,
+  "local_design": {
+    "anchor_action_id": "local_anchor_fit079",
+    "boundary_activation_forward_directions": 3,
+    "boundary_transfer_count": 2,
+    "direction_interpretation": "The three paired interior directions support prespecified pooled odd contrasts and descriptive even-curvature checks. The three one-sided boundary activations are exploratory because matching their Hellinger radius does not match their count, total-variation, or exposure dose to the interior moves. This sparse screen does not identify the other 32 tangent dimensions. Every direction exchanges mass with the single reference donor dolmino_olmocr_pdfs_hq; target and donor marginal effects are not separately identified.",
+    "dose_interpretation": "Paired interior moves use the smallest symmetric count transfer reaching Hellinger 0.02 in both directions while adding at most 0.20 materialized phase-1 epoch. Each boundary activation moves two runtime counts, matching Hellinger radius but not total variation or materialized exposure to the paired interior rays. Realized distances and exposure doses are recorded per action in rank_audit.action_doses.",
+    "forward_direction_count": 6,
+    "interior_forward_directions": 3,
+    "maximum_added_phase1_materialized_epochs": 0.2,
+    "maximum_hellinger_to_anchor": 0.05,
+    "minimum_local_hellinger": 0.01,
+    "residual_degrees_interpretation": "The three residual degrees of freedom arise from paired interior curvature checks, not a noise estimate; noise is measured by the repeated anchor and sentinel controls.",
+    "reverse_direction_count": 3,
+    "reverse_direction_selection": "matched negatives for the three active-bucket targets selected at the low, middle, and high phase-1 exposure scales",
+    "selection_interpretation": "Low, middle, and high refer to deterministic rank quantiles of phase-1 materialized-exposure scale within each eligible boundary or paired-interior candidate pool. Eligibility and selected scales are frozen in rank_audit.",
+    "target_paired_hellinger": 0.02
+  },
+  "missing_cell_policy": "Idempotently rerun the exact frozen row until complete. Do not replace a missing local direction or prefix state; incomplete data supports only explicitly labeled descriptive fits.",
+  "new_control_rows": 27,
+  "new_fit_rows": 90,
+  "outcome_use": {
+    "anchor": "outcome-selected and independently validated on cap4_shared_bounded_ensemble_kl0 before this panel",
+    "local_directions": "constructed without endpoint labels",
+    "prefix_states": "five distinct, outcome-unselected weight points are confirmatory; four outcome-dependent or duplicate diagnostic states are assigned descriptive roles in state_analysis_contract"
+  },
+  "panel_rows_sha256": "4badc57b014f75d8262f2d8494963bf0ac9a5773ba7b3397313c9674b0f7fc63",
+  "panel_source": "delphi_phase1_local_crossed_prefix_fit079_screen10",
+  "panel_weights_sha256": "25e7e52fb5beadfa7fb6d42f28d7fa7e6d72a89bf79337b162fa839930410223",
+  "prefix_count": 9,
+  "prefix_registry_sha256": "5871d9a4e53f9c32e02e40e2f1b42d3b680606bf8cac39aefc0e59ed61f964ee",
+  "primary_inference": {
+    "comparison": "For each confirmatory state s, delta_s = UncheatableBPB(s, local_anchor_fit079, data_seed=974000) - UncheatableBPB(s, control_tied, data_seed=974000). The primary estimate is mean_s(delta_s); negative is better.",
+    "confirmatory_state_ids": [
+      "shared_bounded_ensemble_kl0p05",
+      "shared_bounded_ensemble_kl0p2",
+      "shared_bounded_ensemble_kl0p5",
+      "cap4_shared_bounded_ensemble_kl0p05",
+      "cap4_shared_bounded_ensemble_kl0p2"
+    ],
+    "multiplicity": "Uncheatable anchor-versus-tied is the sole primary hypothesis; no primary correction.",
+    "power_scope": "Using prior contrast SD 0.0004-0.0006 BPB as a planning reference, five states give an approximate two-sided 80%-power MDE of 0.00065-0.00097 BPB. State heterogeneity can make the realized MDE larger. The panel is not powered for individual-prefix superiority or state-by-action interactions.",
+    "resampling_unit": "the five distinct confirmatory prefix-weight states",
+    "state_count": 5,
+    "target": "Uncheatable BPB",
+    "uncertainty": "Report a two-sided 95% t interval over the five state contrasts and the leave-one-state-out range. Claim pooled improvement only if the interval upper bound is below zero. Anchor and max-exposure sentinel repeats calibrate data-order noise; tied has no independent repeat, so the interval does not separately identify tied heteroscedasticity."
+  },
+  "rank_audit": {
+    "action_doses": [
+      {
+        "action_id": "local_anchor_fit079",
+        "hellinger_to_anchor": 0.0,
+        "maximum_added_phase1_materialized_epoch": 0.0,
+        "signed_transfer_count": 0
+      },
+      {
+        "action_id": "local_plus_37",
+        "hellinger_to_anchor": 0.020145604502427663,
+        "maximum_added_phase1_materialized_epoch": 0.03784527628067099,
+        "signed_transfer_count": 32
+      },
+      {
+        "action_id": "local_minus_37",
+        "hellinger_to_anchor": 0.02032136177220019,
+        "maximum_added_phase1_materialized_epoch": 0.09689185452805399,
+        "signed_transfer_count": -32
+      },
+      {
+        "action_id": "local_plus_32",
+        "hellinger_to_anchor": 0.020661928579121414,
+        "maximum_added_phase1_materialized_epoch": 0.13969931249217435,
+        "signed_transfer_count": 30
+      },
+      {
+        "action_id": "local_minus_32",
+        "hellinger_to_anchor": 0.021290447594942696,
+        "maximum_added_phase1_materialized_epoch": 0.09083611362005062,
+        "signed_transfer_count": -30
+      },
+      {
+        "action_id": "local_plus_24",
+        "hellinger_to_anchor": 0.020898530847936185,
+        "maximum_added_phase1_materialized_epoch": 0.19007073496316965,
+        "signed_transfer_count": 21
+      },
+      {
+        "action_id": "local_minus_24",
+        "hellinger_to_anchor": 0.023823337832060414,
+        "maximum_added_phase1_materialized_epoch": 0.06358527953403544,
+        "signed_transfer_count": -21
+      },
+      {
+        "action_id": "local_plus_30",
+        "hellinger_to_anchor": 0.02211367013145806,
+        "maximum_added_phase1_materialized_epoch": 0.0009463452471831972,
+        "signed_transfer_count": 2
+      },
+      {
+        "action_id": "local_plus_10",
+        "hellinger_to_anchor": 0.02211367013145806,
+        "maximum_added_phase1_materialized_epoch": 0.00809222458393819,
+        "signed_transfer_count": 2
+      },
+      {
+        "action_id": "local_plus_20",
+        "hellinger_to_anchor": 0.02211367013145806,
+        "maximum_added_phase1_materialized_epoch": 0.03353466286305393,
+        "signed_transfer_count": 2
+      }
+    ],
+    "anchor_condition_number": 40.33810145125317,
+    "anchor_minimum_nonzero_singular_value": 0.0009765624999999995,
+    "anchor_tangent_rank": 6,
+    "boundary_activation_forward_directions": 3,
+    "boundary_candidate_count": 19,
+    "boundary_target_buckets": [
+      "dolmino_common_crawl_hq",
+      "dolma3_cc/entertainment_low",
+      "dolma3_cc/history_and_geography_low"
+    ],
+    "boundary_target_phase1_scales": [
+      0.969057533115594,
+      8.286437973952706,
+      34.33949477176722
+    ],
+    "donor_bucket": "dolmino_olmocr_pdfs_hq",
+    "forward_directions": 6,
+    "interior_forward_directions": 3,
+    "maximum_added_phase1_materialized_epochs": 0.19007073496316965,
+    "maximum_hellinger_to_anchor": 0.023823337832060414,
+    "median_hellinger_to_anchor": 0.02109448922143944,
+    "minimum_nonzero_hellinger_to_anchor": 0.020145604502427663,
+    "minimum_positive_added_phase1_materialized_epochs": 0.0009463452471831972,
+    "paired_interior_eligible_candidate_count": 9,
+    "paired_interior_excluded_candidate_count": 10,
+    "paired_interior_target_buckets": [
+      "dolmino_synth_qa",
+      "dolmino_stack_edu_fim",
+      "dolma3_cc/literature_low"
+    ],
+    "paired_interior_target_phase1_scales": [
+      2.4220976819629434,
+      9.53680639946577,
+      18.53642215259864
+    ],
+    "residual_degrees_of_freedom_per_state": 3,
+    "reverse_directions": 3,
+    "tangent_degrees_of_freedom": 38,
+    "unresolved_tangent_dimensions": 32
+  },
+  "research_question": "Does the validated fit079 action improve over tied continuation on average across five independent, outcome-unselected prefix-weight states? As a secondary question, do any of three paired interior directions have a nonzero pooled odd response?",
+  "reused_fit_rows": 0,
+  "secondary_inference": {
+    "confirmatory_state_ids": [
+      "shared_bounded_ensemble_kl0p05",
+      "shared_bounded_ensemble_kl0p2",
+      "shared_bounded_ensemble_kl0p5",
+      "cap4_shared_bounded_ensemble_kl0p05",
+      "cap4_shared_bounded_ensemble_kl0p2"
+    ],
+    "estimator": "mean across the five confirmatory states for each named odd contrast",
+    "interior_odd_contrasts": [
+      {
+        "formula": "0.5 * (BPB(local_plus_37) - BPB(local_minus_37))",
+        "ray_id": "interior_37"
+      },
+      {
+        "formula": "0.5 * (BPB(local_plus_32) - BPB(local_minus_32))",
+        "ray_id": "interior_32"
+      },
+      {
+        "formula": "0.5 * (BPB(local_plus_24) - BPB(local_minus_24))",
+        "ray_id": "interior_24"
+      }
+    ],
+    "multiplicity": "Holm-adjust the three two-sided interior-odd tests at familywise alpha 0.05.",
+    "scope": "Secondary mechanism screen only; no frontier or promotion claim.",
+    "target": "Uncheatable BPB"
+  },
+  "selection_rule": "Start from the previously validated fit079 action; select three paired interior directions and three one-sided boundary activations at low, middle, and high phase-1 materialized-exposure scales without using endpoint labels.",
+  "source_artifacts": {
+    "bridge_code_commit": "6f2bb6c226d936c4882715c45635caced44edcca",
+    "bridge_provenance_sha256": "8662825536a631fe379c56e2cc31d4316767f1025a700e384dfade2d3a636100",
+    "cap10_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+    "frontier_contract_sha256": "898b8e5fdab2a9695808acfa31137918f5cf7e720674fb51e43bbc961b0aed27",
+    "harsh_weights_sha256": "ec2814449c1e2ff2c7561cfa72cd419f1d62afc67082074ea405e8176b3bb2d1"
+  },
+  "state_analysis_contract": {
+    "confirmatory_state_ids": [
+      "shared_bounded_ensemble_kl0p05",
+      "shared_bounded_ensemble_kl0p2",
+      "shared_bounded_ensemble_kl0p5",
+      "cap4_shared_bounded_ensemble_kl0p05",
+      "cap4_shared_bounded_ensemble_kl0p2"
+    ],
+    "required_sensitivities": {
+      "all_nine_states": "report descriptively without treating duplicate weight points as exchangeable",
+      "seven_unique_weight_points": [
+        "observed_cap10_best",
+        "shared_bounded_ensemble_kl0p05",
+        "shared_bounded_ensemble_kl0p2",
+        "shared_bounded_ensemble_kl0p5",
+        "cap4_shared_bounded_ensemble_kl0",
+        "cap4_shared_bounded_ensemble_kl0p05",
+        "cap4_shared_bounded_ensemble_kl0p2"
+      ],
+      "within_10_epoch_confirmatory_subset": [
+        "shared_bounded_ensemble_kl0p5",
+        "cap4_shared_bounded_ensemble_kl0p05",
+        "cap4_shared_bounded_ensemble_kl0p2"
+      ]
+    },
+    "state_roles": {
+      "cap4_shared_bounded_ensemble_kl0": "prefix state used to develop and validate the anchor action; descriptive positive control",
+      "cap4_shared_bounded_ensemble_kl0__seed1": "trainer-seed diagnostic at the same prefix weight point; not an independent state",
+      "observed_cap10_best": "outcome-selected incumbent; descriptive only",
+      "shared_bounded_ensemble_kl0p05__v6e_bridge": "hardware-by-code diagnostic at the same prefix weight point; not an independent state"
+    }
+  },
+  "support_audit": {
+    "interpretation": "The action neighborhood is constrained by its incremental phase-1 exposure, not by state-specific filtering. Two cap-10 weight points, represented by three states including the v6e bridge, already exceed the historical 10-total-epoch heuristic under the validated anchor; retaining them preserves the common-action estimand.",
+    "per_state": [
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 8.116859638285403,
+        "panel_max_total_materialized_epoch": 8.116859638285403,
+        "state_id": "observed_cap10_best"
+      },
+      {
+        "actions_above_10_total_epochs": 10,
+        "anchor_max_total_materialized_epoch": 10.386976877341946,
+        "panel_max_total_materialized_epoch": 10.386976877341946,
+        "state_id": "shared_bounded_ensemble_kl0p05"
+      },
+      {
+        "actions_above_10_total_epochs": 10,
+        "anchor_max_total_materialized_epoch": 10.25515185022791,
+        "panel_max_total_materialized_epoch": 10.25515185022791,
+        "state_id": "shared_bounded_ensemble_kl0p2"
+      },
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 9.583325333493995,
+        "panel_max_total_materialized_epoch": 9.583325333493995,
+        "state_id": "shared_bounded_ensemble_kl0p5"
+      },
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 6.466109434560867,
+        "panel_max_total_materialized_epoch": 6.466109434560867,
+        "state_id": "cap4_shared_bounded_ensemble_kl0"
+      },
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 6.466109434560867,
+        "panel_max_total_materialized_epoch": 6.466109434560867,
+        "state_id": "cap4_shared_bounded_ensemble_kl0p05"
+      },
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 6.466109434560867,
+        "panel_max_total_materialized_epoch": 6.466109434560867,
+        "state_id": "cap4_shared_bounded_ensemble_kl0p2"
+      },
+      {
+        "actions_above_10_total_epochs": 0,
+        "anchor_max_total_materialized_epoch": 6.466109434560867,
+        "panel_max_total_materialized_epoch": 6.466109434560867,
+        "state_id": "cap4_shared_bounded_ensemble_kl0__seed1"
+      },
+      {
+        "actions_above_10_total_epochs": 10,
+        "anchor_max_total_materialized_epoch": 10.386976877341946,
+        "panel_max_total_materialized_epoch": 10.386976877341946,
+        "state_id": "shared_bounded_ensemble_kl0p05__v6e_bridge"
+      }
+    ]
+  },
+  "total_rows": 117
+}

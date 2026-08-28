@@ -56,6 +56,24 @@ def test_fit_seed_is_disjoint_from_every_prefix_stream() -> None:
     assert design.FIT_DATA_SEED not in {design.LOW_SENTINEL_DATA_SEED, design.HIGH_SENTINEL_DATA_SEED}
 
 
+def test_panel_contracts_pin_old_and_sparse_allocations() -> None:
+    old = launch.panel_contract(launch.EXPECTED_CONTRACT_VERSION)
+    sparse = launch.panel_contract(launch.LOCAL_SCREEN_CONTRACT_VERSION)
+
+    assert (old.fit_branches_per_prefix, old.tangent_rank, old.residual_degrees_of_freedom) == (50, 38, 11)
+    assert (sparse.fit_branches_per_prefix, sparse.tangent_rank, sparse.residual_degrees_of_freedom) == (10, 6, 3)
+    assert old.experiment_name != sparse.experiment_name
+    assert old.panel_source != sparse.panel_source
+
+
+def test_default_dry_run_output_is_scoped_by_commit_and_selection() -> None:
+    first = launch.default_dry_run_output_dir(launch.DEFAULT_DESIGN_DIR, "a" * 64, "b" * 40, (0, 1))
+
+    assert first == launch.default_dry_run_output_dir(launch.DEFAULT_DESIGN_DIR, "a" * 64, "b" * 40, (0, 1))
+    assert first != launch.default_dry_run_output_dir(launch.DEFAULT_DESIGN_DIR, "a" * 64, "c" * 40, (0, 1))
+    assert first != launch.default_dry_run_output_dir(launch.DEFAULT_DESIGN_DIR, "a" * 64, "b" * 40, (0, 2))
+
+
 def test_branch_run_spec_preserves_prefix_state_and_changes_only_continuation() -> None:
     manifest_hash = launch.file_sha256(launch.DEFAULT_MANIFEST)
     registry_hash = launch.file_sha256(launch.DEFAULT_PREFIX_REGISTRY)
@@ -64,6 +82,7 @@ def test_branch_run_spec_preserves_prefix_state_and_changes_only_continuation() 
     _manifest, prefixes, rows, weights = launch.load_artifacts(
         launch.DEFAULT_MANIFEST,
         manifest_hash,
+        launch.EXPECTED_CONTRACT_VERSION,
         launch.DEFAULT_PREFIX_REGISTRY,
         registry_hash,
         launch.DEFAULT_PANEL_ROWS,
@@ -74,7 +93,13 @@ def test_branch_run_spec_preserves_prefix_state_and_changes_only_continuation() 
     prefix = prefixes[0]
     row = rows.loc[rows.prefix_state_id.eq(prefix.state_id) & rows.continuation_id.eq("fit_maximin_00")].iloc[0]
 
-    result = launch.branch_run_spec(prefix, row, weights, launch.EXPERIMENT_NAME)
+    result = launch.branch_run_spec(
+        prefix,
+        row,
+        weights,
+        launch.EXPERIMENT_NAME,
+        "delphi_phase1_crossed_prefix_panel",
+    )
 
     assert result.phase_weights["phase_0"] == prefix.run_spec.phase_weights["phase_0"]
     assert result.phase_weights["phase_1"] != prefix.run_spec.phase_weights["phase_1"]
@@ -89,6 +114,7 @@ def test_bridge_prefix_resolves_to_commit_scoped_output() -> None:
     _manifest, prefixes, _rows, _weights = launch.load_artifacts(
         launch.DEFAULT_MANIFEST,
         launch.file_sha256(launch.DEFAULT_MANIFEST),
+        launch.EXPECTED_CONTRACT_VERSION,
         launch.DEFAULT_PREFIX_REGISTRY,
         registry_hash,
         launch.DEFAULT_PANEL_ROWS,
