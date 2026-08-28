@@ -618,7 +618,12 @@ def test_get_job_status_returns_original_request(client, state):
             disk_bytes=100 * 1024**3,
         ),
         environment=job_pb2.EnvironmentConfig(
-            setup_scripts=["uv sync\n"],
+            setup_layers=[
+                job_pb2.EnvironmentLayer(
+                    setup_script="uv sync\n",
+                    lifetime=job_pb2.ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT,
+                )
+            ],
             env_vars={"MY_FLAG": "1"},
         ),
         replicas=2,
@@ -647,7 +652,12 @@ def test_get_job_status_returns_original_request(client, state):
     assert int(res["diskBytes"]) == 100 * 1024**3
     # Verify environment
     env = returned_request.get("environment", {})
-    assert env["setupScripts"] == ["uv sync\n"]
+    assert env["setupLayers"] == [
+        {
+            "setupScript": "uv sync\n",
+            "lifetime": "ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT",
+        }
+    ]
     assert env["envVars"] == {"MY_FLAG": "1"}
     # Verify replicas
     assert returned_request["replicas"] == 2

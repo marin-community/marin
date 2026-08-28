@@ -6,10 +6,10 @@
 The RuntimeEntrypoint keeps setup separate from the user's command so each runtime
 can handle it as needed (DockerRuntime runs setup in a build container;
 ProcessRuntime skips it). Setup is the user's client-resolved
-``EnvironmentConfig.setup_scripts`` followed by iris's own runtime-deps script.
+resolved ``EnvironmentConfig.setup_layers`` and iris's own runtime-deps script.
 """
 
-from iris.cluster.setup_scripts import iris_runtime_setup_script
+from iris.cluster.setup_scripts import EnvironmentLayer, iris_runtime_setup_script
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
 
@@ -20,17 +20,17 @@ def build_runtime_entrypoint(
 ) -> job_pb2.RuntimeEntrypoint:
     """Build a RuntimeEntrypoint from a user Entrypoint + env config.
 
-    Assembles ``setup_commands`` as the user's resolved scripts followed by iris's
-    runtime-deps script. The run_command is the user's original command, kept
-    separate so runtimes that don't need setup can skip it cleanly.
+    Assembles setup and activation commands from the resolved layer sequence.
+    Iris's runtime-deps script follows user setup; activation is sourced after
+    virtualenv activation by the runtime.
     """
     rt = job_pb2.RuntimeEntrypoint()
-    # Drop whitespace-only scripts; an empty user list means no setup at all, so the
-    # build phase (iris script included) is skipped and the command runs as-is.
-    user_scripts = [s for s in env_config.setup_scripts if s.strip()]
-    if user_scripts:
+    layers = [EnvironmentLayer.from_proto(layer) for layer in env_config.setup_layers]
+    setup_commands = [layer.setup for layer in layers if layer.setup.strip()]
+    if setup_commands:
         iris_script = iris_runtime_setup_script()
-        rt.setup_commands[:] = [*user_scripts, iris_script]
+        rt.setup_commands[:] = [*setup_commands, iris_script]
+    rt.activation_commands[:] = [layer.activate for layer in layers if layer.activate.strip()]
     rt.run_command.argv[:] = entrypoint.command
     for k, v in entrypoint.workdir_files.items():
         rt.workdir_files[k] = v

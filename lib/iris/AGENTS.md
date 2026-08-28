@@ -112,17 +112,21 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 
 ## Task Setup
 
-Before the command runs, the worker executes a list of setup scripts to prepare
-the environment. The default is `uv sync --all-packages --no-dev`;
-`sync_packages`/`--sync-package` scopes it to named workspace members. The
-worker is pure mechanism; the list is resolved client-side from
-`EnvironmentSpec.setup_scripts` — `None` for the default, `[]` to skip setup
-(bring-your-own image), or a verbatim list — and iris always appends its own
-runtime-deps step. The script builders, the `IRIS_*` env scripts parameterize
-against (notably `$IRIS_VENV`, the venv the run phase activates), child
-inheritance, and the Docker gotcha (setup runs in a separate container, so
-`export` does not reach the command — use `env_vars`) all live in
-`iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
+`EnvironmentSpec.setup` is a `SetupPlan`: `None` selects the default uv
+environment for a root job and inherits the resolved plan in a child.
+`SetupPlan.default(...)` selects extras and workspace packages,
+`SetupPlan.custom(...)` replaces the project setup, and `SetupPlan.empty()` uses
+the task image as-is. A plan is one ordered sequence of `EnvironmentLayer`
+objects. Each layer has a setup script, an activation script, and a lifetime.
+Environment-lifetime layers are replaced when a child selects a different
+environment; job-tree layers survive that replacement.
+
+`iris job run --run-with PATH` loads a job-tree layer from `PATH/setup.sh` and
+`PATH/activate.sh`. Setup runs before the command; activation is sourced after
+the task venv so exports affect the command. Iris appends its own runtime-deps
+setup after layer setup. The script builders and the `IRIS_*` variables available
+to layers, including `$IRIS_VENV`, live in `iris.cluster.setup_scripts`. See
+https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
 

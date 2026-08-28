@@ -188,7 +188,12 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        setup_scripts=["uv sync\n"],
+        setup_layers=[
+            job_pb2.EnvironmentLayer(
+                setup_script="uv sync\n",
+                lifetime=job_pb2.ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT,
+            )
+        ],
     )
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)

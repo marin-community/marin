@@ -31,7 +31,13 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
+from iris.cluster.runtime.env import (
+    VENV_PATH,
+    cache_host_dirname,
+    render_activation_steps,
+    render_setup_steps,
+    write_workdir_files,
+)
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -549,12 +555,15 @@ class DockerContainerHandle:
         # Run from the workdir (matching the k8s task script) and activate the venv
         # only when a setup script left one, so a bring-your-own-env command runs in
         # the image as-is instead of failing on a missing .venv.
-        run_script = f"""#!/bin/bash
-set -e
-cd "$IRIS_WORKDIR"
-[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
-exec {quoted_cmd}
-"""
+        run_lines = [
+            "#!/bin/bash",
+            "set -e",
+            'cd "$IRIS_WORKDIR"',
+            '[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"',
+            *render_activation_steps(self.config.entrypoint.activation_commands),
+            f"exec {quoted_cmd}",
+        ]
+        run_script = "\n".join(run_lines) + "\n"
         self._write_run_script(run_script)
         command = ["bash", "/app/_run.sh"]
 

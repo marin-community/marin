@@ -32,7 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
+from iris.cluster.runtime.env import cache_host_dirname, render_activation_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
     capture_cpu,
@@ -457,6 +457,11 @@ class ProcessContainerHandle:
 
         # Remap container mount paths in command args to host paths
         remapped_cmd = [_remap_container_path(arg, mount_map) for arg in cmd]
+        if config.entrypoint.activation_commands:
+            activation = "\n".join(
+                ["set -e", *render_activation_steps(config.entrypoint.activation_commands), 'exec "$@"']
+            )
+            remapped_cmd = ["bash", "-c", activation, "iris-activation", *remapped_cmd]
 
         updated_config = replace(config, env=env)
 

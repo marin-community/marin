@@ -31,6 +31,7 @@ from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.provenance import provenance_from_proto
+from iris.cluster.setup_scripts import SetupPlan
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import JobState
 from iris.rpc import controller_pb2, job_pb2
@@ -646,7 +647,7 @@ def take_snapshot(cluster: str) -> Snapshot:
 def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobStatus:
     """Submit one throwaway `echo hello world` job and wait for it to finish.
 
-    ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
+    ``SetupPlan.empty()`` skips the default workspace ``uv sync`` so the job tests
     the control plane (submit, schedule, dispatch, container start, logs) instead
     of the Python environment build.
 
@@ -660,7 +661,7 @@ def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobStatus
                 entrypoint=Entrypoint.from_command(*SMOKE_COMMAND),
                 name=name,
                 resources=ResourceSpec(cpu=SMOKE_CPU, memory=SMOKE_MEMORY, disk=SMOKE_DISK),
-                environment=EnvironmentSpec(setup_scripts=[]),
+                environment=EnvironmentSpec(setup=SetupPlan.empty()),
                 priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             )
             click.echo(f"Submitted {job.job_id}")

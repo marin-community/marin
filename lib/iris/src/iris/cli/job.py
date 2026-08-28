@@ -45,6 +45,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
+from iris.cluster.setup_scripts import EnvironmentLayer, SetupPlan
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -147,6 +148,44 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
             env_vars[item[0]] = item[1] if len(item) == 2 else ""
 
     return env_vars
+
+
+def load_job_tree_layer(path: Path) -> EnvironmentLayer:
+    """Load a job-tree environment layer from ``setup.sh`` and ``activate.sh``."""
+    setup_path = path / "setup.sh"
+    activation_path = path / "activate.sh"
+    setup = setup_path.read_text() if setup_path.is_file() else ""
+    activate = activation_path.read_text() if activation_path.is_file() else ""
+    if not setup.strip() and not activate.strip():
+        raise click.UsageError(f"{path} must contain a non-empty setup.sh or activate.sh")
+    return EnvironmentLayer.job_tree(setup=setup, activate=activate)
+
+
+def _cli_setup_plan(
+    *,
+    no_sync: bool,
+    extras: tuple[str, ...],
+    sync_packages: tuple[str, ...],
+    run_with: tuple[Path, ...],
+) -> SetupPlan | None:
+    """Return CLI setup overrides, or ``None`` to use inherited/default setup."""
+    if no_sync and extras:
+        raise click.UsageError("--no-sync skips the project sync; it cannot be combined with --extra.")
+    if no_sync and sync_packages:
+        raise click.UsageError("--no-sync skips the project sync; it cannot be combined with --sync-package.")
+    if no_sync:
+        setup = SetupPlan.empty()
+    elif extras or sync_packages:
+        setup = SetupPlan.default(extras=extras, sync_packages=sync_packages or None)
+    else:
+        setup = None
+
+    job_tree_layers = [load_job_tree_layer(path) for path in run_with]
+    if setup is None:
+        return SetupPlan.extend_job_tree(job_tree_layers) if job_tree_layers else None
+    for layer in job_tree_layers:
+        setup = setup.with_layer(layer)
+    return setup
 
 
 def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
@@ -574,9 +613,7 @@ def run_iris_job(
     replicas: int | None = None,
     max_retries: int = 0,
     timeout: int = 0,
-    extras: list[str] | None = None,
-    setup_scripts: list[str] | None = None,
-    sync_packages: list[str] | None = None,
+    setup: SetupPlan | None = None,
     cancel_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
@@ -614,6 +651,7 @@ def run_iris_job(
         bundle_exclude: Regex matched against each candidate bundle path (POSIX,
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
+        setup: Environment setup plan, including any job-tree layers.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -621,8 +659,6 @@ def run_iris_job(
     env_vars = add_standard_env_vars(env_vars)
     resources = build_resources(tpu, gpu, cpu=cpu, memory=memory, disk=disk)
     job_name = job_name or generate_job_name(command)
-    extras = extras or []
-
     tpu_variants = build_tpu_alternatives(tpu)
     primary_tpu = tpu_variants[0] if tpu_variants else None
 
@@ -695,9 +731,7 @@ def run_iris_job(
         max_retries=max_retries,
         timeout=timeout,
         wait=wait,
-        extras=extras,
-        setup_scripts=setup_scripts,
-        sync_packages=sync_packages,
+        setup=setup,
         cancel_on_exit=cancel_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
@@ -722,9 +756,7 @@ def _submit_and_wait_job(
     max_retries: int,
     timeout: int,
     wait: bool,
-    extras: list[str] | None = None,
-    setup_scripts: list[str] | None = None,
-    sync_packages: list[str] | None = None,
+    setup: SetupPlan | None = None,
     cancel_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
@@ -753,9 +785,7 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(
             env_vars=env_vars,
-            extras=extras or [],
-            setup_scripts=setup_scripts,
-            sync_packages=sync_packages or [],
+            setup=setup,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -913,9 +943,15 @@ Examples:
     ),
 )
 @click.option(
+    "--run-with",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, readable=True, path_type=Path),
+    help="Apply a setup.sh/activate.sh environment layer to this job tree. Can be repeated.",
+)
+@click.option(
     "--no-sync",
     is_flag=True,
-    help="Skip environment setup entirely: run the command in the task image as-is (no uv sync).",
+    help="Skip the default project sync. Run-with extensions still execute.",
 )
 @click.option(
     "--reserve",
@@ -1005,6 +1041,7 @@ def run(
     target_cluster: str | None,
     extra: tuple[str, ...],
     sync_package: tuple[str, ...],
+    run_with: tuple[Path, ...],
     no_sync: bool,
     reserve: tuple[str, ...],
     priority: str | None,
@@ -1022,8 +1059,6 @@ def run(
     dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
-    if no_sync and sync_package:
-        raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
     validate_system_reason(priority, system_reason)
 
     command = list(cmd)
@@ -1062,9 +1097,12 @@ def run(
             replicas=replicas,
             max_retries=max_retries,
             timeout=timeout,
-            extras=list(extra),
-            setup_scripts=[] if no_sync else None,
-            sync_packages=list(sync_package),
+            setup=_cli_setup_plan(
+                no_sync=no_sync,
+                extras=extra,
+                sync_packages=sync_package,
+                run_with=run_with,
+            ),
             cancel_on_exit=cancel_on_exit,
             regions=region or None,
             zone=zone,

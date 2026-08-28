@@ -1,8 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import cast
+
 import pytest
-from iris.cluster.client.job_info import JobInfo, resolve_job_user, set_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
+from iris.cluster.runtime.env import IRIS_JOB_SETUP_LAYERS_ENV, serialize_setup_layers
+from iris.cluster.setup_scripts import EnvironmentLayer
 from iris.cluster.types import JobName
 
 
@@ -17,6 +21,16 @@ def _reset_job_info():
 def test_job_info_user_derives_from_task_id():
     info = JobInfo(task_id=JobName.from_wire("/alice/train/0"))
     assert info.user == "alice"
+
+
+def test_job_info_reads_inherited_environment_layers(monkeypatch):
+    monkeypatch.setenv("IRIS_TASK_ID", "/alice/train/0:0")
+    layers = [EnvironmentLayer.job_tree(setup="install profiler", activate="export PROFILE=1")]
+    monkeypatch.setenv(IRIS_JOB_SETUP_LAYERS_ENV, serialize_setup_layers(layers))
+
+    info = cast(JobInfo, get_job_info())
+
+    assert info.setup_layers == layers
 
 
 def test_resolve_job_user_prefers_explicit_value():

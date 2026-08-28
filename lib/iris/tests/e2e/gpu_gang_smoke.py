@@ -76,6 +76,7 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import Labels, find_free_port
+from iris.cluster.setup_scripts import SetupPlan
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
 
@@ -541,8 +542,8 @@ class CoreweaveTarget(ControllerTarget):
 def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, *, group_by: str, job_name: str) -> bool:
     resources, extras = target.job_resources()
     env = EnvironmentSpec(
-        extras=extras,
         env_vars={"GANG_SMOKE_STEPS": str(args.steps), "GANG_SMOKE_PDB": str(args.per_device_batch)},
+        setup=SetupPlan.default(extras=extras),
     )
     client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=300_000)
     logger.info(

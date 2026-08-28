@@ -478,14 +478,36 @@ message ResourceSpecProto {
 // Job environment configuration
 message EnvironmentConfig {
   map<string, string> env_vars = 2;  // Environment variables to set
-  // Resolved setup scripts the worker runs in order before the command. The
-  // client builds this list (default project sync, or caller-provided); empty
-  // means no setup. Child jobs inherit it to reproduce the parent's environment.
-  repeated string setup_scripts = 6;
+  // Resolved environment layers in execution order. The submitting client has
+  // already applied parent/child replacement and inheritance rules.
+  repeated EnvironmentLayer setup_layers = 8;
 
-  // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
+  // Accepted from clients predating environment layers. The controller
+  // translates this field into setup_layers at submission. Remove after the
+  // rollout window tracked by https://github.com/marin-community/marin/issues/8676.
+  repeated string setup_scripts = 6 [deprecated = true];
+
+  // pip_packages(1), extras(3), python_version(4) are resolved into setup_layers
   // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.
   reserved 1, 3, 4, 5;
+}
+
+enum EnvironmentLayerLifetime {
+  ENVIRONMENT_LAYER_LIFETIME_UNSPECIFIED = 0;
+  // Reused by children that inherit the environment; replaced when a child
+  // selects a different environment.
+  ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT = 1;
+  // Re-applied to every descendant after its environment-specific layers.
+  ENVIRONMENT_LAYER_LIFETIME_JOB_TREE = 2;
+}
+
+message EnvironmentLayer {
+  // Shell run during task setup. Empty means no setup work for this layer.
+  string setup_script = 1;
+  // Shell sourced after venv activation and before the task command. Empty
+  // means the layer does not modify the command's runtime environment.
+  string activation_script = 2;
+  EnvironmentLayerLifetime lifetime = 3;
 }
 
 // ============================================================================
@@ -514,6 +536,10 @@ message RuntimeEntrypoint {
   // References to externalized workdir files stored in the blob store.
   // key -> blob_id (SHA-256 hash). Worker resolves these via BundleStore.
   map<string, string> workdir_file_refs = 4;
+
+  // Shell snippets sourced in order after venv activation and before the user
+  // command. Unlike setup_commands, exports here affect the command.
+  repeated string activation_commands = 5;
 }
 
 // ============================================================================

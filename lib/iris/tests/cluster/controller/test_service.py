@@ -770,6 +770,27 @@ def test_submit_argv_empty_when_omitted(service):
     assert list(response.request.submit_argv) == []
 
 
+def test_launch_job_normalizes_legacy_setup_fields(service):
+    job_name = JobName.root("test-user", "legacy-setup")
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=job_pb2.EnvironmentConfig(
+            setup_scripts=["prepare environment"],
+        ),
+    )
+
+    service.launch_job(request, None)
+
+    response = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()), None)
+    layers = response.request.environment.setup_layers
+    assert [(layer.setup_script, layer.lifetime) for layer in layers] == [
+        ("prepare environment", job_pb2.ENVIRONMENT_LAYER_LIFETIME_ENVIRONMENT),
+    ]
+    assert list(response.request.environment.setup_scripts) == []
+
+
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
     job_name = JobName.root("test-user", "redact-test")

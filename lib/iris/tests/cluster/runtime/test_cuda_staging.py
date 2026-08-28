@@ -15,8 +15,9 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, wants_gpu_extra
+from iris.cluster.setup_scripts import SetupPlan, cuda_toolchain_setup_script, wants_gpu_extra
 from iris.cluster.types import EnvironmentSpec
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 
 _CUDA_13_TEST_PACKAGES = (
     ("nvidia-cudnn-cu13", "9.19.0.56", "nvidia/cudnn/lib/libcudnn.so.9"),
@@ -219,8 +220,10 @@ def test_wants_gpu_extra():
 def test_gpu_extra_appends_a_real_staging_step(tmp_path):
     """A GPU job appends exactly one setup step over the CPU baseline, and that
     step actually stages the toolchain — verified by effect, not string identity."""
-    cpu_scripts = list(EnvironmentSpec(extras=["cpu"]).to_proto().setup_scripts)
-    gpu_scripts = list(EnvironmentSpec(extras=["gpu"]).to_proto().setup_scripts)
+    cpu_environment = EnvironmentSpec(setup=SetupPlan.default(extras=["cpu"])).to_proto()
+    gpu_environment = EnvironmentSpec(setup=SetupPlan.default(extras=["gpu"])).to_proto()
+    cpu_scripts = [layer.setup_script for layer in cpu_environment.setup_layers]
+    gpu_scripts = [layer.setup_script for layer in gpu_environment.setup_layers]
 
     appended = gpu_scripts[len(cpu_scripts) :]
     assert len(appended) == 1
@@ -235,5 +238,15 @@ def test_gpu_extra_appends_a_real_staging_step(tmp_path):
 def test_custom_setup_scripts_skip_cuda_staging():
     # An explicit setup_scripts list is used verbatim even with the gpu extra:
     # no staging step is appended, so a bring-your-own setup must stage itself.
-    scripts = list(EnvironmentSpec(extras=["gpu"], setup_scripts=["echo hi\n"]).to_proto().setup_scripts)
+    layers = EnvironmentSpec(setup=SetupPlan.custom(["echo hi\n"], extras=["gpu"])).to_proto().setup_layers
+    scripts = [layer.setup_script for layer in layers if layer.setup_script]
     assert scripts == ["echo hi\n"]
+    assert len(layers) == 2
+    result = subprocess.run(
+        ["bash", "-c", f'source /dev/stdin; printf "%s" "${{{NCCL_RAS_ENABLE_ENV}}}"'],
+        input=layers[1].activation_script,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "1"

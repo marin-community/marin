@@ -101,6 +101,7 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     cache_host_dirname,
     normalize_workdir_relative_path,
+    render_activation_steps,
     render_setup_steps,
 )
 from iris.cluster.runtime.output_capture import task_output_storage_failure
@@ -529,11 +530,12 @@ class PodConfig:
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
     """Build a shell script that runs the setup steps then the run_command."""
-    lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
+    lines = ["set -e", "ulimit -c 0", 'mkdir -p "$IRIS_WORKDIR"', 'cd "$IRIS_WORKDIR"']
     lines.extend(render_setup_steps(run_req.entrypoint.setup_commands))
     # Activate the venv the setup script populated. Conditional on it existing so
     # a custom or no-setup script that brings its own environment runs as-is.
     lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
+    lines.extend(render_activation_steps(run_req.entrypoint.activation_commands))
     if run_req.entrypoint.run_command.argv:
         lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
     return "\n".join(lines)

@@ -50,6 +50,7 @@ from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
+from iris.cluster.setup_scripts import SetupPlan
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     Entrypoint,
@@ -562,9 +563,14 @@ def main(
 
     if workspace_dir is None:
         outer_extras = () if brokered else plan.worker_extras
-        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)])
+        environment = EnvironmentSpec(
+            setup=SetupPlan.custom(
+                [_checkout_free_setup_script(_marin_core_version(), outer_extras)],
+                extras=outer_extras,
+            )
+        )
     else:
-        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras)
+        environment = EnvironmentSpec(setup=SetupPlan.default(extras=() if brokered else plan.worker_extras))
 
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not

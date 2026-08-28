@@ -29,6 +29,7 @@ from google.protobuf import json_format
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
+from iris.cluster.setup_scripts import SetupPlan
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
@@ -121,8 +122,7 @@ def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, st
         resources=resources_from_spec(spec),
         environment=EnvironmentSpec(
             env_vars=env_vars,
-            pip_packages=spec.pip_packages,
-            sync_packages=spec.sync_packages,
+            setup=SetupPlan.default(pip_packages=spec.pip_packages, sync_packages=spec.sync_packages),
         ),
         ports=[spec.port],
         constraints=[region_constraint(list(spec.regions))],
