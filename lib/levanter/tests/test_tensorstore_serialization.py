@@ -614,12 +614,6 @@ def test_checkpoints_without_a_manifest_still_load(tmp_path):
 
 
 def test_a_leaf_absent_from_the_exemplar_is_not_read_back():
-    """Restore is exemplar-driven and checks nothing against the checkpoint.
-
-    An omitted subtree restores without complaint, and a named leaf comes back at the storage dtype
-    rather than the exemplar's, so a layout mismatch cannot be detected after the fact. Callers whose
-    layout changed across checkpoint generations read the manifest first because of this.
-    """
     fp32 = jnp.arange(8, dtype=jnp.float32) + 0.123456789
     written = {"params": fp32.astype(jnp.bfloat16), "master_params": fp32}
 
