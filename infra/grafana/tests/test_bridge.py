@@ -639,6 +639,7 @@ def _watched(
     *,
     iris_running: bool = True,
     iris_state_age: timedelta | None = timedelta(seconds=30),
+    execution_uid: str | None = "attempt-1",
 ) -> WatchedRun:
     return WatchedRun(
         cluster="cw-a",
@@ -646,6 +647,7 @@ def _watched(
         run_id=run_id,
         iris_running=iris_running,
         iris_state_age=iris_state_age,
+        execution_uid=execution_uid,
     )
 
 
@@ -685,7 +687,13 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
         running_since=[now - timedelta(hours=3)],
         running=[64],
     )
-    phase_runs = finelog_result(cluster=["cw-a"], run_id=["hero-a"], telemetry_job=["/u/hero-a-coord/train"])
+    phase_runs = finelog_result(
+        cluster=["cw-a"],
+        run_id=["hero-a"],
+        telemetry_job=["/u/hero-a-coord/train"],
+        execution_uid=["attempt-1"],
+        phase_at=[now - timedelta(seconds=30)],
+    )
 
     assert active_hero_runs(task_states, now) == ()
     runs = watched_runs(task_states, phase_runs, now)
@@ -693,6 +701,28 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
 
     signals = _signals(now, {"phase": {"latest": 1.0}})
     assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), now))
+
+
+def test_watched_run_keeps_an_old_phase_execution_without_phase_only_enrollment():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-a-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    old_phase = finelog_result(
+        cluster=["cw-a", "cw-b"],
+        run_id=["hero-a", "hero-old"],
+        telemetry_job=["/u/hero-a-coord/train", "/u/hero-old-coord/train"],
+        execution_uid=["attempt-1", "attempt-old"],
+        phase_at=[now - timedelta(hours=2), now - timedelta(hours=2)],
+    )
+
+    runs = watched_runs(task_states, old_phase, now)
+
+    assert [(run.run_id, run.execution_uid) for run in runs] == [("hero-a", "attempt-1")]
 
 
 def test_silent_telemetry_pages_whether_or_not_iris_still_runs_the_tasks():
@@ -964,7 +994,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
         ]
     )
 
-    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    query = signal_query(now, (_watched(),))
+    run = signals_by_run(database.execute(query).fetch_arrow_table())["cw-a", "hero-a"]
     signals = run.metrics
 
     throughput = signals["throughput_tokens_per_second"]
@@ -989,7 +1020,9 @@ def test_signal_query_reduces_one_task_attempt_at_a_time():
         ]
     )
 
-    run = signals_by_run(database.execute(signal_query(now, (_watched(),))).fetch_arrow_table())["cw-a", "hero-a"]
+    run = signals_by_run(
+        database.execute(signal_query(now, (_watched(execution_uid="attempt-2"),))).fetch_arrow_table()
+    )["cw-a", "hero-a"]
 
     assert run.execution_uid == "attempt-2"
     assert run.metrics["optim_skipped_step"].recent_total == 1.0

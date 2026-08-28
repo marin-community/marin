@@ -23,7 +23,10 @@ use clap::ValueEnum;
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::policies::{physical_partition_policy_for, PolicyRegistry};
+use crate::policies::{
+    physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
+    storage_policy_for, PolicyRegistry,
+};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
@@ -34,9 +37,9 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, stamp_cluster_column, stored_form, validate_and_align_batch,
-    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
-    MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+    merge_managed_schema, merge_schemas, resolve_key_column, stamp_cluster_column, stored_form,
+    validate_and_align_batch, validate_and_align_forwarded_batch, validate_index_policies,
+    AlignedBatch, Column, Schema, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
@@ -59,6 +62,12 @@ pub struct ForwardedWrite {
     pub rows_written: i64,
     pub persisted_targets: Vec<(String, i64)>,
     pub ignored_columns: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum SchemaRegistration {
+    Additive,
+    Managed,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +153,9 @@ pub struct Store {
     mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
+    /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
+    /// Concurrent first registrations must not build and displace separate engines.
+    namespace_registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
     /// side across the full DataFusion scan, because `query_providers` snapshots
     /// segment PATHS and DataFusion opens those parquet files LAZILY during
@@ -163,6 +175,7 @@ pub struct Store {
     query_visibility: Arc<tokio::sync::RwLock<()>>,
     index_cache: Arc<IndexCache>,
     index_backfill_slot: Arc<Mutex<()>>,
+    physical_layout_migration_slot: Arc<Mutex<()>>,
     policies: PolicyRegistry,
     _store_lock: Option<File>,
 }
@@ -267,9 +280,11 @@ impl Store {
             mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
+            namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
             index_backfill_slot: Arc::new(Mutex::new(())),
+            physical_layout_migration_slot: Arc::new(Mutex::new(())),
             policies: PolicyRegistry::new(telemetry_root_write_mode),
             _store_lock: store_lock,
         };
@@ -400,6 +415,7 @@ impl Store {
             Arc::clone(&self.query_visibility),
             Arc::clone(&self.index_cache),
             Arc::clone(&self.index_backfill_slot),
+            Arc::clone(&self.physical_layout_migration_slot),
             &self.remote_log_dir,
             policy,
         )?;
@@ -496,11 +512,44 @@ impl Store {
         schema: Schema,
         policy: StoragePolicy,
     ) -> Result<Schema, StatsError> {
+        self.register_table_with(name, schema, policy, SchemaRegistration::Additive)
+    }
+
+    /// Register a server-owned schema whose derived layout is authoritative.
+    ///
+    /// Column evolution remains additive, but index and projection policy may
+    /// be withdrawn by a rollout. Callers must supply the canonical server
+    /// schema rather than a client declaration.
+    pub fn register_managed_table(
+        &self,
+        name: &str,
+        schema: Schema,
+        policy: StoragePolicy,
+    ) -> Result<Schema, StatsError> {
+        self.register_table_with(name, schema, policy, SchemaRegistration::Managed)
+    }
+
+    fn register_table_with(
+        &self,
+        name: &str,
+        schema: Schema,
+        policy: StoragePolicy,
+        registration: SchemaRegistration,
+    ) -> Result<Schema, StatsError> {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
         let stored = stored_form(schema);
+        let registration_lock = {
+            let mut locks = self.namespace_registration_locks.lock().unwrap();
+            Arc::clone(
+                locks
+                    .entry(name.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _registration_guard = registration_lock.lock().unwrap();
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -509,9 +558,19 @@ impl Store {
         let had_engine = self.engines.lock().unwrap().contains_key(name);
         let (effective_schema, effective_policy) =
             self.catalog
-                .register_or_evolve(name, stored, policy, move |existing_schema| {
-                    merge_schemas(existing_schema, &stored_for_merge)
-                })?;
+                .register_or_evolve(
+                    name,
+                    stored,
+                    policy,
+                    move |existing_schema| match registration {
+                        SchemaRegistration::Additive => {
+                            merge_schemas(existing_schema, &stored_for_merge)
+                        }
+                        SchemaRegistration::Managed => {
+                            merge_managed_schema(existing_schema, &stored_for_merge)
+                        }
+                    },
+                )?;
         // (Re)build the engine on fresh registration or when the effective schema
         // evolved. The engine re-opens on the same dir, adopting existing
         // segments and recovering next_seq, so an additive evolution keeps the
@@ -580,9 +639,27 @@ impl Store {
         origin_cluster: &str,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        self.write_routed_batch(
-            IngestionBatchSource::Stored(name),
-            batch,
+        let routed = self
+            .policies
+            .route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
+        for partition in &routed {
+            let namespace = &partition.destination.logical_namespace;
+            match self.require_engine(namespace) {
+                Ok(_) => {}
+                Err(StatsError::NamespaceNotFound(_)) => {
+                    let schema = schema_for_namespace(namespace).ok_or_else(|| {
+                        StatsError::SchemaValidation(format!(
+                            "no server-owned schema is registered for {namespace:?}"
+                        ))
+                    })?;
+                    self.register_managed_table(namespace, schema, storage_policy_for(namespace)?)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.append_routed_batches(
+            batch.num_rows() as i64,
+            routed,
             Some(origin_cluster),
             BatchAlignment::ForwardCompatible,
         )
@@ -735,6 +812,7 @@ impl Store {
                 Arc::clone(&self.index_cache),
             )
             .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
+            .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
             .with_exact_postings_policy(exact_postings_policy)
             .with_segment_key_bounds(key_column, segments.key_bounds)
             .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
@@ -958,6 +1036,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::levanter_metrics_policy::levanter_metrics_schema;
     use crate::store::schema::{with_implicit_cluster, with_implicit_seq, CoveringProjection};
 
     fn worker_schema() -> Schema {
@@ -999,6 +1078,48 @@ mod tests {
             .column("cluster")
             .expect("implicit cluster column");
         assert!(cluster.nullable);
+    }
+
+    #[test]
+    fn managed_levanter_registration_can_disable_stale_index_policy() {
+        let store = mem_store();
+        let mut stale = levanter_metrics_schema();
+        stale
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .unwrap()
+            .index
+            .trigram = true;
+        stale
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "kind")
+            .unwrap()
+            .index
+            .value_counts = true;
+        store
+            .catalog
+            .register_or_evolve(
+                "levanter.metrics",
+                stored_form(stale),
+                StoragePolicy::default(),
+                |_| unreachable!("fresh catalog registration does not merge"),
+            )
+            .unwrap();
+
+        let effective = store
+            .register_managed_table(
+                "levanter.metrics",
+                levanter_metrics_schema(),
+                StoragePolicy::default(),
+            )
+            .unwrap();
+        assert!(effective.columns.iter().all(|column| {
+            !column.index.trigram
+                && !column.index.value_counts
+                && column.index.exact_values.is_empty()
+        }));
     }
 
     #[test]

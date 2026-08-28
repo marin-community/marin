@@ -265,7 +265,6 @@ class InMemoryK8sService:
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._node_resource_metrics: dict[str, str] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -275,6 +274,9 @@ class InMemoryK8sService:
         # Every explicit-namespace pod call as (operation, namespace), so
         # tests can assert the eviction feature stays silent when disabled.
         self.namespaced_pod_calls: list[tuple[str, str]] = []
+        # Every explicit-namespace pod list as (namespace, labels, field_selector), so
+        # tests can assert a caller filters server-side instead of listing everything.
+        self.namespaced_pod_list_selectors: list[tuple[str, dict[str, str] | None, str | None]] = []
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
@@ -539,9 +541,6 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_node_resource_metrics(self, node_name: str, text: str) -> None:
-        self._node_resource_metrics[node_name] = text
-
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
 
@@ -594,9 +593,26 @@ class InMemoryK8sService:
         field_selector: str | None = None,
         namespace: str | None = None,
     ) -> Iterator[dict]:
-        # The fake holds one namespace, so an override resolves to the same store; it
-        # is accepted so the fake still stands in for cross-namespace reads.
-        yield from self.list_json(resource, labels=labels, field_selector=field_selector)
+        self._check_failure("iter_json")
+        if namespace is None or namespace == self._namespace:
+            yield from self.list_json(resource, labels=labels, field_selector=field_selector)
+            return
+        if resource is not K8sResource.PODS:
+            raise NotImplementedError(f"the fake stores no foreign-namespace {resource.plural}")
+        # A foreign namespace reads the store seeded by seed_namespaced_pod. The selectors
+        # are applied here because the real service applies them server-side; the recorded
+        # pair lets tests pin that they were pushed down rather than filtered by the caller.
+        self.namespaced_pod_calls.append(("list", namespace))
+        self.namespaced_pod_list_selectors.append((namespace, labels, field_selector))
+        for (pod_namespace, _), manifest in self._namespaced_pods.items():
+            if pod_namespace != namespace:
+                continue
+            pod_labels = manifest.get("metadata", {}).get("labels", {})
+            if labels and not all(pod_labels.get(key) == value for key, value in labels.items()):
+                continue
+            if field_selector and not _matches_field_selector(manifest, field_selector):
+                continue
+            yield manifest
 
     def list_json(
         self,
@@ -795,10 +811,6 @@ class InMemoryK8sService:
             if _matches_field_selector(event, field_selector):
                 results.append(event)
         return results
-
-    def node_resource_metrics(self, node_name: str) -> str:
-        self._check_failure("node_resource_metrics")
-        return self._node_resource_metrics.get(node_name, "")
 
     def read_file(
         self,

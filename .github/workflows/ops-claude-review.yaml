@@ -96,6 +96,38 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      # The review ships one telemetry row per run through the finelog client
+      # (infra/codehealth/log_stats.py). Sync just that package so the write
+      # does not cold-resolve the whole workspace mid-review.
+      - name: Sync the finelog client
+        run: uv sync --package marin-finelog --frozen
+
+      # Finelog sits behind Iris IAP and the unattended write mints its own edge
+      # token from these credentials, so the identity behind the key needs
+      # roles/iap.httpsResourceAccessor on the Iris backend service. Without
+      # usable credentials the review still runs and the row is lost with a
+      # message in its log.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      # The checkout above is the synthetic merge ref, so local git state names
+      # the merge commit. Name the reviewed branch explicitly, or the row cannot
+      # be joined to its pull request. consult-agent is a composite action whose
+      # inner step defines its own environment, so a step-level `env:` would not
+      # reach the nested agent that spawns log_stats.py; $GITHUB_ENV does.
+      - name: Export the review telemetry environment
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            echo "MARIN_REVIEW_TRIGGER=ci"
+            echo "MARIN_REVIEW_PR_NUMBER=${PR_NUMBER}"
+            echo "MARIN_REVIEW_HEAD_SHA=${HEAD_SHA}"
+          } >> "$GITHUB_ENV"
+
       - name: Run Lint Review
         id: claude
         uses: marin-community/marin-style/actions/consult-agent@main

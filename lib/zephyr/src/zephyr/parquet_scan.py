@@ -10,7 +10,7 @@ import polars as pl
 from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 
 
-def scan_parquet(path: str) -> pl.LazyFrame:
+def scan_parquet(path: str, *, schema: pl.Schema | None = None) -> pl.LazyFrame:
     """Scan a Parquet file, qualifying the endpoint where the store demands it.
 
     Polars' Rust object_store client reads credentials and region from the
@@ -22,7 +22,7 @@ def scan_parquet(path: str) -> pl.LazyFrame:
     """
     endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
     if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
-        return pl.scan_parquet(path)
+        return pl.scan_parquet(path, schema=schema)
 
     bucket = urlparse(path).netloc
     parsed_endpoint = urlparse(endpoint)
@@ -32,6 +32,7 @@ def scan_parquet(path: str) -> pl.LazyFrame:
 
     return pl.scan_parquet(
         path,
+        schema=schema,
         storage_options={
             "aws_endpoint_url": endpoint,
             "aws_virtual_hosted_style_request": "true",

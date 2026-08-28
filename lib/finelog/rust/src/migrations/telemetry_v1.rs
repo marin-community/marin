@@ -19,10 +19,9 @@ use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 use crate::ingestion_policy::IngestionBatchSource;
-use crate::partition_policy::{select_rows, SegmentPartition};
+use crate::partition_policy::select_rows;
 use crate::policies::{
-    eager_storage_namespaces_for, physical_partition_policy_for, schema_for_namespace,
-    storage_policy_for, PolicyRegistry,
+    eager_storage_namespaces_for, schema_for_namespace, storage_policy_for, PolicyRegistry,
 };
 use crate::server::telemetry::TELEMETRY_MAX_ROW_GROUP_ROWS;
 use crate::store::catalog::{Catalog, CATALOG_DB_FILENAME};
@@ -183,8 +182,6 @@ pub struct SourceSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedOutput {
     pub namespace: String,
-    #[serde(default)]
-    pub partition: Option<SegmentPartition>,
     pub relative_path: String,
     pub min_seq: i64,
     pub max_seq: i64,
@@ -195,14 +192,8 @@ pub struct PlannedOutput {
     pub file_sha256: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct MigrationDestination {
-    namespace: String,
-    partition: Option<SegmentPartition>,
-}
-
 struct DestinationWriter {
-    destination: MigrationDestination,
+    namespace: String,
     min_seq: i64,
     next_seq: i64,
     rows: i64,
@@ -663,7 +654,7 @@ fn replace_catalog_for_publish(
                 created_at_ms,
                 min_key_value: Some(output.min_timestamp_ms.to_string()),
                 max_key_value: Some(output.max_timestamp_ms.to_string()),
-                partition: output.partition.clone(),
+                partition: None,
                 location: SegmentLocation::Local,
             })
         })
@@ -1118,26 +1109,18 @@ fn write_source_outputs(
             IngestionBatchSource::Stored(source.namespace.as_str()),
             &batch,
         )? {
-            for (destination, batch) in physical_migration_batches(
-                partition.destination.logical_namespace,
-                partition.batch,
-            )? {
-                if !writers.contains_key(&destination) {
-                    let writer = create_destination_writer(
-                        &destination,
-                        writers.len(),
-                        source_offset,
-                        config,
-                    )?;
-                    writers.insert(destination.clone(), writer);
-                }
-                write_destination_batch(
-                    writers
-                        .get_mut(&destination)
-                        .expect("destination writer was just created"),
-                    &batch,
-                )?;
+            let destination = partition.destination.logical_namespace;
+            if !writers.contains_key(&destination) {
+                let writer =
+                    create_destination_writer(&destination, writers.len(), source_offset, config)?;
+                writers.insert(destination.clone(), writer);
             }
+            write_destination_batch(
+                writers
+                    .get_mut(&destination)
+                    .expect("destination writer was just created"),
+                &partition.batch,
+            )?;
         }
         if last_progress.elapsed() >= PROGRESS_LOG_INTERVAL {
             tracing::info!(
@@ -1188,7 +1171,7 @@ fn migrated_source_offset(source_index: usize) -> Result<i64, StatsError> {
 }
 
 fn create_destination_writer(
-    destination: &MigrationDestination,
+    namespace: &str,
     output_index: usize,
     source_offset: i64,
     config: &PrepareConfig,
@@ -1202,7 +1185,7 @@ fn create_destination_writer(
         .checked_mul(MIGRATED_SEQ_ROWS_PER_OUTPUT)
         .and_then(|offset| source_offset.checked_add(offset))
         .ok_or_else(|| validation_error("migrated sequence range overflowed"))?;
-    let relative_path = Path::new(&destination.namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
+    let relative_path = Path::new(namespace).join(seg_filename(OUTPUT_LEVEL, min_seq));
     let final_path = config.output_dir.join(relative_path);
     let parent = final_path
         .parent()
@@ -1216,18 +1199,17 @@ fn create_destination_writer(
         }
     }
     let file = File::create(&temporary_path).map_err(internal_error("create output segment"))?;
-    let target_schema =
-        schema_to_arrow(&stored_form(migration_schema_for(&destination.namespace)?));
+    let target_schema = schema_to_arrow(&stored_form(migration_schema_for(namespace)?));
     let options =
         ArrowWriterOptions::new().with_properties(segment_writer_properties_with_partition(
             usize::try_from(TELEMETRY_MAX_ROW_GROUP_ROWS)
                 .expect("telemetry row-group limit fits usize"),
-            destination.partition.as_ref(),
+            None,
         )?);
     let writer = ArrowWriter::try_new_with_options(file, Arc::clone(&target_schema), options)
         .map_err(internal_error("create output parquet writer"))?;
     Ok(DestinationWriter {
-        destination: destination.clone(),
+        namespace: namespace.to_string(),
         min_seq,
         next_seq: min_seq,
         rows: 0,
@@ -1279,7 +1261,7 @@ fn write_destination_batch(
 }
 
 fn finish_destination_writers(
-    writers: BTreeMap<MigrationDestination, DestinationWriter>,
+    writers: BTreeMap<String, DestinationWriter>,
     output_dir: &Path,
 ) -> Result<Vec<PlannedOutput>, StatsError> {
     let mut outputs = Vec::with_capacity(writers.len());
@@ -1299,8 +1281,7 @@ fn finish_destination_writers(
             .to_string_lossy()
             .into_owned();
         outputs.push(PlannedOutput {
-            namespace: writer.destination.namespace,
-            partition: writer.destination.partition,
+            namespace: writer.namespace,
             relative_path,
             min_seq: writer.min_seq,
             max_seq: writer.next_seq - 1,
@@ -1315,9 +1296,7 @@ fn finish_destination_writers(
             file_sha256: Some(file_sha256(&writer.final_path)?),
         });
     }
-    outputs.sort_by(|left, right| {
-        (&left.namespace, &left.partition).cmp(&(&right.namespace, &right.partition))
-    });
+    outputs.sort_by(|left, right| left.namespace.cmp(&right.namespace));
     Ok(outputs)
 }
 
@@ -1338,35 +1317,6 @@ fn record_source_outputs(
     source.outputs = outputs;
     source.complete = true;
     Ok(())
-}
-
-fn physical_migration_batches(
-    namespace: String,
-    batch: RecordBatch,
-) -> Result<Vec<(MigrationDestination, RecordBatch)>, StatsError> {
-    let Some(policy) = physical_partition_policy_for(&namespace) else {
-        return Ok(vec![(
-            MigrationDestination {
-                namespace,
-                partition: None,
-            },
-            batch,
-        )]);
-    };
-    Ok(policy
-        .partition_batches(&[batch])?
-        .into_iter()
-        .flat_map(|output| {
-            let destination = MigrationDestination {
-                namespace: namespace.clone(),
-                partition: Some(output.partition),
-            };
-            output
-                .batches
-                .into_iter()
-                .map(move |batch| (destination.clone(), batch))
-        })
-        .collect())
 }
 
 fn align_migrated_batch(
@@ -1534,7 +1484,7 @@ fn verify_output_file(
     if footer.row_count != output.rows
         || footer.min_seq != output.min_seq
         || footer.max_seq != output.max_seq
-        || footer.partition != output.partition
+        || footer.partition.is_some()
     {
         return Err(validation_error(format!(
             "output segment metadata differs from plan: {}",
@@ -2103,7 +2053,6 @@ mod tests {
             .filter(|output| output.namespace == LEVANTER_NAMESPACE)
             .collect::<Vec<_>>();
         assert_eq!(levanter_outputs.len(), 1);
-        assert!(levanter_outputs[0].partition.is_none());
         let staged_dir = dirs.store.join(MIGRATION_DIRECTORY).join(STAGED_DIRECTORY);
         assert!(manifest
             .source_segments
@@ -2190,7 +2139,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_in_place_indexes_steps_independently_of_physical_row_order() {
+    fn prepare_in_place_indexes_steps_and_stages_unpartitioned_l0() {
         let dirs = TestDirs::new("legacy_levanter_metrics");
         let catalog = Catalog::open(Some(&dirs.store)).unwrap();
         let chronological =
@@ -2223,13 +2172,6 @@ mod tests {
             crate::levanter_metrics_policy::LEVANTER_METRICS_NAMESPACE
         );
         assert_eq!(output.rows, 1);
-        assert_eq!(
-            output
-                .partition
-                .as_ref()
-                .and_then(|partition| partition.value("run_id")),
-            Some("run/+long")
-        );
 
         let staged_path = dirs
             .store

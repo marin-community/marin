@@ -113,15 +113,29 @@ pub struct MemorySummary {
 
 /// The filename part of `path`, or `path` itself when it has none.
 ///
-/// Segments are identified by basename nearly everywhere outside the catalog —
-/// logs, the remote archive's object keys, the debug and introspection routes —
-/// because the directory is a property of the store, not of the segment.
+/// Segments are identified by basename in logs and introspection routes. Remote
+/// archive keys use [`segment_relative_key`] so physical partitions survive.
 pub fn basename(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+/// Object-store key for a catalog segment path relative to its namespace dir.
+pub fn segment_relative_key(namespace_dir: &std::path::Path, path: &str) -> Option<String> {
+    let relative = std::path::Path::new(path)
+        .strip_prefix(namespace_dir)
+        .ok()?;
+    let parts = relative
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// Filename for a segment at `level` whose smallest seq is `min_seq`.

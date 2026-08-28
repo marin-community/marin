@@ -31,7 +31,7 @@ use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::arrow::ProjectionMask;
 
 use crate::errors::StatsError;
-use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
+use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
@@ -136,7 +136,13 @@ pub fn run_job_with_partition_policy(
             .is_none_or(|partition| !policy.is_current_partition(partition))
     });
     if job.inputs.len() == 1 && !needs_repartition {
-        apply_level_bump(&job.inputs[0], job.output_level, dir, &input_key_bounds)
+        apply_level_bump(
+            &job.inputs[0],
+            job.output_level,
+            dir,
+            execution.partition_policy,
+            &input_key_bounds,
+        )
     } else {
         apply_merge(
             job,
@@ -166,6 +172,7 @@ fn apply_level_bump(
     old: &SegmentRow,
     output_level: i32,
     dir: &Path,
+    partition_policy: Option<&dyn PhysicalPartitionPolicy>,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
     if !Path::new(&old.path).exists() {
@@ -176,7 +183,13 @@ fn apply_level_bump(
         return Ok(drop_missing_input(old));
     }
     let new_filename = seg_filename(output_level, old.min_seq);
-    let new_path = dir.join(&new_filename);
+    let new_path = segment_path(
+        dir,
+        &new_filename,
+        output_level,
+        old.partition.as_ref(),
+        partition_policy,
+    );
     let (min_key, max_key) = input_key_bounds(&old.path);
     let bumped = LocalSegment {
         path: new_path.to_string_lossy().into_owned(),
@@ -282,7 +295,13 @@ fn apply_merge(
                         error = %e,
                         "unreadable merge input at run head; promoting or dropping it"
                     );
-                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
+                    return apply_level_bump(
+                        inp,
+                        job.output_level,
+                        dir,
+                        execution.partition_policy,
+                        input_key_bounds,
+                    );
                 }
                 tracing::warn!(
                     path = %inp.path,
@@ -320,7 +339,13 @@ fn apply_merge(
     // so it costs no merge memory and its level still advances.
     if consumed.len() == 1 && !needs_repartition {
         drop(projected);
-        return apply_level_bump(consumed[0], job.output_level, dir, input_key_bounds);
+        return apply_level_bump(
+            consumed[0],
+            job.output_level,
+            dir,
+            execution.partition_policy,
+            input_key_bounds,
+        );
     }
 
     let merged = kway_merge(&projected, &sort_cols)
@@ -347,8 +372,23 @@ fn apply_merge(
             StatsError::Internal("compaction produced an empty physical partition".to_string())
         })?;
         let merged_filename = seg_filename(job.output_level, min_seq);
-        let merged_path = dir.join(&merged_filename);
-        let staging_path = dir.join(format!("{merged_filename}.tmp"));
+        let merged_path = segment_path(
+            dir,
+            &merged_filename,
+            job.output_level,
+            partition.as_ref(),
+            execution.partition_policy,
+        );
+        let output_dir = merged_path
+            .parent()
+            .expect("physical segment path has a parent");
+        std::fs::create_dir_all(output_dir).map_err(|error| {
+            StatsError::Internal(format!(
+                "create physical segment directory {}: {error}",
+                output_dir.display()
+            ))
+        })?;
+        let staging_path = output_dir.join(format!("{merged_filename}.tmp"));
         write_merged_segment(
             &staging_path,
             arrow_schema,

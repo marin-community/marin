@@ -977,7 +977,7 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
 
-    async def healthz(_request: Request) -> JSONResponse:
+    async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "store": store.backend})
 
     async def api_runs(request: Request) -> JSONResponse:
@@ -1174,7 +1174,8 @@ def create_app(
         return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
 
     routes = [
-        Route("/healthz", healthz),
+        # Cloud Run reserves some paths ending in "z" before they reach the container.
+        Route("/health", health),
         Route("/api/runs", api_runs),
         Route("/api/groups", api_groups),
         Route("/api/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
