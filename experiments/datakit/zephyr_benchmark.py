@@ -15,7 +15,7 @@ Example (the full preset from the `ab-test-zephyr` skill):
 
     python -m experiments.datakit.zephyr_benchmark \
         --sources all --run-tag zephyr-100b-v1 \
-        --pool-workers 256 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+        --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
         --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
         --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
         --target all --max-concurrent 128 \
@@ -27,7 +27,7 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
 
     python -m experiments.datakit.zephyr_benchmark \
         --source-fraction 0.1 --run-tag zephyr-100b-light-v1 \
-        --pool-workers 64 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+        --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
         --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g \
         --reduce-task-cpu 3 --reduce-task-ram 30g --reduce-task-disk 8g \
         --target all --max-concurrent 80 \
@@ -313,9 +313,8 @@ def main() -> None:
         help=(
             "Max connected-components rounds for fuzzy dedup. Both datakit ferries pin this "
             "to 3; each extra round is a full scatter/reduce pass over the whole bucket graph "
-            "(~5-6 minutes observed at the light preset's scale), so the library default of 10 "
-            "makes fuzzy dedup dominate the benchmark's wall time without adding representative "
-            "signal."
+            "and the library default of 10 makes fuzzy dedup dominate the benchmark's wall time "
+            "without adding representative signal."
         ),
     )
     args = parser.parse_args()

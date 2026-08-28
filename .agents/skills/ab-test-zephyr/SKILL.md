@@ -105,21 +105,23 @@ commits. Add arms only when explicitly requested.
 `experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
 and routes outputs to a seven-day temporary prefix. Use an immutable,
 region-local sample. Its default input is the GCS 100B sample in `europe-west4`.
-All arguments except `--run-tag` must match across the control and treatments.
+All arguments except fresh output run tags must match across the control and
+treatments.
 
 ### Choose a benchmark scale preset
 
-| Preset | Sample | `--sources` / `--source-fraction` | `--pool-workers` | `--pool-cpu` | `--pool-ram` | `--pool-disk` | `--max-concurrent` | `--dedup-max-parallelism` | `--dedup-cc-max-iterations` |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| Full (matches the nemotron ferry) | `sample_100b_8ae7a94f` (measured: 256 GB, 768 parquet shards across 115 sources — the closest pre-built size to the ferry's ~350 GB) | `--sources all` | 512 | 16 | 160g | 32g | 8 | 1000 | 3 |
-| Light (~10% data, faster) | `sample_100b_8ae7a94f`, auto-selected subset | `--source-fraction 0.1` (measured: 77 sources, ~27 GB, 165 shards) | 128 | 16 | 160g | 32g | 8 | 500 | 3 |
+| Preset | Input | Workers | Map task | Reduce task | Pipelines | Dedup shards | CC rounds |
+|---|---|---|---|---|---:|---:|---:|
+| Full | `--sources all`: 256 GB, 768 parquet shards, 115 sources | 12 × 8 CPU / 64 GiB RAM / 32 GiB disk | 1 CPU / 8 GiB RAM / 4 GiB disk | 3 CPU / 30 GiB RAM / 8 GiB disk | 128 | 1000 | 3 |
+| Light | `--source-fraction 0.1`: 26.8 GB, 165 parquet shards, 77 sources | 12 × 8 CPU / 64 GiB RAM / 32 GiB disk | 1 CPU / 8 GiB RAM / 4 GiB disk | 3 CPU / 30 GiB RAM / 8 GiB disk | 80 | 500 | 3 |
 
 Use the full preset for a change that could regress the shared pool at
 production scale (shuffle, partitioning, spill, buffer, or scheduling
 changes). Use the light preset for a quicker, cheaper signal on a
 stage-local change.
 
-There is no pre-built sample near 10% of the ferry's size, so
+The full sample is the closest pre-built workload to the nemotron ferry's
+measured ~350 GB shape. There is no pre-built sample near 10% of that size, so
 `zephyr_benchmark.py` builds the light preset's data at launch time:
 `--source-fraction 0.1` lists every source's parquet shards, greedily selects
 whole sources ordered by ascending average shard size (favoring shard-dense
@@ -130,42 +132,72 @@ the resulting source count, bytes, and shard count.
 parquet shard count of the selected sources (whether from `--sources` or
 `--source-fraction`), rather than silently leaving workers idle.
 
-### Why `--max-concurrent` and `--dedup-cc-max-iterations` are set this way
+### Worker and task sizing
 
-A light-preset run measured at 2h20m against these settings, diagnosed via
-Finelog (`zephyr.stage`) and Iris job logs:
+The worker is a scheduling unit; the task is the subprocess capacity reserved
+inside it. Each preset packs up to eight map tasks or two reduce tasks onto one
+worker. Global exact dedup and tokenization accept the same task sizing as
+MinHash and fuzzy dedup, so no benchmark stage silently falls back to one task
+per worker.
 
-- **`--max-concurrent`** limits how many StepRunner steps run at once, sharing
-  one Zephyr pool (`zephyr_benchmark.py` enters one `ZephyrContext` around the
-  whole DAG, and passes the same value as `max_concurrent_pipelines` since the
-  two must stay in lockstep — see below). During the tokenize/minhash phase,
-  summed stage `elapsed` divided by wall time showed effective concurrency
-  tracking `--max-concurrent` almost exactly (~3.8x observed against a limit
-  of 4) — the pool sat mostly idle because too few of the 154 independent
-  per-source pipelines were in flight at once. That looked like room to raise
-  `--max-concurrent` well past 4, but the pool's coordinator is one actor with
-  a *fixed* concurrent-call budget (`ActorConfig(max_concurrency=100)` in
-  `zephyr.execution`) shared between every in-flight pipeline wait and every
-  worker's poll/heartbeat/registration call — and a pipeline wait holds its
-  slot for the pipeline's whole duration, not briefly. Raising `--max-concurrent`
-  (and `max_concurrent_pipelines` with it, since Zephyr's coordinator rejects a
-  pipeline outright rather than queuing it once `max_concurrent_pipelines` is
-  reached) to 32 against the light preset's 128-worker pool starved worker
-  calls of a slot entirely and deadlocked the pool: pipelines waited on workers
-  that couldn't get a slot to report back. 8 is double the proven-safe original
-  (4) with real headroom left for worker traffic; a caller that wants more
-  concurrent pipelines than that leaves headroom for should raise the
-  coordinator's own `max_concurrency` (a `zephyr` library change) rather than
-  push `max_concurrent_pipelines` closer to it.
+Both presets use the same 12-worker pool, exposing up to 96 concurrent map
+tasks or 24 concurrent reduce tasks. Keeping compute fixed exposes the full
+sample's 9.57x byte increase in wall time. A 256-worker full run completed in
+23m41s, ramped to 512 concurrent reduce tasks, and triggered GCS `429 SlowDown`
+responses.
+
+The calibrated 12-worker presets completed without shard retries, GCS 429s,
+Iris failures, or preemptions. The light run processed 26.8 GB in 27m25s and
+used 16.91 CPU-hours. The full run processed 256.4 GB in 2h54m28s and used
+182.83 CPU-hours; Finelog recorded 18,970 completed shards and a 6.61 GiB
+maximum stage memory peak. These measurements include all benchmark stages and
+three connected-components rounds.
+
+An 8 CPU / 64 GiB worker is below half of even the smallest Iris TPU host
+(v5e: 112 CPU / 192 GiB). Iris can place up to three such workers on a v5e host
+and more on larger TPU hosts when their remaining capacity permits. Keep the
+task memory at or above the ferry-tested 8 GiB map and 30 GiB reduce shapes;
+reducing the worker further would prevent two reducers from sharing it.
+
+### Pipeline and connected-components limits
+
+The previous light benchmark took 2h20m with four concurrent pipelines, one
+task admitted per worker, and the default connected-components budget. Finelog
+(`zephyr.stage`) and Iris job logs identified both bottlenecks:
+
+- **`--max-concurrent`** limits StepRunner fan-out and concurrent pipelines in
+  the shared pool; worker count and per-task resources separately bound shard
+  concurrency. During the tokenize/MinHash phase, each source contributes
+  two independent pipelines, so low values strand most of the pool. Zephyr
+  sizes the coordinator actor's call budget to
+  `max(100, 2 * workers + max_concurrent_pipelines)`: long-lived pipeline waits
+  cannot occupy the slots workers need for polling and heartbeats. Keep the two
+  concurrency limits equal; the coordinator rejects excess pipelines instead
+  of queueing them. Fray must pass this actor setting through to Iris's
+  `ActorServer`; otherwise Iris's 32-call default can starve worker heartbeats
+  even though Zephyr requested a larger budget.
 - **`--dedup-cc-max-iterations`** bounds fuzzy dedup's connected-components
   rounds. Each round is a full scatter/reduce pass over the whole bucket graph
-  regardless of how little remains to resolve; the same run showed 11
+  regardless of how little remains to resolve; the earlier run showed 11
   sequential rounds at ~350s each — about 65 of the 140 minutes after
   tokenize/minhash finished — because `zephyr_datakit_steps` left
   `cc_max_iterations` at the library default of 10 instead of the 3 both
   datakit ferries use. Set it to 3 to match ferry behavior and cut this phase
   by roughly 3x; dedup completeness in the benchmark's output does not matter
   for a performance comparison.
+
+### Select map or shuffle work
+
+`--target all` runs exact dedup, tokenization, MinHash, and fuzzy dedup. For a
+map-only comparison, use `--target map`; it runs tokenization and MinHash with a
+fresh run tag.
+
+A shuffle comparison requires completed MinHash inputs. First run
+`--target map --run-tag <MAP_RUN_TAG>`, then run
+`--target shuffle --shuffle-input-run-tag <MAP_RUN_TAG>` with a fresh output
+run tag. The benchmark checks every selected source's MinHash artifact before
+starting the pool. `shuffle` runs global exact and fuzzy dedup; `exact`,
+`tokenize`, `minhash`, and `fuzzy` are also available for a single-stage run.
 
 Set exactly one data-locality argument before launching:
 
@@ -205,8 +237,14 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
     --pool-cpu <CPU_PER_WORKER> \
     --pool-ram <RAM_PER_WORKER> \
     --pool-disk <DISK_PER_WORKER> \
-    --first-stage <exact|tokenize|minhash|fuzzy> \
-    --last-stage <exact|tokenize|minhash|fuzzy> \
+    --map-task-cpu <CPU_PER_MAP_TASK> \
+    --map-task-ram <RAM_PER_MAP_TASK> \
+    --map-task-disk <DISK_PER_MAP_TASK> \
+    --reduce-task-cpu <CPU_PER_REDUCE_TASK> \
+    --reduce-task-ram <RAM_PER_REDUCE_TASK> \
+    --reduce-task-disk <DISK_PER_REDUCE_TASK> \
+    --target <all|map|shuffle|exact|tokenize|minhash|fuzzy> \
+    `# add --shuffle-input-run-tag <MAP_RUN_TAG> for shuffle or fuzzy` \
     --max-concurrent <PIPELINES> \
     --dedup-max-parallelism <SHARDS> \
     --dedup-cc-max-iterations <ROUNDS>
@@ -216,8 +254,8 @@ Record this workload fingerprint for every arm:
 
 - commit SHA and Iris job ID
 - sample prefix and source selection
-- first and last stage
-- pool workers, CPU, RAM, and disk
+- benchmark target and shuffle input run tag, when present
+- pool worker and per-task CPU, RAM, and disk
 - maximum concurrent pipelines, dedup parallelism, and dedup CC max iterations
 - Iris controller, data-local target cluster or region, priority, and preemptibility
 - run tag
