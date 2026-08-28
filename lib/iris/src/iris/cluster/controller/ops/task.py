@@ -7,9 +7,9 @@ The glues here are small per-tick wrappers around the transition kernel: load
 a closed snapshot covering the affected tasks, call the matching
 ``ReconcileState`` verb, return the effects. ``finalize`` wraps the kernel's
 ``finalize_tasks`` against the caller's write transaction and commits; the
-backend-facing ``apply_dispatch_updates`` wraps ``record_updates`` against the
-backend's read snapshot and returns the effects uncommitted (the controller
-commits them via ``commit_effects``). ``assign`` is the only scheduler-driven
+controller-facing ``apply_dispatch_updates`` validates exact provider
+observations against a fresh read snapshot, wraps ``record_updates``, and returns
+effects uncommitted. ``assign`` is the only scheduler-driven
 write that doesn't go through the kernel — PENDING → ASSIGNED is a direct-write
 transition with no cascade semantics.
 
@@ -17,6 +17,7 @@ Worker-reported task states are authored through ``ops.worker.apply_reconcile``
 (the reconcile loop), not here.
 """
 
+import logging
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
@@ -32,10 +33,13 @@ from iris.cluster.controller.reconcile import (
 )
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
+from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -120,28 +124,41 @@ def assign(
 
 def apply_dispatch_updates(
     source: TransitionReader,
-    updates: list[TaskUpdate],
+    observations: list[ObservedTaskUpdate],
     *,
     now: Timestamp,
 ) -> ControllerEffects:
     """Author effects for direct-provider updates from a read snapshot (no commit).
 
-    The cluster backend's reconcile glue: load a snapshot covering the updated
-    tasks through the backend's own read surface, run the direct-dispatch state
-    machine, and return the effects for the controller to commit. ``now`` stamps
+    The controller's direct-provider reconcile glue: load a snapshot covering
+    the observations, reject stale Attempt UIDs, run the state machine, and
+    return effects for the controller to commit. ``now`` stamps
     the snapshot, which ``record_updates`` reads for its transition timestamps.
     """
     relevant_task_ids = [
-        update.task_id
-        for update in updates
-        if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
+        observation.task_id
+        for observation in observations
+        if observation.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
     ]
-    attempt_keys = [(update.task_id, update.attempt_id) for update in updates]
+    attempt_keys = [(observation.task_id, observation.attempt_id) for observation in observations]
     snapshot = source.transition_snapshot(
         now=now,
         seed_task_ids=relevant_task_ids,
         extra_attempt_keys=attempt_keys,
+        observation_uids=[observation.attempt_uid for observation in observations],
     )
+    updates: list[TaskUpdate] = []
+    for observation in observations:
+        resolved = snapshot.attempt_uid_index.get(observation.attempt_uid)
+        if resolved != (observation.task_id, observation.attempt_id):
+            logger.warning(
+                "Dropping stale provider observation: task=%s attempt=%d uid=%s",
+                observation.task_id,
+                observation.attempt_id,
+                observation.attempt_uid,
+            )
+            continue
+        updates.append(observation)
     return ReconcileState.open(snapshot).record_updates(updates)
 
 

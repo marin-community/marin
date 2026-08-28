@@ -8,7 +8,6 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from finelog.rpc import logging_pb2
-from rigging.timing import Timestamp
 
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -17,19 +16,19 @@ from iris.cluster.controller.backend import (
     BackendKind,
     BackendRuntime,
     DeviceCapacity,
+    DirectTaskObservation,
     ProviderUnsupportedError,
+    ReconcileObservation,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerFleetObservation,
 )
-from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.reconcile.loader import TransitionReader
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 
 
@@ -39,6 +38,7 @@ class ScriptedObservation:
     error: str = ""
     exit_code: int | None = None
     attempt_id: int | None = None
+    attempt_uid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +64,11 @@ class ScriptedTaskBackend:
 
     def __init__(
         self,
-        transition_reader: TransitionReader,
         *,
         backend_id: str = DEFAULT_BACKEND_ID,
         advertised_attributes: dict[str, set[str]] | None = None,
         kind: BackendKind = BackendKind.KUBERNETES,
     ) -> None:
-        self._transition_reader = transition_reader
         self.descriptor = BackendDescriptor(
             backend_id=backend_id,
             display_name="journey",
@@ -78,7 +76,7 @@ class ScriptedTaskBackend:
             advertised_attributes=advertised_attributes or {"region": {"us-central1"}},
         )
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
-        self._desired: set[tuple[str, int]] = set()
+        self._desired: dict[tuple[str, int], str] = {}
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
@@ -120,38 +118,36 @@ class ScriptedTaskBackend:
         self.calls.append("schedule")
         return ScheduleResult()
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         self.calls.append("reconcile")
         if self._reconcile_failures:
             self._reconcile_failures -= 1
             raise ConnectionError("scripted backend is unavailable")
-        desired = {(run.task_id, run.attempt_id) for run in request.tasks_to_run} | {
-            (entry.task_id.to_wire(), entry.attempt_id) for entry in request.running_tasks
+        desired = {
+            **{(run.task_id, run.attempt_id): run.attempt_uid for run in request.tasks_to_run},
+            **{(entry.task_id.to_wire(), entry.attempt_id): entry.attempt_uid for entry in request.running_tasks},
         }
-        for task_id, attempt_id in sorted(self._desired - desired):
+        for task_id, attempt_id in sorted(self._desired.keys() - desired.keys()):
             self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.descriptor.backend_id))
 
-        updates: list[TaskUpdate] = []
+        updates: list[ObservedTaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
-        for task_id, attempt_id in sorted(newly_launched - self._desired):
+        for task_id, attempt_id in sorted(newly_launched - self._desired.keys()):
             self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.descriptor.backend_id))
             queued = self._pop_observation(task_id)
             if queued is None:
                 queued = ScriptedObservation(job_pb2.TASK_STATE_RUNNING)
             observed_attempt_id = attempt_id if queued.attempt_id is None else queued.attempt_id
-            updates.append(self._task_update(task_id, observed_attempt_id, queued))
+            updates.append(self._task_update(task_id, observed_attempt_id, desired[(task_id, attempt_id)], queued))
 
-        for task_id, attempt_id in sorted(desired - newly_launched):
+        for task_id, attempt_id in sorted(desired.keys() - newly_launched):
             queued = self._pop_observation(task_id)
             if queued is not None:
                 observed_attempt_id = attempt_id if queued.attempt_id is None else queued.attempt_id
-                updates.append(self._task_update(task_id, observed_attempt_id, queued))
+                updates.append(self._task_update(task_id, observed_attempt_id, desired[(task_id, attempt_id)], queued))
 
         self._desired = desired
-        if not updates:
-            return ReconcileResult()
-        effects = apply_dispatch_updates(self._transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
+        return DirectTaskObservation(updates=updates)
 
     def _pop_observation(self, task_id: str) -> ScriptedObservation | None:
         queue = self._queued.get(task_id)
@@ -162,18 +158,22 @@ class ScriptedTaskBackend:
             self._queued.pop(task_id, None)
         return observation
 
-    def _task_update(self, task_id: str, attempt_id: int, observation: ScriptedObservation) -> TaskUpdate:
+    def _task_update(
+        self,
+        task_id: str,
+        attempt_id: int,
+        attempt_uid: str,
+        observation: ScriptedObservation,
+    ) -> ObservedTaskUpdate:
         self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.descriptor.backend_id))
-        return TaskUpdate(
+        return ObservedTaskUpdate(
+            attempt_uid=AttemptUid(observation.attempt_uid or attempt_uid),
             task_id=JobName.from_wire(task_id),
             attempt_id=attempt_id,
             new_state=observation.state,
             error=observation.error or None,
             exit_code=observation.exit_code,
         )
-
-    def run_teardown(self) -> None:
-        return None
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         return None
@@ -230,8 +230,12 @@ class ScriptedTaskBackend:
 class UnavailableTaskBackend(ScriptedTaskBackend):
     """Backend that advertises a route but has no capacity."""
 
-    def __init__(self, transition_reader: TransitionReader, **kwargs) -> None:
-        super().__init__(transition_reader, kind=BackendKind.WORKER, **kwargs)
+    def __init__(self, **kwargs) -> None:
+        super().__init__(kind=BackendKind.WORKER, **kwargs)
+
+    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
+        self.calls.append("reconcile")
+        return WorkerFleetObservation()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")

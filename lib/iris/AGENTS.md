@@ -134,7 +134,7 @@ placement decision), `reconcile` (backend I/O: task observations + per-worker
 health events), `autoscale` (provision, or tear down dead workers' slices +
 healthy siblings) — plus the on-demand one-offs (`get_process_status`,
 `profile_task`, `exec_in_container`). Each phase returns its own frozen result
-type: `ScheduleResult`, `ReconcileResult`, `AutoscaleResult`. Composition creates
+type: `ScheduleResult`, `ReconcileObservation`, `AutoscaleResult`. Composition creates
 an empty controller and calls `controller.register_backend(backend)` exactly once
 before `start()`. A second registration is invalid; federation composes distinct
 clusters. `BackendDescriptor` is the source for backend ID, kind, advertised
@@ -143,19 +143,21 @@ attributes, and scale groups.
 The controller builds each `ScheduleRequest` completely from one read snapshot:
 workers, pending tasks, running attempts, and the per-user budget.
 `TaskBackend.schedule` is therefore DB-less and performs a pure decision. The
-reconcile/autoscale path binds `DbBackendWorkerStore`
-through `BackendRuntime`, so those phases are not DB-less.
+worker reconcile/autoscale path still binds `DbBackendWorkerStore` through
+`BackendRuntime`, so those phases are not yet DB-less.
 
 `BackendDescriptor.kind` is `WORKER` or `KUBERNETES`. The controller calls the
 three phases uniformly. Kubernetes reconcile receives the dispatch queue drain;
 worker reconcile sources worker state through the bound store. Dashboard
 capability strings are derived presentation data.
 
-Worker health is observed and folded by worker-daemon backends. Each owns a
-`WorkerHealthTracker` and reaches the controller DB through the
-`DbBackendWorkerStore`. There is no ping loop or separate liveness
-channel: reconcile RPC outcomes are the liveness signal. Kubernetes backends
-have no Iris workers; pod status flows back as task effects.
+Backends return neutral `ReconcileObservation` values, never controller effects.
+After backend I/O, `reconcile/coordinator.py` reloads current state, fences exact
+Attempt UIDs, applies lifecycle policy, and folds worker liveness. Worker-daemon
+backends still construct the shared `WorkerHealthTracker` and reach the DB through
+`DbBackendWorkerStore`; moving those remaining lifecycle dependencies is later
+work. There is no ping loop: reconcile RPC outcomes are the liveness signal.
+Kubernetes backends have no Iris workers and no controller transition reader.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for

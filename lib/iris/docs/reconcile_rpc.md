@@ -26,19 +26,26 @@ routing is purely UID-based — there is no (task_id, attempt_id) fallback.
 
 ```mermaid
 sequenceDiagram
-    participant Loop as Controller<br/>plans_from_snapshot
+    participant Loop as Controller loop
+    participant Store as Worker store
     participant Pure as reconcile/worker.py<br/>build_reconcile_plans()
     participant Prov as RpcTaskBackend<br/>reconcile()
     participant W as Worker
-    participant Apply as ReconcileState<br/>reconcile()
+    participant Coord as reconcile/coordinator.py
+    participant Apply as ReconcileState
 
-    Loop->>Pure: ReconcileInputs (rows + job_specs)
-    Pure-->>Loop: list[WorkerReconcilePlan]
-    Loop->>Prov: plans, addresses
+    Loop->>Prov: ReconcileRequest
+    Prov->>Store: reconcile snapshot
+    Prov->>Pure: ReconcileInputs (rows + job_specs)
+    Pure-->>Prov: list[WorkerReconcilePlan]
     Prov->>W: Reconcile(ReconcileRequest)
     W-->>Prov: ReconcileResponse(observed, health)
-    Prov-->>Loop: list[ReconcileResult]
-    Loop->>Apply: per-worker (plan, result)
+    Prov-->>Loop: WorkerFleetObservation
+    Loop->>Coord: fold observation
+    Coord->>Store: fresh transition snapshot
+    Coord->>Apply: per-worker (plan, result)
+    Apply-->>Coord: transition effects
+    Coord-->>Loop: effects + teardown work
 ```
 
 ## Pure compute vs. transport
@@ -52,9 +59,11 @@ to produce one `WorkerReconcilePlan` per worker (the
 through `RpcTaskBackend.reconcile`
 ([`backends/rpc/backend.py`](../src/iris/cluster/backends/rpc/backend.py))
 which fans them out concurrently, capped by
-`self.parallelism`, and returns a `ReconcileResult` per worker. The apply layer
+`self.parallelism`, and returns a neutral `WorkerFleetObservation`. The
+controller-owned coordinator reloads current state after that I/O; the apply layer
 ([`ReconcileState.reconcile`](../src/iris/cluster/controller/reconcile/batches.py))
-consumes those results.
+consumes those results and exact Attempt UIDs prevent late observations from
+mutating a recreated workload.
 
 ## Worker side
 

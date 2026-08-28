@@ -19,10 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from iris.cluster.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
-    RpcTaskBackend,
-)
+from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -30,14 +27,15 @@ from iris.cluster.controller.backend import (
     BackendDescriptor,
     BackendRuntime,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
+    WorkerFleetObservation,
     plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.reconcile.coordinator import ReconcileFold, fold_reconcile
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
@@ -52,6 +50,7 @@ from iris.cluster.controller.reconcile.worker import (
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import job_config_table, task_attempts_table
+from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import (
     BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
@@ -74,7 +73,6 @@ from iris.testing.controller import (
     query_worker,
     reconcile_once,
     register_worker,
-    run_worker_daemon_reconcile,
     store_from_runtime,
     submit_job,
     worker_backend_descriptor,
@@ -638,13 +636,26 @@ def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None
     provider.seed_liveness()
 
 
+def _fold_provider_observation(
+    provider: RpcTaskBackend,
+    state: ControllerTestState,
+    observation: WorkerFleetObservation,
+) -> ReconcileFold:
+    return fold_reconcile(
+        DbTransitionReader(state._db),
+        observation,
+        worker_health=provider.health,
+        now=Timestamp.now(),
+    )
+
+
 def test_dispatch_reconcile_plans_empty_short_circuits(state):
     provider, stub = _provider_with_stub()
     _bind_provider(provider, state)
 
-    result = provider.reconcile(ReconcileRequest())
+    observation = provider.reconcile(ReconcileRequest())
 
-    assert result.effects.is_empty
+    assert observation.worker_results == []
     assert stub.reconcile_calls == []
 
 
@@ -667,7 +678,8 @@ def test_reconcile_rpc_forwards_observations(state):
     provider, _ = _provider_with_stub(stub)
     _bind_provider(provider, state)
 
-    result = provider.reconcile(ReconcileRequest())
+    observation_result = provider.reconcile(ReconcileRequest())
+    result = _fold_provider_observation(provider, state, observation_result)
 
     assert len(stub.reconcile_calls) == 1
     assert stub.reconcile_calls[0].worker_id == _W1
@@ -716,7 +728,8 @@ def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(sta
     provider, _ = _provider_with_stub(stub)
     _bind_provider(provider, state)
 
-    result = provider.reconcile(ReconcileRequest())
+    observation = provider.reconcile(ReconcileRequest())
+    result = _fold_provider_observation(provider, state, observation)
 
     assert result.effects.tasks == {}
     assert result.effects.attempts == {}
@@ -742,7 +755,8 @@ def test_reconcile_matching_responder_id_resets_unreachable_counter(state):
     )
     assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
 
-    provider.reconcile(ReconcileRequest())
+    observation = provider.reconcile(ReconcileRequest())
+    _fold_provider_observation(provider, state, observation)
 
     assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 0
 
@@ -767,7 +781,8 @@ def test_reconcile_recycled_address_marks_target_worker_unreachable(state):
     provider, _ = _provider_with_stub(stub)
     _bind_provider(provider, state)
 
-    result = provider.reconcile(ReconcileRequest())
+    observation = provider.reconcile(ReconcileRequest())
+    result = _fold_provider_observation(provider, state, observation)
 
     assert result.effects.is_empty
     assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
@@ -1310,7 +1325,6 @@ class _ScriptedProvider:
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
-    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, request)
@@ -1333,7 +1347,7 @@ class _ScriptedProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
         assert self._store is not None, "_ScriptedProvider.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
@@ -1344,14 +1358,7 @@ class _ScriptedProvider:
             (p, WorkerReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
         ]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
-        self._pending_dead.extend(dead)
-        return result
-
-    def run_teardown(self) -> None:
-        dead = self._pending_dead
-        self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+        return WorkerFleetObservation(worker_results=worker_results, transport_events=events)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         assert self._store is not None, "_ScriptedProvider.teardown called before worker store attached"
@@ -1386,7 +1393,6 @@ class _UnreachableProvider:
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
-    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self._store = store_from_runtime(runtime, self.health, self.autoscale)
@@ -1400,7 +1406,7 @@ class _UnreachableProvider:
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, request)
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
         assert self._store is not None, "_UnreachableProvider.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
@@ -1429,14 +1435,7 @@ class _UnreachableProvider:
                     (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None))
                 )
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
-        self._pending_dead.extend(dead)
-        return result
-
-    def run_teardown(self) -> None:
-        dead = self._pending_dead
-        self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+        return WorkerFleetObservation(worker_results=worker_results, transport_events=events)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         assert self._store is not None, "_UnreachableProvider.teardown called before worker store attached"

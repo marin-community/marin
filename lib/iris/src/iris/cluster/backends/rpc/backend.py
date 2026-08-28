@@ -5,13 +5,9 @@
 
 The worker-daemon backend used by the GCP/TPU, CoreWeave-bare-metal, manual, and
 local clusters. The Iris scheduler assigns task→worker; this backend fans the
-per-worker Reconcile RPC out to the worker daemons, resolves the observations
-into task ``effects`` from its own read snapshot, and folds the per-worker
-liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
-through the liveness tracker it constructs and owns (``self.health``). The
-workers its fold reaps are
-stashed and torn down by ``run_teardown`` after the controller commits the
-effects, so no worker identity crosses the reconcile result boundary.
+per-worker Reconcile RPC out to worker daemons and returns raw runtime and
+transport observations. The controller reloads current state, applies Iris
+transition and liveness policy, commits effects, and requests teardown.
 """
 
 import asyncio
@@ -35,15 +31,14 @@ from iris.cluster.controller.backend import (
     DeviceCapacity,
     ProviderError,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerFleetObservation,
     plans_from_snapshot,
     run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
-from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
@@ -77,10 +72,6 @@ RECONCILE_FANOUT_PARALLELISM = 512
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
 EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
-# Failure reason stamped on a worker the reconcile fold reaped (drained by
-# ``run_teardown``).
-WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
-
 _T = TypeVar("_T")
 _R = TypeVar("_R")
 
@@ -103,19 +94,6 @@ def _fan_out(
         return await asyncio.gather(*(run_one(sem, item) for item in items))
 
     return asyncio.run(_run())
-
-
-@dataclass(frozen=True)
-class FleetObservation:
-    """One reconcile fan-out's raw outcome.
-
-    The per-worker results paired with their plans, and the transport liveness
-    each yielded (REACHED / UNREACHABLE). :meth:`RpcTaskBackend.reconcile` resolves
-    the results into effects and folds the liveness.
-    """
-
-    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
-    transport_events: list[WorkerHealthEvent]
 
 
 class WorkerStubFactory(Protocol):
@@ -185,17 +163,12 @@ class RpcTaskBackend:
     # Wall-clock window a worker may stay continuously unreachable before this
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.
     unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
-    # This backend's liveness tracker, constructed and owned here. The backend
-    # folds (reconcile) and forgets (teardown) through it; the controller reads it
-    # for Fleet/exec/capacity/prune paths.
+    # This backend constructs the liveness tracker shared by its worker store;
+    # the controller folds reconcile observations through it.
     health: WorkerHealthTracker = field(init=False, repr=False)
     # One shared scheduler instance reused across cycles; the controller supplies
     # the complete per-tick workspace.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
-    # Workers this backend's reconcile fold reaped, awaiting teardown. ``reconcile``
-    # appends; ``run_teardown`` drains post-commit. Kept off the reconcile result so
-    # no worker identity crosses that boundary back to the controller.
-    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
@@ -289,7 +262,7 @@ class RpcTaskBackend:
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
         return run_scheduling_decision(self._scheduler, request, zone_capabilities)
 
-    def _observe_fleet(self) -> "FleetObservation":
+    def _observe_fleet(self) -> WorkerFleetObservation:
         """Source this backend's placement, fan the Reconcile RPC out, classify liveness.
 
         The reconcile snapshot (worker addresses + reconcile rows + job specs) comes
@@ -345,43 +318,17 @@ class RpcTaskBackend:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
                 transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return FleetObservation(worker_results=worker_results, transport_events=transport_events)
+        return WorkerFleetObservation(worker_results=worker_results, transport_events=transport_events)
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Observe the fleet, resolve its observations into effects, fold liveness.
+    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
+        """Return raw worker runtime and transport observations.
 
-        ``request`` (the cluster-view dispatch drain) is unused — a worker-daemon
-        backend sources its own placement. :meth:`_observe_fleet` fans the Reconcile
-        RPC out; this resolves the observations into task ``effects`` and folds the
-        liveness it observed (transport signals plus kernel-derived BUILD_FAILED)
-        through the shared ``WorkerHealthTracker``. The reaped workers are stashed
-        for :meth:`run_teardown`; only the committable ``effects`` are returned.
+        ``request`` is the Kubernetes dispatch shape and is unused here; the
+        worker backend sources its fleet plan from the bound store. No Iris
+        transition or liveness policy runs in this method.
         """
         assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
-        observation = self._observe_fleet()
-
-        # Fold transport events first, then the kernel's BUILD_FAILED; both go
-        # through the SAME shared tracker reached via the worker store, so the
-        # startup seed and reopen hook are preserved.
-        now = Timestamp.now()
-        effects = apply_reconcile(self._store, observation.worker_results, now=now)
-        events = observation.transport_events + [
-            WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
-        ]
-        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
-
-    def run_teardown(self) -> None:
-        """Tear down the workers this tick's reconcile fold reaped.
-
-        Drains the stash and runs the same fail → slice-and-sibling teardown →
-        forget sequence over a fresh snapshot. The controller calls this after it
-        commits the reconcile effects, so a just-finalized attempt is already
-        terminal and skipped. Empty between reaps, so most ticks are a no-op.
-        """
-        dead = self._pending_dead
-        self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+        return self._observe_fleet()
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         """Fail ``dead_workers``, reap their slices and siblings, and forget them."""

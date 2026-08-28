@@ -16,7 +16,6 @@ from finelog.client.log_client import Table
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 
-from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
     AutoscalerConfig,
@@ -53,11 +52,11 @@ from iris.cluster.controller.backend import (
     DeviceCapacity,
     ProviderUnsupportedError,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
     TaskTarget,
+    WorkerFleetObservation,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -68,10 +67,9 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import build_queued_candidates
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     task_attempts_table,
@@ -133,30 +131,6 @@ def worker_backend_descriptor(
     )
 
 
-def run_worker_daemon_reconcile(
-    store: BackendWorkerStore | None,
-    health: WorkerHealthTracker,
-    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
-    transport_events: list[WorkerHealthEvent],
-) -> tuple[ReconcileResult, list[WorkerId]]:
-    """Author reconcile effects from a fake's worker results and fold the observed
-    liveness — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.reconcile``'s
-    tail (resolve observations into effects through the store, then fold transport +
-    BUILD_FAILED through the backend's own tracker).
-
-    Returns the committable result plus the workers the fold reaped; the caller
-    stashes the latter for its ``run_teardown``, the way the real backend stashes
-    on ``self._pending_dead``."""
-    assert store is not None, "worker-daemon backend reconciled before worker store attached"
-    now = Timestamp.now()
-    effects = apply_reconcile(store, worker_results, now=now)
-    events = transport_events + [
-        WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
-    ]
-    dead = health.apply(events, now_ms=now.epoch_ms())
-    return ReconcileResult(effects=effects), dead
-
-
 def store_from_runtime(
     runtime: BackendRuntime,
     health: WorkerHealthTracker,
@@ -192,8 +166,6 @@ class FakeProvider:
         # This backend's own liveness tracker (the controller builds its worker
         # store over this same object), mirroring RpcTaskBackend.
         self.health: WorkerHealthTracker = WorkerHealthTracker(unreachable_grace=unreachable_grace)
-        # Workers this fake's reconcile fold reaped, awaiting run_teardown.
-        self._pending_dead: list[WorkerId] = []
 
     def runtime_image(self, requested_image: str) -> str:
         return requested_image
@@ -212,27 +184,20 @@ class FakeProvider:
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, request)
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> WorkerFleetObservation:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs), then
-        # author effects + fold liveness exactly as the real backend does.
+        # return the same neutral observations as the real backend.
         assert self._store is not None, "FakeProvider.reconcile called before worker store attached"
         snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
-        self._pending_dead.extend(dead)
-        return result
+        return WorkerFleetObservation(worker_results=worker_results, transport_events=events)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
-
-    def run_teardown(self) -> None:
-        dead = self._pending_dead
-        self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         assert self._store is not None, "FakeProvider.teardown called before worker store attached"

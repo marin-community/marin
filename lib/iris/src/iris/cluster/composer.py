@@ -41,8 +41,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
-from iris.cluster.controller.reconcile.loader import TransitionReader
-from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
@@ -66,7 +64,6 @@ def make_task_backend(
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
-    transition_reader: TransitionReader | None = None,
 ) -> TaskBackend:
     """Create a TaskBackend from cluster configuration.
 
@@ -74,10 +71,9 @@ def make_task_backend(
     or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
     profile tables are passed to the K8s backend; node agents write per-pod
     resource samples, while RPC worker daemons write their own rows.
-    ``unreachable_grace`` sizes the liveness tracker the
-    worker-daemon backend constructs and owns. ``transition_reader`` is the K8s
-    backend's controller-DB read surface; ``autoscaler`` provisions capacity for
-    the worker-daemon backend (None for clusters with no scale groups).
+    ``unreachable_grace`` sizes the liveness tracker the worker-daemon backend
+    constructs and owns. ``autoscaler`` provisions capacity for that backend
+    (None for clusters with no scale groups).
     """
     which = config.provider_kind()
     if which == "kubernetes_provider":
@@ -141,7 +137,6 @@ def make_task_backend(
             preempt_namespaces=list(kp.preempt_namespaces),
             task_event_table=task_event_table,
             profile_table=profile_table,
-            transition_reader=transition_reader,
         )
     if which == "worker_provider":
         return RpcTaskBackend(
@@ -207,8 +202,7 @@ def make_backend(
 
     The finelog tables from ``log_stack`` are threaded into the backend and
     autoscaler at construction. Capacity-managing backends (k8s) provision their
-    own pods, so no autoscaler is built; they read their dispatch drain through a
-    controller-DB :class:`DbTransitionReader`. The autoscaler is built BEFORE the
+    own pods, so no autoscaler is built. The autoscaler is built BEFORE the
     worker-daemon backend so it can be passed to its constructor. In dry-run both
     the autoscaler and the provider bundle are skipped (bundle creation needs
     platform credentials unavailable on a dev machine).
@@ -228,7 +222,6 @@ def make_backend(
             unreachable_grace=unreachable_grace,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
-            transition_reader=DbTransitionReader(db),
         )
         logger.info("Backend created: %s", type(provider).__name__)
         return provider

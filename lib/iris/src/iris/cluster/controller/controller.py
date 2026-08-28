@@ -53,7 +53,6 @@ from iris.cluster.controller.backend import (
     BackendKind,
     BackendRuntime,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
@@ -87,6 +86,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.reconcile.coordinator import ReconcileFold, fold_reconcile
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
@@ -99,6 +99,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
 from iris.cluster.controller.task_state_stats import TaskStateCollector
+from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
@@ -134,6 +135,7 @@ _RPC_HANDLER_THREADS = 64
 _CONTROLLER_KEEPALIVE = 120
 _PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 _SYNCHRONOUS_PHASE_INTERVAL = 0.0
+_WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -973,11 +975,17 @@ class Controller:
         if run_schedule and inputs.queued_federation:
             federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
-        recon_result: ReconcileResult | None = None
+        recon_result: ReconcileFold | None = None
         timeout_decisions: list[TerminalDecision] = []
         if run_reconcile:
             timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
-            recon_result = self.backend.reconcile(inputs.reconcile_request)
+            observation = self.backend.reconcile(inputs.reconcile_request)
+            recon_result = fold_reconcile(
+                DbTransitionReader(self._db),
+                observation,
+                worker_health=self.backend.health,
+                now=Timestamp.now(),
+            )
 
         auto_result: AutoscaleResult | None = None
         if run_autoscale:
@@ -1022,11 +1030,13 @@ class Controller:
                 self._force_reconcile = True
                 self._tick_wake.set()
 
-        # Drain the backend's reaped-worker stash (folded during reconcile) AFTER
-        # the reconcile effects are committed, so its teardown reads a fresh snapshot
-        # where the just-finalized terminal attempts are already terminal and skipped.
-        if run_reconcile:
-            self.backend.run_teardown()
+        # Reaped workers are torn down only after their task transitions commit,
+        # so teardown's fresh snapshot sees finalized attempts and skips them.
+        if recon_result is not None and recon_result.dead_workers:
+            self.backend.teardown(
+                recon_result.dead_workers,
+                reason=_WORKER_RECONCILE_TEARDOWN_REASON,
+            )
 
     def _build_tick_inputs(
         self,
@@ -1104,7 +1114,7 @@ class Controller:
         *,
         sched_result: ScheduleResult | None,
         backend_pins: list[tuple[JobName, str]],
-        recon_result: ReconcileResult | None,
+        recon_result: ReconcileFold | None,
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_result: AutoscaleResult | None,

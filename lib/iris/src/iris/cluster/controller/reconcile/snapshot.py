@@ -51,6 +51,13 @@ class TaskUpdate:
     output_archive: job_pb2.TaskOutputArchive | None = None
 
 
+@dataclass(frozen=True, kw_only=True)
+class ObservedTaskUpdate(TaskUpdate):
+    """A provider observation fenced to one exact Attempt incarnation."""
+
+    attempt_uid: AttemptUid
+
+
 @dataclass(frozen=True, slots=True)
 class JobConfigRow:
     job_id: JobName

@@ -119,28 +119,29 @@ cluster.
 The controller owns the database and loop cadences. It builds a complete,
 single-use `ScheduleRequest` from one read snapshot, including pending tasks,
 running attempts, worker state, and the user budget. `schedule` is a DB-less
-decision. Reconcile and autoscale
-use `BackendRuntime`/`DbBackendWorkerStore` and are not DB-less. The controller
-stores worker records and task assignments; the backend owns the provider-specific
-observation and actuation that produces task-state effects.
+decision. Worker reconcile and autoscale still use
+`BackendRuntime`/`DbBackendWorkerStore` and are not yet DB-less. The controller
+stores worker records and task assignments; the backend owns only
+provider-specific observation and actuation. Controller reconciliation turns
+those neutral observations into task-state effects.
 Both backend implementations expose the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 
 - `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
-- `reconcile(ReconcileRequest) -> ReconcileResult` — converge the substrate and
-  author task-state `effects` for the controller to commit. A worker-daemon
-  backend also folds the liveness it observed into its **own**
-  `WorkerHealthTracker` and stashes the workers its fold reaped.
-- `run_teardown()` — fail the reaped workers, tear down their slices and healthy
-  siblings, and forget them from the backend's own tracker. Called after the
-  tick's effects are committed; no worker identity is passed in.
+- `reconcile(ReconcileRequest) -> ReconcileObservation` — converge the external
+  substrate and return runtime facts. Worker backends return RPC outcomes and
+  reachability; Kubernetes returns task updates fenced by exact Attempt UID.
+- `teardown(workers, reason)` — remove controller-selected worker capacity after
+  the corresponding task and liveness effects commit.
 - `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
 - `status() -> BackendStatus` — author this backend's dashboard status.
 
-Each method returns its own frozen result type (`ScheduleResult` /
-`ReconcileResult` / `AutoscaleResult`). `reconcile` returns `effects` only —
-uniform across backend kinds — so the controller commits the projection without
-branching on the concrete backend class.
+Each phase returns a frozen result type (`ScheduleResult` /
+`ReconcileObservation` / `AutoscaleResult`).
+`reconcile/coordinator.py` discriminates the closed observation variants,
+loads a fresh post-I/O snapshot, applies the controller state machine, folds
+liveness, and returns effects plus post-commit teardown work. `controller.py`
+only sequences backend I/O, folding, commit, and teardown.
 
 `BackendDescriptor.kind` is `WORKER` for Iris worker-daemon clusters or
 `KUBERNETES` for Kueue-backed clusters. Kubernetes reconcile receives the
@@ -148,15 +149,13 @@ controller-owned dispatch drain; worker reconcile sources its worker snapshot
 through `DbBackendWorkerStore`. Dashboard capability strings are derived from
 the kind and the presence of an Iris autoscaler.
 
-Worker health is authored by a worker backend. It constructs and owns its
-`WorkerHealthTracker`,
-folds the liveness it observed during `reconcile` (REACHED / UNREACHABLE, plus
-BUILD_FAILED synthesized from its effects), and reaps over-threshold workers in
-its own `run_teardown`. There is no ping loop and no separate liveness channel —
-the reconcile RPC outcome is the only liveness signal. The controller reaches
-per-worker liveness through the backend (`liveness_for_worker`, `all_liveness`).
-Kubernetes backends have no Iris workers: they hold no tracker, and pod status
-flows back as task `effects`.
+The worker backend still constructs the `WorkerHealthTracker` shared with its
+worker store, but it does not mutate it during reconciliation. The controller
+coordinator folds REACHED / UNREACHABLE plus kernel-derived BUILD_FAILED and
+returns workers that cross the reap threshold. There is no ping loop: the
+reconcile RPC outcome is the only liveness signal. Kubernetes holds no tracker
+or transition reader; exact Pod observations are resolved entirely in the
+controller.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,

@@ -9,7 +9,7 @@ through three uniform methods — :meth:`TaskBackend.schedule`,
 controller-owned inputs
 (:class:`ScheduleRequest` / :class:`ReconcileRequest` / :class:`AutoscaleRequest`)
 and getting back method-specific results (:class:`ScheduleResult` /
-:class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
+:class:`ReconcileObservation` / :class:`AutoscaleResult`). The controller supplies a
 complete scheduling workspace, so scheduling never reads controller storage.
 The worker backend's reconcile and autoscale phases use the controller database
 through a bound worker store. Kubernetes binds no worker store and delegates
@@ -35,12 +35,13 @@ from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile import ControllerEffects
+from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
+    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
@@ -55,7 +56,7 @@ from iris.cluster.controller.scheduling.policy import (
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 
@@ -190,15 +191,26 @@ class ScheduleResult:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
-    """The committable projection :meth:`TaskBackend.reconcile` authored this tick.
+class WorkerFleetObservation:
+    """Raw worker RPC outcomes from one reconcile fan-out.
 
-    Carries only ``effects``: a backend that tracks Iris workers folds and tears
-    down its own reaped workers, so no worker identity crosses this boundary.
+    The backend reports transport/runtime facts only. The controller reloads a
+    fresh transition snapshot, resolves exact Attempt UIDs, applies Iris state
+    policy, and folds liveness after this I/O returns.
     """
 
-    effects: ControllerEffects = field(default_factory=ControllerEffects)
-    """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
+    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = field(default_factory=list)
+    transport_events: list[WorkerHealthEvent] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DirectTaskObservation:
+    """Exact task-attempt observations from a direct execution provider."""
+
+    updates: list[ObservedTaskUpdate] = field(default_factory=list)
+
+
+type ReconcileObservation = WorkerFleetObservation | DirectTaskObservation
 
 
 @dataclass(frozen=True)
@@ -471,37 +483,23 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Converge the backend toward the desired state and author the projection.
+    def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
+        """Converge external execution and return neutral observations.
 
-        Bounded I/O. Worker-daemon backends source their own worker/placement
-        snapshot, fan the reconcile RPC out, resolve the observations into task
-        ``effects``, and fold the per-worker liveness they observed — stashing the
-        workers their fold reaped for the matching :meth:`run_teardown`; cluster
-        backends apply/poll the pods in ``request`` and resolve those into
-        ``effects`` (they track no Iris workers).
-        """
-        ...
-
-    def run_teardown(self) -> None:
-        """Tear down the workers this backend's reconcile fold reaped this tick.
-
-        Bounded I/O. The controller calls this AFTER the tick's reconcile effects
-        are committed, so the just-finalized terminal attempts read as terminal and
-        are skipped. The backend drains its stash of reaped workers, fails them,
-        terminates their slices and healthy siblings, and forgets them from its
-        liveness tracker. A cluster backend tracks no Iris workers and no-ops.
+        Bounded I/O only. Worker-daemon backends return raw per-worker RPC
+        outcomes and transport reachability. Kubernetes backends apply/poll Pods
+        and return exact task-attempt observations. The controller owns snapshot
+        reload, state-machine policy, liveness folding, and persistence.
         """
         ...
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         """Tear down a specific set of this backend's workers now.
 
-        The same fail → slice-and-sibling teardown → forget sequence
-        :meth:`run_teardown` drains its stash into, but for an explicit set the
-        controller resolved to this backend off the reconcile path — the
-        recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
-        A backend that tracks no Iris workers is a no-op.
+        The controller calls this after committing the state transitions caused
+        by liveness reaping, and for the recycled-IP eviction queue. ``reason``
+        is recorded on the worker failure. A backend that tracks no Iris workers
+        is a no-op.
         """
         ...
 

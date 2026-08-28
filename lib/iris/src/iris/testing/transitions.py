@@ -22,7 +22,7 @@ from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
+from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate, TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
@@ -102,7 +102,35 @@ def commit_dispatch_updates(
     now: Timestamp,
 ) -> ControllerEffects:
     """Author + commit direct-provider effects against a write cursor (test glue)."""
-    effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
+    observations = [
+        ObservedTaskUpdate(
+            attempt_uid=AttemptUid(_attempt_uid(cur, update.task_id, update.attempt_id)),
+            task_id=update.task_id,
+            attempt_id=update.attempt_id,
+            new_state=update.new_state,
+            error=update.error,
+            exit_code=update.exit_code,
+            container_id=update.container_id,
+            status_message=update.status_message,
+            pod_name=update.pod_name,
+            pod_uid=update.pod_uid,
+            node_name=update.node_name,
+            terminal_reason=update.terminal_reason,
+            output_archive=update.output_archive,
+        )
+        for update in updates
+    ]
+    return commit_observed_dispatch_updates(cur, observations, now=now)
+
+
+def commit_observed_dispatch_updates(
+    cur: Tx,
+    observations: list[ObservedTaskUpdate],
+    *,
+    now: Timestamp,
+) -> ControllerEffects:
+    """Author and commit exact direct-provider observations."""
+    effects = apply_dispatch_updates(CursorTransitionReader(cur), observations, now=now)
     commit_effects(cur, effects)
     return effects
 

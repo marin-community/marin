@@ -14,18 +14,18 @@ from iris.cluster.controller.backend import (
     BackendDescriptor,
     BackendKind,
     BackendRuntime,
+    DirectTaskObservation,
     ProviderUnsupportedError,
     ReconcileRequest,
-    ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile.snapshot import ObservedTaskUpdate, TaskUpdate
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import set_user_budget
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults
+from iris.cluster.controller.writes import delete_job, set_user_budget
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_direct_job_request,
@@ -36,7 +36,7 @@ from iris.testing.controller import (
     submit_direct_job,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
-from iris.testing.transitions import commit_dispatch_updates
+from iris.testing.transitions import commit_dispatch_updates, commit_observed_dispatch_updates
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
 
@@ -54,15 +54,12 @@ class FakeDirectProvider:
             kind=BackendKind.KUBERNETES,
         )
         self.sync_calls: list[ReconcileRequest] = []
-        self.sync_result = ReconcileResult()
+        self.sync_result = DirectTaskObservation()
         self.closed = False
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> DirectTaskObservation:
         self.sync_calls.append(request)
         return self.sync_result
-
-    def run_teardown(self) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers to reap."""
 
     def teardown(self, dead_workers, *, reason: str) -> None:
         """No-op: a cluster-view backend tracks no Iris workers to reap."""
@@ -624,10 +621,15 @@ def test_apply_ignores_stale_attempt(state):
 
     # Apply with wrong attempt_id.
     with state._db.transaction() as cur:
-        commit_dispatch_updates(
+        commit_observed_dispatch_updates(
             cur,
             [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id + 99, new_state=job_pb2.TASK_STATE_RUNNING),
+                ObservedTaskUpdate(
+                    attempt_uid=AttemptUid(batch.tasks_to_run[0].attempt_uid),
+                    task_id=task_id,
+                    attempt_id=attempt_id + 99,
+                    new_state=job_pb2.TASK_STATE_RUNNING,
+                ),
             ],
             now=Timestamp.now(),
         )
@@ -635,6 +637,38 @@ def test_apply_ignores_stale_attempt(state):
     task = query_task(state, task_id)
     # Should still be ASSIGNED (the update was skipped).
     assert task.state == job_pb2.TASK_STATE_ASSIGNED
+
+
+def test_apply_ignores_observation_from_recreated_job(state):
+    [task_id] = submit_direct_job(state, "recreated-attempt")
+    with state._db.transaction() as cur:
+        original = dispatch.drain_for_dispatch(cur).tasks_to_run[0]
+
+    job_id = task_id.parent
+    assert job_id is not None
+    with state._db.transaction() as cur:
+        delete_job(cur, job_id, record_tombstone=False)
+    [replacement_task_id] = submit_direct_job(state, "recreated-attempt")
+    assert replacement_task_id == task_id
+    with state._db.transaction() as cur:
+        replacement = dispatch.drain_for_dispatch(cur).tasks_to_run[0]
+    assert replacement.attempt_uid != original.attempt_uid
+
+    with state._db.transaction() as cur:
+        commit_observed_dispatch_updates(
+            cur,
+            [
+                ObservedTaskUpdate(
+                    attempt_uid=AttemptUid(original.attempt_uid),
+                    task_id=task_id,
+                    attempt_id=0,
+                    new_state=job_pb2.TASK_STATE_SUCCEEDED,
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
 
 # =============================================================================
