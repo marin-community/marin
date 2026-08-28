@@ -82,6 +82,11 @@ impl NativeCatalog {
         }))
     }
 
+    /// Remove the query and recovery pointer while retaining immutable history.
+    pub async fn delete_head(&self, namespace: &str) -> Result<(), StatsError> {
+        self.remote.delete_native(namespace, HEAD_KEY).await
+    }
+
     pub async fn publish(
         &self,
         namespace: &str,

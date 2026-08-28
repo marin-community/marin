@@ -113,6 +113,7 @@ class _FakeStatsServiceClient:
         self.registered: dict[str, stats_pb2.Schema] = {}
         self.registered_policies: dict[str, stats_pb2.StoragePolicy] = {}
         self.registered_specs: dict[str, stats_pb2.TableSpec] = {}
+        self.registration_requests: list[stats_pb2.RegisterTableRequest] = []
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
         self.queries: list[str] = []
@@ -123,6 +124,7 @@ class _FakeStatsServiceClient:
         self.namespaces: list[stats_pb2.NamespaceInfo] = []
 
     def register_table(self, request):
+        self.registration_requests.append(request)
         self.registered[request.namespace] = request.schema
         self.registered_policies[request.namespace] = request.storage_policy
         if request.HasField("table_spec"):
@@ -572,6 +574,28 @@ def test_get_table_registers_complete_versioned_object_native_spec(tracked_clien
         assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_NATIVE
         assert registered.operating_policy.local_cache.max_bytes == 1024
         assert registered.operating_policy.remote_retention.retain_forever
+    finally:
+        client.close()
+
+
+def test_cached_table_handle_registers_a_new_table_spec_version(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=1))
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        same_table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=2))
+        assert same_table is table
+        same_table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=2)])
+        assert same_table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        versions = [
+            request.table_spec.version
+            for request in tracked_clients[0].registration_requests
+            if request.namespace == "iris.worker"
+        ]
+        assert versions == [1, 2]
     finally:
         client.close()
 

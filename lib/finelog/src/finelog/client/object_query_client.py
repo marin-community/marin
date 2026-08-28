@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -19,7 +20,7 @@ import pyarrow as pa
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
-from finelog.errors import QueryResultTooLargeError, StatsError
+from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class CatalogPin:
     namespace: str
     catalog_generation: int
     table_spec_version: int
+    max_query_time_ms: int
     object_uris: tuple[str, ...]
     logical_schema: dict[str, object]
 
@@ -70,19 +72,44 @@ class ObjectQueryClient:
         max_rows: int = 100_000,
     ) -> pa.Table:
         """Return the SQL result from catalog snapshots pinned before execution."""
+        started = time.monotonic()
         names = tuple(dict.fromkeys(namespaces))
         if not names:
             raise ValueError("client-directed queries require at least one namespace")
         pins = tuple(self._load_catalog(namespace) for namespace in names)
+        lifetime_ms = min(pin.max_query_time_ms for pin in pins)
+        deadline = started + lifetime_ms / 1000
+        if deadline <= time.monotonic():
+            raise QueryTimeoutError("direct query catalog lifetime expired before execution")
         query_id = str(uuid.uuid4())
-        started = time.monotonic()
         self._best_effort_start(query_id, sql, pins)
         try:
             with duckdb.connect() as connection:
-                connection.register_filesystem(self._filesystem)
-                for pin in pins:
-                    self._register_namespace(connection, pin)
-                table = connection.execute(sql).fetch_arrow_table()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise QueryTimeoutError("direct query catalog lifetime expired before execution")
+                timed_out = threading.Event()
+
+                def interrupt() -> None:
+                    timed_out.set()
+                    connection.interrupt()
+
+                watchdog = threading.Timer(remaining, interrupt)
+                watchdog.start()
+                try:
+                    connection.register_filesystem(self._filesystem)
+                    for pin in pins:
+                        self._register_namespace(connection, pin)
+                    table = connection.execute(sql).fetch_arrow_table()
+                except duckdb.Error as error:
+                    if timed_out.is_set():
+                        raise QueryTimeoutError(
+                            f"direct query exceeded the pinned catalog lifetime of {lifetime_ms} ms"
+                        ) from error
+                    raise
+                finally:
+                    watchdog.cancel()
+                    watchdog.join()
             if table.num_rows > max_rows:
                 raise QueryResultTooLargeError(
                     f"query returned {table.num_rows} rows, exceeds max_rows={max_rows} "
@@ -189,10 +216,14 @@ class ObjectQueryClient:
         if operating_policy.get("l0Mode") != "L0_MODE_OBJECT_NATIVE":
             raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-native")
         logical_schema = _mapping(spec.get("logicalSchema"), "TableSpec.logicalSchema")
+        max_query_time_ms = _integer(catalog.get("maxQueryTimeMs"), "catalog.maxQueryTimeMs")
+        if max_query_time_ms == 0:
+            raise StatsError(f"catalog for namespace {namespace!r} has no direct-query lifetime")
         return CatalogPin(
             namespace=namespace,
             catalog_generation=generation,
             table_spec_version=active_version,
+            max_query_time_ms=max_query_time_ms,
             object_uris=object_uris,
             logical_schema=logical_schema,
         )

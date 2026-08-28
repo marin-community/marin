@@ -4,13 +4,17 @@
 import base64
 import hashlib
 import json
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
+import duckdb
+import finelog.client.object_query_client as object_query_client_mod
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finelog.client import ObjectQueryClient
-from finelog.errors import StatsError
+from finelog.errors import QueryTimeoutError, StatsError
 
 
 def _write_catalog(
@@ -19,6 +23,7 @@ def _write_catalog(
     catalog_bytes_override: bytes | None = None,
     active_version: int = 1,
     l0_mode: str = "L0_MODE_OBJECT_NATIVE",
+    max_query_time_ms: int = 600_000,
 ) -> Path:
     namespace = "iris.worker"
     native = root / "_native" / "namespaces" / namespace
@@ -42,6 +47,7 @@ def _write_catalog(
         "catalogGeneration": "7",
         "activeTableSpecVersion": str(active_version),
         "desiredTableSpecVersion": "0",
+        "maxQueryTimeMs": str(max_query_time_ms),
         "retainedTableSpecs": [
             {
                 "version": "1",
@@ -137,6 +143,57 @@ def test_object_query_reporting_is_best_effort(tmp_path: Path) -> None:
     ).query('SELECT count(*) AS rows FROM "iris.worker"', namespaces=["iris.worker"])
 
     assert result.column("rows").to_pylist() == [2]
+
+
+def test_object_query_stops_at_the_catalog_lifetime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_catalog(tmp_path)
+
+    class ImmediateTimer:
+        def __init__(self, _interval: float, callback: Callable[[], None]) -> None:
+            self._callback = callback
+
+        def start(self) -> None:
+            self._callback()
+
+        def cancel(self) -> None:
+            return None
+
+        def join(self) -> None:
+            return None
+
+    class BlockingConnection:
+        def __init__(self) -> None:
+            self.interrupted = threading.Event()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def register_filesystem(self, _filesystem) -> None:
+            pass
+
+        def execute(self, _sql: str):
+            return self
+
+        def fetch_arrow_table(self) -> pa.Table:
+            assert self.interrupted.is_set()
+            raise duckdb.InterruptException("interrupted")
+
+        def interrupt(self) -> None:
+            self.interrupted.set()
+
+    connection = BlockingConnection()
+    monkeypatch.setattr(duckdb, "connect", lambda: connection)
+    monkeypatch.setattr(object_query_client_mod.threading, "Timer", ImmediateTimer)
+
+    with pytest.raises(QueryTimeoutError):
+        ObjectQueryClient(str(tmp_path)).query(
+            'SELECT * FROM "iris.worker"',
+            namespaces=["iris.worker"],
+        )
+    assert connection.interrupted.is_set()
 
 
 @pytest.mark.parametrize(

@@ -1275,8 +1275,10 @@ impl Store {
         self.catalog.list_segments(name)
     }
 
-    /// Remove `name` from the registry and delete its catalog rows + on-disk
-    /// subdir. Rejects the privileged `log` namespace.
+    /// Remove `name` from the registry and delete its local catalog and cache.
+    ///
+    /// Native tables also lose their remote HEAD so retained immutable history
+    /// cannot restore the table. Rejects the privileged `log` namespace.
     pub fn drop_table(&self, name: &str) -> Result<(), StatsError> {
         if name == LOG_NAMESPACE_NAME {
             return Err(StatsError::InvalidNamespace(format!(
@@ -1284,6 +1286,7 @@ impl Store {
             )));
         }
         self.catalog.begin_drop(name)?;
+        let native_generation = self.catalog.table_spec_status(name)?.catalog_generation;
         // Drop the engine first so its flush task stops touching the dir/catalog
         // before we delete rows + files.
         let engine = self.engines.lock().unwrap().remove(name);
@@ -1303,6 +1306,14 @@ impl Store {
                     // signal suffices and needs no runtime.
                     engine.request_stop();
                 }
+            }
+            if native_generation > 0 {
+                let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "namespace {name:?} has a native generation without a remote catalog"
+                    ))
+                })?;
+                tokio::runtime::Handle::current().block_on(native_catalog.delete_head(name))?;
             }
             self.catalog.delete(name)?;
             if let Some(dir) = &self.data_dir {
@@ -2581,6 +2592,55 @@ mod tests {
             Err(StatsError::InvalidNamespace(_))
         ));
         assert!(store.get_table_schema("log").is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropped_native_table_is_not_recovered_from_retained_objects() {
+        let data_dir = crate::test_support::unique_dir("native_drop_data");
+        let recovered_data_dir = crate::test_support::unique_dir("native_drop_recovered");
+        let remote_dir = crate::test_support::unique_dir("native_drop_remote");
+        let store = Arc::new(
+            Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Shadow,
+            )
+            .unwrap(),
+        );
+        store
+            .register_versioned_table("iris.worker", object_native_spec(1))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+
+        let dropping = Arc::clone(&store);
+        tokio::task::spawn_blocking(move || dropping.drop_table("iris.worker"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!remote_dir
+            .join("_native/namespaces/iris.worker/HEAD.json")
+            .exists());
+        assert!(remote_dir
+            .join("_native/namespaces/iris.worker/catalogs")
+            .exists());
+
+        let recovered = Store::new(
+            Some(recovered_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        assert_eq!(recovered.recover_native_namespaces().await.unwrap(), 0);
+        assert!(matches!(
+            recovered.get_table_schema("iris.worker"),
+            Err(StatsError::NamespaceNotFound(_))
+        ));
+
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(recovered_data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

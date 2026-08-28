@@ -238,10 +238,10 @@ class Table:
     LogClient drains every Table.
 
     Registration is deferred to the flush thread: if a ``registrar`` is given,
-    it is invoked once before the first send to register the namespace and
-    return its effective schema. A failing registration is treated like any
-    other flush failure (retried with backoff, or the batch dropped on a
-    non-retryable error) and never blocks the caller that created the Table.
+    it is invoked before the first send and again when the requested registration
+    changes. A failing registration is treated like any other flush failure
+    (retried with backoff, or the batch dropped on a non-retryable error) and
+    never blocks the caller that created the Table.
     """
 
     def __init__(
@@ -252,6 +252,7 @@ class Table:
         flusher: Callable[[str, pa.RecordBatch], None],
         querier: Callable[[str], pa.Table] | None = None,
         registrar: Callable[[], Schema] | None = None,
+        registration_key: object | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         batch_rows: int = DEFAULT_BATCH_ROWS,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
@@ -268,7 +269,9 @@ class Table:
         # locally-requested one for Arrow encoding. ``None`` means the
         # namespace is already registered server-side (e.g. ``log``).
         self._registrar = registrar
-        self._registered = registrar is None
+        self._registration_key = registration_key
+        self._registration_generation = 0
+        self._registered_generation = 0 if registrar is None else -1
         self._flush_interval = flush_interval
         self._batch_rows = batch_rows
         self._max_buffer_bytes = max_buffer_bytes
@@ -483,6 +486,18 @@ class Table:
             return 0, items
         return items[-1].seq, []
 
+    def _update_registration(self, registration_key: object, registrar: Callable[[], Schema]) -> None:
+        """Schedule a changed registration before this handle's next send."""
+        with self._cond:
+            if self._closing or self._closed:
+                raise RuntimeError(f"Table({self._namespace}) is closed")
+            if registration_key == self._registration_key:
+                return
+            self._registration_key = registration_key
+            self._registrar = registrar
+            self._registration_generation += 1
+            self._cond.notify_all()
+
     def _ensure_registered(self) -> None:
         """Register the namespace on first send, adopting its effective schema.
 
@@ -491,13 +506,21 @@ class Table:
         exception propagates to :meth:`_send`, which treats it as a flush
         failure.
         """
-        if self._registered:
-            return
-        assert self._registrar is not None
-        effective = self._registrar()
-        self._schema = effective
-        self._arrow_schema = schema_to_arrow(effective)
-        self._registered = True
+        while True:
+            with self._cond:
+                generation = self._registration_generation
+                if self._registered_generation == generation:
+                    return
+                registrar = self._registrar
+            assert registrar is not None
+            effective = registrar()
+            with self._cond:
+                if generation != self._registration_generation:
+                    continue
+                self._schema = effective
+                self._arrow_schema = schema_to_arrow(effective)
+                self._registered_generation = generation
+                return
 
 
 _ClientT = TypeVar("_ClientT")
@@ -775,7 +798,12 @@ class LogClient:
             if self._closed:
                 raise RuntimeError("LogClient is closed")
             existing = self._tables.get(namespace)
+            registration_key = (requested, storage_policy, table_spec)
             if existing is not None:
+                existing._update_registration(
+                    registration_key,
+                    lambda: self._register_table(namespace, requested, storage_policy, table_spec),
+                )
                 return existing
             table = Table(
                 namespace=namespace,
@@ -783,6 +811,7 @@ class LogClient:
                 flusher=self._stats_flush,
                 querier=self._stats_query,
                 registrar=lambda: self._register_table(namespace, requested, storage_policy, table_spec),
+                registration_key=registration_key,
             )
             self._tables[namespace] = table
             return table
@@ -820,7 +849,7 @@ class LogClient:
         return schema_from_proto(response.effective_schema)
 
     def drop_table(self, namespace: str) -> None:
-        """Remove ``namespace`` from the registry and delete its local data."""
+        """Remove ``namespace`` from query visibility and delete its local data."""
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("cannot drop the privileged 'log' namespace")
         # Close the local Table first so in-flight rows do not race the

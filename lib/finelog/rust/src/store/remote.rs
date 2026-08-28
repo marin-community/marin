@@ -386,10 +386,12 @@ impl RemoteStore {
         relative_key: &str,
     ) -> Result<(), StatsError> {
         let path = self.native_path(namespace, relative_key);
-        self.store
-            .delete(&path)
-            .await
-            .map_err(|error| StatsError::Internal(format!("delete native object {path}: {error}")))
+        match self.store.delete(&path).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(error) => Err(StatsError::Internal(format!(
+                "delete native object {path}: {error}"
+            ))),
+        }
     }
 
     /// Upload `local_path` to `{namespace}/{relative_key}`. Returns `true` on
