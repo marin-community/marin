@@ -78,10 +78,8 @@ def execute_sql_batches(items: Iterable[object], query: SqlQuery) -> Iterator[pa
         if input_schema is None:
             input_schema = batch.schema
         elif not input_schema.equals(batch.schema, check_metadata=True):
-            raise ValueError(
-                "SQL map input schema changed within one shard. "
-                f"Expected:\n{input_schema}\nGot:\n{batch.schema}"
-            )
+            schema_diff = f"Expected:\n{input_schema}\nGot:\n{batch.schema}"
+            raise ValueError(f"SQL map input schema changed within one shard. {schema_diff}")
 
         context.register_record_batches(SQL_INPUT_TABLE, [[batch]])
         try:
