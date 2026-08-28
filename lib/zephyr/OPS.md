@@ -101,12 +101,13 @@ uv run iris --cluster marin job logs <WORKER_JOB_ID> --level error | \
   rg 'Generic S3 HEAD|400 Bad Request'
 ```
 
-Zephyr qualifies the endpoint in `zephyr.parquet_scan.scan_parquet` before
-calling Polars. Check `AWS_ENDPOINT_URL_S3` and `AWS_ENDPOINT_URL` if the bad
-URL persists. `FSSPEC_S3` does not configure Polars' Rust `object_store`
-client, so changing fsspec retries, credentials, or worker RAM does not repair
-this addressing error. See the [incident record](https://echo.oa.dev/wiki/59)
-for the reproduced failure and validation.
+Zephyr qualifies the endpoint in `zephyr.parquet_scan.register_object_stores`
+before registering DataFusion's S3 object store. Check `AWS_ENDPOINT_URL_S3`
+and `AWS_ENDPOINT_URL` if the bad URL persists. `FSSPEC_S3` does not configure
+DataFusion's `object_store` client, so changing fsspec retries, credentials, or
+worker RAM does not repair this addressing error. See the
+[incident record](https://echo.oa.dev/wiki/59) for the reproduced failure and
+validation.
 
 ### Stale Pipeline Warning
 

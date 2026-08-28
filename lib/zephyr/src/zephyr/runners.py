@@ -24,6 +24,7 @@ package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
 import logging
+import math
 import os
 import re
 import signal
@@ -38,9 +39,10 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
+import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 
-from zephyr import counters, memory_budget
+from zephyr import counters
 from zephyr.plan import Scatter, StageContext, run_stage
 from zephyr.stage_io import (
     ShardTask,
@@ -158,12 +160,21 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
+def _stage_item_count_and_bytes(item: Any) -> tuple[int, int]:
+    if isinstance(item, pa.RecordBatch):
+        return item.num_rows, item.get_total_buffer_size()
+    if isinstance(item, pa.Table):
+        return item.num_rows, item.get_total_buffer_size()
+    return 1, sys.getsizeof(item)
+
+
 def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
     """Yield items from ``gen`` while recording item count and byte size into the current stage's counters."""
     stage_counters = counters.current_stage()
     for item in gen:
-        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, 1)
-        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, sys.getsizeof(item))
+        item_count, bytes_processed = _stage_item_count_and_bytes(item)
+        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, item_count)
+        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, bytes_processed)
         yield item
 
 
@@ -437,14 +448,13 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             child_env = os.environ.copy()
-            child_env["POLARS_MAX_THREADS"] = str(memory_budget.polars_thread_count(task.cost.cpu))
-            with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                returncode = self._child_returncode(
-                    [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, sort_dir],
-                    child_env,
-                    execution_id,
-                    task.stage_name,
-                )
+            child_env["OMP_NUM_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
+            returncode = self._child_returncode(
+                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
+                child_env,
+                execution_id,
+                task.stage_name,
+            )
 
             if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish

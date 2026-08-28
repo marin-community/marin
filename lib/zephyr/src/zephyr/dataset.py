@@ -16,8 +16,10 @@ from pyarrow import RecordBatch
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
-from zephyr.expr import Expr
+from zephyr.batches import ArrowBatch
+from zephyr.expr import ColumnExpr, Expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.sql import SqlQuery, SqlScalarFunction
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,16 @@ class MapOp:
 
     def __repr__(self):
         return f"MapOp(fn={_get_fn_name(self.fn)})"
+
+
+@dataclass
+class SqlOp:
+    """Apply a DataFusion SQL query independently to each Arrow batch."""
+
+    query: SqlQuery
+
+    def __repr__(self):
+        return "SqlOp"
 
 
 @dataclass
@@ -283,10 +295,10 @@ class ReshardOp:
 class GroupByOp:
     """Group items by `key_fn`, reducing each group with `reducer_fn`."""
 
-    key_fn: Callable  # Function from item -> hashable key
-    reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
+    key_fn: Callable | ColumnExpr  # Function or column from item -> hashable key
+    reducer_fn: Callable | SqlQuery  # Python group callback or whole-shard SQL query
     num_output_shards: int | None = None  # None = auto-detect from current shard count
-    sort_fn: Callable | None = None  # Optional secondary sort within each group
+    sort_fn: Callable | ColumnExpr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
 
     def __repr__(self):
@@ -336,6 +348,7 @@ class JoinOp:
 
 LogicalOp = (
     MapOp
+    | SqlOp
     | FilterOp
     | SelectOp
     | TakePerShardOp
@@ -451,6 +464,26 @@ class Dataset(Generic[T]):
             [2, 4, 6]
         """
         return cast("Dataset[R]", self._derive(MapOp(fn)))
+
+    def sql(
+        self: "Dataset[ArrowBatch]",
+        query: str,
+        *,
+        scalar_functions: tuple[SqlScalarFunction, ...] = (),
+    ) -> "Dataset[RecordBatch]":
+        """Apply a DataFusion SQL query independently to each Arrow batch.
+
+        The input batch is available as the table ``input``. The query may
+        filter, project, join, unnest, or otherwise transform that batch.
+
+        Args:
+            query: DataFusion SQL statement that reads from ``input``.
+            scalar_functions: Python scalar UDFs to register for the query.
+        """
+        return cast(
+            "Dataset[RecordBatch]",
+            self._derive(SqlOp(SqlQuery(query, scalar_functions))),
+        )
 
     def filter(self, predicate: Callable[[T], bool] | Expr) -> "Dataset[T]":
         """Filter dataset elements by a predicate or expression.
@@ -889,28 +922,57 @@ class Dataset(Generic[T]):
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]": ...
 
+    @overload
+    def group_by(
+        self: "Dataset[ArrowBatch]",
+        key: ColumnExpr,
+        *,
+        reducer: SqlQuery,
+        sort_by: ColumnExpr | None = None,
+        num_output_shards: int | None = None,
+        combiner: None = None,
+    ) -> "Dataset[RecordBatch]": ...
+
+    @overload
+    def group_by(
+        self: "Dataset[ArrowBatch]",
+        key: ColumnExpr,
+        *,
+        reducer: Callable[[Any, Iterator[dict[str, Any]]], R | Iterator[R]],
+        sort_by: ColumnExpr | None = None,
+        num_output_shards: int | None = None,
+        combiner: None = None,
+    ) -> "Dataset[R]": ...
+
     def group_by(
         self,
-        key: Callable[[T], K],
+        key: Callable[[T], K] | ColumnExpr,
         *,
-        reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
-        sort_by: Callable[[T], Any] | None = None,
+        reducer: Callable[[K, Iterator[T]], R | Iterator[R]] | SqlQuery,
+        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]":
         """Group items by key and apply reducer function.
 
-        The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
-        results for that group.
+        A Python reducer receives ``(key, iterator_of_items)`` and returns a
+        single result or an iterator of results for that group. A
+        :class:`~zephyr.sql.SqlQuery` runs once over the merged target shard;
+        its input is the table ``input`` and it returns Arrow batches.
+
+        Arrow-batch inputs require ``zephyr.expr.col(...)`` for ``key`` and
+        ``sort_by``.
 
         Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
         Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
-            key: Function extracting grouping key from item (must be hashable)
-            reducer: Function from (key, Iterator[items]) -> result
-            sort_by: Optional function extracting a sort key from each item. When provided,
-                items within each group are delivered to the reducer sorted by this key.
+            key: Function extracting a hashable grouping key, or a column
+                expression for Arrow-batch inputs.
+            reducer: Python function from ``(key, Iterator[items])`` to results,
+                or a SQL query over the merged ``input`` table.
+            sort_by: Optional function or column expression selecting the sort
+                key. Python reducers receive each group in this order.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
             combiner: Optional local pre-aggregation applied during scatter. Receives
                 (key, Iterator[items]) and yields reduced items of the same type. Must be

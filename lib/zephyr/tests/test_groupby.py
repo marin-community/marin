@@ -8,6 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from zephyr.dataset import Dataset
+from zephyr.expr import col
+from zephyr.sql import sql
 from zephyr.writers import infer_arrow_schema
 
 
@@ -577,4 +579,68 @@ def test_group_by_combiner_sum(zephyr_ctx):
     assert results == [
         {"cat": "x", "total": 6},
         {"cat": "y", "total": 30},
+    ]
+
+
+def test_sql_map_transforms_arrow_batches(zephyr_ctx):
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"name": "alpha", "value": 1},
+            {"name": "beta", "value": 3},
+            {"name": "gamma", "value": 5},
+        ]
+    )
+
+    results = zephyr_ctx.execute(
+        Dataset.from_list([batch]).sql("SELECT name, value * 2 AS doubled FROM input WHERE value >= 3")
+    ).results
+
+    assert pa.Table.from_batches(results).to_pylist() == [
+        {"name": "beta", "doubled": 6},
+        {"name": "gamma", "doubled": 10},
+    ]
+
+
+def test_group_by_sql_reduces_merged_arrow_shard(zephyr_ctx):
+    batches = [
+        pa.RecordBatch.from_pylist([{"cat": "a", "value": 1}, {"cat": "b", "value": 3}]),
+        pa.RecordBatch.from_pylist([{"cat": "a", "value": 2}, {"cat": "b", "value": 4}]),
+    ]
+    dataset = Dataset.from_list(batches).group_by(
+        key=col("cat"),
+        reducer=sql("SELECT cat, sum(value) AS total FROM input GROUP BY cat"),
+        sort_by=col("value"),
+        num_output_shards=2,
+    )
+
+    results = zephyr_ctx.execute(dataset).results
+    rows = sorted(
+        (row for batch in results for row in batch.to_pylist()),
+        key=lambda row: row["cat"],
+    )
+
+    assert rows == [{"cat": "a", "total": 3}, {"cat": "b", "total": 7}]
+
+
+def test_group_by_column_key_supports_python_reducer(zephyr_ctx):
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {"cat": "a", "value": 2},
+            {"cat": "a", "value": 1},
+            {"cat": "b", "value": 4},
+        ]
+    )
+
+    results = zephyr_ctx.execute(
+        Dataset.from_list([batch]).group_by(
+            key=col("cat"),
+            reducer=lambda key, rows: {"cat": key, "values": [row["value"] for row in rows]},
+            sort_by=col("value"),
+            num_output_shards=2,
+        )
+    ).results
+
+    assert sorted(results, key=lambda row: row["cat"]) == [
+        {"cat": "a", "values": [1, 2]},
+        {"cat": "b", "values": [4]},
     ]

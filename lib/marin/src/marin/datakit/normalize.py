@@ -16,16 +16,16 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
+import functools
 import logging
 import os
-import re
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import dupekit
 import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ValidationInfo, model_validator
 from rigging.filesystem.factory import url_to_fs
@@ -33,8 +33,10 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
-from zephyr.writers import ThreadedBatchWriter, write_parquet_file
+from zephyr.expr import col
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file, load_file_batch
+from zephyr.sql import SqlScalarFunction, quote_identifier, sql
+from zephyr.writers import ThreadedBatchWriter, batchify, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.datakit.source_key import DatakitArtifactPath
@@ -53,6 +55,13 @@ DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
 
 # Counter name for documents that had whitespace runs compacted.
 COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
+EMPTY_TEXT_FILTERED_COUNTER = "normalize/empty_text_filtered"
+
+_INPUT_BATCH_ROWS = 8192
+_SCHEMA_SAMPLE_FILES = 2
+_COMPACTED_COL = "__normalize_compacted"
+_EMPTY_TEXT_COL = "__normalize_empty_text"
+_DUPLICATE_COL = "__normalize_duplicate"
 
 # Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
 # a single normalize spans thousands of shards over very large staged dumps.
@@ -131,60 +140,135 @@ def _text_from_value(value: Any) -> str:
     return str(value)
 
 
-def _make_normalize_fn(
+def _input_batches(path: str) -> Iterator[pa.RecordBatch]:
+    if path.endswith(".parquet"):
+        yield from load_file_batch(path)
+        return
+    for records in batchify(load_file(path), n=_INPUT_BATCH_ROWS):
+        yield pa.RecordBatch.from_pylist(list(records))
+
+
+def _infer_input_schema(paths: list[str]) -> pa.Schema:
+    """Infer one Arrow schema from the first batch of two non-empty files."""
+    schemas: list[pa.Schema] = []
+    sampled_paths: list[str] = []
+    for path in paths:
+        batch = next(_input_batches(path), None)
+        if batch is None or len(batch) == 0:
+            continue
+        schemas.append(batch.schema)
+        sampled_paths.append(path)
+        if len(schemas) == _SCHEMA_SAMPLE_FILES:
+            break
+
+    if not schemas:
+        return pa.schema([])
+    try:
+        return pa.unify_schemas(schemas, promote_options="permissive")
+    except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as err:
+        raise ValueError(f"Could not infer one Arrow schema from sampled files {sampled_paths}: {err}") from err
+
+
+def _iter_input_batches(path: str, *, schema: pa.Schema) -> Iterator[pa.RecordBatch]:
+    """Load input batches under one sampled schema contract."""
+    for batch in _input_batches(path):
+        try:
+            unified = pa.unify_schemas([schema, batch.schema], promote_options="permissive")
+            if not schema.equals(unified, check_metadata=True):
+                raise pa.ArrowInvalid("batch would widen the sampled schema")
+            yield pa.RecordBatch.from_struct_array(
+                pa.StructArray.from_arrays(
+                    [
+                        (
+                            batch.column(field.name)
+                            if field.name in batch.schema.names
+                            else pa.nulls(len(batch), field.type)
+                        )
+                        for field in schema
+                    ],
+                    fields=list(schema),
+                )
+            ).cast(schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as err:
+            raise ValueError(
+                f"Input batch from {path} does not match the sampled schema. "
+                f"Sampled schema:\n{schema}\nBatch schema:\n{batch.schema}"
+            ) from err
+
+
+def _text_array(values: pa.Array) -> pa.Array:
+    return pa.array(
+        [None if value is None else _text_from_value(value) for value in values.to_pylist()],
+        type=pa.string(),
+    )
+
+
+def _id_array(values: pa.Array) -> pa.Array:
+    return pa.array([None if value is None else generate_id(value) for value in values.to_pylist()], type=pa.string())
+
+
+def _finalize_normalized_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+    empty = int(pc.sum(batch.column(_EMPTY_TEXT_COL)).as_py() or 0)
+    if empty:
+        counters.pipeline.update_counter(EMPTY_TEXT_FILTERED_COUNTER, empty)
+    compacted = int(pc.sum(batch.column(_COMPACTED_COL)).as_py() or 0)
+    if compacted:
+        counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, compacted)
+    batch = batch.filter(pc.invert(batch.column(_EMPTY_TEXT_COL)))
+    return batch.select([name for name in batch.schema.names if name not in {_COMPACTED_COL, _EMPTY_TEXT_COL}])
+
+
+def _normalize_query(
+    schema: pa.Schema,
+    *,
     text_field: str,
-    id_field: str,
-    bare: bool = False,
-    drop_fields: tuple[str, ...] = (),
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return a record-level transform function.
+    id_field: str | None,
+    max_whitespace_run_chars: int,
+    kept_fields: tuple[str, ...],
+):
+    if text_field not in schema.names:
+        return sql(
+            f"SELECT CAST(NULL AS VARCHAR) AS id, CAST(NULL AS VARCHAR) AS text, "
+            f"false AS {quote_identifier(_COMPACTED_COL)}, "
+            f"true AS {quote_identifier(_EMPTY_TEXT_COL)} FROM input"
+        )
 
-    The returned function:
-    1. Extracts ``text`` from *text_field*.
-    2. Generates a deterministic ``id`` via xxh3_128.
-    3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns unless *bare* is set or they are listed in
-       *drop_fields*.
+    text_sql = quote_identifier(text_field)
+    raw_text_col = quote_identifier("__normalize_raw_text")
+    compacted_text_col = quote_identifier("__normalize_text")
+    whitespace_pattern = rf"(\s{{{max_whitespace_run_chars}}})\s+"
 
-    *bare* takes the strict path: drop every column that isn't ``id``,
-    ``text``, or ``source_id``. Use this for sources whose extra columns
-    vary across shards (e.g. starcoderdata's 87 language subdirs each
-    ship a different set of GitHub-meta columns, or proof-pile-2's
-    nested ``meta`` dict with optional-typed fields); the parquet writer
-    can't add columns mid-write and the reduce stage can't widen
-    null-vs-typed, so a uniform schema is the only safe option.
+    projection = [quote_identifier(name) for name in kept_fields]
+    projection.extend(
+        [
+            f"normalize_id({compacted_text_col}) AS id",
+            f"{compacted_text_col} AS text",
+        ]
+    )
+    if id_field is not None and id_field in schema.names:
+        projection.append(f"{quote_identifier(id_field)} AS source_id")
+    projection.append(f"{compacted_text_col} != {raw_text_col} AS {quote_identifier(_COMPACTED_COL)}")
+    projection.append(
+        f"{raw_text_col} IS NULL OR regexp_like({raw_text_col}, '^\\s*$') " f"AS {quote_identifier(_EMPTY_TEXT_COL)}"
+    )
 
-    Records with missing or blank text must be filtered out before calling
-    the returned function.
-    """
-
-    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-        # --- text ---
-        text = _text_from_value(record[text_field])
-
-        # --- source_id (skip silently if id_field absent) ---
-        source_id = record.get(id_field)
-
-        # --- build output ---
-        out: dict[str, Any] = {}
-
-        if not bare:
-            # Copy all original columns except the ones we're replacing
-            for k, v in record.items():
-                if k == id_field or k in drop_fields:
-                    continue
-                if k == text_field and text_field != "text":
-                    continue
-                out[k] = v
-
-        out["id"] = generate_id(text)
-        out["text"] = text
-        if source_id is not None:
-            out["source_id"] = source_id
-
-        return out
-
-    return normalize_record
+    return sql(
+        f"""
+        WITH normalized AS (
+            SELECT *, normalize_text({text_sql}) AS {raw_text_col}
+            FROM input
+        ), compacted AS (
+            SELECT *, regexp_replace({raw_text_col}, '{whitespace_pattern}', '$1', 'g') AS {compacted_text_col}
+            FROM normalized
+        )
+        SELECT {", ".join(projection)}
+        FROM compacted
+        """,
+        scalar_functions=(
+            SqlScalarFunction("normalize_text", _text_array, (schema.field(text_field).type,), pa.string()),
+            SqlScalarFunction("normalize_id", _id_array, (pa.string(),), pa.string()),
+        ),
+    )
 
 
 # Env var that ferries set on test/smoke runs to bound the input set on
@@ -260,46 +344,11 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return sum(StoragePath(path).size() for path in file_paths)
 
 
-def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return a map function that compacts consecutive whitespace runs exceeding the limit.
-
-    Any run of whitespace longer than *max_whitespace_run_chars* is truncated to
-    that length (preserving the original whitespace characters). Affected records
-    are counted via the ``COMPACTED_WHITESPACE_COUNTER`` Zephyr counter, and the
-    ``id`` is recomputed to reflect the new text.
-    """
-    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
-
-    def compact(record: dict[str, Any]) -> dict[str, Any]:
-        text = record["text"]
-        compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
-        if len(compacted) != len(text):
-            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
-            record = {**record, "text": compacted, "id": generate_id(compacted)}
-        return record
-
-    return compact
-
-
-@dataclass
-class MainOutput:
-    """Wraps a unique record destined for the main output shard."""
-
-    data: dict[str, Any]
-
-
-@dataclass
-class ExactDupSideOutput:
-    """Wraps a duplicate record destined for the side (dups) output shard."""
-
-    data: dict[str, Any]
-
-
 def _make_split_writer(
     output_dir: str,
     output_schema: pa.Schema | None = None,
-) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
-    """Return a ``map_shard`` function that fans records out to main and dup Parquet files.
+) -> Callable[[Iterator[pa.RecordBatch], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
+    """Return a ``map_shard`` function that fans SQL-marked batches to two outputs.
 
     Each shard writes two files concurrently via ``ThreadedBatchWriter`` so the
     producer isn't blocked on I/O. Yields a single manifest per shard containing
@@ -309,7 +358,7 @@ def _make_split_writer(
     # TODO (rav): consider whether we want to generalize this in the future.
 
     def split_writer(
-        records: Iterator[MainOutput | ExactDupSideOutput],
+        batches: Iterator[pa.RecordBatch],
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
@@ -321,8 +370,8 @@ def _make_split_writer(
         # the ThreadedBatchWriter context exits (which joins the thread).
         results: dict[str, dict[str, Any]] = {}
 
-        def write_to(path: str, key: str) -> Callable[[Iterable[dict[str, Any]]], None]:
-            def _fn(items: Iterable[dict[str, Any]]) -> None:
+        def write_to(path: str, key: str) -> Callable[[Iterable[pa.RecordBatch]], None]:
+            def _fn(items: Iterable[pa.RecordBatch]) -> None:
                 results[key] = write_parquet_file(items, output_path=path, schema=output_schema)
 
             return _fn
@@ -331,13 +380,24 @@ def _make_split_writer(
             ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
             ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
         ):
-            for item in records:
-                if isinstance(item, MainOutput):
-                    counters.pipeline.update_counter("normalize/unique_records_out", 1)
-                    main_writer.submit(item.data)
-                else:
-                    counters.pipeline.update_counter("normalize/duplicate_records_out", 1)
-                    dup_writer.submit(item.data)
+
+            def output_batch(batch: pa.RecordBatch, mask: pa.Array, columns: list[str]) -> pa.RecordBatch:
+                output = batch.filter(mask).select(columns)
+                if output_schema is None:
+                    return output
+                return output.select(output_schema.names).cast(output_schema)
+
+            for batch in batches:
+                duplicate = batch.column(_DUPLICATE_COL)
+                columns = [name for name in batch.schema.names if name != _DUPLICATE_COL]
+                duplicate_count = int(pc.sum(duplicate).as_py() or 0)
+                unique_count = len(batch) - duplicate_count
+                if unique_count:
+                    counters.pipeline.update_counter("normalize/unique_records_out", unique_count)
+                    main_writer.submit(output_batch(batch, pc.invert(duplicate), columns))
+                if duplicate_count:
+                    counters.pipeline.update_counter("normalize/duplicate_records_out", duplicate_count)
+                    dup_writer.submit(output_batch(batch, duplicate, columns))
 
         yield results
 
@@ -357,42 +417,35 @@ def _build_pipeline(
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
-
-    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
-        """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
-        prev_id: str | None = None
-        for record in items:
-            rid = record["id"]
-            if rid != prev_id:
-                prev_id = rid
-                yield MainOutput(data=record)
-            else:
-                yield ExactDupSideOutput(data=record)
-
-    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
-        """Yield items unchanged; used when dedup is disabled."""
-        yield from (MainOutput(data=item) for item in items)
-
-    def has_text(record: dict[str, Any]) -> bool:
-        text = record.get(text_field)
-        if text is None or _text_from_value(text).strip() == "":
-            counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
-            return False
-        return True
-
-    reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
+    input_schema = _infer_input_schema(files)
+    excluded = set(drop_fields) | {"id", "text", "source_id"}
+    if id_field is not None:
+        excluded.add(id_field)
+    if text_field != "text":
+        excluded.add(text_field)
+    kept_fields = () if bare else tuple(name for name in input_schema.names if name not in excluded)
+    normalize_query = _normalize_query(
+        input_schema,
+        text_field=text_field,
+        id_field=id_field,
+        max_whitespace_run_chars=max_whitespace_run_chars,
+        kept_fields=kept_fields,
+    )
+    duplicate_sql = (
+        f"row_number() OVER (PARTITION BY id ORDER BY id) > 1 AS {quote_identifier(_DUPLICATE_COL)}"
+        if dedup_mode == DedupMode.EXACT
+        else f"false AS {quote_identifier(_DUPLICATE_COL)}"
+    )
 
     return (
         Dataset.from_list(files)
-        .flat_map(load_file)
-        .filter(has_text)
-        .map(normalize_record)
-        .map(_make_whitespace_compactor(max_whitespace_run_chars))
+        .flat_map(functools.partial(_iter_input_batches, schema=input_schema))
+        .sql(normalize_query.text, scalar_functions=normalize_query.scalar_functions)
+        .map(_finalize_normalized_batch)
         .group_by(
-            key=lambda r: r["id"],
-            reducer=reducers[dedup_mode],
-            sort_by=lambda r: r["id"],
+            key=col("id"),
+            reducer=sql(f"SELECT *, {duplicate_sql} FROM input"),
+            sort_by=col("id"),
             num_output_shards=num_shards,
         )
         .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
