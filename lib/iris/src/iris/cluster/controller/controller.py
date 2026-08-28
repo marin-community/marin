@@ -508,12 +508,6 @@ class Controller:
         self._scheduling_diagnostics: dict[str, str] = {}
         self._scheduling_round: int = 0
 
-        # Last completed scheduling context — None until the first tick runs.
-        # The dashboard diagnostics path reads this instead of rebuilding from
-        # the DB. This is the only ``| None`` attribute on Controller: it is
-        # genuinely None before the first scheduling tick has run.
-        self._last_scheduling_context: SchedulingContext | None = None
-
         self._atexit_registered = False
 
         # Rate-limits periodic (best-effort) checkpoint writes.
@@ -1017,7 +1011,6 @@ class Controller:
         # dispatch follow-up for fresh assignments.
         if sched_result is not None:
             self._scheduling_diagnostics = sched_result.diagnostics
-            self._last_scheduling_context = sched_result.scheduling_context
             if sched_result.assignments:
                 self._force_reconcile = True
                 self._tick_wake.set()
@@ -1222,7 +1215,6 @@ class Controller:
         context = inputs.scheduling_context
         if context is None:
             self._scheduling_diagnostics = {}
-            self._last_scheduling_context = None
             return SchedulingOutcome.NO_PENDING_TASKS
         result = self._schedule_phase(inputs).result
 
@@ -1235,7 +1227,6 @@ class Controller:
         self._apply_preemptions(result.preemptions)
 
         self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.scheduling_context
 
         if result.assignments or result.preemptions:
             log_event(
@@ -1352,17 +1343,6 @@ class Controller:
                 )
             )
         return decisions
-
-    @property
-    def last_scheduling_context(self) -> "SchedulingContext | None":
-        """Return the most recent finalized scheduling context.
-
-        ``None`` before the first scheduling tick has run; otherwise the
-        post-taint context from the last completed ``_run_scheduling`` pass.
-        Consumed by dashboard diagnostics that need a snapshot of capacities
-        and pending tasks without rebuilding from the DB.
-        """
-        return self._last_scheduling_context
 
     # =========================================================================
     # Worker reconcile pass (snapshot → backend.reconcile → apply + health)

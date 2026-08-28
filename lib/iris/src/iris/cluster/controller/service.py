@@ -68,7 +68,6 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
-from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     federation_changelog_table,
     federation_sync_state_table,
@@ -1223,9 +1222,6 @@ class ControllerProtocol(Protocol):
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
-
-    @property
-    def last_scheduling_context(self) -> SchedulingContext | None: ...
 
     @property
     def backend(self) -> TaskBackend: ...
