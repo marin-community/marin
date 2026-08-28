@@ -337,24 +337,38 @@ def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
     assert filename.endswith("aarch64.whl")
 
 
+def _tiny_state(params, master_params):
+    return train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=(),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 2)),
+    )
+
+
 def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     """A run wanting a master cannot synthesize one from a master-less checkpoint; refuse loudly.
 
-    The same-layout cases pass the exemplar through unchanged.
+    The same-layout cases pass the template through unchanged.
     """
+    state = _tiny_state(jnp.zeros(4), None)
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
     assert not train.checkpoint_stores_master(master_less)
-    assert train.exemplar_for_candidate({"x": 1}, master_less, train.MasterParamMode.DISABLED) == {"x": 1}
+    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DISABLED) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
-        train.exemplar_for_candidate({"x": 1}, master_less, train.MasterParamMode.FP32_PINNED_HOST)
+        train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
 
     master_bearing = str(tmp_path / "step-2")
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
     assert train.checkpoint_stores_master(master_bearing)
-    assert train.exemplar_for_candidate({"x": 1}, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) == {"x": 1}
+    assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
+    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DISABLED)
+    assert migrating.params is None and migrating.master_params is state.params
 
 
 def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
@@ -401,14 +415,14 @@ def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_rest
         jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DISABLED
     )
     with set_mesh(mesh):
-        restored = train.adopt_restored_master(
+        restored = train.take_master_as_params(
             restore_grug_state_from_checkpoint(
                 template,
                 checkpoint_search_paths=[str(checkpoint_root)],
                 load_checkpoint_setting=True,
                 mesh=None,
                 allow_partial=False,
-                template_for_candidate=lambda candidate: train.exemplar_for_candidate(
+                template_for_candidate=lambda candidate: train.template_for_candidate_layout(
                     template, candidate, train.MasterParamMode.DISABLED
                 ),
             )

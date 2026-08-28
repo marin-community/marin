@@ -156,15 +156,18 @@ def checkpoint_stores_master(candidate: str) -> bool:
     return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
 
 
-def exemplar_for_candidate(state, candidate: str, run_mode: MasterParamMode):
-    """The exemplar restore should read checkpoint ``candidate`` with: ``state``, or a remap of it.
+def template_for_candidate_layout(
+    state: "GrugTrainState", candidate: str, run_mode: MasterParamMode
+) -> "GrugTrainState":
+    """Pick the template restore reads checkpoint ``candidate`` with.
 
-    Restore reads only the leaves the exemplar names and takes each dtype from storage, checking
-    neither against the checkpoint, so reading a master-bearing checkpoint with a master-less
-    exemplar succeeds silently and trains the run from the bf16 compute copy. A master-bearing
-    checkpoint therefore migrates in process: its authoritative fp32 ``master_params`` leaves are
-    read directly into the run's device fp32 ``params`` template (the bf16 copy goes unread), and
-    the next save writes the new layout. The result is a dict for ``adopt_restored_master``.
+    Restore reads only the leaves the template names and takes each dtype from storage, checking
+    neither against the checkpoint, so reading a master-bearing checkpoint with the run's own
+    master-less template would silently return the bf16 compute copy. When the layouts match the
+    template is ``state`` itself. A master-bearing checkpoint read by a master-less run migrates
+    in process: the run's device fp32 ``params`` template is presented under ``master_params``, so
+    the checkpoint's authoritative fp32 master loads directly into it and the bf16 copy goes
+    unread; ``take_master_as_params`` then moves it back, and the next save writes the new layout.
     """
     has_master = checkpoint_stores_master(candidate)
     if has_master == (run_mode != MasterParamMode.DISABLED):
@@ -175,19 +178,14 @@ def exemplar_for_candidate(state, candidate: str, run_mode: MasterParamMode):
             "Synthesizing a master from stored weights is not a conversion this supports."
         )
     logger.info("Checkpoint %s stores a pinned-host fp32 master; restoring it as the parameters.", candidate)
-    exemplar = {field.name: getattr(state, field.name) for field in dataclasses.fields(state)}
-    exemplar[MASTER_PARAMS_KEY] = exemplar.pop("params")
-    return exemplar
+    return dataclasses.replace(state, params=None, master_params=state.params)
 
 
-def adopt_restored_master(loaded: "GrugTrainState | dict") -> "GrugTrainState":
-    """Rebuild the train state from a remapped restore, or pass a plain one through."""
-    if not isinstance(loaded, dict):
-        return loaded
-    loaded = dict(loaded)
-    loaded["params"] = loaded.pop(MASTER_PARAMS_KEY)
-    loaded[MASTER_PARAMS_KEY] = None
-    return GrugTrainState(**loaded)
+def take_master_as_params(state: "GrugTrainState") -> "GrugTrainState":
+    """Move a master restored through ``template_for_candidate_layout`` into ``params``."""
+    if state.master_params is None:
+        return state
+    return dataclasses.replace(state, params=state.master_params, master_params=None)
 
 
 def _apply_hero_ep_runtime_defaults(
@@ -955,18 +953,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         if released_initial_state:
             state = restore_template_from(state)
 
-        state = adopt_restored_master(
-            restore_grug_state_from_checkpoint(
-                state,
-                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-                load_checkpoint_setting=trainer.load_checkpoint,
-                mesh=mesh,
-                allow_partial=trainer.allow_partial_checkpoint,
-                template_for_candidate=lambda candidate: exemplar_for_candidate(
-                    state, candidate, config.trainer.master_param_mode
-                ),
-            )
+        state = restore_grug_state_from_checkpoint(
+            state,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+            load_checkpoint_setting=trainer.load_checkpoint,
+            mesh=mesh,
+            allow_partial=trainer.allow_partial_checkpoint,
+            template_for_candidate=lambda candidate: template_for_candidate_layout(
+                state, candidate, config.trainer.master_param_mode
+            ),
         )
+        if config.trainer.master_param_mode == MasterParamMode.DISABLED:
+            state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
         dump_grug_state_sharding_run_artifact(
