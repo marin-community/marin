@@ -301,9 +301,8 @@ class MockController:
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
         self.backend.autoscaler = None
         self.backend.runtime_image.return_value = ""
-        # The backend owns its liveness tracker; the service registers workers into
-        # it and the controller's union reads back through it. Tests that inspect a
-        # specific ``state._health`` point this at that tracker.
+        # The backend owns its liveness tracker. Tests that inspect a specific
+        # ``state._health`` point this at that tracker.
         self.backend.health = WorkerHealthTracker()
         # Zero-peer federation: route_submit returns local, ListPeers is empty.
         self.federation = FederationManager([], threads=get_thread_container())

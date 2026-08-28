@@ -1081,6 +1081,12 @@ class Controller:
             return SchedulePhaseResult(ScheduleResult(), [])
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
+        if trace:
+            logger.info(
+                "[TRACE round=%d] Phase 0: %d pending tasks",
+                self._scheduling_round,
+                len(context.pending_task_rows),
+            )
         pins = {
             task.job_id: self.backend.descriptor.backend_id for task in context.pending_task_rows if not task.backend_id
         }
@@ -1207,37 +1213,18 @@ class Controller:
         access is serialized by ControllerDB._lock with multi-statement
         mutations wrapped in BEGIN IMMEDIATE transactions.
         """
-        self._scheduling_round += 1
-        trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
-
-        with self._db.control_read_snapshot() as snap:
-            health = self.backend.health if self.backend.descriptor.kind is BackendKind.WORKER else None
-            context = build_scheduling_context(
-                snap,
-                health,
-                snap.caches[WorkerAttrsProjection],
-                self._config.user_budget_defaults,
-            )
-
-        if trace:
-            logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks",
-                self._scheduling_round,
-                len(context.pending_task_rows),
-            )
-
-        if not context.pending_task_rows:
+        inputs = self._build_tick_inputs(
+            now=Timestamp.now(),
+            run_schedule=True,
+            run_reconcile=False,
+            scan_timeouts=False,
+        )
+        context = inputs.scheduling_context
+        if context is None:
             self._scheduling_diagnostics = {}
             self._last_scheduling_context = None
             return SchedulingOutcome.NO_PENDING_TASKS
-
-        result = self.backend.schedule(
-            ScheduleRequest(
-                context=context,
-                max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
-                trace=trace,
-            )
-        )
+        result = self._schedule_phase(inputs).result
 
         # Commit the decisions. Expired/deadline tasks are marked UNSCHEDULABLE;
         # assignments stamp ASSIGNED; preemption finalizes victims.
@@ -1290,6 +1277,10 @@ class Controller:
         drops them from the worker's desired set.
         """
         if not preemptions:
+            return
+        if self._config.dry_run:
+            for decision in preemptions:
+                logger.info("[DRY-RUN] Would preempt task %s", decision.task_id)
             return
         with self._db.transaction() as cur:
             finalize(

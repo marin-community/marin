@@ -2660,7 +2660,6 @@ class ControllerServiceImpl:
 
     @property
     def backend(self) -> TaskBackend:
-        """The live execution backend."""
         return self._controller.backend
 
     def _federated_handle_for_task(self, task_id: JobName) -> reads.FederatedHandle | None:

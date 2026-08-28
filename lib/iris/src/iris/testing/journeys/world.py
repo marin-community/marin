@@ -297,8 +297,7 @@ class JourneyWorld:
         exit_code: int | None = None,
         attempt_id: int | None = None,
     ) -> None:
-        backend = self._backend_for_task(task)
-        backend.observe(
+        self.backend.observe(
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )
@@ -469,9 +468,6 @@ class JourneyWorld:
     @property
     def pending_task_ids(self) -> tuple[str, ...]:
         return self.backend.pending_task_ids
-
-    def _backend_for_task(self, task: TaskRef) -> ScriptedTaskBackend:
-        return self.backend
 
     def _current_backend_events(self) -> list[BackendEvent]:
         return self.backend.events

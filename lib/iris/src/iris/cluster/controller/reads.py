@@ -1511,7 +1511,6 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def all_worker_ids(tx: Tx) -> set[WorkerId]:
-    """Return every registered worker ID."""
     return {WorkerId(str(row.worker_id)) for row in tx.execute(select(workers_table.c.worker_id)).all()}
 
 

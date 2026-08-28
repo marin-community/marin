@@ -11,8 +11,9 @@ controller-owned inputs
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
 complete scheduling workspace, so scheduling never reads controller storage.
-Reconcile and autoscale still use the controller database through the bound
-worker store.
+The worker backend's reconcile and autoscale phases use the controller database
+through a bound worker store. Kubernetes binds no worker store and delegates
+placement and capacity management to its substrate.
 
 :attr:`TaskBackend.descriptor` declares the backend's immutable identity, kind,
 and advertised capacity. The two backend kinds have deliberately different

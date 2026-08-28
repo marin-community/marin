@@ -1425,11 +1425,6 @@ def _inject_scale_group_names_into(scale_groups: object) -> None:
             sg["name"] = name
 
 
-def _inject_scale_group_names(data: dict) -> None:
-    """Stamp each scale group's map key onto its ``name`` field."""
-    _inject_scale_group_names_into(data.get("scale_groups"))
-
-
 def parse_config(data: dict) -> IrisClusterConfig:
     """Parse and validate a raw config dict (post-expansion) into the model."""
     config = IrisClusterConfig.model_validate(data)
@@ -1455,7 +1450,7 @@ def load_config(config_path: Path | str) -> IrisClusterConfig:
 
     _expand_tpu_pools(data)
     _expand_multi_zone_groups(data)
-    _inject_scale_group_names(data)
+    _inject_scale_group_names_into(data.get("scale_groups"))
 
     config = parse_config(data)
 

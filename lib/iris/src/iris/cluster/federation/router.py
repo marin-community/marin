@@ -51,7 +51,7 @@ class RoutingRequest:
 class SubmitDisposition(StrEnum):
     """What a submit-time classification decided for a job."""
 
-    LOCAL = "local"  # run on one of this controller's own backends
+    LOCAL = "local"  # run on this controller's backend
     QUEUE = "queue"  # admit to the federation queue; the tick assigns a peer
     REJECT = "reject"  # unschedulable now — no local backend, no reachable peer
 

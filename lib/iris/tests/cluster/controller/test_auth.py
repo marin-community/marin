@@ -30,7 +30,6 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
@@ -39,9 +38,9 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.testing.controller import worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -87,11 +86,7 @@ def _make_service(db, log_client, auth=None):
     controller_mock.last_scheduling_context = None
     controller_mock.backend = Mock()
     controller_mock.backend.autoscaler = None
-    controller_mock.backend.descriptor = BackendDescriptor(
-        backend_id=DEFAULT_BACKEND_ID,
-        display_name="worker",
-        kind=BackendKind.WORKER,
-    )
+    controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
@@ -124,11 +119,7 @@ def service(state, tmp_path, log_client):
     controller_mock.wake = Mock()
     controller_mock.backend = Mock()
     controller_mock.backend.autoscaler = None
-    controller_mock.backend.descriptor = BackendDescriptor(
-        backend_id=DEFAULT_BACKEND_ID,
-        display_name="worker",
-        kind=BackendKind.WORKER,
-    )
+    controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

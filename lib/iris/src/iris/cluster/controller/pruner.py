@@ -71,11 +71,6 @@ def _prune_terminal_jobs(
     return deleted
 
 
-def _prune_dead_workers(backend: TaskBackend, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-    """Delete the backend's DEAD workers whose last heartbeat predates ``cutoff_ms``."""
-    return backend.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
-
-
 def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
     """Garbage-collect slice rows left behind by abandoned scaling groups.
 
@@ -145,7 +140,11 @@ def prune_old_data(
     now_ms = now.epoch_ms()
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
-        workers_deleted=_prune_dead_workers(backend, now_ms - worker_retention.to_ms(), stop_event, pause_between_s),
+        workers_deleted=backend.prune_dead_workers(
+            cutoff_ms=now_ms - worker_retention.to_ms(),
+            stop_event=stop_event,
+            pause=pause_between_s,
+        ),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, now),
     )
