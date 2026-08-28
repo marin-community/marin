@@ -466,6 +466,24 @@ def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
     assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
 
 
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_remat_mode"),
+    [(train.RAGGED_MOE_IMPLEMENTATION, "offload_carry"), ("fixed_pooled_wave_all_to_all", "recompute_all")],
+)
+def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+    step = launch.build_diagnostic_run(
+        run_id="carry-offload",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        moe_implementation=moe_implementation,
+        processes_per_task=4,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == expected_remat_mode
+
+
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 64, 1),

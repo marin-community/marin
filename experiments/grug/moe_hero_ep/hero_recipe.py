@@ -18,8 +18,9 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
-from experiments.grug.moe_hero_ep.model import QbEstimator
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
+    RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
     MasterParamMode,
     TrainingDataMode,
@@ -54,6 +55,22 @@ HERO_MODEL_CONFIG = dataclasses.replace(
     qb_estimator=QbEstimator.HIST,
     qb_hist_bins=HERO_QB_HIST_BINS,
 )
+
+
+def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+    """Give the ragged transport the layer-carry offload that its scheduling posture depends on.
+
+    Staging the carry on pinned host lowered the measured HBM peak by 36 GiB, which is what makes
+    the latency-hiding scheduler fit. The other transports are unmeasured with the offload, which
+    is the only reason they do not take it.
+
+    The hero recipes apply this. The small-scale ablation arms do not, and keep the scheduling
+    posture they were measured under: the scheduler reads the remat mode, so a model without the
+    offload schedules exactly as it did before the mode existed.
+    """
+    if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        return model
+    return dataclasses.replace(model, remat_mode="offload_carry")
 
 
 class HeroThroughputResult(Artifact):

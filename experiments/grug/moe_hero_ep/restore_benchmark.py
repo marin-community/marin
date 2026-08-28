@@ -59,6 +59,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
+    with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_configs
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
@@ -243,7 +244,7 @@ def main(
 ) -> None:
     batch_size = HERO_EP_BATCH_SIZE * replica_groups
     if model_size == HERO_MODEL_SIZE:
-        model = HERO_MODEL_CONFIG
+        model = with_transport_remat_mode(HERO_MODEL_CONFIG)
         _, optimizer = build_hero_configs(num_train_steps=HERO_SCHEDULE_STEPS, batch_size=batch_size)
     else:
         shape = SMALL_SHAPES[model_size]
