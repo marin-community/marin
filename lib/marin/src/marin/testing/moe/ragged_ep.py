@@ -76,10 +76,6 @@ def _no_drop_capacity() -> float:
 
 
 NO_DROP_CAPACITY = _no_drop_capacity()
-# `ring` keeps the pre-chunking value: it does not chunk, and larger factors make its top_k
-# selection ask for more rows than exist and fail. It is a diagnostic, so it does not need the
-# structural bound the graded ragged run does.
-RING_DIAGNOSTIC_CAPACITY = 2.0
 # At or below the mean assignment count per expert, so the skewed router in `_inputs` drives
 # real clipping and the surviving set is worth checking.
 SKEWED_CAPACITY = 1.0
@@ -140,6 +136,7 @@ class SeedRow(BaseModel):
     seed: int
     ragged_vs_dense: float
     ring_vs_dense: float
+    ring_grad_vs_dense: GradDiff
     grad_vs_dense: GradDiff
     dropped_no_drop_case: int
     dropped_no_drop_case_ring: int
@@ -341,20 +338,15 @@ def _run() -> list[SeedRow]:
         )
 
     def compare_without_drops(seed: int):
-        """Balanced routing at a capacity that cannot clip, so the transport must equal dense.
-
-        `ring` runs on the same inputs and is recorded as a diagnostic, never as a reference.
-        """
+        """Balanced routing at a capacity that cannot clip, so the transport must equal dense."""
         raw = _inputs(jax.random.key(1000 + seed), tokens, skew=False)
         dense, g_dense = _dense_reference(*raw)
         xb, selb, cwb, w13b, w2b = reshard(*raw)
         o_ragged, g_ragged, dropped = loss_and_grad(
             "ragged_all_to_all", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY
         )
-        o_ring, _g_ring, dropped_ring = loss_and_grad(
-            "ring", xb, selb, cwb, w13b, w2b, capacity_factor=RING_DIAGNOSTIC_CAPACITY
-        )
-        return dense, g_dense, o_ragged, g_ragged, dropped, o_ring, dropped_ring
+        o_ring, g_ring, dropped_ring = loss_and_grad("ring", xb, selb, cwb, w13b, w2b, capacity_factor=NO_DROP_CAPACITY)
+        return dense, g_dense, o_ragged, g_ragged, dropped, o_ring, g_ring, dropped_ring
 
     def compare_under_drops(seed: int):
         """Skewed routing at a capacity that clips, against dense restricted to surviving rows.
@@ -377,16 +369,18 @@ def _run() -> list[SeedRow]:
     rows: list[SeedRow] = []
     for seed in SEEDS:
         with jax.set_mesh(mesh):
-            dense, g_dense, o_ragged, g_ragged, dropped, o_ring, dropped_ring = compare_without_drops(seed)
+            dense, g_dense, o_ragged, g_ragged, dropped, o_ring, g_ring, dropped_ring = compare_without_drops(seed)
             keep, dense_dropped, g_dense_dropped, o_drop, g_drop, dropped_skewed = compare_under_drops(seed)
 
         grad = _graddiff(g_ragged, g_dense)
+        ring_grad = _graddiff(g_ring, g_dense)
         grad_dropped = _graddiff(g_drop, g_dense_dropped)
         rows.append(
             SeedRow(
                 seed=seed,
                 ragged_vs_dense=_maxdiff_vs_dense(o_ragged, dense),
                 ring_vs_dense=_maxdiff_vs_dense(o_ring, dense),
+                ring_grad_vs_dense=ring_grad,
                 grad_vs_dense=grad,
                 dropped_no_drop_case=dropped,
                 dropped_no_drop_case_ring=dropped_ring,
@@ -418,10 +412,17 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         and r.dropped_skewed == r.dropped_skewed_expected
         for r in rows
     )
+    ring_ok = all(
+        r.ring_vs_dense <= TOLERANCE
+        and r.ring_grad_vs_dense.worst_slice_median <= TOLERANCE
+        and r.dropped_no_drop_case_ring == 0
+        for r in rows
+    )
     verdict = {
         "ragged_correct": bool(ground_truth_ok and drops_ok),
         "matches_dense_no_drop": ground_truth_ok,
         "matches_dense_under_drops": drops_ok,
+        "ring_matches_dense_no_drop": ring_ok,
     }
     runtime = _runtime_row()
     logger.info(
@@ -435,8 +436,8 @@ def run_benchmark(config: RaggedEpConfig) -> None:
     (output_dir / "results.json").write_text(
         json.dumps({"rows": payload, "verdict": verdict, "runtime": runtime.model_dump(mode="json")}, indent=2)
     )
-    if not verdict["ragged_correct"]:
-        raise RuntimeError(f"ragged EP NOT validated: {verdict}")
+    if not (verdict["ragged_correct"] and ring_ok):
+        raise RuntimeError(f"EP transport NOT validated: {verdict}")
 
 
 def build_benchmark(
