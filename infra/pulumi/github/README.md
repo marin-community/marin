@@ -92,56 +92,83 @@ the profile authorized by Loom.
 
 ## Dependency updater app
 
-The external-runtime and native-package dependency workflows share a private, repository-scoped
-GitHub App instead of the Nightshift app. It may write repository contents and pull requests; it has
-no webhook, OAuth, administration, or organization permissions. Its private key is available only
-through the `external-runtime-updater` Actions environment, whose deployment policy accepts `main`
-and rejects pull-request branches.
+The external-runtime and native-package dependency workflows share the private
+`marin-external-runtime-updater` GitHub App. The app may write repository contents, workflows, and
+pull requests; it has no webhook, OAuth, administration, or organization permissions. Each
+repository receives a separate `external-runtime-updater` environment whose deployment policy
+accepts `main` and rejects pull-request branches. The same private key is sealed independently to
+each environment's Actions public key.
 
-Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
-Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
-GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
-context names from another integration do not satisfy it.
+`dependencyUpdater.repositories` is the installation allowlist. Pulumi selects exactly those
+repositories, creates their environments and variables, adopts or creates their review rulesets,
+and manages every configured environment ciphertext. The provider's installation-selection
+resource requires a user-scoped organization-owner token and does not support GitHub App
+authentication. Run this stack with an owner `GITHUB_TOKEN` that can administer every configured
+repository and the App installation.
 
-The app review bypass must exist in both the review ruleset and classic `main` branch protection.
-GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still
-waiting for review. After changing either control, inspect the preview and run the live audit below.
+Pulumi verifies that the installed app identity matches the declared app, uses selected-repository
+scope, is not suspended, and has Contents, Pull requests, and Workflows write permission. App
+registration changes and permission approval remain owner operations because GitHub does not expose
+the registration as a provider resource.
 
-App registration and installation remain owner-managed because GitHub's repository-selection
-endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation must
-select only `marin`. To recreate or rotate the app credential:
+The app receives a pull-request-only bypass of the one-review ruleset. Organization admins retain
+an always-on emergency bypass. Required-CI rulesets contain only the organization-admin bypass and
+bind check names to GitHub Actions' integration ID. A repository with classic protection on `main`
+must declare `classicRequiredChecks`; preview fails when a matching classic rule is present but
+unmanaged. This preserves the second review layer that previously blocked an otherwise green updater
+pull request; the [2026 updater bypass incident](https://echo.oa.dev/wiki/107) records that failure
+and the required separation between review and CI bypasses.
 
-1. Verify that the app has only Contents and Pull requests read/write permission and remains
-   installed only on `marin`. Record the app ID, client ID, and slug from its settings page.
-2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
-   prints ciphertext without creating the secret. Record the matching public-key ID:
+Bootstrap a repository in two updates because an environment must exist before GitHub exposes its
+public key:
+
+1. Add the repository to `dependencyUpdater.repositories`. Set `reviewRulesetId` when adopting an
+   existing review ruleset. Declare `classicRequiredChecks` only when importing an exact classic
+   `main` rule. Omit `privateKey` during this first update.
+2. Run `pulumi preview` and `pulumi up`. Inspect all imported protection changes. This creates the
+   environment, restricts it to `main`, and reconciles the App installation allowlist.
+3. Generate a new App private key and immediately create its recovery secret with the PEM. Later
+   rotations add a version to the same secret.
 
    ```bash
-   repository_id=$(gh api repos/marin-community/marin --jq .id)
-   gh api "repositories/$repository_id/environments/external-runtime-updater/secrets/public-key" \
+   gcloud secrets create marin-external-runtime-updater-private-key \
+     --project=hai-gcp-models \
+     --replication-policy=automatic \
+     --data-file=/path/to/marin-external-runtime-updater.pem
+   ```
+
+   ```bash
+   gcloud secrets versions add marin-external-runtime-updater-private-key \
+     --project=hai-gcp-models \
+     --data-file=/path/to/marin-external-runtime-updater.pem
+   ```
+
+4. Seal the same PEM to each repository environment without creating the GitHub secret out of band.
+   `--no-store` prints the ciphertext; record it with the public-key ID under that repository's
+   `privateKey` declaration:
+
+   ```bash
+   updater_repository=marin-community/harbor
+   updater_repository_id=$(gh api "repos/$updater_repository" --jq .id)
+   gh api \
+     "repositories/$updater_repository_id/environments/external-runtime-updater/secrets/public-key" \
      --jq .key_id
    gh secret set DEPENDENCY_UPDATER_PRIVATE_KEY \
-     --repo marin-community/marin --env external-runtime-updater --no-store \
-     < /path/to/private-key.pem
+     --repo "$updater_repository" \
+     --env external-runtime-updater \
+     --no-store \
+     < /path/to/marin-external-runtime-updater.pem
    ```
-
-3. Update `dependencyUpdater` in `Pulumi.marin-community.yaml` with the app metadata, public-key
-   ID, and sealed ciphertext. The ciphertext is safe to commit: only GitHub can decrypt it, and
-   Pulumi never receives the private key plaintext.
 
    ```yaml
-   marin-github:dependencyUpdater:
-     repository: marin-community/marin
-     appId: 123456
-     clientId: Iv23example-client-id
-     appSlug: marin-external-runtime-updater
-     reviewRulesetId: 785435
-     actionsKeyId: example-key-id
-     encryptedPrivateKey: example-base64-ciphertext
+   - repository: marin-community/harbor
+     reviewRulesetId: 19130649
+     privateKey:
+       actionsKeyId: example-key-id
+       encryptedPrivateKey: example-base64-ciphertext
    ```
 
-4. Run `pulumi preview`. Verify the ruleset bypass actors and the imported classic `main`
-   protection's app bypass, then run `pulumi up` and the live audit:
+5. Run `pulumi preview`, `pulumi up`, and the live credential audit:
 
    ```bash
    pulumi preview
@@ -149,6 +176,6 @@ select only `marin`. To recreate or rotate the app credential:
    uv run --package marin-iac python audit.py --live
    ```
 
-Delete the downloaded PEM after the ciphertext is recorded. To rotate the key, generate a new PEM,
-repeat the sealing command with the current Actions public-key ID, update the two stack fields, and
-run `pulumi up` again.
+Delete the downloaded PEM after Secret Manager and every environment ciphertext are updated. Rotate
+the key by adding a Secret Manager version, sealing it to every current environment public key, and
+updating all `privateKey` declarations in one reviewed change.
