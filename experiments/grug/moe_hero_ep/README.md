@@ -41,69 +41,17 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 `expert` axes. The expert axis stays sharded during Newton-Schulz.
 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
-`--checkpoint-path` and resumes from the newest complete checkpoint. PR
-[#8480](https://github.com/marin-community/marin/pull/8480) bounded pinned-host restore memory. Its
-d6144 run restored step 164 with a 735 GiB fleet peak against a 940 GiB request.
+`--checkpoint-path` and resumes from the newest complete checkpoint.
 
-## Results
+## Why this recipe
 
-### Transport
-
-[#8549](https://github.com/marin-community/marin/pull/8549) compared the ragged and pooled-wave
-transports head to head: both runs restored the live hero's step-6000 checkpoint on one NVL72
-rack and ran back to back, with the transport the only variable and fp32 weights on device in
-both:
-
-| | ragged | pooled-wave |
-| --- | --- | --- |
-| MFU | 22.87% | 22.71% |
-| assignments dropped | 0.018% | 2.67% |
-| loss at the scored step | 1.4727 | 1.4777 |
-| runtime device peak | 137.9 GiB | 149.9 GiB |
-
-The throughput gap is inside the run-to-run spread (standard deviation over the scored steps was
-0.11 for ragged and 0.59 for pooled-wave, and three earlier ragged runs ranged 22.34–22.58), so
-this buys the drop rate and the headroom at parity rather than a speedup. At d768 over 10.8k steps
-ragged also finished ahead on train loss (1.939 vs 1.956) and eval bpb (0.975 vs 1.033).
-
-Dropping the pinned-host fp32 master is worth about 0.4 MFU on the ragged path, measured on a
-paired hero. Pooled-wave needed the master to fit at all.
-
-### Earlier pooled-wave gates
-
-These ran before the ragged transport, at capacity and process settings the recipe no longer uses.
-
-The 1.10 sender and 1.15 receiver configuration completed a 20-step, one-rack gate. Median
-throughput over steps 2 through 19 was 250,691 tokens/s, and final throughput was 246,947 tokens/s.
-The final loss was 6.3224. The final total drop rate was 19.33%: 7.14% at the sender and 12.19% at
-the receiver. The receiver dropped 13.12% of assignments that reached it. This short gate validates
-memory use and metric reporting. It does not estimate the steady drop rate. All 16 workers completed
-without an OOM, nonfinite value, failure, or preemption. See the
-[W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-118-recv-metrics-send110-recv115-smoke).
-
-The prior 1.05 sender and 1.33 receiver configuration completed 200 steps on one rack. Over steps
-150 through 199, median throughput was 256,818 tokens/s and median MFU was 24.03%. Median routing
-drop rate was 2.41%, and the final drop rate was 2.21%. The final loss was 3.2510. All 16 workers
-completed without an OOM, nonfinite value, failure, or preemption. See the
-[W&B run](https://wandb.ai/marin-community/rav_moe/runs/mhep-103-bf16params-pooled-striped-wave2-send105-recv133-200-20260814)
-and the [XProf trace](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmhep-101-bf16params-pooled-striped-wave2-send105-recv133-profile-20260814&tool=trace_viewer).
-
-### EP ablation ladder (4k context)
-
-The default EP configuration — histogram QB, standard init, latent MoE — trained across the
-downsized d768–d2048 ladder at 4096 sequence length and 750 tokens per active parameter. Final
-Paloma macro loss, both as trained (with capacity drops) and re-scored dropless
-(`sonic_cute` at one chunk), against issue [#8062](https://github.com/marin-community/marin/issues/8062):
-
-| size | drop % (last 50) | Paloma (with drop) | Paloma (dropless) |
-| --- | --- | --- | --- |
-| d768 | 5.50% | [3.2326](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768) | [3.0331](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768-dropless-eval) |
-| d1024 | 5.94% | [2.9849](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024) | [2.7930](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024-dropless-eval) |
-| d1536 | 6.61% | [2.7487](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536) | [2.5710](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536-dropless-eval) |
-| d2048 | 7.11% | [2.5858](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048) | [2.4106](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048-dropless-eval) |
-
-The drop-free re-eval is the fair comparison to a dropless FSDP run; the training-time drops grow
-with width and are recovered by scoring dropless.
+[#8549](https://github.com/marin-community/marin/pull/8549) selected the ragged transport in a
+head-to-head restore of the live hero: 22.87% vs 22.71% MFU against pooled-wave (inside
+run-to-run spread), 0.018% vs 2.67% assignments dropped, and 137.9 vs 149.9 GiB device peak.
+Dropping the pinned-host fp32 master is worth about 0.4 MFU on this path; pooled-wave needed the
+master to fit at all. The earlier pooled-wave gates and their per-run W&B links are in the
+[#7279](https://github.com/marin-community/marin/issues/7279) coordination record; the EP ablation
+ladder is in [#8062](https://github.com/marin-community/marin/issues/8062).
 
 ## Diagnostic sweeps
 
