@@ -110,7 +110,8 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
-    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
+    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
+    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
     # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
     # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
@@ -301,7 +302,11 @@ def build_diagnostic_run(
     type=click.IntRange(min=1),
     default=DEFAULT_HERO_STEPS,
     show_default=True,
-    help="Number of training steps.",
+    help=(
+        "Absolute step the run stops at, not a count. A run that restores a checkpoint must set "
+        "this past the restored step (e.g. 30200 for 200 steps from a step-30000 restore), or the "
+        "trainer sees the run as already complete and exits successfully after zero steps."
+    ),
 )
 @click.option(
     "--schedule-steps",
