@@ -26,6 +26,7 @@ VLLM_OVERVIEW_SECTIONS = frozenset(
         "request_outcome",
         "saturation",
         "saturation_summary",
+        "telemetry_health",
         "token_rate",
     }
 )
@@ -77,7 +78,13 @@ _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
     f"{family}_{component}" for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
 )
-_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_SERVING_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_HEALTH_METRIC_NAMES = (
+    "prometheus_source_available",
+    "prometheus_stage_failures",
+    "prometheus_dropped_samples",
+)
+_METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 
 
 def sql_string(value: str) -> str:
@@ -147,6 +154,7 @@ def vllm_overview_query(
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
     identity_literal = sql_string(identity)
     metric_names = _sql_values(_METRIC_NAMES)
+    serving_metric_names = _sql_values(_SERVING_METRIC_NAMES)
     token_counters = _sql_values(_TOKEN_COUNTERS)
     preemption_counters = _sql_values(_PREEMPTION_COUNTERS)
     outcome_counters = _sql_values(_OUTCOME_COUNTERS)
@@ -403,9 +411,48 @@ WITH base AS (
     WHERE name IN ({outcome_counters})
       AND delta IS NOT NULL
     GROUP BY 1
+), collector_polls AS (
+    SELECT COUNT(*) AS polls,
+           SUM(CASE WHEN value <= 0 THEN 1 ELSE 0 END) AS unavailable_polls
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_source_available'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+), collection_failure_totals AS (
+    SELECT COALESCE(json_get(attributes_json, 'stage'), 'unknown') AS stage,
+           SUM(delta) AS value
+    FROM increments
+    WHERE name = 'prometheus_stage_failures'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND delta > 0
+    GROUP BY 1
+), dropped_sample_totals AS (
+    SELECT COALESCE(json_get(attributes_json, 'drop_reason'), 'unknown') AS drop_reason,
+           SUM(value) AS value
+    FROM base
+    WHERE timestamp_ms >= {start_ms}
+      AND name = 'prometheus_dropped_samples'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND value > 0
+    GROUP BY 1
+), telemetry_health AS (
+    SELECT polls,
+           COALESCE(unavailable_polls, 0) AS unavailable_polls,
+           CASE
+               WHEN COALESCE(unavailable_polls, 0) > 0
+                 OR failure_stages > 0
+                 OR drop_reasons > 0
+               THEN 'incomplete'
+               WHEN polls > 0 THEN 'healthy'
+               ELSE 'unknown'
+           END AS status
+    FROM collector_polls
+    CROSS JOIN (SELECT COUNT(*) AS failure_stages FROM collection_failure_totals)
+    CROSS JOIN (SELECT COUNT(*) AS drop_reasons FROM dropped_sample_totals)
 ), producer_samples AS (
     SELECT DISTINCT origin_cluster, service, resource_attributes_json, timestamp_ms
     FROM base
+    WHERE name IN ({serving_metric_names})
 ), producer_ordered AS (
     SELECT *,
            LAG(timestamp_ms) OVER (
@@ -562,6 +609,63 @@ WITH base AS (
 
     UNION ALL
 
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'collector' AS metric,
+           'polls' AS stat,
+           'all resources' AS series,
+           CAST(polls AS DOUBLE) AS value,
+           'polls' AS unit,
+           status AS status,
+           CAST(polls AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM telemetry_health
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'source availability' AS metric,
+           'unavailable polls' AS stat,
+           'all resources' AS series,
+           CAST(unavailable_polls AS DOUBLE) AS value,
+           'polls' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM telemetry_health
+    WHERE unavailable_polls > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'collection failures' AS metric,
+           'delta' AS stat,
+           stage AS series,
+           value AS value,
+           'failures' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM collection_failure_totals
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'telemetry_health' AS section,
+           'dropped samples' AS metric,
+           'total' AS stat,
+           drop_reason AS series,
+           value AS value,
+           'samples' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM dropped_sample_totals
+
+    UNION ALL
+
     SELECT latest_timestamp_ms AS t,
            'freshness' AS section,
            'telemetry' AS metric,
@@ -605,7 +709,12 @@ WITH base AS (
 )
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output
-ORDER BY section, metric, stat, series, t
+ORDER BY section,
+         CASE WHEN section = 'telemetry_health' AND metric = 'collector' THEN 0 ELSE 1 END,
+         metric,
+         stat,
+         series,
+         t
 LIMIT {VLLM_MAX_RESULT_ROWS}
 """.strip()
     return VllmOverviewQuery(
