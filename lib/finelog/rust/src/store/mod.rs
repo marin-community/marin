@@ -24,6 +24,7 @@ pub mod segment;
 pub mod segment_index;
 pub(crate) mod string_column;
 pub mod table_spec;
+pub mod table_state;
 pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.

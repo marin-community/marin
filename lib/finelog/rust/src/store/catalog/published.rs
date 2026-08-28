@@ -10,7 +10,7 @@ use crate::store::object_store::ObjectVersion;
 pub struct CatalogSnapshot {
     pub head: CatalogHead,
     pub catalog: NamespaceCatalog,
-    pub(super) head_version: ObjectVersion,
+    pub(crate) head_version: ObjectVersion,
 }
 
 /// Published-catalog boundary used by store orchestration and table tasks.

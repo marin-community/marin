@@ -28,6 +28,7 @@ use crate::store::schema::{schema_from_json, schema_to_json, Schema};
 use crate::store::table_spec::{
     canonical_json_bytes, migration_phase_for_state, table_spec_from_json,
 };
+use crate::store::table_state::{SegmentDescriptor, TableRevision};
 use crate::store::types::{NamespaceStats, SegmentRow};
 
 /// Sidecar filename.
@@ -1067,20 +1068,19 @@ impl Catalog {
     /// Commit every object produced by one sealed buffer in one generation.
     pub fn commit_object_segments(
         &self,
-        rows: &[SegmentRow],
+        segments: &[SegmentDescriptor],
         table_spec_version: u64,
-        sources: &[ObjectRef],
         migration_backfill: bool,
-    ) -> Result<u64, StatsError> {
-        if rows.is_empty() || rows.len() != sources.len() {
+    ) -> Result<TableRevision, StatsError> {
+        if segments.is_empty() {
             return Err(StatsError::Internal(
-                "object segment rows and sources must be non-empty and equal length".to_string(),
+                "an object segment commit must carry at least one segment".to_string(),
             ));
         }
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let namespace = &rows[0].namespace;
-        for (row, source) in rows.iter().zip(sources) {
+        let namespace = &segments[0].row.namespace;
+        for SegmentDescriptor { row, source } in segments {
             if &row.namespace != namespace {
                 return Err(StatsError::Internal(
                     "one object commit cannot span namespaces".to_string(),
@@ -1134,7 +1134,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(generation as u64)
+        Ok(TableRevision::new(generation as u64))
     }
 
     /// Replace immutable objects atomically and advance one catalog generation.
@@ -1142,12 +1142,11 @@ impl Catalog {
         &self,
         namespace: &str,
         removed_paths: &[String],
-        rows: &[SegmentRow],
+        segments: &[SegmentDescriptor],
         table_spec_version: u64,
-        sources: &[ObjectRef],
         migration_backfill: bool,
-    ) -> Result<u64, StatsError> {
-        if removed_paths.is_empty() || rows.is_empty() || rows.len() != sources.len() {
+    ) -> Result<TableRevision, StatsError> {
+        if removed_paths.is_empty() || segments.is_empty() {
             return Err(StatsError::Internal(
                 "object replacement inputs and outputs must be non-empty".to_string(),
             ));
@@ -1155,7 +1154,7 @@ impl Catalog {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         remove_segments_in(&transaction, namespace, removed_paths)?;
-        for (row, source) in rows.iter().zip(sources) {
+        for SegmentDescriptor { row, source } in segments {
             if row.namespace != namespace {
                 return Err(StatsError::Internal(
                     "one object replacement cannot span namespaces".to_string(),
@@ -1195,93 +1194,24 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(generation as u64)
-    }
-
-    /// Restore a replacement's input records when its HEAD publication fails.
-    pub fn rollback_object_replacement(
-        &self,
-        namespace: &str,
-        removed_rows: &[SegmentRow],
-        removed_records: &[ObjectSegmentRecord],
-        added_paths: &[String],
-        committed_generation: u64,
-    ) -> Result<(), StatsError> {
-        let records: HashMap<_, _> = removed_records
-            .iter()
-            .map(|record| (record.path.as_str(), record))
-            .collect();
-        if removed_rows
-            .iter()
-            .any(|row| !records.contains_key(row.path.as_str()))
-        {
-            return Err(StatsError::Internal(
-                "object replacement rollback is missing an input record".to_string(),
-            ));
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let current: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        if current as u64 != committed_generation {
-            return Err(StatsError::Internal(format!(
-                "cannot roll back object replacement for {namespace:?}: local generation {current} advanced past {committed_generation}"
-            )));
-        }
-        remove_segments_in(&transaction, namespace, added_paths)?;
-        for row in removed_rows {
-            let record = records[row.path.as_str()];
-            upsert_segment_in(&transaction, row)?;
-            transaction
-                .execute(
-                    "INSERT INTO object_segments
-                        (namespace, path, table_spec_version, source_json, migration_backfill,
-                         migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![
-                        namespace,
-                        row.path,
-                        record.table_spec_version as i64,
-                        serde_json::to_string(&record.source).map_err(|error| {
-                            StatsError::Internal(format!("serialize rollback source: {error}"))
-                        })?,
-                        record.migration_backfill,
-                        record.migration_source_id,
-                        record.migration_source_rows,
-                    ],
-                )
-                .map_err(sqlite_err)?;
-        }
-        transaction
-            .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation - 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        transaction.commit().map_err(sqlite_err)
+        Ok(TableRevision::new(generation as u64))
     }
 
     /// Commit every output from one migrated source and checkpoint it once.
     pub fn commit_migration_segments(
         &self,
-        rows: &[SegmentRow],
+        segments: &[SegmentDescriptor],
         table_spec_version: u64,
-        sources: &[ObjectRef],
         migration_source_id: &str,
         migration_source_rows: i64,
-    ) -> Result<u64, StatsError> {
-        if rows.is_empty() || rows.len() != sources.len() || migration_source_rows <= 0 {
+    ) -> Result<TableRevision, StatsError> {
+        if segments.is_empty() || migration_source_rows <= 0 {
             return Err(StatsError::Internal(
-                "migrated rows and sources must be non-empty and equal length".to_string(),
+                "a migration checkpoint must carry at least one segment and one source row"
+                    .to_string(),
             ));
         }
-        let namespace = &rows[0].namespace;
+        let namespace = &segments[0].row.namespace;
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         let migration: MigrationCheckpoint = transaction
@@ -1314,7 +1244,7 @@ impl Catalog {
                 namespace, phase
             )));
         }
-        for (row, source) in rows.iter().zip(sources) {
+        for SegmentDescriptor { row, source } in segments {
             if &row.namespace != namespace {
                 return Err(StatsError::Internal(
                     "one migration checkpoint cannot span namespaces".to_string(),
@@ -1377,69 +1307,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(generation as u64)
-    }
-
-    pub fn rollback_object_segments(
-        &self,
-        namespace: &str,
-        paths: &[String],
-        committed_generation: u64,
-    ) -> Result<(), StatsError> {
-        let mut inner = self.inner.lock().unwrap();
-        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let current: i64 = transaction
-            .query_row(
-                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        if current as u64 != committed_generation {
-            return Err(StatsError::Internal(format!(
-                "cannot roll back unpublished segment for {namespace:?}: local generation {current} advanced past {committed_generation}"
-            )));
-        }
-        let mut backfill_sources = HashMap::<String, i64>::new();
-        for path in paths {
-            if let Some((source_id, source_rows)) = transaction
-                .query_row(
-                    "SELECT COALESCE(object_segments.migration_source_id, object_segments.path),
-                            COALESCE(object_segments.migration_source_rows, segments.row_count)
-                     FROM object_segments
-                     JOIN segments USING (namespace, path)
-                     WHERE object_segments.namespace = ?1
-                       AND object_segments.path = ?2
-                       AND object_segments.migration_backfill = 1",
-                    rusqlite::params![namespace, path],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .map_err(sqlite_err)?
-            {
-                backfill_sources.insert(source_id, source_rows);
-            }
-        }
-        let backfill_rows = backfill_sources.values().sum::<i64>();
-        remove_segments_in(&transaction, namespace, paths)?;
-        if backfill_rows > 0 {
-            transaction
-                .execute(
-                    "UPDATE table_migrations
-                     SET rows_completed = MAX(0, rows_completed - ?2)
-                     WHERE namespace = ?1",
-                    rusqlite::params![namespace, backfill_rows],
-                )
-                .map_err(sqlite_err)?;
-        }
-        transaction
-            .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation - 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        transaction.commit().map_err(sqlite_err)
+        Ok(TableRevision::new(generation as u64))
     }
 
     pub fn object_segments(&self, namespace: &str) -> Result<Vec<ObjectSegmentRecord>, StatsError> {
@@ -1517,12 +1385,15 @@ impl Catalog {
     /// Record `cursor` as settled for `(target, namespace)`. Callers write it only once
     /// the rows below it can never be sent again, so a crash mid-batch re-forwards that
     /// batch rather than losing it.
+    ///
+    /// Returns the table's revision after the write. A namespace without a
+    /// versioned head keeps revision zero and publishes nothing.
     pub fn set_forward_cursor(
         &self,
         target: &str,
         namespace: &str,
         cursor: i64,
-    ) -> Result<bool, StatsError> {
+    ) -> Result<TableRevision, StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         transaction
@@ -1532,16 +1403,23 @@ impl Catalog {
                 rusqlite::params![target, namespace, cursor],
             )
             .map_err(sqlite_err)?;
-        let object_generation_changed = transaction
+        transaction
             .execute(
                 "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
-            .map_err(sqlite_err)?
-            == 1;
+            .map_err(sqlite_err)?;
+        let generation: Option<i64> = transaction
+            .query_row(
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
+                [namespace],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(object_generation_changed)
+        Ok(TableRevision::new(generation.unwrap_or(0) as u64))
     }
 
     // ----- live namespace registry --------------------------------------

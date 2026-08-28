@@ -115,9 +115,10 @@ impl Fixture {
     }
 
     /// Point `namespace`'s watermark below every row, so a forward drains it whole.
-    fn forward_from_start(&self, namespace: &str) {
+    async fn forward_from_start(&self, namespace: &str) {
         self.source
             .set_forward_cursor(&self.target_url, namespace, 0)
+            .await
             .unwrap();
     }
 
@@ -610,7 +611,7 @@ async fn drains_a_startup_backlog_of_many_keys_in_one_request() {
     for key in ["/user/job/task-a", "/user/job/task-b", "/system/worker/1"] {
         push(&fx.source_client, key, &["first", "second"]).await;
     }
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     let requests_before = fx.requests();
 
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
@@ -643,7 +644,7 @@ async fn forwarded_rows_carry_the_origin_cluster_of_the_store_that_sent_them() {
     // `cluster` column on the way out.
     let fx = Fixture::new("stamp").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
     let entries = client(fx.target_addr)
@@ -711,7 +712,7 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
         .await_persisted(namespace, last_seq, Duration::from_secs(5))
         .await
         .unwrap();
-    fx.forward_from_start(namespace);
+    fx.forward_from_start(namespace).await;
 
     fx.drain(PRIV_A, namespace).await;
 
@@ -728,7 +729,7 @@ async fn forwarded_telemetry_ignores_candidate_only_nullable_columns() {
 async fn forwarded_root_telemetry_registers_an_unseen_semantic_namespace() {
     let fx = Fixture::new("telemetry-unseen-service").await;
     write_root_telemetry(&fx.source, "batch", "queue_depth").await;
-    fx.forward_from_start(TELEMETRY_NAMESPACE);
+    fx.forward_from_start(TELEMETRY_NAMESPACE).await;
 
     fx.drain(PRIV_A, TELEMETRY_NAMESPACE).await;
 
@@ -763,8 +764,8 @@ async fn concurrent_forwarders_share_one_unseen_semantic_namespace_engine() {
     .await;
     write_root_telemetry(&fx_a.source, "batch-a", "queue_a").await;
     write_root_telemetry(&fx_b.source, "batch-b", "queue_b").await;
-    fx_a.forward_from_start(TELEMETRY_NAMESPACE);
-    fx_b.forward_from_start(TELEMETRY_NAMESPACE);
+    fx_a.forward_from_start(TELEMETRY_NAMESPACE).await;
+    fx_b.forward_from_start(TELEMETRY_NAMESPACE).await;
 
     tokio::join!(
         fx_a.drain(PRIV_A, TELEMETRY_NAMESPACE),
@@ -785,7 +786,7 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
     // owed, and the local store still serves them.
     let fx = Fixture::new("reject").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let running = RunningForwarder::start(fx.forwarder(PRIV_UNTRUSTED));
     // Wait for the push to REACH the hub. Stopping on a timer instead would let a
@@ -805,7 +806,7 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
 async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
     let fx = Fixture::with_rejecting_hub("poison").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -829,8 +830,8 @@ async fn three_retryable_push_failures_yield_to_the_next_namespace() {
     let fx = Fixture::with_unavailable_hub("unavailable").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
     write_id_rows(&fx.source, "events", 1).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
-    fx.forward_from_start("events");
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
+    fx.forward_from_start("events").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -903,7 +904,7 @@ async fn rows_that_already_carry_an_origin_cluster_are_never_re_forwarded() {
         .await
         .unwrap();
     push(&fx.source_client, "/user/job/t", &["local"]).await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
 
     assert_eq!(
@@ -920,6 +921,7 @@ async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
     push(&fx.source_client, "/user/job/t", &["one"]).await;
     fx.source
         .set_forward_cursor(&fx.target_url, LOG_NAMESPACE_NAME, 10_000)
+        .await
         .unwrap();
 
     fx.drain(PRIV_A, LOG_NAMESPACE_NAME).await;
@@ -936,7 +938,7 @@ async fn a_backlog_beyond_the_warning_threshold_is_drained_without_loss() {
         &["one", "two", "three", "four"],
     )
     .await;
-    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    fx.forward_from_start(LOG_NAMESPACE_NAME).await;
 
     let mut forwarder = fx.forwarder(PRIV_A);
     forwarder.lag_warning_seqs = 2;
@@ -965,8 +967,8 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
     let fx = Fixture::new("fairness").await;
     write_id_rows(&fx.source, "busy", FORWARD_BATCH_ROWS as usize + 1).await;
     write_id_rows(&fx.source, "urgent", 1).await;
-    fx.forward_from_start("busy");
-    fx.forward_from_start("urgent");
+    fx.forward_from_start("busy").await;
+    fx.forward_from_start("urgent").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
@@ -991,7 +993,7 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
 async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     let fx = Fixture::new("large-batch").await;
     write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
     let requests_before = fx.requests();
     let zstd_before = fx.zstd_requests();
 
@@ -1018,7 +1020,7 @@ async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
         vec!["x".repeat(TELEMETRY_ROW_BYTES); FORWARD_BATCH_ROWS as usize],
     )
     .await;
-    fx.forward_from_start("telemetry");
+    fx.forward_from_start("telemetry").await;
 
     fx.drain(PRIV_A, "telemetry").await;
 
@@ -1049,7 +1051,7 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
     // The producer declares `id` only; `cluster` is added implicitly at registration.
     write_id_rows(&fx.source, "events", 2).await;
 
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
     fx.drain(PRIV_A, "events").await;
 
     let stats = fx.target_store().list_namespaces_with_stats().unwrap();
@@ -1073,7 +1075,7 @@ async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() 
 async fn schema_evolution_is_registered_before_forwarding_new_rows() {
     let fx = Fixture::new("schema-evolution").await;
     write_id_rows(&fx.source, "events", 1).await;
-    fx.forward_from_start("events");
+    fx.forward_from_start("events").await;
 
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();

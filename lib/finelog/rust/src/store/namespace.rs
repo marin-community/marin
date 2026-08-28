@@ -70,6 +70,7 @@ use crate::store::segment_index::{
     needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
     SegmentIndexConfig, SegmentIndexWrite,
 };
+use crate::store::table_state::{SegmentDescriptor, TableCommit, TableRevision};
 use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
@@ -114,6 +115,15 @@ fn remove_index_artifacts(parquet_path: &str) {
             tracing::warn!(path = %path.display(), %error, index_artifact = kind, "failed to remove segment index artifact");
         }
     }
+}
+
+/// Why one sealed buffer did not reach a published table revision.
+enum SealedCommit {
+    /// Nothing was committed. The sealed rows return to the RAM buffer.
+    NotCommitted(StatsError),
+    /// The rows are committed to durable local state but HEAD does not name
+    /// that revision yet. Re-flushing them would duplicate committed data.
+    PublicationUnresolved(StatsError),
 }
 
 fn fixed_index_artifacts_exist(parquet_path: &Path) -> bool {
@@ -855,18 +865,20 @@ impl Namespace {
         *self.table_runtime.lock().unwrap() = TableRuntimePolicy::from_status(status);
     }
 
-    pub(crate) fn mark_object_publish_pending(&self) {
-        self.object_table
-            .as_ref()
-            .expect("object-backed namespace has an object table")
-            .mark_publish_pending();
+    pub(crate) fn object_table(&self) -> Option<&ObjectTable> {
+        self.object_table.as_ref()
     }
 
-    async fn publish_pending_object_catalog(&self) -> Result<(), StatsError> {
+    /// The durable-state commit owner for this table.
+    pub(crate) fn state_commit(&self) -> TableCommit<'_> {
+        TableCommit::new(&self.name, &self.catalog, self.object_table.as_ref())
+    }
+
+    async fn publish_owed_object_catalog(&self) -> Result<(), StatsError> {
         self.object_table
             .as_ref()
             .expect("object-backed namespace has an object table")
-            .publish_pending()
+            .publish_owed()
             .await
     }
 
@@ -881,7 +893,8 @@ impl Namespace {
                 self.name
             ))
         })?;
-        object_table.publish().await
+        object_table.publish_state().await?;
+        Ok(())
     }
 
     async fn migration_source_bytes(
@@ -948,11 +961,19 @@ impl Namespace {
 
     async fn activate_verified_table_spec(&self) -> Result<TableSpecStatus, StatsError> {
         let _visibility_guard = self.query_visibility.write().await;
-        let status = self.catalog.activate_desired_table_spec(&self.name)?;
-        let publication = self.publish_object_catalog_state().await;
+        // The in-memory query view swaps only after the activation revision is
+        // known to be published, so queries never see a version whose state no
+        // reader can recover.
+        let status = self
+            .state_commit()
+            .commit(|| {
+                let status = self.catalog.activate_desired_table_spec(&self.name)?;
+                Ok((TableRevision::new(status.catalog_generation), status))
+            })
+            .await?
+            .output;
         self.activate_query_version(status.active_version())?;
         self.update_table_spec(&status);
-        publication?;
         tracing::info!(
             namespace = %self.name,
             table_spec_version = status.active_version(),
@@ -971,7 +992,7 @@ impl Namespace {
         };
         match status.phase {
             MigrationPhase::MIGRATION_PHASE_RETIRED => {
-                self.publish_pending_object_catalog().await?;
+                self.publish_owed_object_catalog().await?;
                 return Ok(false);
             }
             MigrationPhase::MIGRATION_PHASE_UNSPECIFIED => return Ok(false),
@@ -981,12 +1002,12 @@ impl Namespace {
                 self.publish_object_catalog_state().await?;
                 self.activate_query_version(status.active_version())?;
                 self.update_table_spec(&status);
-                let retired = self.catalog.retire_observed_migration(&self.name)?;
-                if retired.catalog_generation != status.catalog_generation {
-                    self.mark_object_publish_pending();
-                    self.publish_pending_object_catalog().await?;
-                    return Ok(false);
-                }
+                self.state_commit()
+                    .commit(|| {
+                        let retired = self.catalog.retire_observed_migration(&self.name)?;
+                        Ok((TableRevision::new(retired.catalog_generation), retired))
+                    })
+                    .await?;
                 // The old version remains remotely referenced for rollback.
                 // Compaction keeps backfill and post-cutover writes in separate
                 // provenance groups, while cache eviction can rehydrate either
@@ -1113,7 +1134,6 @@ impl Namespace {
                 )));
             }
             let mut migrated = Vec::with_capacity(rewritten.len());
-            let mut sources = Vec::with_capacity(rewritten.len());
             for EncodedMigrationSegment {
                 partition,
                 batch,
@@ -1124,40 +1144,36 @@ impl Namespace {
             {
                 let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
                 let (min_key_value, max_key_value) = self.key_bounds(&batch);
-                migrated.push(SegmentRow {
-                    namespace: row.namespace.clone(),
-                    path: stored.path.to_string_lossy().into_owned(),
-                    level: row.level,
-                    min_seq,
-                    max_seq,
-                    row_count: batch.num_rows() as i64,
-                    byte_size: stored.byte_size,
-                    created_at_ms: row.created_at_ms,
-                    min_key_value: min_key_value.map(|value| value.to_string()),
-                    max_key_value: max_key_value.map(|value| value.to_string()),
-                    partition,
-                    location: SegmentLocation::Both,
+                migrated.push(SegmentDescriptor {
+                    row: SegmentRow {
+                        namespace: row.namespace.clone(),
+                        path: stored.path.to_string_lossy().into_owned(),
+                        level: row.level,
+                        min_seq,
+                        max_seq,
+                        row_count: batch.num_rows() as i64,
+                        byte_size: stored.byte_size,
+                        created_at_ms: row.created_at_ms,
+                        min_key_value: min_key_value.map(|value| value.to_string()),
+                        max_key_value: max_key_value.map(|value| value.to_string()),
+                        partition,
+                        location: SegmentLocation::Both,
+                    },
+                    source: stored.source,
                 });
-                sources.push(stored.source);
             }
-            let committed_generation = self.catalog.commit_migration_segments(
-                &migrated,
-                to_version,
-                &sources,
-                &migration_source_id,
-                row.row_count,
-            )?;
-            if let Err(error) = self.publish_object_catalog_state().await {
-                self.catalog.rollback_object_segments(
-                    &self.name,
-                    &migrated
-                        .iter()
-                        .map(|segment| segment.path.clone())
-                        .collect::<Vec<_>>(),
-                    committed_generation,
-                )?;
-                return Err(error);
-            }
+            let source_rows = row.row_count;
+            self.state_commit()
+                .commit(|| {
+                    let revision = self.catalog.commit_migration_segments(
+                        &migrated,
+                        to_version,
+                        &migration_source_id,
+                        source_rows,
+                    )?;
+                    Ok((revision, ()))
+                })
+                .await?;
             covered.insert(migration_source_id);
             processed += 1;
         }
@@ -1169,12 +1185,18 @@ impl Namespace {
         if progress.rows_completed != progress.rows_total {
             return Ok(true);
         }
-        let verified = self.catalog.update_migration_phase(
-            &self.name,
-            MigrationPhase::MIGRATION_PHASE_BACKFILL,
-            MigrationPhase::MIGRATION_PHASE_VERIFY,
-        )?;
-        self.publish_object_catalog_state().await?;
+        let verified = self
+            .state_commit()
+            .commit(|| {
+                let verified = self.catalog.update_migration_phase(
+                    &self.name,
+                    MigrationPhase::MIGRATION_PHASE_BACKFILL,
+                    MigrationPhase::MIGRATION_PHASE_VERIFY,
+                )?;
+                Ok((TableRevision::new(verified.catalog_generation), verified))
+            })
+            .await?
+            .output;
         debug_assert_eq!(verified.phase, MigrationPhase::MIGRATION_PHASE_VERIFY);
         self.activate_verified_table_spec().await?;
         Ok(true)
@@ -1250,7 +1272,6 @@ impl Namespace {
             StatsError::Internal("object-backed compaction requires an object table".to_string())
         })?;
         let mut input_bytes = Vec::with_capacity(inputs.len());
-        let mut input_records = Vec::with_capacity(inputs.len());
         for row in &inputs {
             let record = object_records.get(&row.path).ok_or_else(|| {
                 StatsError::Internal(format!("object compaction lost input {}", row.path))
@@ -1259,7 +1280,6 @@ impl Namespace {
                 self.migration_source_bytes(namespace_dir, row, Some(record))
                     .await?,
             );
-            input_records.push(record.clone());
         }
         let source_layout = policy.source_layout.clone();
         let arrow_schema = Arc::clone(&self.arrow_schema);
@@ -1308,8 +1328,7 @@ impl Namespace {
             .unwrap_or(0)
             .saturating_add(1);
         let mut output_segments = Vec::with_capacity(rewritten.len());
-        let mut output_rows = Vec::with_capacity(rewritten.len());
-        let mut output_sources = Vec::with_capacity(rewritten.len());
+        let mut outputs = Vec::with_capacity(rewritten.len());
         for (partition, batch, parquet, min_seq, max_seq) in rewritten {
             let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
             let (min_key_value, max_key_value) = self.key_bounds(&batch);
@@ -1326,8 +1345,10 @@ impl Namespace {
                 partition,
                 location: SegmentLocation::Both,
             };
-            output_rows.push(segment_to_row(&self.name, &segment));
-            output_sources.push(stored.source);
+            outputs.push(SegmentDescriptor {
+                row: segment_to_row(&self.name, &segment),
+                source: stored.source,
+            });
             output_segments.push(segment);
         }
         let removed_paths = inputs
@@ -1338,24 +1359,25 @@ impl Namespace {
             .iter()
             .map(|segment| segment.path.clone())
             .collect::<Vec<_>>();
-        let generation = self.catalog.replace_object_segments(
-            &self.name,
-            &removed_paths,
-            &output_rows,
-            active_version,
-            &output_sources,
-            migration_backfill,
-        )?;
-        if let Err(error) = self.publish_object_catalog_state().await {
-            self.catalog.rollback_object_replacement(
-                &self.name,
-                &inputs,
-                &input_records,
-                &added_paths,
-                generation,
-            )?;
-            return Err(error);
-        }
+        // The replacement owns the inputs once it commits, so the local view
+        // follows the committed rows even when HEAD publication is unresolved.
+        let committed = match self
+            .state_commit()
+            .commit(|| {
+                let revision = self.catalog.replace_object_segments(
+                    &self.name,
+                    &removed_paths,
+                    &outputs,
+                    active_version,
+                    migration_backfill,
+                )?;
+                Ok((revision, ()))
+            })
+            .await
+        {
+            Err(error) if !error.is_committed() => return Err(error.into()),
+            outcome => outcome,
+        };
         let _visibility_guard = self.query_visibility.write().await;
         let removed: HashSet<_> = removed_paths.iter().collect();
         let mut inner = self.inner.lock().unwrap();
@@ -1372,12 +1394,13 @@ impl Namespace {
         for path in &removed_paths {
             remove_index_artifacts(path);
         }
+        let committed = committed?;
         tracing::info!(
             namespace = %self.name,
             inputs = removed_paths.len(),
             outputs = added_paths.len(),
             rows = input_rows,
-            catalog_generation = generation,
+            catalog_generation = committed.token.revision().get(),
             "object-backed compaction committed"
         );
         Ok(true)
@@ -1689,9 +1712,16 @@ impl Namespace {
                 self.persisted_seq.send_replace(sealed.max_seq);
                 Ok(())
             }
-            Err(error) => {
+            Err(SealedCommit::NotCommitted(error)) => {
                 self.inner.lock().unwrap().buffers.restore_flush();
                 tracing::warn!(namespace = %self.name, %error, "object-backed flush failed; restored RAM buffer");
+                Err(error)
+            }
+            Err(SealedCommit::PublicationUnresolved(error)) => {
+                // The rows are durable in the local catalog. Republishing that
+                // revision is the only repair; re-flushing would duplicate it,
+                // and the high-water mark waits for HEAD to name it.
+                tracing::warn!(namespace = %self.name, %error, "object-backed flush committed without a published revision");
                 Err(error)
             }
         }
@@ -1702,12 +1732,12 @@ impl Namespace {
         _namespace_dir: &Path,
         sealed: &SealedBuffer,
         policy: &TableRuntimePolicy,
-    ) -> Result<(), StatsError> {
+    ) -> Result<(), SealedCommit> {
         let object_table = self.object_table.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!(
+            SealedCommit::NotCommitted(StatsError::Internal(format!(
                 "object-backed namespace {:?} has no object table",
                 self.name
-            ))
+            )))
         })?;
         let batch = sealed.batch.clone();
         let source_layout = policy.source_layout.clone();
@@ -1731,12 +1761,16 @@ impl Namespace {
         .await
         .map_err(|error| {
             StatsError::Internal(format!("object-backed parquet task panicked: {error}"))
-        })??;
+        })
+        .and_then(|encoded| encoded)
+        .map_err(SealedCommit::NotCommitted)?;
         let mut segments = Vec::with_capacity(encoded.len());
-        let mut rows = Vec::with_capacity(encoded.len());
-        let mut sources = Vec::with_capacity(encoded.len());
+        let mut descriptors = Vec::with_capacity(encoded.len());
         for (partition, batch, parquet, min_seq, max_seq) in encoded {
-            let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
+            let stored = object_table
+                .write_parquet(Bytes::from(parquet))
+                .await
+                .map_err(SealedCommit::NotCommitted)?;
 
             let (min_key, max_key) = self.key_bounds(&batch);
             let segment = LocalSegment {
@@ -1752,27 +1786,30 @@ impl Namespace {
                 partition,
                 location: SegmentLocation::Both,
             };
-            rows.push(segment_to_row(&self.name, &segment));
-            sources.push(stored.source);
+            descriptors.push(SegmentDescriptor {
+                row: segment_to_row(&self.name, &segment),
+                source: stored.source,
+            });
             segments.push(segment);
         }
-        let committed_generation = self.catalog.commit_object_segments(
-            &rows,
-            policy.table_spec_version,
-            &sources,
-            false,
-        )?;
-        if let Err(error) = object_table.publish().await {
-            self.catalog.rollback_object_segments(
-                &self.name,
-                &segments
-                    .iter()
-                    .map(|segment| segment.path.clone())
-                    .collect::<Vec<_>>(),
-                committed_generation,
-            )?;
-            return Err(error);
-        }
+        let table_spec_version = policy.table_spec_version;
+        // A committed revision owns these objects whether or not HEAD names it
+        // yet, so the sealed rows are never re-flushed.
+        let committed = match self
+            .state_commit()
+            .commit(|| {
+                let revision =
+                    self.catalog
+                        .commit_object_segments(&descriptors, table_spec_version, false)?;
+                Ok((revision, ()))
+            })
+            .await
+        {
+            Err(error) if !error.is_committed() => {
+                return Err(SealedCommit::NotCommitted(error.into()))
+            }
+            outcome => outcome,
+        };
         let mut inner = self.inner.lock().unwrap();
         inner.local_segments.extend(segments);
         inner
@@ -1781,7 +1818,10 @@ impl Namespace {
             .sort_by_key(|segment| segment.min_seq);
         debug_assert_unique_paths(&inner.local_segments);
         inner.buffers.commit_flush();
-        Ok(())
+        drop(inner);
+        committed
+            .map(|_| ())
+            .map_err(|error| SealedCommit::PublicationUnresolved(error.into()))
     }
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
@@ -2964,7 +3004,7 @@ impl Namespace {
             return Ok(());
         }
         if self.runtime_policy().object_backed() {
-            self.publish_pending_object_catalog().await?;
+            self.publish_owed_object_catalog().await?;
             self.object_compaction_step().await?;
             self.object_table
                 .as_ref()

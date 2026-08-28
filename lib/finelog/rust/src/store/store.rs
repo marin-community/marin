@@ -33,8 +33,7 @@ use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::object_catalog::ObjectCatalog;
-use crate::store::catalog::projection::namespace_catalog;
-use crate::store::catalog::published::{CatalogSnapshot, PublishedCatalog};
+use crate::store::catalog::published::PublishedCatalog;
 use crate::store::catalog::{
     Catalog, PublishedObjectSegment, RegisteredNamespace, TableSpecStatus,
 };
@@ -53,6 +52,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::table_spec::ValidatedTableSpec;
+use crate::store::table_state::{TableCommit, TableRevision, TableSnapshot};
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
@@ -749,28 +749,22 @@ impl Store {
         })
     }
 
-    /// Make one complete local metadata snapshot visible to direct readers.
+    /// Publish the revision a synchronous caller committed, so direct readers
+    /// see it before the RPC returns.
     ///
-    /// Returns the selected remote snapshot after publication.
+    /// Returns the state HEAD selects after publication.
     pub async fn publish_object_catalog(
         &self,
         namespace: &str,
-    ) -> Result<CatalogSnapshot, StatsError> {
-        let published_catalog = self.object_catalog.as_ref().ok_or_else(|| {
+    ) -> Result<TableSnapshot, StatsError> {
+        let engine = self.require_engine(namespace)?;
+        let object_table = engine.object_table().ok_or_else(|| {
             StatsError::SchemaValidation(
                 "object-backed table specifications require a configured remote_log_dir"
                     .to_string(),
             )
         })?;
-        let namespace_dir = self.namespace_dir(namespace)?.ok_or_else(|| {
-            StatsError::SchemaValidation(
-                "object-backed catalogs require a disk-backed store".to_string(),
-            )
-        })?;
-        let catalog = namespace_catalog(&self.catalog, namespace, &namespace_dir)?;
-        published_catalog
-            .publish(namespace, catalog, self.writer_epoch)
-            .await
+        Ok(object_table.publish_state().await?)
     }
 
     fn register_table_with(
@@ -871,11 +865,30 @@ impl Store {
                 engine.update_policy(effective_policy);
             }
         }
+        // Registration is a synchronous RPC path, so its committed revision is
+        // owed to the table's maintenance loop, which publishes it or a later
+        // revision containing it.
+        let engine = self.engines.lock().unwrap().get(name).cloned();
+        let commit = TableCommit::new(
+            name,
+            &self.catalog,
+            engine.as_deref().and_then(Namespace::object_table),
+        );
         let table_spec_status = table_spec
             .map(|table_spec| {
-                let has_rows = self.catalog.aggregate_namespace_stats(name)?.row_count > 0;
-                self.catalog
-                    .register_table_spec(name, &table_spec.spec, &table_spec.hash, has_rows)
+                commit
+                    .commit_owing_publication(|| {
+                        let has_rows = self.catalog.aggregate_namespace_stats(name)?.row_count > 0;
+                        let status = self.catalog.register_table_spec(
+                            name,
+                            &table_spec.spec,
+                            &table_spec.hash,
+                            has_rows,
+                        )?;
+                        Ok((TableRevision::new(status.catalog_generation), status))
+                    })
+                    .map(|committed| committed.output)
+                    .map_err(StatsError::from)
             })
             .transpose()?;
         if let Some(status) = &table_spec_status {
@@ -1158,16 +1171,26 @@ impl Store {
     }
 
     /// Record `cursor` as settled for `(target, namespace)`.
-    pub fn set_forward_cursor(
+    ///
+    /// A cursor advance is a durable table-state transition: it changes both
+    /// recovery state and the published direct-query snapshot.
+    pub async fn set_forward_cursor(
         &self,
         target: &str,
         namespace: &str,
         cursor: i64,
     ) -> Result<(), StatsError> {
-        if self.catalog.set_forward_cursor(target, namespace, cursor)? {
-            self.require_engine(namespace)?
-                .mark_object_publish_pending();
-        }
+        let engine = self.engines.lock().unwrap().get(namespace).cloned();
+        TableCommit::new(
+            namespace,
+            &self.catalog,
+            engine.as_deref().and_then(Namespace::object_table),
+        )
+        .commit(|| {
+            let revision = self.catalog.set_forward_cursor(target, namespace, cursor)?;
+            Ok((revision, ()))
+        })
+        .await?;
         Ok(())
     }
 
@@ -1203,12 +1226,17 @@ impl Store {
     pub async fn abort_table_migration(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
         self.catalog.require_live(name)?;
         let _visibility_guard = self.query_visibility.write().await;
-        let status = self.catalog.abort_table_migration(name)?;
+        let engine = self.require_engine(name)?;
+        // The query view follows the abort only once its revision is published.
+        let status = engine
+            .state_commit()
+            .commit(|| {
+                let status = self.catalog.abort_table_migration(name)?;
+                Ok((TableRevision::new(status.catalog_generation), status))
+            })
+            .await?
+            .output;
         self.apply_table_spec_status(name, &status)?;
-        if let Err(error) = self.publish_object_catalog(name).await {
-            self.require_engine(name)?.mark_object_publish_pending();
-            return Err(error);
-        }
         Ok(status)
     }
 
@@ -1505,8 +1533,8 @@ mod tests {
         batch_schema: SchemaRef,
         paths: Vec<String>,
         last_seq: i64,
-        initial_catalog: CatalogSnapshot,
-        current_catalog: CatalogSnapshot,
+        initial_catalog: TableSnapshot,
+        current_catalog: TableSnapshot,
     }
 
     async fn published_object_table(tag: &str) -> PublishedObjectTableFixture {
@@ -1583,13 +1611,14 @@ mod tests {
                 .active_version(),
             1
         );
-        assert_eq!(first.catalog.active_table_spec_version, Some(1));
-        assert_eq!(first.catalog.retained_table_specs.len(), 1);
+        assert_eq!(first.state().catalog().active_table_spec_version, Some(1));
+        assert_eq!(first.state().catalog().retained_table_specs.len(), 1);
         assert_eq!(paths.len(), 1);
         assert_local_content_object(&data_dir, &paths[0]);
-        assert_eq!(after_flush.catalog.catalog_generation, Some(2));
+        assert_eq!(after_flush.state().catalog().catalog_generation, Some(2));
         let version = after_flush
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|segments| segments.table_spec_version == Some(1))
@@ -1615,7 +1644,7 @@ mod tests {
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
         let retry = store.publish_object_catalog("iris.worker").await.unwrap();
-        assert_eq!(retry.catalog, after_flush.catalog);
+        assert_eq!(retry.state().catalog(), after_flush.state().catalog());
         let recovered = ObjectCatalog::new(Arc::new(
             build_remote_object_store(remote_dir.to_str().unwrap())
                 .unwrap()
@@ -1625,10 +1654,11 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(recovered.catalog, after_flush.catalog);
+        assert_eq!(&recovered.catalog, after_flush.state().catalog());
 
         store
             .set_forward_cursor("hub", "iris.worker", last_seq)
+            .await
             .unwrap();
         store
             .maintain_namespace("iris.worker", false)
@@ -1857,7 +1887,8 @@ mod tests {
         assert_eq!(registration.table_spec_status.desired_version(), 2);
         let transition = store.publish_object_catalog("iris.worker").await.unwrap();
         let active = transition
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|version| version.table_spec_version == Some(1))
@@ -1890,7 +1921,8 @@ mod tests {
         assert!(compacted[0].migration_backfill);
         let compacted_snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let compacted_active = compacted_snapshot
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|version| version.table_spec_version == Some(2))
@@ -1929,7 +1961,8 @@ mod tests {
             .all(|segment| !segment.migration_backfill));
         let retired_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
         assert!(retired_catalog
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .all(|version| version.table_spec_version == Some(2)));
@@ -2022,7 +2055,8 @@ mod tests {
 
         let snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let rollback_version = snapshot
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|segments| segments.table_spec_version == Some(0))
@@ -2256,7 +2290,7 @@ mod tests {
         }
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 2);
         let before = store.publish_object_catalog("iris.worker").await.unwrap();
-        assert!(before.catalog.direct_query_segments.is_empty());
+        assert!(before.state().catalog().direct_query_segments.is_empty());
         store
             .maintain_namespace("iris.worker", false)
             .await
@@ -2266,14 +2300,16 @@ mod tests {
         assert_local_content_object(&data_dir, &paths[0]);
         let after = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(
-            after.catalog.catalog_generation,
+            after.state().catalog().catalog_generation,
             before
-                .catalog
+                .state()
+                .catalog()
                 .catalog_generation
                 .map(|generation| generation + 1)
         );
         let version = after
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|version| version.table_spec_version == Some(1))
@@ -2281,8 +2317,8 @@ mod tests {
         assert_eq!(version.live_segments.len(), 1);
         assert_eq!(version.live_segments[0].row_count, Some(2));
         assert_eq!(version.live_segments[0].level, Some(1));
-        assert_eq!(after.catalog.direct_query_segments.len(), 1);
-        assert_eq!(after.catalog.direct_query_high_water, Some(2));
+        assert_eq!(after.state().catalog().direct_query_segments.len(), 1);
+        assert_eq!(after.state().catalog().direct_query_high_water, Some(2));
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
@@ -2333,7 +2369,8 @@ mod tests {
         assert_eq!(status.active_version(), 1);
         let snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let version = snapshot
-            .catalog
+            .state()
+            .catalog()
             .version_segments
             .iter()
             .find(|version| version.table_spec_version == Some(1))

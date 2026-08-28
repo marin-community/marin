@@ -236,11 +236,15 @@ impl RemoteObjectStore {
                 content_sha256,
                 byte_size,
             }),
+            // A precondition failure is the one outcome the backend states
+            // definitively: the swap did not apply. Every other failure leaves
+            // the pointer's state unknown, so it is reported as ambiguous and
+            // the caller resolves it by re-reading the pointer.
             Err(object_store::Error::AlreadyExists { .. })
             | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
                 format!("object pointer {path} changed concurrently"),
             )),
-            Err(error) => Err(StatsError::Internal(format!(
+            Err(error) => Err(StatsError::AmbiguousCommit(format!(
                 "update object pointer {path}: {error}"
             ))),
         }

@@ -398,7 +398,7 @@ where
                 return ForwardTurn::Wait;
             }
         };
-        let mut cursor = match self.seed(name, persisted) {
+        let mut cursor = match self.seed(name, persisted).await {
             Ok(cursor) => cursor,
             Err(e) => {
                 tracing::warn!(namespace = name, error = %e, "finelog forwarder: cannot seed; skipping");
@@ -438,7 +438,7 @@ where
                 "finelog forwarder: rows evicted before they were forwarded; skipping ahead"
             );
             cursor = resume_at;
-            if !self.persist_cursor(name, cursor) {
+            if !self.persist_cursor(name, cursor).await {
                 return ForwardTurn::Wait;
             }
         }
@@ -448,7 +448,7 @@ where
             // or the loop rereads them forever. Safe against a concurrent writer:
             // `persisted` is a captured bound, and later rows arrive with a later
             // watermark.
-            self.persist_cursor(name, persisted);
+            self.persist_cursor(name, persisted).await;
             return ForwardTurn::Wait;
         };
         // The hub must hold the namespace before it can take rows for it.
@@ -507,7 +507,7 @@ where
                 }
             }
             cursor = last_seq;
-            if !self.persist_cursor(name, cursor) {
+            if !self.persist_cursor(name, cursor).await {
                 return ForwardTurn::Wait;
             }
         }
@@ -521,7 +521,7 @@ where
     /// The cursor to start `name` from: its stored watermark, or the current tip when
     /// there is none, or when the watermark sits beyond `persisted` and so names a seq
     /// space this store no longer has (a recreated volume).
-    fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
+    async fn seed(&self, name: &str, persisted: i64) -> Result<i64, StatsError> {
         match self.store.forward_cursor(&self.config.target, name)? {
             Some(cursor) if cursor <= persisted => Ok(cursor),
             Some(cursor) => {
@@ -531,7 +531,7 @@ where
                     persisted,
                     "finelog forwarder: watermark is ahead of the store; reseeding at the tip"
                 );
-                self.persist(name, persisted)?;
+                self.persist(name, persisted).await?;
                 Ok(persisted)
             }
             None => {
@@ -540,22 +540,23 @@ where
                     persisted,
                     "finelog forwarder: no watermark for this target; seeding at the tip (new rows only)"
                 );
-                self.persist(name, persisted)?;
+                self.persist(name, persisted).await?;
                 Ok(persisted)
             }
         }
     }
 
-    fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
+    async fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
         self.store
             .set_forward_cursor(&self.config.target, name, cursor)
+            .await
     }
 
     /// Record `cursor` as the durable watermark for `name`, reporting whether the write
     /// stuck. `false` is not data loss: every row stays queryable in this store, and the
     /// catalog still names an older cursor for the next round to resume from.
-    fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
-        if let Err(e) = self.persist(name, cursor) {
+    async fn persist_cursor(&self, name: &str, cursor: i64) -> bool {
+        if let Err(e) = self.persist(name, cursor).await {
             tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: persisting the watermark failed");
             return false;
         }
