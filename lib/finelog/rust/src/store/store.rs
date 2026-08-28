@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef;
@@ -39,12 +39,10 @@ use crate::store::catalog::{
     Catalog, PublishedObjectSegment, RegisteredNamespace, TableSpecStatus,
 };
 use crate::store::ipc::decode_one_record_batch;
-use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
     build_remote_object_store, CachedObjectStore, LegacyObjectStore, ObjectStore,
 };
-use crate::store::object_table::ObjectTable;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     merge_managed_schema, merge_schemas, resolve_key_column, schema_from_proto_view,
@@ -52,8 +50,9 @@ use crate::store::schema::{
     validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
+use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::ValidatedTableSpec;
-use crate::store::table_state::{TableCommit, TableRevision, TableSnapshot, WriterFence};
+use crate::store::table_state::{TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
@@ -72,13 +71,6 @@ fn writer_epoch() -> Result<u64, StatsError> {
         .as_nanos() as u64;
     Ok(nanos ^ u64::from(std::process::id()))
 }
-
-/// Bounded budget for stopping + joining a namespace's background tasks during a
-/// live lifecycle transition (re-register replacement, drop). Runs inside the
-/// RPC's `spawn_blocking` worker, so it must not block long: a task that misses
-/// this window is aborted rather than wedging the worker. Distinct from the
-/// process-shutdown drain budget passed to [`Store::shutdown`] at SIGTERM.
-const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Result of appending one schema-compatible federated batch.
 pub struct ForwardedWrite {
@@ -171,49 +163,28 @@ pub enum ServeMode {
     Shadow,
 }
 
-/// Store backed by the Rust catalog plus per-namespace durability engines.
+/// The application composition root the RPC handlers sit on.
 ///
-/// The catalog owns the persistent registry + segments table; the `engines`
-/// map owns one `Namespace` per live namespace (built at boot from the catalog
-/// and on `register_table`). The data path (WriteRows / PushLogs) routes through
-/// these engines; the metadata RPCs stay on the catalog.
+/// It constructs the object store, the durable state stores, and the
+/// [`TableManager`], then delegates every table operation to that manager. The
+/// catalog owns the persistent registry and segment rows; the metadata RPCs stay
+/// on it. Registration policy — schema merge rules, the privileged `log`
+/// namespace, ingestion routing — stays here.
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
     mode: ServeMode,
     catalog: Arc<Catalog>,
     object_store: Option<Arc<dyn ObjectStore>>,
-    legacy_object_store: Option<Arc<dyn ObjectStore>>,
     /// Durable state authority for object-backed tables. Absent when no remote
     /// object store is configured.
     object_state_store: Option<Arc<dyn TableStateStore>>,
     /// Durable state authority for legacy tables.
     legacy_state_store: Arc<dyn TableStateStore>,
     fence: WriterFence,
-    engines: Mutex<HashMap<String, Arc<Namespace>>>,
-    /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
-    /// Concurrent first registrations must not build and displace separate engines.
-    namespace_registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
-    /// side across the full DataFusion scan, because `query_providers` snapshots
-    /// segment PATHS and DataFusion opens those parquet files LAZILY during
-    /// `collect()`. Structural mutations that unlink segment files — `drop_table`,
-    /// compaction/eviction — take the WRITE side so no scan is mid-flight over
-    /// paths about to disappear.
-    ///
-    /// ONE shared instance for the whole process (queries are cross-namespace, so
-    /// the drain must be global). Cloned into each `Namespace` so the per-ns
-    /// maintenance task takes `.blocking_write()` inside its `spawn_blocking`.
-    ///
-    /// `tokio::sync::RwLock` is WRITE-preferring (a new reader waits behind a
-    /// pending writer). It upholds the safety invariant (a writer never proceeds
-    /// while any reader holds the lock, so no scan opens a file mid-unlink), and
-    /// write-preference is safer here — it cannot starve compaction/eviction under
-    /// a steady query stream.
-    query_visibility: Arc<tokio::sync::RwLock<()>>,
-    index_cache: Arc<IndexCache>,
-    index_backfill_slot: Arc<Mutex<()>>,
-    physical_layout_migration_slot: Arc<Mutex<()>>,
+    /// The only table control surface. Owns the live registry, the per-table
+    /// durable-state controllers, and the query-visibility lock.
+    tables: Arc<TableManager>,
     policies: PolicyRegistry,
     _store_lock: Option<File>,
 }
@@ -333,22 +304,26 @@ impl Store {
         let catalog_adoption_started = Instant::now();
         crate::store::adopt::ensure_catalog_adopted(data_dir.as_deref(), &catalog)?;
         let catalog_adoption_ms = catalog_adoption_started.elapsed().as_millis() as u64;
+        let tables = TableManager::new(
+            data_dir.clone(),
+            mode,
+            Arc::clone(&catalog),
+            object_store.clone(),
+            legacy_object_store,
+            object_state_store.clone(),
+            fence,
+            index_cache_mb,
+        );
         let store = Store {
             data_dir,
             remote_log_dir,
             mode,
             catalog,
             object_store,
-            legacy_object_store,
             object_state_store,
             legacy_state_store,
             fence,
-            engines: Mutex::new(HashMap::new()),
-            namespace_registration_locks: Mutex::new(HashMap::new()),
-            query_visibility: Arc::new(tokio::sync::RwLock::new(())),
-            index_cache: Arc::new(IndexCache::new(index_cache_mb)),
-            index_backfill_slot: Arc::new(Mutex::new(())),
-            physical_layout_migration_slot: Arc::new(Mutex::new(())),
+            tables,
             policies: PolicyRegistry::new(telemetry_root_write_mode),
             _store_lock: store_lock,
         };
@@ -365,7 +340,7 @@ impl Store {
         let rehydrate_started = Instant::now();
         store.rehydrate_from_catalog()?;
         let rehydrate_ms = rehydrate_started.elapsed().as_millis() as u64;
-        let namespaces = store.engines.lock().unwrap().len();
+        let namespaces = store.tables.table_count();
         tracing::info!(
             namespaces,
             catalog_open_ms,
@@ -380,8 +355,8 @@ impl Store {
 
     /// Return the root telemetry sequence fence before this process accepts writes.
     pub fn telemetry_root_max_seq(&self) -> Result<i64, StatsError> {
-        match self.engines.lock().unwrap().get(TELEMETRY_NAMESPACE) {
-            Some(engine) => Ok(engine.stats().max_seq),
+        match self.tables.get(TELEMETRY_NAMESPACE) {
+            Some(table) => Ok(table.stats().max_seq),
             None => Ok(self
                 .catalog
                 .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
@@ -394,14 +369,7 @@ impl Store {
     ///
     /// Each task runs periodic flush, compaction, publication, and GC work.
     pub fn bootstrap_maintenance(&self) {
-        if self.mode == ServeMode::Shadow {
-            tracing::info!("shadow mode: maintenance not started");
-            return;
-        }
-        let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
-        for engine in &engines {
-            engine.spawn_maintenance();
-        }
+        self.tables.spawn_maintenance();
     }
 
     /// Load and claim every table's durable state before the server accepts
@@ -475,10 +443,9 @@ impl Store {
                     continue;
                 }
             };
-            if self
-                .recover_claimed_table(&namespace, claimed.catalog)
-                .await?
-            {
+            let state = claimed.catalog.clone();
+            self.tables.adopt_claimed_state(&namespace, claimed);
+            if self.recover_claimed_table(&namespace, state).await? {
                 loaded_count += 1;
             }
         }
@@ -490,9 +457,9 @@ impl Store {
         if !self.catalog.contains(namespace) {
             return Ok(());
         }
-        let engine = self.engines.lock().unwrap().remove(namespace);
-        if let Some(engine) = engine {
-            engine.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+        let (runtime, _controller) = self.tables.take(namespace);
+        if let Some(runtime) = runtime {
+            runtime.shutdown(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
         }
         self.catalog.delete(namespace)?;
         tracing::info!(namespace, "discarded the projection of a deleted table");
@@ -501,10 +468,7 @@ impl Store {
 
     /// Stop accepting writes for `namespace` until a restart recovers it.
     fn mark_table_unready(&self, namespace: &str, reason: &str) {
-        let engine = self.engines.lock().unwrap().get(namespace).cloned();
-        if let Some(object_table) = engine.as_deref().and_then(Namespace::object_table) {
-            object_table.mark_unready(reason);
-        }
+        self.tables.mark_unready(namespace, reason);
     }
 
     /// Bring the local projection in line with the claimed durable state.
@@ -524,15 +488,7 @@ impl Store {
             .table_spec_status(namespace)?
             .catalog_generation;
         if local_revision > remote_revision {
-            let engine = self.engines.lock().unwrap().get(namespace).cloned();
-            let object_table = engine.as_deref().and_then(Namespace::object_table);
-            object_table
-                .ok_or_else(|| {
-                    StatsError::Internal(format!(
-                        "namespace {namespace:?} holds revision {local_revision} with no object table"
-                    ))
-                })?
-                .mark_publication_owed();
+            self.tables.controller(namespace).mark_publication_owed();
             tracing::info!(
                 namespace,
                 local_revision,
@@ -662,13 +618,13 @@ impl Store {
             self.mark_table_unready(namespace, &error.to_string());
             return Ok(false);
         }
-        let prior = self.engines.lock().unwrap().remove(namespace);
+        let (prior, _controller) = self.tables.take(namespace);
         if let Some(prior) = prior {
-            prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+            prior.shutdown(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
         }
-        // The rebuilt engine seeds its sequence high-water mark from the
+        // The rebuilt runtime seeds its sequence high-water mark from the
         // projection of the claimed state.
-        self.build_engine(namespace, schema, policy)?;
+        self.tables.register(namespace, schema, policy)?;
         Ok(true)
     }
 
@@ -677,7 +633,8 @@ impl Store {
             let policy = self.catalog.get_policy(&name)?;
             // `bootstrap_maintenance` starts all engines after startup loading is
             // complete.
-            self.build_engine(&name, schema.clone(), policy.clone())?;
+            self.tables
+                .register(&name, schema.clone(), policy.clone())?;
             self.catalog.insert_live(RegisteredNamespace {
                 name,
                 schema,
@@ -685,105 +642,6 @@ impl Store {
             });
         }
         Ok(())
-    }
-
-    /// Resolve the on-disk subdir for `name` WITHOUT validating (callers that
-    /// already hold a validated/registered name; `log` maps to `{data_dir}/log`).
-    fn engine_dir(&self, name: &str) -> Option<PathBuf> {
-        self.data_dir.as_ref().map(|dir| {
-            if name == LOG_NAMESPACE_NAME {
-                dir.join(LOG_NAMESPACE_DIR)
-            } else {
-                dir.join(name)
-            }
-        })
-    }
-
-    /// Build (or rebuild) the engine for `name` with `stored_schema`, replacing
-    /// any prior engine. The engine recovers next_seq + adopts local segments.
-    fn build_engine(
-        &self,
-        name: &str,
-        stored_schema: Schema,
-        policy: StoragePolicy,
-    ) -> Result<Arc<Namespace>, StatsError> {
-        let ns_dir = self.engine_dir(name);
-        // Re-register over a live engine (additive schema evolution): stop AND
-        // JOIN the prior engine's flush + maintenance tasks before opening the
-        // replacement over the same directory, so the old tasks can't flush /
-        // evict / upsert concurrently with the new engine adopting that dir.
-        // Disk-backed only — mem-store namespaces spawn no background tasks, so
-        // replacing the Arc is enough. This always runs under a runtime: a
-        // disk-backed re-register arrives via register_table's spawn_blocking
-        // worker; the boot rehydrate path has no prior, so block_on never fires.
-        if ns_dir.is_some() {
-            let prior = self.engines.lock().unwrap().get(name).cloned();
-            if let Some(prior) = prior {
-                tokio::runtime::Handle::current()
-                    .block_on(prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT));
-            }
-        }
-        let object_table = match (
-            ns_dir.clone(),
-            self.object_store.clone(),
-            self.legacy_object_store.clone(),
-            self.object_state_store.clone(),
-        ) {
-            (Some(table_dir), Some(store), Some(legacy_store), Some(state_store)) => {
-                Some(ObjectTable::new(
-                    name.to_string(),
-                    table_dir,
-                    Arc::clone(&self.catalog),
-                    store,
-                    legacy_store,
-                    state_store,
-                    self.fence,
-                ))
-            }
-            _ => None,
-        };
-        let engine = Namespace::open(
-            name,
-            stored_schema,
-            ns_dir,
-            Arc::clone(&self.catalog),
-            Arc::clone(&self.query_visibility),
-            Arc::clone(&self.index_cache),
-            Arc::clone(&self.index_backfill_slot),
-            Arc::clone(&self.physical_layout_migration_slot),
-            object_table,
-            policy,
-        )?;
-        self.engines
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), Arc::clone(&engine));
-        Ok(engine)
-    }
-
-    /// The live engine for `name`, or `NamespaceNotFound`.
-    fn require_engine(&self, name: &str) -> Result<Arc<Namespace>, StatsError> {
-        self.engines
-            .lock()
-            .unwrap()
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                StatsError::NamespaceNotFound(format!("namespace {name:?} is not registered"))
-            })
-    }
-
-    /// The live engine for `name`, rejected when another writer owns the
-    /// table's durable state. A fenced table serves reads and takes no writes
-    /// until a restart re-claims it.
-    fn require_writable_engine(&self, name: &str) -> Result<Arc<Namespace>, StatsError> {
-        let engine = self.require_engine(name)?;
-        if !engine.write_ready() {
-            return Err(StatsError::SchemaConflict(format!(
-                "namespace {name:?} is fenced by another writer and is not accepting writes"
-            )));
-        }
-        Ok(engine)
     }
 
     /// Register the privileged `log` namespace's schema in the catalog, or
@@ -901,14 +759,8 @@ impl Store {
         &self,
         namespace: &str,
     ) -> Result<TableSnapshot, StatsError> {
-        let engine = self.require_engine(namespace)?;
-        let object_table = engine.object_table().ok_or_else(|| {
-            StatsError::SchemaValidation(
-                "object-backed table specifications require a configured remote_log_dir"
-                    .to_string(),
-            )
-        })?;
-        Ok(object_table.publish_state().await?)
+        self.tables.require(namespace)?;
+        Ok((*self.tables.publish(namespace).await?).clone())
     }
 
     fn register_table_with(
@@ -924,14 +776,7 @@ impl Store {
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
         let stored = stored_form(schema);
-        let registration_lock = {
-            let mut locks = self.namespace_registration_locks.lock().unwrap();
-            Arc::clone(
-                locks
-                    .entry(name.to_string())
-                    .or_insert_with(|| Arc::new(Mutex::new(()))),
-            )
-        };
+        let registration_lock = self.tables.registration_lock(name);
         let _registration_guard = registration_lock.lock().unwrap();
         if let Some(table_spec) = table_spec {
             self.catalog.validate_table_spec_registration(
@@ -968,7 +813,7 @@ impl Store {
         // The catalog applies the empty-policy-keeps-existing rule and persists
         // under a single lock; we only supply the schema-merge decision.
         let stored_for_merge = stored.clone();
-        let had_engine = self.engines.lock().unwrap().contains_key(name);
+        let had_engine = self.tables.contains(name);
         let (effective_schema, effective_policy) =
             self.catalog
                 .register_or_evolve(
@@ -991,36 +836,31 @@ impl Store {
         // immediately after construction.
         let needs_engine = !had_engine
             || self
-                .engines
-                .lock()
-                .unwrap()
+                .tables
                 .get(name)
-                .map(|e| e.schema() != &effective_schema)
+                .map(|table| table.schema() != &effective_schema)
                 .unwrap_or(true);
         if needs_engine {
-            let engine = self.build_engine(name, effective_schema.clone(), effective_policy)?;
+            let table = self
+                .tables
+                .register(name, effective_schema.clone(), effective_policy)?;
             if self.mode == ServeMode::Live {
-                engine.spawn_maintenance();
+                table.spawn_maintenance();
             }
         } else {
-            // Engine kept; push the (possibly updated) policy onto it so a
+            // Runtime kept; push the (possibly updated) policy onto it so a
             // policy-only re-register takes effect on the next eviction tick.
-            if let Some(engine) = self.engines.lock().unwrap().get(name) {
-                engine.update_policy(effective_policy);
+            if let Some(table) = self.tables.get(name) {
+                table.update_policy(effective_policy);
             }
         }
         // Registration is a synchronous RPC path, so its committed revision is
         // owed to the table's maintenance loop, which publishes it or a later
         // revision containing it.
-        let engine = self.engines.lock().unwrap().get(name).cloned();
-        let commit = TableCommit::new(
-            name,
-            &self.catalog,
-            engine.as_deref().and_then(Namespace::object_table),
-        );
+        let controller = self.tables.controller(name);
         let table_spec_status = table_spec
             .map(|table_spec| {
-                commit
+                controller
                     .commit_owing_publication(|| {
                         let has_rows = self.catalog.aggregate_namespace_stats(name)?.row_count > 0;
                         let status = self.catalog.register_table_spec(
@@ -1036,8 +876,8 @@ impl Store {
             })
             .transpose()?;
         if let Some(status) = &table_spec_status {
-            if let Some(engine) = self.engines.lock().unwrap().get(name) {
-                engine.update_table_spec(status);
+            if let Some(table) = self.tables.get(name) {
+                table.update_table_spec(status);
             }
         }
         Ok((effective_schema, table_spec_status))
@@ -1091,7 +931,7 @@ impl Store {
             .route_ingestion_batch(IngestionBatchSource::Stored(name), &batch)?;
         for partition in &routed {
             let namespace = &partition.destination.logical_namespace;
-            match self.require_engine(namespace) {
+            match self.tables.require(namespace) {
                 Ok(_) => {}
                 Err(StatsError::NamespaceNotFound(_)) => {
                     let schema = schema_for_namespace(namespace).ok_or_else(|| {
@@ -1143,18 +983,18 @@ impl Store {
         let mut ignored_columns = BTreeSet::new();
         for partition in routed {
             let destination = partition.destination.logical_namespace;
-            let engine = self.require_writable_engine(&destination)?;
-            let (mut aligned, ignored) = alignment.align(&partition.batch, engine.schema())?;
+            let table = self.tables.require_writable(&destination)?;
+            let (mut aligned, ignored) = alignment.align(&partition.batch, table.schema())?;
             if let Some(origin) = origin_cluster {
                 stamp_cluster_column(&mut aligned, origin);
             }
             ignored_columns.extend(ignored);
-            prepared_partitions.push((destination, engine, aligned));
+            prepared_partitions.push((destination, table, aligned));
         }
         let persisted_targets = prepared_partitions
             .into_iter()
-            .map(|(destination, engine, aligned)| {
-                let last_seq = engine.append_aligned_batch(&aligned);
+            .map(|(destination, table, aligned)| {
+                let last_seq = table.append_aligned_batch(&aligned);
                 (destination, last_seq)
             })
             .collect();
@@ -1180,13 +1020,14 @@ impl Store {
         origin_cluster: Option<&str>,
     ) -> Result<ForwardedWrite, StatsError> {
         let batch = decode_bounded_write_batch(arrow_ipc)?;
-        let engine = self.require_writable_engine(name)?;
-        let mut aligned = validate_and_align_batch(&batch, engine.schema())?;
+        let table = self.tables.require_writable(name)?;
+        let mut aligned = validate_and_align_batch(&batch, table.schema())?;
         if let Some(origin) = origin_cluster {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
-        let last_seq = engine.append_aligned_batch(&aligned);
+        let last_seq = self.tables.append(name, &aligned)?;
+        debug_assert_eq!(table.name(), name);
         Ok(ForwardedWrite {
             rows_written: n,
             persisted_targets: vec![(name.to_string(), last_seq)],
@@ -1204,8 +1045,8 @@ impl Store {
         num_rows: usize,
         added_bytes: i64,
     ) -> Result<i64, StatsError> {
-        let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok(engine.append_log_batch(columns, num_rows, added_bytes))
+        let table = self.tables.require(LOG_NAMESPACE_NAME)?;
+        Ok(table.append_log_batch(columns, num_rows, added_bytes))
     }
 
     /// Block until `target` is durable in `name`, bounded by `timeout`.
@@ -1215,8 +1056,10 @@ impl Store {
         target: i64,
         timeout: Duration,
     ) -> Result<(), StatsError> {
-        let engine = self.require_engine(name)?;
-        engine.await_persisted(target, timeout).await
+        self.tables
+            .require(name)?
+            .await_persisted(target, timeout)
+            .await
     }
 
     /// Return the store-form schema for `name`. NamespaceNotFound if missing.
@@ -1229,7 +1072,7 @@ impl Store {
     /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
     /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
-        &self.query_visibility
+        self.tables.query_visibility()
     }
 
     /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
@@ -1243,11 +1086,10 @@ impl Store {
     pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            let engine = match self.engines.lock().unwrap().get(&ns.name) {
-                Some(e) => Arc::clone(e),
-                // A registry entry with no engine is a transient state during
+            let Some(engine) = self.tables.get(&ns.name) else {
+                // A registry entry with no runtime is a transient state during
                 // (re)build; skip it rather than fail the whole query.
-                None => continue,
+                continue;
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
             let exact_postings_policy = engine.schema().exact_postings_policy();
@@ -1256,7 +1098,7 @@ impl Store {
             let provider = NamespaceProvider::build(
                 arrow_schema,
                 &segments.paths,
-                Arc::clone(&self.index_cache),
+                Arc::clone(self.tables.index_cache()),
             )
             .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
             .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
@@ -1273,11 +1115,7 @@ impl Store {
 
     /// Materialize local files required by the current query snapshots.
     pub async fn materialize_query_objects(&self) -> Result<(), StatsError> {
-        let engines: Vec<_> = self.engines.lock().unwrap().values().cloned().collect();
-        for engine in engines {
-            engine.materialize_query_segments().await?;
-        }
-        Ok(())
+        self.tables.materialize_query_objects().await
     }
 
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
@@ -1285,7 +1123,7 @@ impl Store {
     /// describe the same segment set, so a reader can tell a `seq` it simply has not
     /// reached from one that eviction put out of reach.
     pub fn query_snapshot(&self, name: &str) -> Result<NamespaceSnapshot, StatsError> {
-        let engine = self.require_engine(name)?;
+        let engine = self.tables.require(name)?;
         let segments = engine.query_snapshot();
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
@@ -1295,18 +1133,18 @@ impl Store {
             key_bounds: segments.key_bounds,
             partitions: segments.partitions,
             min_seq: segments.min_seq,
-            index_cache: Arc::clone(&self.index_cache),
+            index_cache: Arc::clone(self.tables.index_cache()),
         })
     }
 
     pub fn index_cache(&self) -> &Arc<IndexCache> {
-        &self.index_cache
+        self.tables.index_cache()
     }
 
     /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
     /// into a segment, so it is visible to a scan unless it has since been evicted.
     pub fn namespace_persisted_seq(&self, name: &str) -> Result<i64, StatsError> {
-        Ok(*self.require_engine(name)?.watch_persisted_seq().borrow())
+        Ok(*self.tables.require(name)?.watch_persisted_seq().borrow())
     }
 
     /// The seq in `namespace` below which this store will never send to `target` again.
@@ -1324,17 +1162,13 @@ impl Store {
         namespace: &str,
         cursor: i64,
     ) -> Result<(), StatsError> {
-        let engine = self.engines.lock().unwrap().get(namespace).cloned();
-        TableCommit::new(
-            namespace,
-            &self.catalog,
-            engine.as_deref().and_then(Namespace::object_table),
-        )
-        .commit(|| {
-            let revision = self.catalog.set_forward_cursor(target, namespace, cursor)?;
-            Ok((revision, ()))
-        })
-        .await?;
+        self.tables
+            .controller(namespace)
+            .commit(|| {
+                let revision = self.catalog.set_forward_cursor(target, namespace, cursor)?;
+                Ok((revision, ()))
+            })
+            .await?;
         Ok(())
     }
 
@@ -1347,8 +1181,8 @@ impl Store {
     ) -> Result<Vec<(String, Schema, NamespaceStats, StoragePolicy)>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            let stats = match self.engines.lock().unwrap().get(&ns.name) {
-                Some(engine) => engine.stats(),
+            let stats = match self.tables.get(&ns.name) {
+                Some(table) => table.stats(),
                 None => self.catalog.aggregate_namespace_stats(&ns.name)?,
             };
             let policy = self.catalog.get_policy(&ns.name)?;
@@ -1369,11 +1203,11 @@ impl Store {
 
     pub async fn abort_table_migration(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
         self.catalog.require_live(name)?;
-        let _visibility_guard = self.query_visibility.write().await;
-        let engine = self.require_engine(name)?;
+        let _visibility_guard = self.tables.query_visibility().write().await;
+        let table = self.tables.require(name)?;
         // The query view follows the abort only once its revision is published.
-        let status = engine
-            .state_commit()
+        let status = table
+            .controller()
             .commit(|| {
                 let status = self.catalog.abort_table_migration(name)?;
                 Ok((TableRevision::new(status.catalog_generation), status))
@@ -1389,9 +1223,9 @@ impl Store {
         name: &str,
         status: &TableSpecStatus,
     ) -> Result<(), StatsError> {
-        let engine = self.require_engine(name)?;
-        engine.activate_query_version(status.active_version())?;
-        engine.update_table_spec(status);
+        let table = self.tables.require(name)?;
+        table.activate_query_version(status.active_version())?;
+        table.update_table_spec(status);
         Ok(())
     }
 
@@ -1413,8 +1247,7 @@ impl Store {
         name: &str,
         force_compact_l0: bool,
     ) -> Result<(), StatsError> {
-        let engine = self.require_engine(name)?;
-        engine.run_maintenance(force_compact_l0).await
+        self.tables.maintain(name, force_compact_l0).await
     }
 
     /// Backdate a segment's `created_at_ms` (test-only `/debug/backdate` seam, so
@@ -1426,8 +1259,9 @@ impl Store {
         path_basename: &str,
         created_at_ms: i64,
     ) -> Result<(), StatsError> {
-        let engine = self.require_engine(name)?;
-        engine.backdate_segment(path_basename, created_at_ms)
+        self.tables
+            .require(name)?
+            .backdate_segment(path_basename, created_at_ms)
     }
 
     /// Directory holding the catalog and every segment file, or `None` when the
@@ -1463,9 +1297,9 @@ impl Store {
         }
         self.catalog.begin_drop(name)?;
         let object_generation = self.catalog.table_spec_status(name)?.catalog_generation;
-        // Drop the engine first so its flush task stops touching the dir/catalog
-        // before we delete rows + files.
-        let engine = self.engines.lock().unwrap().remove(name);
+        // Remove the table from the registry first so its flush task stops
+        // touching the dir/catalog before we delete rows + files.
+        let (engine, controller) = self.tables.take(name);
         let result = (|| {
             if let Some(engine) = engine {
                 if self.data_dir.is_some() {
@@ -1476,7 +1310,7 @@ impl Store {
                     // drop_table runs in a spawn_blocking worker, so block_on of
                     // the async join is safe (never blocks a reactor thread).
                     tokio::runtime::Handle::current()
-                        .block_on(engine.stop_and_join(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT));
+                        .block_on(engine.stop_and_join(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT));
                 } else {
                     // mem-store: no background tasks and no dir; a sync stop
                     // signal suffices and needs no runtime.
@@ -1484,18 +1318,12 @@ impl Store {
                 }
             }
             if object_generation > 0 {
-                let state_store = self.object_state_store.as_ref().ok_or_else(|| {
+                let controller = controller.ok_or_else(|| {
                     StatsError::Internal(format!(
-                        "namespace {name:?} has an object generation without a state store"
+                        "namespace {name:?} has an object generation without a controller"
                     ))
                 })?;
-                tokio::runtime::Handle::current().block_on(async {
-                    let Some(selected) = state_store.load(name).await? else {
-                        return Ok::<(), StatsError>(());
-                    };
-                    state_store.tombstone(name, self.fence, &selected).await?;
-                    Ok(())
-                })?;
+                tokio::runtime::Handle::current().block_on(controller.tombstone())?;
             }
             self.catalog.delete(name)?;
             if let Some(dir) = &self.data_dir {
@@ -1516,19 +1344,7 @@ impl Store {
     /// diagnostics line. `namespaces` is the live engine count, `ram_bytes` /
     /// `chunks` sum the per-namespace RAM buffers.
     pub fn memory_summary(&self) -> crate::store::types::MemorySummary {
-        let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
-        let mut ram_bytes = 0i64;
-        let mut chunks = 0usize;
-        for engine in &engines {
-            let (b, c) = engine.memory_summary();
-            ram_bytes += b;
-            chunks += c;
-        }
-        crate::store::types::MemorySummary {
-            namespaces: engines.len(),
-            ram_bytes,
-            chunks,
-        }
+        self.tables.memory_summary()
     }
 
     /// Cooperatively shut down every namespace's background tasks.
@@ -1542,15 +1358,7 @@ impl Store {
     /// timeout) guarantees this cannot hang — `main` applies its own outer
     /// timeout around `shutdown` for defense in depth.
     pub async fn shutdown(&self, per_namespace_timeout: Duration) {
-        let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
-        // Shut namespaces down concurrently so the total drain is bounded by the
-        // per-namespace timeout, not its product with the namespace count.
-        futures::future::join_all(
-            engines
-                .iter()
-                .map(|engine| engine.shutdown(per_namespace_timeout)),
-        )
-        .await;
+        self.tables.shutdown(per_namespace_timeout).await;
     }
 }
 
@@ -1895,7 +1703,8 @@ mod tests {
         );
 
         reopened
-            .require_engine("iris.worker")
+            .tables
+            .require("iris.worker")
             .unwrap()
             .materialize_query_segments()
             .await
@@ -2403,7 +2212,8 @@ mod tests {
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
         store
-            .require_engine("iris.worker")
+            .tables
+            .require("iris.worker")
             .unwrap()
             .sync_step()
             .await
@@ -3175,7 +2985,8 @@ mod tests {
                     .register_table("iris.worker", worker_schema(), StoragePolicy::default())
                     .unwrap();
                 store
-                    .require_engine("iris.worker")
+                    .tables
+                    .require("iris.worker")
                     .unwrap()
                     .background_task_count()
             })

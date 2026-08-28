@@ -1,11 +1,11 @@
-//! Durable table state and the single commit path that advances it.
+//! The durable state values one table's commits move between.
 //!
-//! One table has one monotonic [`TableRevision`], allocated by the SQLite
-//! transaction that mutates its rows and mirrored into the published object
-//! catalog. [`TableCommit`] is the only way a generation-advancing mutation
-//! reaches durable state: it applies the mutation, publishes the resulting
-//! state for an object-backed table, and returns the [`CommitToken`] proving
-//! the revision is durable.
+//! One table has one monotonic [`TableRevision`], allocated by the transaction
+//! that mutates its rows and mirrored into the published object catalog. A
+//! [`CommitToken`] proves a revision is durable, and a [`TableSnapshot`] is the
+//! immutable read view of one committed state. The commit path that produces
+//! them is
+//! [`TableController`](crate::store::table::TableController).
 //!
 //! A revision never decreases. A publication whose outcome is unknown is
 //! settled against HEAD by [`resolve_publication`]; a revision that is
@@ -15,9 +15,7 @@
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
 use crate::store::catalog::state_store::{BackendToken, StoredTableState};
-use crate::store::catalog::Catalog;
 use crate::store::object_store::ObjectVersion;
-use crate::store::object_table::ObjectTable;
 use crate::store::types::SegmentRow;
 
 /// Monotonic durable revision of one table's state.
@@ -234,107 +232,6 @@ impl std::fmt::Display for CommitError {
 pub struct Committed<T> {
     pub token: CommitToken,
     pub output: T,
-}
-
-/// The durable-state commit owner for one table.
-///
-/// `publisher` is present exactly for object-backed tables; a legacy table
-/// commits to the local catalog only.
-pub struct TableCommit<'a> {
-    table: &'a str,
-    catalog: &'a Catalog,
-    publisher: Option<&'a ObjectTable>,
-}
-
-impl<'a> TableCommit<'a> {
-    pub fn new(
-        table: &'a str,
-        catalog: &'a Catalog,
-        publisher: Option<&'a ObjectTable>,
-    ) -> TableCommit<'a> {
-        TableCommit {
-            table,
-            catalog,
-            publisher,
-        }
-    }
-
-    /// Apply one durable state transition and publish the resulting state.
-    ///
-    /// `mutation` runs the SQLite transaction that allocates the next revision
-    /// and reports it. For an object-backed table the committed state is then
-    /// published under the writer fence as the second half of one ordered
-    /// operation, and an unresolved publication is settled against HEAD.
-    pub async fn commit<T, F>(&self, mutation: F) -> Result<Committed<T>, CommitError>
-    where
-        F: FnOnce() -> Result<(TableRevision, T), StatsError>,
-    {
-        let (previous, revision, output) = self.apply(mutation)?;
-        let Some(publisher) = self.publisher else {
-            return Ok(Committed {
-                token: CommitToken::local(revision, WriterFence::UNCLAIMED),
-                output,
-            });
-        };
-        if revision == previous && !publisher.publication_owed() {
-            return Ok(Committed {
-                token: CommitToken::local(revision, publisher.writer_fence()),
-                output,
-            });
-        }
-        let published = publisher.publish_state().await?;
-        Ok(Committed {
-            token: published.token(),
-            output,
-        })
-    }
-
-    /// Apply one durable state transition from a synchronous caller.
-    ///
-    /// The committed revision is owed to the table's maintenance loop, which
-    /// publishes it — or a later revision containing it — through
-    /// [`ObjectTable::publish_owed`].
-    pub fn commit_owing_publication<T, F>(&self, mutation: F) -> Result<Committed<T>, CommitError>
-    where
-        F: FnOnce() -> Result<(TableRevision, T), StatsError>,
-    {
-        let (previous, revision, output) = self.apply(mutation)?;
-        let fence = match self.publisher {
-            Some(publisher) if revision > previous => {
-                publisher.mark_publication_owed();
-                publisher.writer_fence()
-            }
-            Some(publisher) => publisher.writer_fence(),
-            None => WriterFence::UNCLAIMED,
-        };
-        Ok(Committed {
-            token: CommitToken::local(revision, fence),
-            output,
-        })
-    }
-
-    /// Run the mutation and enforce revision monotonicity.
-    fn apply<T, F>(&self, mutation: F) -> Result<(TableRevision, TableRevision, T), CommitError>
-    where
-        F: FnOnce() -> Result<(TableRevision, T), StatsError>,
-    {
-        let previous = self.revision().map_err(CommitError::NotCommitted)?;
-        let (revision, output) = mutation().map_err(CommitError::NotCommitted)?;
-        assert!(
-            revision >= previous,
-            "table {:?} revision moved backwards from {previous} to {revision}",
-            self.table
-        );
-        Ok((previous, revision, output))
-    }
-
-    fn revision(&self) -> Result<TableRevision, StatsError> {
-        Ok(TableRevision::new(
-            self.catalog
-                .table_spec_status(self.table)?
-                .catalog_generation,
-        ))
-    }
 }
 
 /// Settle a publication whose outcome the object store did not report.

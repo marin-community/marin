@@ -52,7 +52,6 @@ use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::object_store::{ObjectId, ObjectPrefix};
-use crate::store::object_table::{object_segment_is_query_visible, ObjectTable};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::schema::{
@@ -70,7 +69,8 @@ use crate::store::segment_index::{
     needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
     SegmentIndexConfig, SegmentIndexWrite,
 };
-use crate::store::table_state::{SegmentDescriptor, TableCommit, TableRevision};
+use crate::store::table::{object_segment_is_query_visible, TableController};
+use crate::store::table_state::{SegmentDescriptor, TableRevision};
 use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
@@ -555,8 +555,9 @@ pub struct Namespace {
     /// pre-swap paths drains before any rename/unlink. Query/FetchLogs handlers
     /// hold the READ side across `collect()`.
     query_visibility: Arc<RwLock<()>>,
-    /// Object persistence controller. `None` for memory-only stores.
-    object_table: Option<ObjectTable>,
+    /// Durable-state controller for this table: the only owner of its
+    /// publication, writer claim, and canonical object writes.
+    controller: Arc<TableController>,
     last_object_gc: Mutex<Option<Instant>>,
     persisted_seq: watch::Sender<i64>,
     /// Nudged by every append (and a durability await): "there may be data to
@@ -713,7 +714,7 @@ impl Namespace {
         index_cache: Arc<IndexCache>,
         index_backfill_slot: Arc<Mutex<()>>,
         physical_layout_migration_slot: Arc<Mutex<()>>,
-        object_table: Option<ObjectTable>,
+        controller: Arc<TableController>,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
@@ -727,7 +728,7 @@ impl Namespace {
         let key_column = resolve_key_column(&schema)?;
 
         let local_recovery_started = Instant::now();
-        let (next_seq, adopted, init_persisted) = match (&data_dir, object_table.is_some()) {
+        let (next_seq, adopted, init_persisted) = match (&data_dir, controller.is_object_backed()) {
             (None, _) => (1_i64, VecDeque::new(), -1_i64),
             // An object-backed table's contents come from its durable state,
             // never from files present in the local object cache. Recovery
@@ -807,7 +808,7 @@ impl Namespace {
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
             query_visibility,
-            object_table,
+            controller,
             last_object_gc: Mutex::new(None),
             persisted_seq: tx,
             flush_notify: Arc::new(Notify::new()),
@@ -850,22 +851,20 @@ impl Namespace {
 
     /// Whether this namespace has a remote offload target configured.
     pub fn has_remote(&self) -> bool {
-        self.object_table.is_some()
+        self.controller.is_object_backed()
     }
 
     /// Whether this process still owns the table's durable state. A fenced
     /// object-backed table rejects writes until a restart re-claims it.
     pub(crate) fn write_ready(&self) -> bool {
-        self.object_table
-            .as_ref()
-            .is_none_or(ObjectTable::writes_ready)
+        self.controller.writes_ready()
     }
 
     pub(crate) async fn materialize_query_segments(&self) -> Result<(), StatsError> {
-        let Some(object_table) = &self.object_table else {
-            return Ok(());
-        };
-        let segments = object_table.local_query_segments(&self.key_column).await?;
+        let segments = self
+            .controller
+            .local_query_segments(&self.key_column)
+            .await?;
         let mut inner = self.inner.lock().unwrap();
         for segment in segments {
             if inner
@@ -895,21 +894,13 @@ impl Namespace {
         *self.table_runtime.lock().unwrap() = TableRuntimePolicy::from_status(status);
     }
 
-    pub(crate) fn object_table(&self) -> Option<&ObjectTable> {
-        self.object_table.as_ref()
-    }
-
     /// The durable-state commit owner for this table.
-    pub(crate) fn state_commit(&self) -> TableCommit<'_> {
-        TableCommit::new(&self.name, &self.catalog, self.object_table.as_ref())
+    pub(crate) fn controller(&self) -> &Arc<TableController> {
+        &self.controller
     }
 
     async fn publish_owed_object_catalog(&self) -> Result<(), StatsError> {
-        self.object_table
-            .as_ref()
-            .expect("object-backed namespace has an object table")
-            .publish_owed()
-            .await
+        self.controller.publish_owed().await
     }
 
     fn runtime_policy(&self) -> TableRuntimePolicy {
@@ -917,13 +908,7 @@ impl Namespace {
     }
 
     async fn publish_object_catalog_state(&self) -> Result<(), StatsError> {
-        let object_table = self.object_table.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "versioned namespace {:?} has no object table",
-                self.name
-            ))
-        })?;
-        object_table.publish_state().await?;
+        self.controller.publish_state().await?;
         Ok(())
     }
 
@@ -933,13 +918,7 @@ impl Namespace {
         row: &SegmentRow,
         object_record: Option<&ObjectSegmentRecord>,
     ) -> Result<Bytes, StatsError> {
-        let object_table = self.object_table.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "migration source {} has no local or remote copy",
-                row.path
-            ))
-        })?;
-        object_table.source_bytes(row, object_record).await
+        self.controller.source_bytes(row, object_record).await
     }
 
     pub(crate) fn activate_query_version(&self, version: u64) -> Result<(), StatsError> {
@@ -995,7 +974,7 @@ impl Namespace {
         // known to be published, so queries never see a version whose state no
         // reader can recover.
         let status = self
-            .state_commit()
+            .controller
             .commit(|| {
                 let status = self.catalog.activate_desired_table_spec(&self.name)?;
                 Ok((TableRevision::new(status.catalog_generation), status))
@@ -1032,7 +1011,7 @@ impl Namespace {
                 self.publish_object_catalog_state().await?;
                 self.activate_query_version(status.active_version())?;
                 self.update_table_spec(&status);
-                self.state_commit()
+                self.controller
                     .commit(|| {
                         let retired = self.catalog.retire_observed_migration(&self.name)?;
                         Ok((TableRevision::new(retired.catalog_generation), retired))
@@ -1071,12 +1050,6 @@ impl Namespace {
         let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
             StatsError::Internal(format!(
                 "migration for {:?} requires a disk-backed cache",
-                self.name
-            ))
-        })?;
-        let object_table = self.object_table.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "migration for {:?} requires an object table",
                 self.name
             ))
         })?;
@@ -1172,7 +1145,7 @@ impl Namespace {
                 max_seq,
             } in rewritten
             {
-                let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
+                let stored = self.controller.write_parquet(Bytes::from(parquet)).await?;
                 let (min_key_value, max_key_value) = self.key_bounds(&batch);
                 migrated.push(SegmentDescriptor {
                     row: SegmentRow {
@@ -1193,7 +1166,7 @@ impl Namespace {
                 });
             }
             let source_rows = row.row_count;
-            self.state_commit()
+            self.controller
                 .commit(|| {
                     let revision = self.catalog.commit_migration_segments(
                         &migrated,
@@ -1216,7 +1189,7 @@ impl Namespace {
             return Ok(true);
         }
         let verified = self
-            .state_commit()
+            .controller
             .commit(|| {
                 let verified = self.catalog.update_migration_phase(
                     &self.name,
@@ -1298,9 +1271,12 @@ impl Namespace {
         let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
             StatsError::Internal("object-backed compaction requires local table state".to_string())
         })?;
-        let object_table = self.object_table.as_ref().ok_or_else(|| {
-            StatsError::Internal("object-backed compaction requires an object table".to_string())
-        })?;
+        // The lease pins the definition version and the exact inputs. Merging and
+        // encoding then run outside the controller; only the replacement commit
+        // is serialized against concurrent flushes and cursor advances.
+        let lease = self
+            .controller
+            .begin_compaction(inputs.iter().map(|row| row.path.clone()).collect())?;
         let mut input_bytes = Vec::with_capacity(inputs.len());
         for row in &inputs {
             let record = object_records.get(&row.path).ok_or_else(|| {
@@ -1360,7 +1336,7 @@ impl Namespace {
         let mut output_segments = Vec::with_capacity(rewritten.len());
         let mut outputs = Vec::with_capacity(rewritten.len());
         for (partition, batch, parquet, min_seq, max_seq) in rewritten {
-            let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
+            let stored = self.controller.write_parquet(Bytes::from(parquet)).await?;
             let (min_key_value, max_key_value) = self.key_bounds(&batch);
             let segment = LocalSegment {
                 path: stored.path.to_string_lossy().into_owned(),
@@ -1381,10 +1357,7 @@ impl Namespace {
             });
             output_segments.push(segment);
         }
-        let removed_paths = inputs
-            .iter()
-            .map(|row| row.path.clone())
-            .collect::<Vec<_>>();
+        let removed_paths = lease.inputs().to_vec();
         let added_paths = output_segments
             .iter()
             .map(|segment| segment.path.clone())
@@ -1392,8 +1365,8 @@ impl Namespace {
         // The replacement owns the inputs once it commits, so the local view
         // follows the committed rows even when HEAD publication is unresolved.
         let committed = match self
-            .state_commit()
-            .commit(|| {
+            .controller
+            .commit_maintenance(&lease, || {
                 let revision = self.catalog.replace_object_segments(
                     &self.name,
                     &removed_paths,
@@ -1763,12 +1736,6 @@ impl Namespace {
         sealed: &SealedBuffer,
         policy: &TableRuntimePolicy,
     ) -> Result<(), SealedCommit> {
-        let object_table = self.object_table.as_ref().ok_or_else(|| {
-            SealedCommit::NotCommitted(StatsError::Internal(format!(
-                "object-backed namespace {:?} has no object table",
-                self.name
-            )))
-        })?;
         let batch = sealed.batch.clone();
         let source_layout = policy.source_layout.clone();
         let max_row_group_rows = source_layout
@@ -1797,7 +1764,8 @@ impl Namespace {
         let mut segments = Vec::with_capacity(encoded.len());
         let mut descriptors = Vec::with_capacity(encoded.len());
         for (partition, batch, parquet, min_seq, max_seq) in encoded {
-            let stored = object_table
+            let stored = self
+                .controller
                 .write_parquet(Bytes::from(parquet))
                 .await
                 .map_err(SealedCommit::NotCommitted)?;
@@ -1826,7 +1794,7 @@ impl Namespace {
         // A committed revision owns these objects whether or not HEAD names it
         // yet, so the sealed rows are never re-flushed.
         let committed = match self
-            .state_commit()
+            .controller
             .commit(|| {
                 let revision =
                     self.catalog
@@ -2123,12 +2091,10 @@ impl Namespace {
 
     /// Relocate one archived segment to its current physical path.
     async fn remote_layout_migration_step(&self) -> Result<bool, StatsError> {
-        let (Some(dir), Some(object_table)) =
-            (self.data_dir.as_deref(), self.object_table.as_ref())
+        let (Some(dir), Some(remote)) = (self.data_dir.as_deref(), self.controller.legacy_store())
         else {
             return Ok(false);
         };
-        let remote = object_table.legacy_store();
 
         let candidate = self
             .remote_layout_migration_candidates()?
@@ -2536,10 +2502,9 @@ impl Namespace {
     ///
     /// No-op without a remote dir / in memory mode.
     pub async fn sync_step(&self) -> Result<(), StatsError> {
-        let Some(object_table) = &self.object_table else {
+        let Some(remote) = self.controller.legacy_store() else {
             return Ok(());
         };
-        let remote = object_table.legacy_store();
         // A TableSpec migration temporarily keeps legacy segments and
         // object-backed cache entries in the same SQLite `segments` table.
         // Legacy sync must continue making the former durable while backfill
@@ -2993,6 +2958,9 @@ impl Namespace {
     // ----- maintenance orchestration ------------------------------------
 
     async fn gc_published_catalog(&self) -> Result<(), StatsError> {
+        if !self.controller.is_object_backed() {
+            return Ok(());
+        }
         let should_run = {
             let mut last = self.last_object_gc.lock().unwrap();
             let due = last.is_none_or(|instant| instant.elapsed() >= OBJECT_GC_INTERVAL);
@@ -3001,12 +2969,13 @@ impl Namespace {
             }
             due
         };
-        let Some(object_table) = self.object_table.as_ref().filter(|_| should_run) else {
+        if !should_run {
             return Ok(());
-        };
+        }
         let catalog_retention_ms = self.runtime_policy().max_query_time_ms;
         let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
-        let removed = object_table
+        let removed = self
+            .controller
             .gc_published(now_ms(), catalog_retention_ms, orphan_grace_ms)
             .await?;
         if removed > 0 {
@@ -3036,11 +3005,7 @@ impl Namespace {
         if self.runtime_policy().object_backed() {
             self.publish_owed_object_catalog().await?;
             self.object_compaction_step().await?;
-            self.object_table
-                .as_ref()
-                .expect("object-backed namespace has an object table")
-                .gc()
-                .await?;
+            self.controller.gc_objects().await?;
             self.gc_published_catalog().await?;
             let namespace = Arc::clone(self);
             tokio::task::spawn_blocking(move || namespace.maintain_index_artifacts())
@@ -3827,12 +3792,17 @@ mod tests {
             name,
             schema,
             data_dir,
-            catalog,
+            Arc::clone(&catalog),
             Arc::new(RwLock::new(())),
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
-            None,
+            TableController::start(
+                name.to_string(),
+                catalog,
+                None,
+                crate::store::table_state::WriterFence::UNCLAIMED,
+            ),
             policy,
         )
         .unwrap()
@@ -3870,15 +3840,17 @@ mod tests {
                 object_store.clone(),
             ),
         ) as Arc<dyn crate::store::catalog::state_store::TableStateStore>;
-        let object_table = Some(ObjectTable::new(
+        let controller = TableController::start(
             name.to_string(),
-            data_dir.clone().unwrap(),
             Arc::clone(&catalog),
-            object_store,
-            legacy_object_store,
-            state_store,
+            Some(crate::store::table::ObjectPersistence {
+                table_dir: data_dir.clone().unwrap(),
+                store: object_store,
+                legacy_store: legacy_object_store,
+                state_store,
+            }),
             crate::store::table_state::WriterFence::new(1),
-        ));
+        );
         Namespace::open(
             name,
             schema,
@@ -3888,7 +3860,7 @@ mod tests {
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
-            object_table,
+            controller,
             policy,
         )
         .unwrap()
