@@ -10,6 +10,8 @@ import cloudpickle
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
 from zephyr.context import ZephyrContext, _require_resolvable_worker_handles
@@ -201,7 +203,7 @@ def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, t
     assert second_result.results == ["text-1-a", "text-2-b", "text-0-a", "text-3-b"]
 
 
-def test_memory_store_retries_only_actor_unavailability():
+def test_memory_store_retries_actor_unavailability_and_preserves_application_errors():
     recovering_actor = _SequencedActor(
         [
             _TestActorFuture(error=ActorUnavailableError("restarting")),
@@ -213,6 +215,17 @@ def test_memory_store_retries_only_actor_unavailability():
     failing_actor = _SequencedActor([_TestActorFuture(error=_ApplicationError())])
     with pytest.raises(_ApplicationError):
         _fake_store(failing_actor).get("key")
+
+
+def test_memory_store_retries_lost_operation_after_actor_recovery():
+    recovering_actor = _SequencedActor(
+        [
+            _TestActorFuture(error=ConnectError(Code.NOT_FOUND, "Operation 'lost' not found")),
+            _TestActorFuture(value=MemoryTableLookup(MemoryTableStatus.READY, [(True, "value")])),
+        ]
+    )
+
+    assert _fake_store(recovering_actor).get("key") == "value"
 
 
 def test_memory_store_bounds_actor_call_by_recovery_timeout():
