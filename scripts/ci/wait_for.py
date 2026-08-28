@@ -211,9 +211,9 @@ class PrSnapshot:
 
 def gh_pr_snapshot(pr: str, repo: str) -> PrSnapshot:
     """Read the fields observed by ``github.pr``."""
-    data: dict = gh_json(
-        ["pr", "view", pr, "--repo", repo, "--json", "state,mergeable,reviewDecision,isDraft,url"]
-    )  # pyrefly: ignore  # gh JSON shape
+    data = gh_json(["pr", "view", pr, "--repo", repo, "--json", "state,mergeable,reviewDecision,isDraft,url"])
+    if not isinstance(data, dict):
+        raise GhError(f"`gh pr view {pr}` returned {type(data).__name__}, expected an object")
     return PrSnapshot(
         state=data["state"],
         mergeable=data["mergeable"],
@@ -345,6 +345,7 @@ class CommentFilter(StrEnum):
 CLAUDE_BOT = "claude[bot]"
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 LOOM_BOT = "loom-oa-dev[bot]"
+WEAVER_USER = "weaverbot"
 _LOOM_SESSION_ENV = "LOOM_SESSION_ID"
 _INSTALLATION_TOKEN_USER_ERROR = "Resource not accessible by integration (HTTP 403)"
 
@@ -479,6 +480,8 @@ COMMENT_RULES: tuple[CommentRule, ...] = (
     CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
     CommentRule(LOOM_BOT, is_loom_placeholder, Significance.PROGRESS),
     CommentRule(LOOM_BOT, is_loom_access_handshake, Significance.HANDSHAKE),
+    CommentRule(LOOM_BOT, is_clean_verdict, Significance.CLEAN),
+    CommentRule(WEAVER_USER, is_clean_verdict, Significance.CLEAN),
 )
 
 
