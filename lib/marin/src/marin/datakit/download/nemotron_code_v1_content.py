@@ -3,6 +3,14 @@
 
 """Normalize pre-staged Nemotron Code v1 file contents.
 
+Reconstruct the content SWHIDs from NVIDIA's ``(repo, commit_id, rel_path)`` metadata
+with the resolver and pinned 2025-05-18 Software Heritage graph configuration at
+commit ``fa02e79eefac9c8c30a65310b698a9d631bcbe93``:
+https://github.com/muchanem/build-nt-code/tree/fa02e79eefac9c8c30a65310b698a9d631bcbe93
+
+Map the resulting ``sha1_git`` values to ``sha1`` with the matching Software Heritage
+content table, then fetch the bytes from the public Software Heritage content store.
+
 The raw parquet shards are consumed from ``{MARIN_PREFIX}/raw/nemotron-code-v1-content``,
 so each cluster reads them from its own bucket and they must be copied in before a run. The
 canonical copy lives on Cloudflare R2 at ``s3://marin-na/users/held/nemotron-code-v1-content``
