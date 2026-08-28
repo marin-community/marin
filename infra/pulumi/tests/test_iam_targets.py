@@ -38,6 +38,12 @@ def _grant_keys(args: GcpIamArgs) -> list[tuple[object, ...]]:
         for member in grant.members
     )
     keys.extend(
+        ("backend-service", service.service, grant.role, member, grant.condition)
+        for service in args.backend_service_iap
+        for grant in service.iap_grants
+        for member in grant.members
+    )
+    keys.extend(
         ("cloud-run", service.location, service.service, grant.role, member, grant.condition)
         for service in args.cloud_run_iap
         for grant in service.iap_grants
