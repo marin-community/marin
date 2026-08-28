@@ -29,11 +29,14 @@ artifacts produces fresh markers without re-reading any source text.
 import logging
 from collections.abc import Iterator
 
+import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
 from zephyr.context import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.dataset import Dataset
+from zephyr.expr import col
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -141,23 +144,26 @@ def _cc_id(source_tag: str, doc_id: str) -> str:
     return f"{source_tag}{_CC_ID_SEP}{doc_id}"
 
 
-def _strip_cc_prefix(record_id: str) -> str:
-    """Reverse :func:`_cc_id`, returning the original ``doc_id``."""
-    return record_id.split(_CC_ID_SEP, 1)[1]
-
-
-def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
-    """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
+def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[pa.RecordBatch]:
+    """Emit Arrow batches of globally unique node ids and LSH buckets."""
     for entry in entries:
         for batch in _load_batches(entry.input_path, columns=["id", "buckets"]):
-            ids = batch["id"]
-            buckets_col = batch["buckets"]
-            for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
-                if not doc_buckets.is_valid:
-                    continue
-                cc_id = _cc_id(entry.source_tag, doc_id.as_py())
-                for b in doc_buckets.as_py():
-                    yield {"bucket": str(b), "id": cc_id, "file_idx": entry.file_idx}
+            buckets = pc.list_flatten(batch["buckets"])
+            parents = pc.list_parent_indices(batch["buckets"])
+            valid = pc.is_valid(buckets)
+            buckets = pc.filter(buckets, valid)
+            parents = pc.filter(parents, valid)
+            if len(buckets) == 0:
+                continue
+            doc_ids = pc.take(batch["id"], parents).to_pylist()
+            yield pa.RecordBatch.from_arrays(
+                [
+                    pc.cast(buckets, pa.string()),
+                    pa.array([_cc_id(entry.source_tag, str(doc_id)) for doc_id in doc_ids]),
+                    pa.array([entry.file_idx] * len(buckets), type=pa.int64()),
+                ],
+                names=["bucket", "id", "file_idx"],
+            )
 
 
 # Key under which ``entries`` is staged via ``ZephyrContext.put`` for the
@@ -344,19 +350,20 @@ def compute_fuzzy_dups_attrs(
     # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
     shard_pipeline = (
         Dataset.from_list(cc_files)
-        .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
+        .load_parquet(batch_mode=True)
+        .sql(
+            f"""
+            SELECT split_part(record_id, '{_CC_ID_SEP}', 2) AS id,
+                   component_id,
+                   component_id = id_norm AS is_canonical,
+                   cardinality(adjacency_list) = 1 AND adjacency_list[1] = id_norm AS is_singleton,
+                   file_idx
+            FROM input
+            """
         )
         .group_by(
-            lambda r: r["file_idx"],
-            sort_by=lambda r: r["id"],
+            col("file_idx"),
+            sort_by=col("id"),
             reducer=aggregator,
         )
     )

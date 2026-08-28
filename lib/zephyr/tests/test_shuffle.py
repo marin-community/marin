@@ -21,6 +21,7 @@ from datafusion import col
 from datafusion.object_store import LocalFileSystem as DataFusionLocalFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
+from zephyr.expr import col as zephyr_col
 from zephyr.parquet_scan import datafusion_context, register_object_stores
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -37,6 +38,7 @@ from zephyr.shuffle import (
     _table_to_items,
     _write_scatter,
 )
+from zephyr.sql import sql
 from zephyr.worker_context import _worker_ctx_var
 
 
@@ -366,6 +368,65 @@ def test_merge_sorted_chunks_external_runs_use_gcs_urls(tmp_path, monkeypatch):
 
     assert active_runs
     assert [item["k"] for item in [first, *remaining]] == list(range(10))
+    assert [path for path in remote_root.rglob("*") if path.is_file()] == []
+
+
+def test_sql_reduce_external_runs_use_gcs_urls(tmp_path, monkeypatch):
+    scatter_paths = []
+    for source_shard in range(10):
+        writer = ScatterWriter(
+            data_path=str(tmp_path / f"shard-{source_shard:04d}/scatter/"),
+            key_fn=zephyr_col("k"),
+            source_shard=source_shard,
+            num_output_shards=1,
+        )
+        writer.write_batch(pa.record_batch({"k": ["all"], "v": [source_shard]}))
+        scatter_paths.extend(writer.close())
+
+    shard = ScatterReader.from_sidecars(scatter_paths, 0)
+    remote_root = tmp_path / "gcs"
+
+    def remote_path(url: str):
+        parsed = urlparse(url)
+        assert (parsed.scheme, parsed.netloc) == ("gs", "bucket")
+        return remote_root / parsed.path.lstrip("/")
+
+    class FakeStoragePath:
+        def __init__(self, url: str):
+            self.url = url
+
+        def __truediv__(self, name: str):
+            return FakeStoragePath(f"{self.url.rstrip('/')}/{name}")
+
+        def __str__(self) -> str:
+            return self.url
+
+        def mkdirs(self) -> None:
+            remote_path(self.url).mkdir(parents=True, exist_ok=True)
+
+        def rm(self) -> None:
+            remote_path(self.url).unlink()
+
+    monkeypatch.setattr("zephyr.shuffle.StoragePath", FakeStoragePath)
+    monkeypatch.setattr(
+        "zephyr.parquet_scan.GoogleCloud",
+        lambda bucket_name: DataFusionLocalFileSystem(prefix=str(remote_root)),
+    )
+    shard.shard_payload_bytes = 1_000_000
+
+    with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
+        mock_res.return_value = TaskResources(memory_bytes=1_000_000, cpu_cores=1, gpu_count=0, tpu_count=0)
+        reduced = shard.reduce(
+            external_sort_dir="gs://bucket/external-sort/",
+            key=zephyr_col("k"),
+            reducer=sql("SELECT k, sum(v) AS total FROM input GROUP BY k"),
+        )
+        first = next(reduced)
+        active_runs = [path for path in remote_root.rglob("*") if path.is_file()]
+        batches = [first, *reduced]
+
+    assert active_runs
+    assert pa.Table.from_batches(batches).to_pylist() == [{"k": "all", "total": 45}]
     assert [path for path in remote_root.rglob("*") if path.is_file()] == []
 
 

@@ -39,6 +39,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
+import pyarrow as pa
 from rigging.filesystem.storage_path import StoragePath
 
 from zephyr import counters
@@ -159,12 +160,21 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
+def _stage_item_count_and_bytes(item: Any) -> tuple[int, int]:
+    if isinstance(item, pa.RecordBatch):
+        return item.num_rows, item.get_total_buffer_size()
+    if isinstance(item, pa.Table):
+        return item.num_rows, item.get_total_buffer_size()
+    return 1, sys.getsizeof(item)
+
+
 def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
     """Yield items from ``gen`` while recording item count and byte size into the current stage's counters."""
     stage_counters = counters.current_stage()
     for item in gen:
-        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, 1)
-        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, sys.getsizeof(item))
+        item_count, bytes_processed = _stage_item_count_and_bytes(item)
+        stage_counters.update_counter(ZEPHYR_STAGE_ITEM_COUNT_KEY, item_count)
+        stage_counters.update_counter(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, bytes_processed)
         yield item
 
 

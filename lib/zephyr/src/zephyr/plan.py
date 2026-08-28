@@ -38,15 +38,17 @@ from zephyr.dataset import (
     ReshardOp,
     SelectOp,
     ShardInfo,
+    SqlOp,
     TakePerShardOp,
     WindowOp,
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr, referenced_columns
+from zephyr.expr import ColumnExpr, Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
+from zephyr.sql import SqlQuery, execute_sql_batches
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
@@ -97,9 +99,9 @@ class Write:
 class Scatter:
     """Distribute items to output shards by key hash."""
 
-    key_fn: Callable[[Any], Any]  # item → key
+    key_fn: Callable[[Any], Any] | ColumnExpr  # item → key
     num_output_shards: int
-    sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    sort_fn: Callable[[Any], Any] | ColumnExpr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
@@ -110,8 +112,8 @@ class Reduce:
     Sort within each group is encoded into ``_SORT_KEY_COL`` at scatter time
     """
 
-    key_fn: Callable[[Any], Any]
-    reducer_fn: Callable[[Any, Iterator], Any]
+    key_fn: Callable[[Any], Any] | ColumnExpr
+    reducer_fn: Callable[[Any, Iterator], Any] | SqlQuery
 
 
 @dataclass
@@ -165,17 +167,11 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 def _reduce_gen(
     shard: ScatterReader,
-    key_fn: Callable,
-    reducer_fn: Callable,
+    key_fn: Callable | ColumnExpr,
+    reducer_fn: Callable | SqlQuery,
     external_sort_dir: str,
 ) -> Iterator:
-    merged = shard.merge_sorted_chunks(external_sort_dir)
-    for key, grouped in groupby(merged, key=key_fn):
-        result = reducer_fn(key, grouped)
-        if isinstance(result, Iterator):
-            yield from result
-        else:
-            yield result
+    yield from shard.reduce(external_sort_dir, key_fn, reducer_fn)
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -215,6 +211,8 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
                 )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
+            elif isinstance(op, SqlOp):
+                stream = execute_sql_batches(stream, op.query)
             elif isinstance(op, FilterOp):
                 stream = _filter_gen(stream, op.predicate)
             elif isinstance(op, FlatMapOp):
@@ -472,7 +470,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
 
         else:
-            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
+            # Fusible ops: LoadFileOp, MapOp, SqlOp, FilterOp, FlatMapOp, MapShardOp,
             # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
 
@@ -553,7 +551,7 @@ def _compute_file_pushdown(
             # later SelectOp pushdown could KeyError the lambda by dropping
             # columns it needs. Stop pushdown here.
             break
-        elif isinstance(op, (MapOp | FlatMapOp)):
+        elif isinstance(op, (MapOp | SqlOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
             break

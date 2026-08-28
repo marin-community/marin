@@ -34,6 +34,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import groupby
 from typing import Any, ClassVar, Protocol
 
 import cloudpickle
@@ -47,8 +48,11 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import RateLimiter, log_time
 
+from zephyr.batches import ArrowBatch, canonicalize_record_batch, iter_record_batches
+from zephyr.expr import ColumnExpr
 from zephyr.parquet_scan import datafusion_context, register_object_stores, scan_parquet
 from zephyr.shard_keys import encode_key, hash_encoded_key
+from zephyr.sql import SQL_INPUT_TABLE, SqlQuery, apply_sql_query, quote_identifier
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -112,6 +116,7 @@ _SCATTER_FILE_PARTITIONS = 8
 # Internal routing columns injected by _items_to_table.
 _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
+_ROUTING_HASH_COL = "__zephyr_routing_hash__"
 # A cloudpickle-serialized Python object representing the item
 _PAYLOAD_COL = "__payload__"
 _PAYLOAD_BYTES_COL = "payload_bytes"
@@ -144,9 +149,48 @@ def _task_memory_bytes() -> int:
 
 
 def _table_to_items(table: pa.Table | pa.RecordBatch) -> Iterator[Any]:
-    """Yield deserialized Python items from an Arrow table or record batch."""
-    for payload in table[_PAYLOAD_COL].to_pylist():
-        yield cloudpickle.loads(payload)
+    """Yield Python items from a shuffled Arrow table or record batch."""
+    if _PAYLOAD_COL in table.schema.names:
+        for payload in table[_PAYLOAD_COL].to_pylist():
+            yield cloudpickle.loads(payload)
+        return
+
+    user_columns = [name for name in table.schema.names if name not in {_SHARD_COL, _SORT_KEY_COL}]
+    yield from table.select(user_columns).to_pylist()
+
+
+def _routing_query(key: ColumnExpr, sort_by: ColumnExpr | None, num_output_shards: int) -> str:
+    """Build the DataFusion projection that adds native routing columns."""
+    key_sql = quote_identifier(key.name)
+    sort_key_sql = key_sql if sort_by is None else f"{key_sql}, {quote_identifier(sort_by.name)}"
+    hash_sql = quote_identifier(_ROUTING_HASH_COL)
+    coefficients = (6620626219009, 50539131443, 385794897, 2944999, 22481, 131, 1)
+    terms = [
+        f"CAST(ascii(substr({hash_sql}, {index}, 1)) AS BIGINT) * {coefficient}"
+        for index, coefficient in enumerate(coefficients, 1)
+    ]
+    terms.append(f"CAST(ascii(substr({hash_sql}, 8, 1)) AS BIGINT)")
+    shard_sql = " + ".join(terms)
+    return f"""
+        WITH hashed AS (
+            SELECT *,
+                   encode(
+                       digest(
+                           CASE WHEN {key_sql} IS NULL
+                                THEN 'null:'
+                                ELSE 'value:' || CAST({key_sql} AS VARCHAR)
+                           END,
+                           'sha256'
+                       ),
+                       'hex'
+                   ) AS {hash_sql}
+            FROM {SQL_INPUT_TABLE}
+        )
+        SELECT * EXCLUDE ({hash_sql}),
+               CAST(({shard_sql}) % {num_output_shards} AS INT) AS {quote_identifier(_SHARD_COL)},
+               struct({sort_key_sql}) AS {quote_identifier(_SORT_KEY_COL)}
+        FROM hashed
+    """
 
 
 def _columns_to_table(
@@ -413,6 +457,7 @@ def _merge_sorted_frames(
     external_sort_dir: str,
     fan_in: int,
     shard: int,
+    transform: Callable[[SessionContext, DataFrame], DataFrame] | None = None,
 ) -> Iterator[pa.RecordBatch]:
     """Merge ordered frames, writing bounded intermediate runs when needed."""
     if not frames:
@@ -463,8 +508,12 @@ def _merge_sorted_frames(
             pass_index += 1
 
         logger.info("[shard %d] Final merge of %d frames (%d spill pass(es))", shard, len(frames), pass_index)
-        for batch in _merged_frame(frames, sort_key).execute_stream():
-            yield batch.to_pyarrow()
+        merged = _merged_frame(frames, sort_key)
+        if transform is not None:
+            merged = transform(context, merged)
+        output_schema = merged.schema()
+        for batch in merged.execute_stream():
+            yield canonicalize_record_batch(batch.to_pyarrow(), output_schema)
     finally:
         if spill_files:
             try:
@@ -550,11 +599,20 @@ class ScatterReader:
 
         register_object_stores(context, [chunk.path for chunk in self._chunk_files])
         schemas = [chunk.schema for chunk in self._chunk_files]
-        schema = (
-            schemas[0]
-            if all(value.equals(schemas[0]) for value in schemas[1:])
-            else pa.unify_schemas(schemas, promote_options="permissive")
-        )
+        payload_modes = {_PAYLOAD_COL in schema.names for schema in schemas}
+        if len(payload_modes) != 1:
+            raise ValueError("Cannot mix Python-row and Arrow-batch shuffle chunks")
+        expected_schema = schemas[0]
+        schemas_match = all(value.equals(expected_schema, check_metadata=True) for value in schemas[1:])
+        if not next(iter(payload_modes)) and not schemas_match:
+            mismatched_schema = next(
+                value for value in schemas[1:] if not value.equals(expected_schema, check_metadata=True)
+            )
+            raise ValueError(
+                "Arrow batch schema changed across shuffle mappers. "
+                f"Expected:\n{expected_schema}\nGot:\n{mismatched_schema}"
+            )
+        schema = expected_schema if schemas_match else pa.unify_schemas(schemas, promote_options="permissive")
         frames = [
             scan_parquet(
                 context,
@@ -570,26 +628,22 @@ class ScatterReader:
     def total_chunks(self) -> int:
         return len(self._chunk_files)
 
-    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
-        """Merge sorted chunks using k-way merge, yielding items in global sort order.
-
-        Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
-        secondary sort). Performs a k-way merge across all chunks.
-        Args:
-            external_sort_dir: Stage-filesystem directory for intermediate runs
-                when the shard exceeds the memory budget.
-
-        Yields:
-            Deserialized Python items in merged sort order.
-        """
-
+    def _merged_batches(
+        self,
+        external_sort_dir: str,
+        *,
+        materialize_python_rows: bool,
+        transform: Callable[[SessionContext, DataFrame], DataFrame] | None = None,
+    ) -> Iterator[pa.RecordBatch]:
         if self.total_chunks == 0:
             return
         if self.shard_payload_bytes == 0:
             return
 
         shard_payload_bytes = self.shard_payload_bytes
-        overhead = _SCATTER_READ_DATAFUSION_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+        overhead = _SCATTER_READ_DATAFUSION_ROW_OVERHEAD
+        if materialize_python_rows:
+            overhead *= _SCATTER_READ_PYTHON_ROW_OVERHEAD
         memory_bytes = _task_memory_bytes()
         merge_memory_bytes = int(memory_bytes * _SCATTER_READ_MEMORY_FRACTION)
 
@@ -617,10 +671,50 @@ class ScatterReader:
             external_sort_dir=external_sort_dir,
             fan_in=fan_in,
             shard=self._target_shard,
+            transform=transform,
         )
+        yield from batches
 
-        for batch in batches:
+    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
+        """Merge sorted chunks and yield Python items in global key order."""
+        for batch in self._merged_batches(external_sort_dir, materialize_python_rows=True):
             yield from _table_to_items(batch)
+
+    def reduce(
+        self,
+        external_sort_dir: str,
+        key: Callable | ColumnExpr,
+        reducer: Callable | SqlQuery,
+    ) -> Iterator[Any]:
+        """Merge the target shard and apply a SQL or Python group reducer."""
+        if isinstance(reducer, SqlQuery):
+            if not isinstance(key, ColumnExpr):
+                raise TypeError("SQL group_by reducers require key=zephyr.expr.col(...)")
+
+            def apply_reducer(context: SessionContext, merged: DataFrame) -> DataFrame:
+                if _PAYLOAD_COL in merged.schema().names:
+                    raise TypeError("SQL group_by reducers require Arrow-batch shuffle input")
+                return apply_sql_query(context, merged.drop(_SORT_KEY_COL), reducer)
+
+            yield from self._merged_batches(
+                external_sort_dir,
+                materialize_python_rows=False,
+                transform=apply_reducer,
+            )
+            return
+
+        row_key = key.evaluate if isinstance(key, ColumnExpr) else key
+        items = (
+            item
+            for batch in self._merged_batches(external_sort_dir, materialize_python_rows=True)
+            for item in _table_to_items(batch)
+        )
+        for group_key, grouped in groupby(items, key=row_key):
+            result = reducer(group_key, grouped)
+            if isinstance(result, Iterator):
+                yield from result
+            else:
+                yield result
 
 
 # ---------------------------------------------------------------------------
@@ -651,10 +745,10 @@ class ScatterWriter:
     def __init__(
         self,
         data_path: str,
-        key_fn: Callable,
+        key_fn: Callable | ColumnExpr,
         source_shard: int,
         num_output_shards: int,
-        sort_fn: Callable | None = None,
+        sort_fn: Callable | ColumnExpr | None = None,
         combiner_fn: Callable | None = None,
     ) -> None:
         self._data_path = data_path if data_path.endswith("/") else f"{data_path}/"
@@ -682,6 +776,13 @@ class ScatterWriter:
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
         # Running Arrow buffer-size total of unflushed tables; reset to 0 on flush.
         self._buffer_estimated_bytes: int = 0
+        self._columnar_schema: pa.Schema | None = None
+        self._routing_context: SessionContext | None = None
+        self._routing_sql = (
+            _routing_query(key_fn, sort_fn, num_output_shards)
+            if isinstance(key_fn, ColumnExpr) and (sort_fn is None or isinstance(sort_fn, ColumnExpr))
+            else None
+        )
 
         ensure_parent_dir(self._data_path)
         self._result: ListShard | None = None
@@ -706,6 +807,8 @@ class ScatterWriter:
                 buffer = buffer.combine_chunks()
 
             if self._combiner_fn is not None:
+                assert isinstance(self._key_fn, Callable)
+                assert self._sort_fn is None or isinstance(self._sort_fn, Callable)
                 by_shard: defaultdict[int, list[Any]] = defaultdict(list)
                 for shard_val, payload in zip(
                     buffer[_SHARD_COL].to_pylist(),
@@ -734,19 +837,26 @@ class ScatterWriter:
 
             flushed_bytes = int(buffer.nbytes)
             total_flushed_bytes += flushed_bytes
-            shard_sizes = (
-                pa.table(
-                    {
-                        _SHARD_COL: buffer[_SHARD_COL],
-                        _PAYLOAD_BYTES_COL: pc.binary_length(buffer[_PAYLOAD_COL]),
-                    }
+            if _PAYLOAD_COL in buffer.schema.names:
+                shard_sizes = (
+                    pa.table(
+                        {
+                            _SHARD_COL: buffer[_SHARD_COL],
+                            _PAYLOAD_BYTES_COL: pc.binary_length(buffer[_PAYLOAD_COL]),
+                        }
+                    )
+                    .group_by(_SHARD_COL, use_threads=False)
+                    .aggregate([(_PAYLOAD_BYTES_COL, "sum"), (_PAYLOAD_BYTES_COL, "count")])
                 )
-                .group_by(_SHARD_COL, use_threads=False)
-                .aggregate([(_PAYLOAD_BYTES_COL, "sum"), (_PAYLOAD_BYTES_COL, "count")])
-            )
-            for row in shard_sizes.to_pylist():
-                self._shard_bytes[int(row[_SHARD_COL])] += int(row[_PAYLOAD_BYTES_SUM_COL])
-                self._shard_rows[int(row[_SHARD_COL])] += int(row[_PAYLOAD_ROWS_COL])
+                for row in shard_sizes.to_pylist():
+                    self._shard_bytes[int(row[_SHARD_COL])] += int(row[_PAYLOAD_BYTES_SUM_COL])
+                    self._shard_rows[int(row[_SHARD_COL])] += int(row[_PAYLOAD_ROWS_COL])
+            else:
+                for value_count in pc.value_counts(buffer[_SHARD_COL]).to_pylist():
+                    shard = int(value_count["values"])
+                    rows = int(value_count["counts"])
+                    self._shard_bytes[shard] += math.ceil(flushed_bytes * rows / len(buffer))
+                    self._shard_rows[shard] += rows
 
             num_targets = int(pc.count_distinct(buffer[_SHARD_COL]).as_py())
             num_row_groups = min(num_targets, _SCATTER_MAX_ROW_GROUPS_PER_CHUNK)
@@ -816,6 +926,41 @@ class ScatterWriter:
             if len(partition_table):
                 partitioned.append((partition, partition_table))
         self.write_partitioned(partitioned)
+
+    def write_batch(self, batch: pa.RecordBatch) -> None:
+        """Route and buffer an Arrow batch without materializing Python rows."""
+        if not isinstance(self._key_fn, ColumnExpr):
+            raise TypeError("Arrow batch scatter requires key=zephyr.expr.col(...)")
+        if self._sort_fn is not None and not isinstance(self._sort_fn, ColumnExpr):
+            raise TypeError("Arrow batch scatter requires sort_by=zephyr.expr.col(...)")
+        if self._combiner_fn is not None:
+            raise TypeError("Arrow batch scatter does not support a Python combiner")
+
+        collisions = {_PAYLOAD_COL, _SHARD_COL, _SORT_KEY_COL, _ROUTING_HASH_COL}.intersection(batch.schema.names)
+        if collisions:
+            raise ValueError(f"Arrow batch contains reserved Zephyr columns: {sorted(collisions)}")
+        if self._columnar_schema is None:
+            self._columnar_schema = batch.schema
+        elif not self._columnar_schema.equals(batch.schema, check_metadata=True):
+            raise ValueError(
+                "Arrow batch schema changed within one shuffle mapper. "
+                f"Expected:\n{self._columnar_schema}\nGot:\n{batch.schema}"
+            )
+
+        if self._routing_context is None:
+            self._routing_context = datafusion_context(target_partitions=1)
+        assert self._routing_sql is not None
+        self._routing_context.register_record_batches(SQL_INPUT_TABLE, [[batch]])
+        try:
+            routed_frame = self._routing_context.sql(self._routing_sql)
+            routed_batches = [
+                canonicalize_record_batch(value.to_pyarrow(), routed_frame.schema())
+                for value in routed_frame.execute_stream()
+            ]
+        finally:
+            self._routing_context.deregister_table(SQL_INPUT_TABLE)
+        if routed_batches:
+            self.write(pa.Table.from_batches(routed_batches, schema=routed_batches[0].schema))
 
     def write_partitioned(self, tables: list[tuple[int, pa.Table]]) -> None:
         """Buffer tables already routed to target-range file partitions."""
@@ -896,9 +1041,9 @@ def _write_scatter(
     items: Iterator,
     source_shard: int,
     data_path: str,
-    key_fn: Callable,
+    key_fn: Callable | ColumnExpr,
     num_output_shards: int,
-    sort_fn: Callable | None = None,
+    sort_fn: Callable | ColumnExpr | None = None,
     combiner_fn: Callable | None = None,
 ) -> ListShard:
     """Write items as sorted Parquet chunks routed across target shards.
@@ -914,9 +1059,20 @@ def _write_scatter(
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
+        if isinstance(key_fn, ColumnExpr):
+            if sort_fn is not None and not isinstance(sort_fn, ColumnExpr):
+                raise TypeError("Arrow batch scatter requires sort_by=zephyr.expr.col(...)")
+            for batch in iter_record_batches(items):
+                writer.write_batch(batch)
+            return writer.close()
+
+        if isinstance(sort_fn, ColumnExpr):
+            raise TypeError("Python row scatter requires sort_by to be a callable")
         num_file_partitions = _file_partition_count(num_output_shards)
         pending: list[Any] = []
         for item in items:
+            if isinstance(item, ArrowBatch):
+                raise TypeError("Arrow batch scatter requires key=zephyr.expr.col(...)")
             pending.append(item)
             if len(pending) >= _TABLE_ROW_COUNT:
                 writer.write_partitioned(

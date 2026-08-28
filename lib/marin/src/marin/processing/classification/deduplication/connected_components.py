@@ -6,11 +6,16 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
+import pyarrow as pa
+import pyarrow.compute as pc
 from fray.types import ResourceConfig
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr.batches import ArrowBatch, iter_record_batches
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
+from zephyr.expr import col
+from zephyr.sql import SqlScalarFunction, sql
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -39,45 +44,168 @@ def _find_last_complete_iteration(
     return last_complete, last_paths
 
 
-# TODO (rav): can we have just a single id that's expected to be clean on the inputs?
-class RecordId(TypedDict):
-    record_id: Any
-    id_norm: str
-    file_idx: int
-
-
-class CCNode(TypedDict):
-    record_id: Any
-    id_norm: str
-    adjacency_list: list[str]
-    component_id: str
-    changed: bool
-    file_idx: int
-
-
 class CCInput(TypedDict):
     bucket: str
     id: Any
     file_idx: int
 
 
-def _internal_orderable_id(record_id: Any) -> str:
+def _hash_string_ids(values: pa.Array) -> pa.Array:
+    return pa.array(
+        [None if value is None else str(dupekit.hash_xxh3_128(value.encode())) for value in values.to_pylist()],
+        type=pa.string(),
+    )
+
+
+def _cc_input_batches(
+    items: Iterator[CCInput | ArrowBatch],
+    _shard: ShardInfo,
+) -> Iterator[pa.RecordBatch]:
+    """Canonicalize CC inputs to Arrow batches without unpacking batch inputs."""
+
+    def validate(batch: pa.RecordBatch) -> pa.RecordBatch:
+        id_values = batch.column("id")
+        if not (pa.types.is_integer(id_values.type) or pa.types.is_string(id_values.type)):
+            raise ValueError(f"Unsupported id type: {id_values.type}")
+        if id_values.null_count:
+            raise ValueError("Connected-components ids must not be null")
+        return batch
+
+    rows: list[CCInput] = []
+    for item in items:
+        if isinstance(item, ArrowBatch):
+            if rows:
+                yield validate(pa.RecordBatch.from_pylist(rows))
+                rows = []
+            yield from (validate(batch) for batch in iter_record_batches([item]))
+            continue
+        rows.append(item)
+        if len(rows) == 8192:
+            yield validate(pa.RecordBatch.from_pylist(rows))
+            rows = []
+    if rows:
+        yield validate(pa.RecordBatch.from_pylist(rows))
+
+
+_PREPARE_BUCKETS_SQL = """
+    WITH normalized AS (
+        SELECT bucket, id, file_idx,
+               CASE
+                   WHEN arrow_typeof(id) LIKE 'Int%' OR arrow_typeof(id) LIKE 'UInt%'
+                   THEN CAST(id AS VARCHAR)
+                   ELSE cc_hash_string_id(CAST(id AS VARCHAR))
+               END AS id_norm
+        FROM input
+    ), ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY bucket, id_norm ORDER BY id_norm) AS occurrence
+        FROM normalized
+    )
+    SELECT bucket, id, file_idx, id_norm
+    FROM ranked
+    WHERE occurrence = 1
+"""
+
+
+def _bucket_links_sql(preserve_singletons: bool) -> str:
+    singleton_filter = "bucket_size = 1" if preserve_singletons else "false"
+    return f"""
+        WITH unique_nodes AS (
+            SELECT *, row_number() OVER (PARTITION BY bucket, id_norm ORDER BY id_norm) AS occurrence
+            FROM input
+        ), nodes AS (
+            SELECT bucket, id, file_idx, id_norm
+            FROM unique_nodes
+            WHERE occurrence = 1
+        ), tagged AS (
+            SELECT *,
+                   first_value(id) OVER (PARTITION BY bucket ORDER BY id_norm) AS hub_record_id,
+                   first_value(id_norm) OVER (PARTITION BY bucket ORDER BY id_norm) AS hub_id_norm,
+                   first_value(file_idx) OVER (PARTITION BY bucket ORDER BY id_norm) AS hub_file_idx,
+                   count(*) OVER (PARTITION BY bucket) AS bucket_size
+            FROM nodes
+        )
+        SELECT hub_record_id AS source_record_id,
+               hub_id_norm AS source_id_norm,
+               hub_file_idx AS source_file_idx,
+               id_norm AS dest_id_norm
+        FROM tagged
+        WHERE id_norm != hub_id_norm
+        UNION ALL
+        SELECT id AS source_record_id,
+               id_norm AS source_id_norm,
+               file_idx AS source_file_idx,
+               hub_id_norm AS dest_id_norm
+        FROM tagged
+        WHERE id_norm != hub_id_norm
+        UNION ALL
+        SELECT id AS source_record_id,
+               id_norm AS source_id_norm,
+               file_idx AS source_file_idx,
+               id_norm AS dest_id_norm
+        FROM tagged
+        WHERE {singleton_filter}
     """
-    We need an id that has a total ordering for connected components. If the id is an int,
-    we can use it as is. If it's a string, we hash it and convert it to string. We convert
-    to string to make internal zephyr/pyarrow serde happy.
-    """
-    if isinstance(record_id, int):
-        id_norm = str(record_id)
-    elif isinstance(record_id, str):
-        id_norm = str(dupekit.hash_xxh3_128(record_id.encode()))
-    else:
-        raise ValueError(f"Unsupported id type: {type(record_id)}")
-    return id_norm
+
+
+_BUILD_ADJACENCY_SQL = """
+    SELECT min(source_record_id) AS record_id,
+           source_id_norm AS id_norm,
+           array_agg(DISTINCT dest_id_norm ORDER BY dest_id_norm) AS adjacency_list,
+           source_id_norm AS component_id,
+           true AS changed,
+           min(source_file_idx) AS file_idx
+    FROM input
+    GROUP BY source_id_norm
+"""
+
+
+_EMIT_MESSAGES_SQL = """
+    SELECT id_norm AS key,
+           true AS is_self,
+           record_id,
+           id_norm,
+           adjacency_list,
+           component_id,
+           changed,
+           file_idx
+    FROM input
+    UNION ALL
+    SELECT unnest(adjacency_list) AS key,
+           false AS is_self,
+           record_id,
+           '' AS id_norm,
+           make_array('') AS adjacency_list,
+           component_id,
+           false AS changed,
+           CAST(0 AS BIGINT) AS file_idx
+    FROM input
+"""
+
+
+_REDUCE_NODE_SQL = """
+    WITH propagated AS (
+        SELECT key, least(key, min(component_id)) AS minimum_component
+        FROM input
+        GROUP BY key
+    ), self_messages AS (
+        SELECT *, row_number() OVER (PARTITION BY key ORDER BY key) AS occurrence
+        FROM input
+        WHERE is_self
+    )
+    SELECT self_messages.record_id,
+           self_messages.id_norm,
+           self_messages.adjacency_list,
+           propagated.minimum_component AS component_id,
+           propagated.minimum_component < self_messages.component_id AS changed,
+           self_messages.file_idx
+    FROM self_messages
+    JOIN propagated USING (key)
+    WHERE self_messages.occurrence = 1
+"""
 
 
 def connected_components(
-    ds: Dataset[CCInput],
+    ds: Dataset[CCInput | ArrowBatch],
     ctx: ZephyrContext,
     *,
     output_dir: str,
@@ -102,59 +230,6 @@ def connected_components(
         num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
     """
 
-    def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
-        """Generator reducer: dedup items by id_norm, yield star-topology links.
-
-        Streams through items tracking only the current minimum hub RecordId (O(1))
-        and a set of seen id_norms for dedup (O(n) strings). This is ~4x cheaper
-        than the previous dict[str, RecordId] approach which stored a full RecordId
-        per unique item. When a new minimum hub is found mid-stream, the old hub is
-        linked to the new hub so all prior nodes remain transitively connected.
-        """
-        seen: set[str] = set()
-        hub: RecordId | None = None
-        num_unique = 0
-
-        for item in items:
-            norm = _internal_orderable_id(item["id"])
-            if norm in seen:
-                continue
-            seen.add(norm)
-            num_unique += 1
-
-            record = RecordId(record_id=item["id"], id_norm=norm, file_idx=item["file_idx"])
-
-            if hub is None:
-                hub = record
-            elif norm < hub["id_norm"]:
-                yield _make_link(record, hub)
-                yield _make_link(hub, record)
-                counters.pipeline.update_counter("cc/links", 2)
-                hub = record
-            else:
-                yield _make_link(hub, record)
-                yield _make_link(record, hub)
-                counters.pipeline.update_counter("cc/links", 2)
-
-        if hub is None:
-            return
-
-        counters.pipeline.update_counter("cc/buckets", 1)
-        counters.pipeline.update_counter("cc/bucket_nodes", num_unique)
-
-        if preserve_singletons and num_unique == 1:
-            yield _make_link(hub, hub)
-
-    def _dedup_combiner(bucket: str, items: Iterator[CCInput]) -> Iterator[CCInput]:
-        """Local pre-aggregation: deduplicate items by record_id within each scatter buffer."""
-        # TODO (rav): replace this with bloom filter? Reduce mem overhead.
-        seen: set[str] = set()
-        for item in items:
-            norm = _internal_orderable_id(item["id"])
-            if norm not in seen:
-                seen.add(norm)
-                yield item
-
     # Determine reduce shard count. Default to ctx max_workers to avoid
     # I/O amplification.
     num_reduce_shards = num_reduce_shards or ctx.max_workers
@@ -177,13 +252,23 @@ def connected_components(
             start_iteration = last_it
         logger.info("CC resume: through it_%d, starting at it_%d", last_it, start_iteration)
     else:
+        prepared = ds.map_shard(_cc_input_batches).sql(
+            _PREPARE_BUCKETS_SQL,
+            scalar_functions=(
+                SqlScalarFunction(
+                    "cc_hash_string_id",
+                    _hash_string_ids,
+                    (pa.string(),),
+                    pa.string(),
+                ),
+            ),
+        )
         curr_it = ctx.execute(
-            ds
+            prepared
             # Group nodes in buckets, deduplicate, and emit pairwise links
             .group_by(
-                lambda x: x["bucket"],
-                reducer=_reduce_bucket_to_links,
-                combiner=_dedup_combiner,
+                col("bucket"),
+                reducer=sql(_bucket_links_sql(preserve_singletons)),
                 # Sort each bucket's nodes by id_norm so the reducer always anchors
                 # the star on the true minimum, independent of shuffle/arrival order.
                 # Without this the star-vs-chain topology depends on how many reduce
@@ -191,15 +276,15 @@ def connected_components(
                 # produce different component labels on different machine counts
                 # (marin#6798). The converged result is unchanged; this only pins the
                 # intermediate topology (and speeds convergence).
-                sort_by=lambda x: _internal_orderable_id(x["id"]),
+                sort_by=col("id_norm"),
                 num_output_shards=num_reduce_shards,
             )
             # Construct Node state, init with:
             #  * each node is its own component
             #  * adjacency list from links
             .group_by(
-                lambda x: x["source_id_norm"],
-                reducer=_build_adjacency,
+                col("source_id_norm"),
+                reducer=sql(_BUILD_ADJACENCY_SQL),
                 num_output_shards=num_reduce_shards,
             ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
             verbose=True,
@@ -209,22 +294,22 @@ def connected_components(
 
     def _get_write_shard_and_count_fn(iteration: int):
         # NOTE: this function exists to make the iteration number closure capture explicit
-        def _write_shard_and_count(nodes: Iterator[CCNode], shard_info: ShardInfo) -> Iterator[dict]:
+        def _write_shard_and_count(nodes: Iterator[ArrowBatch], shard_info: ShardInfo) -> Iterator[dict]:
             num_changes = 0
 
-            def counting_iter():
+            def counting_batches() -> Iterator[pa.RecordBatch]:
                 nonlocal num_changes
-                for node in nodes:
-                    counters.pipeline.update_counter("cc/iteration_nodes", 1)
-                    if node["changed"]:
-                        num_changes += 1
-                        counters.pipeline.update_counter("cc/changes", 1)
-                    yield node
+                for batch in iter_record_batches(nodes):
+                    changes = int(pc.sum(batch.column("changed")).as_py() or 0)
+                    num_changes += changes
+                    counters.pipeline.update_counter("cc/iteration_nodes", len(batch))
+                    counters.pipeline.update_counter("cc/changes", changes)
+                    yield batch
 
             path = (
                 f"{output_dir}/it_{iteration}/part-{shard_info.shard_idx:05d}-of-{shard_info.total_shards:05d}.parquet"
             )
-            result = write_parquet_file(counting_iter(), path)
+            result = write_parquet_file(counting_batches(), path)
             yield {**result, "num_changes": num_changes}
 
         return _write_shard_and_count
@@ -235,10 +320,13 @@ def connected_components(
 
         shard_results = ctx.execute(
             Dataset.from_list(curr_it)
-            .load_parquet()
-            .map(lambda record: CCNode(**record))
-            .flat_map(_emit_messages)
-            .group_by(key=lambda x: x["key"], reducer=_reduce_node_step, num_output_shards=num_reduce_shards)
+            .load_parquet(batch_mode=True)
+            .sql(_EMIT_MESSAGES_SQL)
+            .group_by(
+                key=col("key"),
+                reducer=sql(_REDUCE_NODE_SQL),
+                num_output_shards=num_reduce_shards,
+            )
             .map_shard(_get_write_shard_and_count_fn(i)),
             verbose=True,
             map_task_resources=map_task_resources,
@@ -256,99 +344,3 @@ def connected_components(
             logger.info(f"Connected components iteration {i} found {num_changes:,} changes.")
 
     return converged, curr_it
-
-
-def _make_link(source: RecordId, dest: RecordId) -> dict:
-    return {
-        "source_record_id": source["record_id"],
-        "source_id_norm": source["id_norm"],
-        "source_file_idx": source["file_idx"],
-        "dest_id_norm": dest["id_norm"],
-    }
-
-
-def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
-    first = next(links)
-    adj: set[str] = {first["dest_id_norm"]}
-    for link in links:
-        adj.add(link["dest_id_norm"])
-    counters.pipeline.update_counter("cc/nodes", 1)
-    return CCNode(
-        record_id=first["source_record_id"],
-        id_norm=first["source_id_norm"],
-        adjacency_list=list(adj),
-        component_id=node_id,
-        changed=True,
-        file_idx=first["source_file_idx"],
-    )
-
-
-def _emit_messages(node: CCNode) -> Iterator[dict]:
-    """
-    1. Emit the node structure to itself (to preserve graph topology).
-    2. Emit the current component ID to all neighbors.
-    """
-    # 1. Preserve structure (self-message carries all node fields)
-    yield {
-        "key": node["id_norm"],
-        "is_self": True,
-        "record_id": node["record_id"],
-        "id_norm": node["id_norm"],
-        "adjacency_list": node["adjacency_list"],
-        "component_id": node["component_id"],
-        "changed": node["changed"],
-        "file_idx": node["file_idx"],
-    }
-
-    # 2. Propagate component ID to neighbors
-    # Use [""] instead of [] so Arrow infers list<string> consistently
-    # with the self-message's adjacency_list, avoiding schema evolution.
-    for neighbor_id in node["adjacency_list"]:
-        yield {
-            "key": neighbor_id,
-            "is_self": False,
-            "record_id": node["record_id"],
-            "id_norm": "",
-            "adjacency_list": [""],
-            "component_id": node["component_id"],
-            "changed": False,
-            "file_idx": 0,
-        }
-
-
-def _reduce_node_step(key: str, incoming: Iterator[dict]) -> CCNode:
-    """
-    1. Recover NodeState from self-message.
-    2. Find minimum component ID from all messages.
-    3. Update state if a smaller ID is found.
-    """
-    # NOTE: init the minimum component ID with the current key
-    min_comp = key
-    node_structure: CCNode | None = None
-
-    for msg in incoming:
-        if msg["is_self"]:
-            node_structure = CCNode(
-                record_id=msg["record_id"],
-                id_norm=msg["id_norm"],
-                adjacency_list=msg["adjacency_list"],
-                component_id=msg["component_id"],
-                changed=msg["changed"],
-                file_idx=msg["file_idx"],
-            )
-            if node_structure["component_id"] < min_comp:
-                min_comp = node_structure["component_id"]
-        else:
-            if msg["component_id"] < min_comp:
-                min_comp = msg["component_id"]
-
-    if node_structure is None:
-        raise ValueError(f"Lost/corrupted structure for node {key}")
-
-    if min_comp < node_structure["component_id"]:
-        node_structure["component_id"] = min_comp
-        node_structure["changed"] = True
-    else:
-        node_structure["changed"] = False
-
-    return node_structure
