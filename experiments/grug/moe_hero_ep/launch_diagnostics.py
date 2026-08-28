@@ -303,9 +303,9 @@ def build_diagnostic_run(
     default=DEFAULT_HERO_STEPS,
     show_default=True,
     help=(
-        "Absolute step the run stops at, not a count. A run that restores a checkpoint must set "
-        "this past the restored step (e.g. 30200 for 200 steps from a step-30000 restore), or the "
-        "trainer sees the run as already complete and exits successfully after zero steps."
+        "Number of steps at which training terminates. When restoring from a checkpoint, "
+        "the number of steps taken in this run will be less than --num-steps "
+        "by the number of steps at the checkpoint."
     ),
 )
 @click.option(
