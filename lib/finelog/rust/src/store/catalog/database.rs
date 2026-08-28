@@ -1,4 +1,4 @@
-//! Catalog: single source of truth for namespace state.
+//! SQLite catalog: single source of truth for namespace state.
 //!
 //! Backed by a `rusqlite` sidecar at `{data_dir}/_finelog_catalog.sqlite`.
 //! `data_dir = None` selects an in-memory sqlite.

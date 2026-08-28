@@ -1,7 +1,7 @@
 //! Transactional Finelog catalog and its ordered SQLite schema migrations.
 
-mod catalog;
+mod database;
 pub(crate) mod migrations;
 pub(crate) mod objects;
 
-pub use catalog::*;
+pub use database::*;
