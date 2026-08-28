@@ -41,9 +41,17 @@ and should be reported as a retirement candidate only when catalog history
 proves that the rule was present for the whole window. Report an exposure gap
 when it does not. A synthetic benchmark positive is not production exposure.
 
-Publish `codehealth-refinement-report` as a Loom artifact. Include the corpus
-identity and completeness checks, methods, current metrics, exact proposed and
-retired rule text, supporting and counterexample event IDs and URLs,
-fixed-benchmark results, 7-day and 30-day results, and limitations. Append a
+Publish `codehealth-refinement-analysis` as JSON matching the models in
+`infra/codehealth/refinement_report.py`. Publish the catalog matcher's complete
+predictions as `codehealth-refinement-benchmark-predictions` JSONL. These are
+the machine-readable inputs for the report renderer and catalog-PR publisher.
+
+Publish `codehealth-refinement-report` as a Loom Markdown artifact using the
+same section order and metric definitions as `refinement_report.render_markdown`.
+Include the corpus identity and completeness checks, current metrics, exact
+proposed rule text, supporting and counterexample event IDs and URLs,
+fixed-benchmark results, 7-day and 30-day results, and limitations. Include the
+compact `refinement_report.render_slack` text in the typed result so a trusted
+publisher can deliver it without reconstructing metrics from prose. Append that
 typed `result` to the durable channel only after the subagents finish and the
 evidence verifier's corrections are incorporated.

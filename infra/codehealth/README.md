@@ -104,7 +104,13 @@ Actions-token budget.
 The lead agent delegates overlapping pattern mining, complete-catalog matching,
 counterexample search, and evidence verification over the local archive. The
 session cannot receive GitHub credentials and is instructed not to use live
-network sources or mutate the repository or external systems.
+network sources or mutate the repository or external systems. It publishes a
+structured `codehealth-refinement-analysis` artifact, the committed benchmark
+predictions, and a rendered `codehealth-refinement-report` artifact. The Loom
+artifact is the canonical report: unlike a gist, it is versioned with the
+analysis session and does not require another GitHub credential or retention
+policy. A short Slack rendering links the Loom report and a catalog PR when one
+exists.
 
 Run either command from the repository root:
 
@@ -115,6 +121,13 @@ uv run python -m infra.codehealth.review_corpus export --days 30 \
   --output /tmp/refinement-corpus
 uv run python -m infra.codehealth.review_corpus validate \
   /tmp/refinement-corpus
+uv run python -m infra.codehealth.refinement_report \
+  --corpus /tmp/refinement-corpus \
+  --analysis /tmp/refinement-analysis.json \
+  --predictions /tmp/benchmark-predictions.jsonl \
+  --report-out /tmp/refinement-report.md \
+  --slack-out /tmp/refinement-slack.md \
+  --report-url https://loom.example.com/artifacts/codehealth-refinement-report
 ```
 
 The exporter publishes its directory atomically and refuses to replace an
@@ -136,6 +149,23 @@ month of catalog presence and no production findings is retirement evidence
 even when its catalog-derived benchmark case still passes. When the frozen
 telemetry cannot prove month-long presence, the report records an exposure gap
 instead of recommending retirement.
+
+`refinement_report.py` validates the corpus identity, proposal evidence, blind
+prediction coverage, and catalog rule names before rendering Markdown. It
+recomputes 7-day and 30-day production counts from the frozen Finelog rows and
+labels the catalog-derived benchmark as synthetic. A proposal is rejected when
+its evidence is missing, agent-authored, outside the window, or drawn from fewer
+than three pull requests.
+
+The PR fetcher does not maintain a local cache. Finelog already provides the
+append-only analytics tables for automation runs, findings, and classified
+comments. The weekly corpus is an immutable reproducibility snapshot containing
+thread state, diffs, the catalog, and benchmark inputs. Moving these records to
+a separate PostgreSQL cache would still require snapshot artifacts and would
+add invalidation rules for edited comments, resolved threads, force-pushed
+heads, and changed diffs. Add normalized raw-event Finelog tables only if the
+measured GitHub collection budget becomes a constraint; the validated survey
+used 377 GraphQL points and 453 REST requests.
 
 ## Access
 

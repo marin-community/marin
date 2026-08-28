@@ -273,6 +273,9 @@ def test_codehealth_refinement_workflow_delegates_read_only_analysis() -> None:
     assert "benchmark labels hidden" in goal
     assert "no production findings" in goal
     assert "not production recall" in goal
+    assert "codehealth-refinement-analysis" in goal
+    assert "codehealth-refinement-benchmark-predictions" in goal
+    assert "compact Slack rendering" in goal
     assert "typed result" in goal
 
 
@@ -299,6 +302,9 @@ def test_codehealth_refinement_profile_is_read_only_and_credential_free() -> Non
     assert "tar -xOzf" in instructions
     assert "`benchmark/labels.jsonl`" in instructions
     assert "synthetic regression check" in instructions
+    assert "infra/codehealth/refinement_report.py" in instructions
+    assert "codehealth-refinement-analysis" in instructions
+    assert "codehealth-refinement-benchmark-predictions" in instructions
     assert "only permitted writes" in instructions
 
     federation = federations["codehealth-refinement"]

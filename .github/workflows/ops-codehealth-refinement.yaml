@@ -107,12 +107,16 @@ jobs:
             when it does not. A synthetic benchmark pass never supplies
             production exposure.
 
-            Publish a codehealth-refinement-report Loom artifact with corpus
-            completeness and identity, methods, current rule metrics, proposed
+            Publish codehealth-refinement-analysis as JSON matching
+            infra/codehealth/refinement_report.py and publish the matcher's
+            complete predictions as codehealth-refinement-benchmark-predictions
+            JSONL. Publish a codehealth-refinement-report Loom artifact with
+            corpus completeness and identity, current rule metrics, proposed
             and retired rules, evidence URLs and IDs, fixed-benchmark results,
-            7-day and 30-day results, and limitations. After delegated work is
-            complete, append a typed result to the durable channel with the
-            artifact URL and headline metrics.
+            7-day and 30-day results, and limitations. Include the compact Slack
+            rendering in the typed result. After delegated work is complete,
+            append that typed result to the durable channel with the artifact
+            URL and headline metrics.
           base: ${{ github.sha }}
           channel: codehealth-refinement
           scratch-file: refinement-corpus.tar.gz
