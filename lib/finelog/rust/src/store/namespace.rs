@@ -42,7 +42,9 @@ use crate::proto::finelog::stats::{
     partition_field, ColumnType, L0Mode, MigrationPhase, ObjectRef, SourceLayout,
 };
 use crate::query::index_cache::IndexCache;
-use crate::store::catalog::{Catalog, NativeSegmentRecord, TableSpecStatus};
+use crate::store::cache::{object_cache_path, write_cache_file};
+use crate::store::catalog::objects::{ObjectCatalog, PublishedCatalog};
+use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
@@ -51,11 +53,11 @@ use crate::store::compaction::executor::{
 use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
-use crate::store::native_catalog::NativeCatalog;
+use crate::store::legacy_archive::LegacyArchive;
+use crate::store::object_store::{build_object_storage, ObjectId, ObjectStorage, ObjectStore};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
-use crate::store::remote::{atomic_write_file, build_remote_store, RemoteStore};
 use crate::store::schema::{
     resolve_key_column, resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema,
 };
@@ -191,6 +193,8 @@ const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis
 /// Source objects copied per maintenance tick while a TableSpec transition is active.
 const TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK: usize = 4;
 const NULL_PARTITION_VALUE: &str = "__HIVE_DEFAULT_PARTITION__";
+const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const OBJECT_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Process-wide permit for the layout rewrite, so only one namespace re-encodes
 /// at a time.
@@ -216,48 +220,6 @@ fn now_ms() -> i64 {
 
 fn full_hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-pub(crate) fn native_cache_path(
-    namespace_dir: &Path,
-    namespace: &str,
-    object_key: &str,
-) -> Result<PathBuf, StatsError> {
-    let root = namespace_dir.parent().ok_or_else(|| {
-        StatsError::Internal(format!(
-            "namespace directory {} has no cache root",
-            namespace_dir.display()
-        ))
-    })?;
-    relative_cache_path(
-        &root.join("_native").join("namespaces").join(namespace),
-        object_key,
-    )
-}
-
-pub(crate) fn relative_cache_path(root: &Path, object_key: &str) -> Result<PathBuf, StatsError> {
-    let mut path = root.to_path_buf();
-    for part in object_key.split('/').filter(|part| !part.is_empty()) {
-        if matches!(part, "." | "..") || part.contains('\\') {
-            return Err(StatsError::Internal(format!(
-                "object key {object_key:?} is not a safe relative path"
-            )));
-        }
-        path.push(part);
-    }
-    Ok(path)
-}
-
-fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<(), StatsError> {
-    if path.exists() {
-        let existing = std::fs::read(path).map_err(|error| {
-            StatsError::Internal(format!("read native cache {}: {error}", path.display()))
-        })?;
-        if Sha256::digest(&existing).as_slice() == Sha256::digest(bytes).as_slice() {
-            return Ok(());
-        }
-    }
-    atomic_write_file(path, bytes)
 }
 
 /// Insertion-lock-guarded mutable state.
@@ -336,12 +298,12 @@ impl TableRuntimePolicy {
         }
     }
 
-    fn object_native(&self) -> bool {
-        self.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE
+    fn object_backed(&self) -> bool {
+        self.l0_mode == L0Mode::L0_MODE_OBJECT_STORE
     }
 }
 
-fn native_segment_is_query_visible(status: &TableSpecStatus, record: &NativeSegmentRecord) -> bool {
+fn object_segment_is_query_visible(status: &TableSpecStatus, record: &ObjectSegmentRecord) -> bool {
     record.table_spec_version == status.active_version()
         || (status.desired_version() == record.table_spec_version && !record.migration_backfill)
         || (status.migration.as_ref().is_some_and(|migration| {
@@ -383,13 +345,13 @@ fn sorted_object_batch(
         })
         .collect::<Result<Vec<_>, StatsError>>()?;
     let indices = lexsort_to_indices(&columns, None)
-        .map_err(|error| StatsError::Internal(format!("sort object-native batch: {error}")))?;
+        .map_err(|error| StatsError::Internal(format!("sort object-backed batch: {error}")))?;
     let arrays = batch
         .columns()
         .iter()
         .map(|column| take(column.as_ref(), &indices, None))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| StatsError::Internal(format!("apply object-native sort: {error}")))?;
+        .map_err(|error| StatsError::Internal(format!("apply object-backed sort: {error}")))?;
     RecordBatch::try_new(batch.schema(), arrays)
         .map_err(|error| StatsError::Internal(format!("build sorted object batch: {error}")))
 }
@@ -485,13 +447,13 @@ fn batch_seq_bounds(batch: &RecordBatch) -> Result<(i64, i64), StatsError> {
     let seq = batch
         .column_by_name("seq")
         .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
-        .ok_or_else(|| StatsError::Internal("object-native batch has no Int64 seq".to_string()))?;
+        .ok_or_else(|| StatsError::Internal("object-backed batch has no Int64 seq".to_string()))?;
     let min = (0..seq.len())
         .filter(|index| !seq.is_null(*index))
         .map(|index| seq.value(index))
         .min()
         .ok_or_else(|| {
-            StatsError::Internal("object-native batch has no sequence values".to_string())
+            StatsError::Internal("object-backed batch has no sequence values".to_string())
         })?;
     let max = (0..seq.len())
         .filter(|index| !seq.is_null(*index))
@@ -594,15 +556,17 @@ pub struct Namespace {
     /// pre-swap paths drains before any rename/unlink. Query/FetchLogs handlers
     /// hold the READ side across `collect()`.
     query_visibility: Arc<RwLock<()>>,
-    /// Configured remote store (`None` disables sync). The maintenance task's
-    /// `sync_step` uploads L>=1 LOCAL segments here; eviction flips BOTH->REMOTE.
-    remote: Option<RemoteStore>,
-    native_catalog: Option<NativeCatalog>,
+    /// Canonical immutable object persistence used by catalogs and table data.
+    object_storage: Option<ObjectStorage>,
+    /// Transitional pre-catalog archive used only while legacy tables migrate.
+    legacy_archive: Option<LegacyArchive>,
+    object_catalog: Option<Arc<dyn PublishedCatalog>>,
     writer_epoch: u64,
     /// Set when SQLite committed a catalog generation whose HEAD publication
     /// must be retried. Crash recovery uses remote HEAD as canonical; this
     /// latch covers publication failures while the same process stays alive.
-    native_publish_pending: AtomicBool,
+    object_publish_pending: AtomicBool,
+    last_object_gc: Mutex<Option<Instant>>,
     persisted_seq: watch::Sender<i64>,
     /// Nudged by every append (and a durability await): "there may be data to
     /// flush". Drives the flush task's normal wake.
@@ -811,17 +775,20 @@ impl Namespace {
         };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        // The RemoteStore is rooted at the remote dir and composes the
+        // The ObjectStorage is rooted at the remote dir and composes the
         // namespace prefix internally, so we only need the dir to be configured.
         let remote_store_started = Instant::now();
-        let remote = if data_dir.is_some() {
-            build_remote_store(remote_log_dir)?
+        let object_storage = if data_dir.is_some() {
+            build_object_storage(remote_log_dir)?
         } else {
             None
         };
         let remote_store_ms = remote_store_started.elapsed().as_millis() as u64;
         let table_runtime = TableRuntimePolicy::from_status(&catalog.table_spec_status(name)?);
-        let native_catalog = remote.clone().map(NativeCatalog::new);
+        let legacy_archive = object_storage.clone().map(LegacyArchive::new);
+        let object_catalog = object_storage
+            .clone()
+            .map(|storage| Arc::new(ObjectCatalog::new(storage)) as Arc<dyn PublishedCatalog>);
 
         let (tx, _rx) = watch::channel(init_persisted);
         let ns = Arc::new(Namespace {
@@ -844,10 +811,12 @@ impl Namespace {
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
             query_visibility,
-            remote,
-            native_catalog,
+            object_storage,
+            legacy_archive,
+            object_catalog,
             writer_epoch,
-            native_publish_pending: AtomicBool::new(false),
+            object_publish_pending: AtomicBool::new(false),
+            last_object_gc: Mutex::new(None),
             persisted_seq: tx,
             flush_notify: Arc::new(Notify::new()),
             force_flush: Arc::new(Notify::new()),
@@ -890,20 +859,22 @@ impl Namespace {
 
     /// Whether this namespace has a remote offload target configured.
     pub fn has_remote(&self) -> bool {
-        self.remote.is_some()
+        self.object_storage.is_some()
     }
 
     /// Run the boot-time remote reconcile (adopt unknown remote parquet as
     /// REMOTE, redundancy-drop covered segments). No-op without a remote dir or
     /// in memory mode. Called once after construction, before serving.
     pub async fn boot_reconcile(&self) -> Result<(), StatsError> {
-        let (Some(remote), Some(dir)) = (&self.remote, &self.data_dir) else {
+        let (Some(object_storage), Some(archive), Some(dir)) =
+            (&self.object_storage, &self.legacy_archive, &self.data_dir)
+        else {
             return Ok(());
         };
-        self.restore_native_cache(remote).await?;
+        self.restore_object_cache(object_storage).await?;
         reconcile_remote_segments(
             &self.catalog,
-            remote,
+            archive,
             &self.name,
             dir,
             Some(&self.key_column),
@@ -922,9 +893,9 @@ impl Namespace {
         Ok(())
     }
 
-    pub(crate) async fn restore_native_cache(
+    pub(crate) async fn restore_object_cache(
         &self,
-        remote: &RemoteStore,
+        remote: &ObjectStorage,
     ) -> Result<(), StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let rows: std::collections::HashMap<_, _> = self
@@ -933,14 +904,14 @@ impl Namespace {
             .into_iter()
             .map(|row| (row.path.clone(), row))
             .collect();
-        for record in self.catalog.native_segments(&self.name)? {
-            if !native_segment_is_query_visible(&status, &record) {
+        for record in self.catalog.object_segments(&self.name)? {
+            if !object_segment_is_query_visible(&status, &record) {
                 continue;
             }
             let path = PathBuf::from(&record.path);
             let row = rows.get(&record.path).ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "native segment {:?} has no local catalog row",
+                    "object segment {:?} has no local catalog row",
                     record.path
                 ))
             })?;
@@ -954,9 +925,16 @@ impl Namespace {
             if path.exists() && already_tracked && row.location == SegmentLocation::Both {
                 continue;
             }
-            let source_key = record.source.uri.as_deref().ok_or_else(|| {
+            let source_object_id = record.source.object_id.as_deref().ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "native segment {:?} has an empty source URI",
+                    "object segment {:?} has an empty source object ID",
+                    record.path
+                ))
+            })?;
+            let source_id = ObjectId::parse(source_object_id)?;
+            let source_key = source_id.table_relative(&self.name).ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "object segment {:?} references another table",
                     record.path
                 ))
             })?;
@@ -969,19 +947,16 @@ impl Namespace {
                 .then(|| read_segment_footer(&path, Some(&self.key_column)))
                 .flatten();
             if metadata.is_none() {
-                let object = remote
-                    .get_native(&self.name, source_key)
-                    .await?
-                    .ok_or_else(|| {
-                        StatsError::Internal(format!(
-                            "native segment source {source_key:?} is missing for {:?}",
-                            self.name
-                        ))
-                    })?;
+                let object = remote.read(&source_id).await?.ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "object segment source {source_key:?} is missing for {:?}",
+                        self.name
+                    ))
+                })?;
                 if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice())
                 {
                     return Err(StatsError::Internal(format!(
-                        "native segment source {source_key:?} failed SHA-256 validation"
+                        "object segment source {source_key:?} failed SHA-256 validation"
                     )));
                 }
                 let bytes = object.bytes.to_vec();
@@ -989,13 +964,13 @@ impl Namespace {
                 tokio::task::spawn_blocking(move || write_cache_file(&cache_path, &bytes))
                     .await
                     .map_err(|error| {
-                        StatsError::Internal(format!("native cache restore task panicked: {error}"))
+                        StatsError::Internal(format!("object cache restore task panicked: {error}"))
                     })??;
                 metadata = read_segment_footer(&path, Some(&self.key_column));
             }
             let metadata = metadata.ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "restored native cache {} has an unreadable Parquet footer",
+                    "restored object cache {} has an unreadable Parquet footer",
                     path.display()
                 ))
             })?;
@@ -1032,11 +1007,11 @@ impl Namespace {
         Ok(())
     }
 
-    pub(crate) async fn ensure_native_query_cache(&self) -> Result<(), StatsError> {
-        let Some(remote) = &self.remote else {
+    pub(crate) async fn ensure_query_cache(&self) -> Result<(), StatsError> {
+        let Some(remote) = &self.object_storage else {
             return Ok(());
         };
-        self.restore_native_cache(remote).await
+        self.restore_object_cache(remote).await
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction
@@ -1049,16 +1024,16 @@ impl Namespace {
         *self.table_runtime.lock().unwrap() = TableRuntimePolicy::from_status(status);
     }
 
-    pub(crate) fn mark_native_publish_pending(&self) {
-        self.native_publish_pending.store(true, Ordering::SeqCst);
+    pub(crate) fn mark_object_publish_pending(&self) {
+        self.object_publish_pending.store(true, Ordering::SeqCst);
     }
 
-    async fn publish_pending_native_state(&self) -> Result<(), StatsError> {
-        if !self.native_publish_pending.swap(false, Ordering::SeqCst) {
+    async fn publish_pending_object_catalog(&self) -> Result<(), StatsError> {
+        if !self.object_publish_pending.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
-        if let Err(error) = self.publish_native_state().await {
-            self.native_publish_pending.store(true, Ordering::SeqCst);
+        if let Err(error) = self.publish_object_catalog_state().await {
+            self.object_publish_pending.store(true, Ordering::SeqCst);
             return Err(error);
         }
         Ok(())
@@ -1068,10 +1043,10 @@ impl Namespace {
         self.table_runtime.lock().unwrap().clone()
     }
 
-    async fn publish_native_state(&self) -> Result<(), StatsError> {
-        let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+    async fn publish_object_catalog_state(&self) -> Result<(), StatsError> {
+        let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "versioned namespace {:?} has no native catalog",
+                "versioned namespace {:?} has no object catalog",
                 self.name
             ))
         })?;
@@ -1081,7 +1056,7 @@ impl Namespace {
                 self.name
             ))
         })?;
-        native_catalog
+        object_catalog
             .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
             .await?;
         Ok(())
@@ -1091,7 +1066,7 @@ impl Namespace {
         &self,
         namespace_dir: &Path,
         row: &SegmentRow,
-        native: Option<&NativeSegmentRecord>,
+        object_record: Option<&ObjectSegmentRecord>,
     ) -> Result<Bytes, StatsError> {
         if Path::new(&row.path).exists() {
             return tokio::fs::read(&row.path)
@@ -1101,28 +1076,31 @@ impl Namespace {
                     StatsError::Internal(format!("read migration source {}: {error}", row.path))
                 });
         }
-        let remote = self.remote.as_ref().ok_or_else(|| {
+        let object_storage = self.object_storage.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
                 "migration source {} has no local or remote copy",
                 row.path
             ))
         })?;
-        if let Some(record) = native {
-            let key = record.source.uri.as_deref().ok_or_else(|| {
+        if let Some(record) = object_record {
+            let object_id = record.source.object_id.as_deref().ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "native migration source {:?} has an empty URI",
+                    "object migration source {:?} has an empty object ID",
                     row.path
                 ))
             })?;
-            let object = remote.get_native(&self.name, key).await?.ok_or_else(|| {
+            let object_id = ObjectId::parse(object_id)?;
+            let object = object_storage.read(&object_id).await?.ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "native migration source {key:?} is missing for {:?}",
+                    "object migration source {:?} is missing for {:?}",
+                    object_id.as_str(),
                     self.name
                 ))
             })?;
             if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice()) {
                 return Err(StatsError::Internal(format!(
-                    "native migration source {key:?} failed SHA-256 validation"
+                    "object migration source {:?} failed SHA-256 validation",
+                    object_id.as_str()
                 )));
             }
             return Ok(object.bytes);
@@ -1134,8 +1112,10 @@ impl Namespace {
                 namespace_dir.display()
             ))
         })?;
-        remote
-            .get(&self.name, &key)
+        self.legacy_archive
+            .as_ref()
+            .expect("object storage and legacy archive are configured together")
+            .read(&self.name, &key)
             .await?
             .map(|object| object.bytes)
             .ok_or_else(|| {
@@ -1152,15 +1132,15 @@ impl Namespace {
             (status.active_version() == version && migration.from_version == Some(version))
                 .then_some(migration.to_version.unwrap_or(0))
         });
-        let native: HashMap<_, _> = self
+        let object_records: HashMap<_, _> = self
             .catalog
-            .native_segments(&self.name)?
+            .object_segments(&self.name)?
             .into_iter()
             .map(|record| (record.path.clone(), record))
             .collect();
         let mut segments = VecDeque::new();
         for row in self.catalog.list_segments(&self.name)? {
-            let visible = match native.get(&row.path) {
+            let visible = match object_records.get(&row.path) {
                 Some(record) => {
                     record.table_spec_version == version
                         || (rollback_alias == Some(record.table_spec_version)
@@ -1196,7 +1176,7 @@ impl Namespace {
     async fn activate_verified_table_spec(&self) -> Result<TableSpecStatus, StatsError> {
         let _visibility_guard = self.query_visibility.write().await;
         let status = self.catalog.activate_desired_table_spec(&self.name)?;
-        let publication = self.publish_native_state().await;
+        let publication = self.publish_object_catalog_state().await;
         self.activate_query_version(status.active_version())?;
         self.update_table_spec(&status);
         publication?;
@@ -1229,32 +1209,22 @@ impl Namespace {
         };
         match status.phase {
             MigrationPhase::MIGRATION_PHASE_RETIRED => {
-                let (cleaned, retired_paths) =
-                    self.catalog.cleanup_rolled_back_migration(&self.name)?;
-                if cleaned.catalog_generation != status.catalog_generation {
-                    self.mark_native_publish_pending();
-                    self.remove_retired_cache_paths(retired_paths);
-                    self.publish_pending_native_state().await?;
-                    return Ok(false);
-                }
-                self.publish_pending_native_state().await?;
+                self.publish_pending_object_catalog().await?;
                 return Ok(false);
             }
             MigrationPhase::MIGRATION_PHASE_UNSPECIFIED => return Ok(false),
             MigrationPhase::MIGRATION_PHASE_OBSERVING => {
                 // Heal a process failure after the local activation commit but
                 // before HEAD publication or the in-memory view swap.
-                self.publish_native_state().await?;
+                self.publish_object_catalog_state().await?;
                 self.activate_query_version(status.active_version())?;
                 self.update_table_spec(&status);
-                let (retired, retired_paths) = self.catalog.retire_observed_migration(
-                    &self.name,
-                    self.runtime_policy().max_query_time_ms,
-                )?;
+                let (retired, retired_paths) =
+                    self.catalog.retire_observed_migration(&self.name)?;
                 if retired.catalog_generation != status.catalog_generation {
-                    self.mark_native_publish_pending();
+                    self.mark_object_publish_pending();
                     self.remove_retired_cache_paths(retired_paths);
-                    self.publish_pending_native_state().await?;
+                    self.publish_pending_object_catalog().await?;
                     return Ok(false);
                 }
                 // The old version remains remotely referenced for rollback.
@@ -1284,7 +1254,7 @@ impl Namespace {
                 self.name
             ))
         })?;
-        let remote = self.remote.as_ref().ok_or_else(|| {
+        let remote = self.object_storage.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
                 "migration for {:?} requires an object store",
                 self.name
@@ -1293,14 +1263,14 @@ impl Namespace {
         let from_version = migration.from_version.unwrap_or(0);
         let to_version = migration.to_version.unwrap_or(0);
         let fence_seq = migration.fence_seq.unwrap_or(-1);
-        let native_records: HashMap<_, _> = self
+        let object_records: HashMap<_, _> = self
             .catalog
-            .native_segments(&self.name)?
+            .object_segments(&self.name)?
             .into_iter()
             .map(|record| (record.path.clone(), record))
             .collect();
         let rows = self.catalog.list_segments(&self.name)?;
-        let mut covered: HashSet<_> = native_records
+        let mut covered: HashSet<_> = object_records
             .values()
             .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
             .filter_map(|record| record.migration_source_id.clone())
@@ -1308,7 +1278,7 @@ impl Namespace {
         let mut pending: Vec<_> = rows
             .iter()
             .filter(|row| row.max_seq <= fence_seq)
-            .filter(|row| match native_records.get(&row.path) {
+            .filter(|row| match object_records.get(&row.path) {
                 None => from_version == 0,
                 Some(record) => record.table_spec_version == from_version,
             })
@@ -1331,12 +1301,12 @@ impl Namespace {
                 break;
             }
             let bytes = self
-                .migration_source_bytes(namespace_dir, row, native_records.get(&row.path))
+                .migration_source_bytes(namespace_dir, row, object_records.get(&row.path))
                 .await?;
             let source_sha256: [u8; 32] = Sha256::digest(&bytes).into();
-            let source_identity = native_records
+            let source_identity = object_records
                 .get(&row.path)
-                .and_then(|record| record.source.uri.as_deref())
+                .and_then(|record| record.source.object_id.as_deref())
                 .unwrap_or(&row.path);
             let mut source_id_digest = Sha256::new();
             source_id_digest.update(source_identity.as_bytes());
@@ -1388,10 +1358,11 @@ impl Namespace {
                     "objects/v{to_version}/backfill/{migration_source_id}/{partition_directory}/{hash}/{}",
                     seg_filename(row.level, min_seq)
                 );
+                let object_id = ObjectId::table(&self.name, &object_key)?;
                 let remote_version = remote
-                    .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                    .write(&object_id, Bytes::from(parquet.clone()))
                     .await?;
-                let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+                let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
                 let cache_path_for_write = cache_path.clone();
                 tokio::task::spawn_blocking(move || {
                     write_cache_file(&cache_path_for_write, &parquet)
@@ -1427,7 +1398,7 @@ impl Namespace {
                     location: SegmentLocation::Both,
                 });
                 sources.push(ObjectRef {
-                    uri: Some(object_key),
+                    object_id: Some(object_id.as_str().to_string()),
                     provider_version: remote_version.provider_version,
                     etag: remote_version.e_tag,
                     byte_size: u64::try_from(byte_size).ok(),
@@ -1442,8 +1413,8 @@ impl Namespace {
                 &migration_source_id,
                 row.row_count,
             )?;
-            if let Err(error) = self.publish_native_state().await {
-                self.catalog.rollback_native_segments(
+            if let Err(error) = self.publish_object_catalog_state().await {
+                self.catalog.rollback_object_segments(
                     &self.name,
                     &migrated
                         .iter()
@@ -1469,7 +1440,7 @@ impl Namespace {
             MigrationPhase::MIGRATION_PHASE_BACKFILL,
             MigrationPhase::MIGRATION_PHASE_VERIFY,
         )?;
-        self.publish_native_state().await?;
+        self.publish_object_catalog_state().await?;
         debug_assert_eq!(verified.phase, MigrationPhase::MIGRATION_PHASE_VERIFY);
         self.activate_verified_table_spec().await?;
         Ok(true)
@@ -1479,23 +1450,23 @@ impl Namespace {
     ///
     /// Returns `true` when a group was replaced and `false` when no group is
     /// currently eligible.
-    async fn native_compaction_step(&self) -> Result<bool, StatsError> {
+    async fn object_compaction_step(&self) -> Result<bool, StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let active_version = status.active_version();
         if active_version == 0 {
             return Ok(false);
         }
         let policy = self.runtime_policy();
-        let native_records: HashMap<_, _> = self
+        let object_records: HashMap<_, _> = self
             .catalog
-            .native_segments(&self.name)?
+            .object_segments(&self.name)?
             .into_iter()
             .filter(|record| record.table_spec_version == active_version)
             .map(|record| (record.path.clone(), record))
             .collect();
         let mut groups = BTreeMap::<(Option<SegmentPartition>, bool), Vec<SegmentRow>>::new();
         for row in self.catalog.list_segments(&self.name)? {
-            if let Some(record) = native_records.get(&row.path) {
+            if let Some(record) = object_records.get(&row.path) {
                 groups
                     .entry((row.partition.clone(), record.migration_backfill))
                     .or_default()
@@ -1539,16 +1510,16 @@ impl Namespace {
             return Ok(false);
         };
         let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
-            StatsError::Internal("object-native compaction requires a cache root".to_string())
+            StatsError::Internal("object-backed compaction requires a cache root".to_string())
         })?;
-        let remote = self.remote.as_ref().ok_or_else(|| {
-            StatsError::Internal("object-native compaction requires an object store".to_string())
+        let remote = self.object_storage.as_ref().ok_or_else(|| {
+            StatsError::Internal("object-backed compaction requires an object store".to_string())
         })?;
         let mut input_bytes = Vec::with_capacity(inputs.len());
         let mut input_records = Vec::with_capacity(inputs.len());
         for row in &inputs {
-            let record = native_records.get(&row.path).ok_or_else(|| {
-                StatsError::Internal(format!("native compaction lost input {}", row.path))
+            let record = object_records.get(&row.path).ok_or_else(|| {
+                StatsError::Internal(format!("object compaction lost input {}", row.path))
             })?;
             input_bytes.push(
                 self.migration_source_bytes(namespace_dir, row, Some(record))
@@ -1569,7 +1540,7 @@ impl Namespace {
                 .map(|bytes| decode_migration_source(bytes, &arrow_schema))
                 .collect::<Result<Vec<_>, _>>()?;
             let merged = concat_batches(&arrow_schema, &decoded).map_err(|error| {
-                StatsError::Internal(format!("merge native compaction batches: {error}"))
+                StatsError::Internal(format!("merge object compaction batches: {error}"))
             })?;
             let sorted = sorted_object_batch(&merged, source_layout.as_ref())?;
             partition_object_batch(&sorted, source_layout.as_ref())?
@@ -1584,7 +1555,7 @@ impl Namespace {
         })
         .await
         .map_err(|error| {
-            StatsError::Internal(format!("native compaction task panicked: {error}"))
+            StatsError::Internal(format!("object compaction task panicked: {error}"))
         })??;
         let input_rows = inputs.iter().map(|row| row.row_count).sum::<i64>();
         let output_rows = rewritten
@@ -1593,7 +1564,7 @@ impl Namespace {
             .sum::<i64>();
         if input_rows != output_rows {
             return Err(StatsError::Internal(format!(
-                "native compaction rewrote {input_rows} rows as {output_rows}"
+                "object compaction rewrote {input_rows} rows as {output_rows}"
             )));
         }
         let output_level = inputs
@@ -1613,21 +1584,22 @@ impl Namespace {
                 "objects/v{active_version}/compact/{partition_directory}/{hash}/{}",
                 seg_filename(output_level, min_seq)
             );
+            let object_id = ObjectId::table(&self.name, &object_key)?;
             let remote_version = remote
-                .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                .write(&object_id, Bytes::from(parquet.clone()))
                 .await?;
-            let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+            let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
             let cache_path_for_write = cache_path.clone();
             tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
                 .await
                 .map_err(|error| {
-                    StatsError::Internal(format!("native compaction cache task panicked: {error}"))
+                    StatsError::Internal(format!("object compaction cache task panicked: {error}"))
                 })??;
             let byte_size = i64::try_from(
                 std::fs::metadata(&cache_path)
                     .map_err(|error| {
                         StatsError::Internal(format!(
-                            "stat native compaction cache {}: {error}",
+                            "stat object compaction cache {}: {error}",
                             cache_path.display()
                         ))
                     })?
@@ -1650,7 +1622,7 @@ impl Namespace {
             };
             output_rows.push(segment_to_row(&self.name, &segment));
             output_sources.push(ObjectRef {
-                uri: Some(object_key),
+                object_id: Some(object_id.as_str().to_string()),
                 provider_version: remote_version.provider_version,
                 etag: remote_version.e_tag,
                 byte_size: u64::try_from(byte_size).ok(),
@@ -1667,7 +1639,7 @@ impl Namespace {
             .iter()
             .map(|segment| segment.path.clone())
             .collect::<Vec<_>>();
-        let generation = self.catalog.replace_native_segments(
+        let generation = self.catalog.replace_object_segments(
             &self.name,
             &removed_paths,
             &output_rows,
@@ -1675,8 +1647,8 @@ impl Namespace {
             &output_sources,
             migration_backfill,
         )?;
-        if let Err(error) = self.publish_native_state().await {
-            self.catalog.rollback_native_replacement(
+        if let Err(error) = self.publish_object_catalog_state().await {
+            self.catalog.rollback_object_replacement(
                 &self.name,
                 &inputs,
                 &input_records,
@@ -1702,7 +1674,7 @@ impl Namespace {
             remove_index_artifacts(path);
             if let Err(error) = std::fs::remove_file(path) {
                 if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(%path, %error, "remove compacted native cache input failed");
+                    tracing::warn!(%path, %error, "remove compacted object cache input failed");
                 }
             }
         }
@@ -1712,7 +1684,7 @@ impl Namespace {
             outputs = added_paths.len(),
             rows = input_rows,
             catalog_generation = generation,
-            "object-native compaction committed"
+            "object-backed compaction committed"
         );
         Ok(true)
     }
@@ -1960,9 +1932,9 @@ impl Namespace {
     /// when there was nothing to flush. On parquet-write failure the in-flight
     /// buffer is restored and `persisted_seq` is NOT advanced.
     pub fn flush_once(&self) -> Result<(), StatsError> {
-        if self.runtime_policy().object_native() {
+        if self.runtime_policy().object_backed() {
             return Err(StatsError::Internal(format!(
-                "object-native namespace {:?} requires flush_once_async",
+                "object-backed namespace {:?} requires flush_once_async",
                 self.name
             )));
         }
@@ -1999,7 +1971,7 @@ impl Namespace {
     }
 
     pub async fn flush_once_async(self: &Arc<Self>) -> Result<(), StatsError> {
-        if !self.runtime_policy().object_native() {
+        if !self.runtime_policy().object_backed() {
             let namespace = Arc::clone(self);
             return tokio::task::spawn_blocking(move || namespace.flush_once())
                 .await
@@ -2018,37 +1990,34 @@ impl Namespace {
             return Ok(());
         };
 
-        match self
-            .write_sealed_object_native(&dir, &sealed, &policy)
-            .await
-        {
+        match self.write_sealed_object(&dir, &sealed, &policy).await {
             Ok(()) => {
                 self.persisted_seq.send_replace(sealed.max_seq);
                 Ok(())
             }
             Err(error) => {
                 self.inner.lock().unwrap().buffers.restore_flush();
-                tracing::warn!(namespace = %self.name, %error, "object-native flush failed; restored RAM buffer");
+                tracing::warn!(namespace = %self.name, %error, "object-backed flush failed; restored RAM buffer");
                 Err(error)
             }
         }
     }
 
-    async fn write_sealed_object_native(
+    async fn write_sealed_object(
         &self,
         namespace_dir: &Path,
         sealed: &SealedBuffer,
         policy: &TableRuntimePolicy,
     ) -> Result<(), StatsError> {
-        let remote = self.remote.as_ref().ok_or_else(|| {
+        let remote = self.object_storage.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "object-native namespace {:?} has no remote store",
+                "object-backed namespace {:?} has no remote store",
                 self.name
             ))
         })?;
-        let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+        let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "object-native namespace {:?} has no native catalog",
+                "object-backed namespace {:?} has no object catalog",
                 self.name
             ))
         })?;
@@ -2073,7 +2042,7 @@ impl Namespace {
         })
         .await
         .map_err(|error| {
-            StatsError::Internal(format!("object-native parquet task panicked: {error}"))
+            StatsError::Internal(format!("object-backed parquet task panicked: {error}"))
         })??;
         let mut segments = Vec::with_capacity(encoded.len());
         let mut rows = Vec::with_capacity(encoded.len());
@@ -2087,15 +2056,16 @@ impl Namespace {
                 policy.table_spec_version,
                 seg_filename(0, min_seq)
             );
+            let object_id = ObjectId::table(&self.name, &object_key)?;
             let remote_version = remote
-                .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                .write(&object_id, Bytes::from(parquet.clone()))
                 .await?;
-            let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+            let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
             let cache_path_for_write = cache_path.clone();
             tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
                 .await
                 .map_err(|error| {
-                    StatsError::Internal(format!("native cache task panicked: {error}"))
+                    StatsError::Internal(format!("object cache task panicked: {error}"))
                 })??;
 
             let (min_key, max_key) = self.key_bounds(&batch);
@@ -2105,7 +2075,7 @@ impl Namespace {
                     std::fs::metadata(&cache_path)
                         .map_err(|error| {
                             StatsError::Internal(format!(
-                                "stat native cache {}: {error}",
+                                "stat object cache {}: {error}",
                                 cache_path.display()
                             ))
                         })?
@@ -2124,7 +2094,7 @@ impl Namespace {
             };
             rows.push(segment_to_row(&self.name, &segment));
             sources.push(ObjectRef {
-                uri: Some(object_key),
+                object_id: Some(object_id.as_str().to_string()),
                 provider_version: remote_version.provider_version,
                 etag: remote_version.e_tag,
                 byte_size: u64::try_from(segment.size_bytes).ok(),
@@ -2133,17 +2103,17 @@ impl Namespace {
             });
             segments.push(segment);
         }
-        let committed_generation = self.catalog.commit_native_segments(
+        let committed_generation = self.catalog.commit_object_segments(
             &rows,
             policy.table_spec_version,
             &sources,
             false,
         )?;
-        if let Err(error) = native_catalog
+        if let Err(error) = object_catalog
             .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
             .await
         {
-            self.catalog.rollback_native_segments(
+            self.catalog.rollback_object_segments(
                 &self.name,
                 &segments
                     .iter()
@@ -2433,7 +2403,8 @@ impl Namespace {
 
     /// Relocate one archived segment to its current physical path.
     async fn remote_layout_migration_step(&self) -> Result<bool, StatsError> {
-        let (Some(dir), Some(remote)) = (self.data_dir.as_deref(), self.remote.as_ref()) else {
+        let (Some(dir), Some(remote)) = (self.data_dir.as_deref(), self.legacy_archive.as_ref())
+        else {
             return Ok(false);
         };
 
@@ -2835,18 +2806,18 @@ impl Namespace {
     ///
     /// No-op without a remote dir / in memory mode.
     pub async fn sync_step(&self) -> Result<(), StatsError> {
-        let Some(remote) = &self.remote else {
+        let Some(remote) = &self.legacy_archive else {
             return Ok(());
         };
         // A TableSpec migration temporarily keeps legacy segments and
-        // object-native cache entries in the same SQLite `segments` table.
+        // object-backed cache entries in the same SQLite `segments` table.
         // Legacy sync must continue making the former durable while backfill
-        // is incomplete, but native objects already live under the canonical
-        // `_native` prefix and must never be interpreted as legacy upload
+        // is incomplete, but object objects already live under the canonical
+        // `_finelog` prefix and must never be interpreted as legacy upload
         // candidates or orphans.
-        let native_paths: HashSet<String> = self
+        let object_paths: HashSet<String> = self
             .catalog
-            .native_segments(&self.name)?
+            .object_segments(&self.name)?
             .into_iter()
             .map(|record| record.path)
             .collect();
@@ -2866,7 +2837,7 @@ impl Namespace {
             .expect("disk-backed namespace with remote store has a data directory");
         let mut all_durable = true;
         for row in &rows {
-            if row.location != SegmentLocation::Local || native_paths.contains(&row.path) {
+            if row.location != SegmentLocation::Local || object_paths.contains(&row.path) {
                 continue;
             }
             let Some(key) = segment_relative_key(namespace_dir, &row.path) else {
@@ -2893,10 +2864,10 @@ impl Namespace {
             return Ok(());
         }
 
-        // The legacy archive is outside the object-native catalog's MVCC
-        // lifetime. Object-native policy therefore retains archive objects
+        // The legacy archive is outside the object-backed catalog's MVCC
+        // lifetime. Object-backed policy therefore retains archive objects
         // when their local migration source is replaced.
-        if self.runtime_policy().object_native() {
+        if self.runtime_policy().object_backed() {
             return Ok(());
         }
 
@@ -2908,7 +2879,7 @@ impl Namespace {
             .catalog
             .list_segments_min_level(&self.name, 1)?
             .iter()
-            .filter(|row| !native_paths.contains(&row.path))
+            .filter(|row| !object_paths.contains(&row.path))
             .filter_map(|row| segment_relative_key(namespace_dir, &row.path))
             .collect();
         for key in remote_keys.difference(&catalog_keys) {
@@ -2986,7 +2957,7 @@ impl Namespace {
         Ok(())
     }
 
-    fn native_cache_eviction_step(&self) -> Result<(), StatsError> {
+    fn object_cache_eviction_step(&self) -> Result<(), StatsError> {
         let policy = self.inner.lock().unwrap().storage_policy.clone();
         let max_segments = policy
             .max_segments
@@ -2995,9 +2966,9 @@ impl Namespace {
         let max_bytes = policy
             .max_bytes
             .unwrap_or(self.compaction_config.max_bytes_per_namespace);
-        let native_paths: HashSet<_> = self
+        let object_paths: HashSet<_> = self
             .catalog
-            .native_segments(&self.name)?
+            .object_segments(&self.name)?
             .into_iter()
             .map(|record| record.path)
             .collect();
@@ -3018,7 +2989,7 @@ impl Namespace {
                         .iter()
                         .filter(|segment| {
                             segment.location == SegmentLocation::Both
-                                && native_paths.contains(&segment.path)
+                                && object_paths.contains(&segment.path)
                         })
                         .min_by_key(|segment| segment.min_seq)
                         .map(|segment| segment.path.clone())
@@ -3027,7 +2998,7 @@ impl Namespace {
             let Some(path) = candidate else {
                 break;
             };
-            self.evict_native_cache_segment(&path)?;
+            self.evict_object_cache_segment(&path)?;
         }
 
         let Some(max_age_seconds) = policy.max_age_seconds else {
@@ -3044,19 +3015,19 @@ impl Namespace {
                 .filter(|segment| {
                     segment.location == SegmentLocation::Both
                         && segment.created_at_ms < cutoff_ms
-                        && native_paths.contains(&segment.path)
+                        && object_paths.contains(&segment.path)
                 })
                 .min_by_key(|segment| segment.created_at_ms)
                 .map(|segment| segment.path.clone());
             let Some(path) = candidate else {
                 break;
             };
-            self.evict_native_cache_segment(&path)?;
+            self.evict_object_cache_segment(&path)?;
         }
         Ok(())
     }
 
-    fn evict_native_cache_segment(&self, path: &str) -> Result<(), StatsError> {
+    fn evict_object_cache_segment(&self, path: &str) -> Result<(), StatsError> {
         let _write_guard = self.query_visibility.blocking_write();
         self.catalog
             .set_location(&self.name, path, SegmentLocation::Remote)?;
@@ -3066,7 +3037,7 @@ impl Namespace {
         }
         if let Err(error) = std::fs::remove_file(path) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(namespace = %self.name, path, %error, "failed to evict native cache file");
+                tracing::warn!(namespace = %self.name, path, %error, "failed to evict object cache file");
             }
         }
         remove_index_artifacts(path);
@@ -3362,9 +3333,38 @@ impl Namespace {
 
     // ----- maintenance orchestration ------------------------------------
 
+    async fn gc_published_catalog(&self) -> Result<(), StatsError> {
+        let should_run = {
+            let mut last = self.last_object_gc.lock().unwrap();
+            let due = last.is_none_or(|instant| instant.elapsed() >= OBJECT_GC_INTERVAL);
+            if due {
+                *last = Some(Instant::now());
+            }
+            due
+        };
+        let Some(catalog) = self.object_catalog.as_ref().filter(|_| should_run) else {
+            return Ok(());
+        };
+        let catalog_retention_ms = self.runtime_policy().max_query_time_ms;
+        let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
+        let removed = catalog
+            .gc_obsolete_catalogs(
+                &self.name,
+                now_ms(),
+                catalog_retention_ms,
+                orphan_grace_ms,
+                self.writer_epoch,
+            )
+            .await?;
+        if removed > 0 {
+            tracing::info!(namespace = %self.name, removed, "removed obsolete table objects");
+        }
+        Ok(())
+    }
+
     /// Run one maintenance cycle, serialized against other callers.
     ///
-    /// Object-native tables publish pending catalogs, compact immutable objects,
+    /// Object-backed tables publish pending catalogs, compact immutable objects,
     /// evict cache entries, collect expired objects, and maintain indexes. Legacy
     /// tables compact local segments, synchronize the archive, evict, and perform
     /// physical-layout and index maintenance. No-op in memory mode.
@@ -3380,32 +3380,21 @@ impl Namespace {
         if self.advance_table_spec_migration().await? {
             return Ok(());
         }
-        if self.runtime_policy().object_native() {
-            self.publish_pending_native_state().await?;
-            self.native_compaction_step().await?;
+        if self.runtime_policy().object_backed() {
+            self.publish_pending_object_catalog().await?;
+            self.object_compaction_step().await?;
             let namespace = Arc::clone(self);
-            tokio::task::spawn_blocking(move || namespace.native_cache_eviction_step())
+            tokio::task::spawn_blocking(move || namespace.object_cache_eviction_step())
                 .await
                 .map_err(|error| {
-                    StatsError::Internal(format!("native cache eviction task panicked: {error}"))
+                    StatsError::Internal(format!("object cache eviction task panicked: {error}"))
                 })??;
-            if let Some(native_catalog) = &self.native_catalog {
-                let removed = native_catalog
-                    .gc_obsolete_catalogs(
-                        &self.name,
-                        now_ms(),
-                        self.runtime_policy().max_query_time_ms,
-                    )
-                    .await?;
-                if removed > 0 {
-                    tracing::info!(namespace = %self.name, removed, "removed obsolete native catalogs");
-                }
-            }
+            self.gc_published_catalog().await?;
             let namespace = Arc::clone(self);
             tokio::task::spawn_blocking(move || namespace.maintain_index_artifacts())
                 .await
                 .map_err(|error| {
-                    StatsError::Internal(format!("maintenance native index task panicked: {error}"))
+                    StatsError::Internal(format!("maintenance object index task panicked: {error}"))
                 })?;
             return Ok(());
         }
@@ -3446,15 +3435,7 @@ impl Namespace {
 
         // Sync (async object_store).
         self.sync_step().await?;
-        if let Some(native_catalog) = &self.native_catalog {
-            let max_query_time_ms = self.runtime_policy().max_query_time_ms;
-            let removed = native_catalog
-                .gc_obsolete_catalogs(&self.name, now_ms(), max_query_time_ms)
-                .await?;
-            if removed > 0 {
-                tracing::info!(namespace = %self.name, removed, "removed obsolete native catalogs");
-            }
-        }
+        self.gc_published_catalog().await?;
 
         // Relocate evicted objects after local outputs are durable. Each copy is
         // server-side and crash-safe; the time budget prevents a cold archive
@@ -3841,8 +3822,8 @@ fn adopt_local_segments(
     discard_staging_files(dir, namespace);
 
     let status = catalog.table_spec_status(namespace)?;
-    let native_records: HashMap<_, _> = catalog
-        .native_segments(namespace)?
+    let object_records: HashMap<_, _> = catalog
+        .object_segments(namespace)?
         .into_iter()
         .map(|record| (record.path.clone(), record))
         .collect();
@@ -3852,7 +3833,7 @@ fn adopt_local_segments(
         .into_iter()
         .map(|p| (p.to_string_lossy().into_owned(), p))
         .collect();
-    for record in native_records.values() {
+    for record in object_records.values() {
         let path = PathBuf::from(&record.path);
         if path.exists() {
             local_files.insert(record.path.clone(), path);
@@ -3903,8 +3884,8 @@ fn adopt_local_segments(
         } else {
             row.location
         };
-        let query_visible = match native_records.get(&row.path) {
-            Some(record) => native_segment_is_query_visible(&status, record),
+        let query_visible = match object_records.get(&row.path) {
+            Some(record) => object_segment_is_query_visible(&status, record),
             None => status.active_version() == 0,
         };
         if !query_visible {

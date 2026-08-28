@@ -1,8 +1,10 @@
-//! Immutable object-native catalogs selected by one conditional HEAD update.
+//! Published table catalogs selected by one conditional HEAD update.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use buffa::MessageField;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
@@ -12,10 +14,12 @@ use crate::proto::finelog::stats::{
     CatalogHead, CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, TableVersionSegments,
 };
 use crate::store::catalog::Catalog;
-use crate::store::remote::{RemoteStore, RemoteVersion};
+use crate::store::object_store::{
+    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStorage, ObjectStore, ObjectVersion,
+};
 use crate::store::types::{basename, segment_relative_key, SegmentLocation};
 
-pub const NATIVE_FORMAT_VERSION: u64 = 1;
+pub const OBJECT_CATALOG_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const CATALOGS_PREFIX: &str = "catalogs";
 
@@ -23,55 +27,87 @@ const CATALOGS_PREFIX: &str = "catalogs";
 pub struct CatalogSnapshot {
     pub head: CatalogHead,
     pub catalog: NamespaceCatalog,
-    head_version: RemoteVersion,
+    head_version: ObjectVersion,
 }
 
 #[derive(Clone)]
-pub struct NativeCatalog {
-    remote: RemoteStore,
+pub struct ObjectCatalog {
+    storage: Arc<dyn ObjectStore>,
 }
 
-impl NativeCatalog {
-    pub fn new(remote: RemoteStore) -> Self {
-        Self { remote }
+#[async_trait]
+pub trait PublishedCatalog: Send + Sync {
+    async fn load(&self, table: &str) -> Result<Option<CatalogSnapshot>, StatsError>;
+    async fn claim_writer(
+        &self,
+        table: &str,
+        writer_epoch: u64,
+        snapshot: &CatalogSnapshot,
+    ) -> Result<CatalogSnapshot, StatsError>;
+    async fn publish_local(
+        &self,
+        catalog: &Catalog,
+        table: &str,
+        table_dir: &Path,
+        writer_epoch: u64,
+    ) -> Result<CatalogSnapshot, StatsError>;
+    async fn delete_head(&self, table: &str) -> Result<(), StatsError>;
+    async fn gc_obsolete_catalogs(
+        &self,
+        table: &str,
+        now_ms: i64,
+        catalog_retention_ms: u64,
+        orphan_grace_ms: u64,
+        writer_epoch: u64,
+    ) -> Result<usize, StatsError>;
+}
+
+impl ObjectCatalog {
+    pub fn new(storage: ObjectStorage) -> Self {
+        Self {
+            storage: Arc::new(storage),
+        }
     }
 
     pub async fn load(&self, namespace: &str) -> Result<Option<CatalogSnapshot>, StatsError> {
-        let Some(head_object) = self.remote.get_native(namespace, HEAD_KEY).await? else {
+        let head_id = ObjectId::table(namespace, HEAD_KEY)?;
+        let Some(head_object) = self.storage.read(&head_id).await? else {
             return Ok(None);
         };
         let head: CatalogHead = serde_json::from_slice(&head_object.bytes).map_err(|error| {
-            StatsError::Internal(format!("decode native HEAD for {namespace:?}: {error}"))
+            StatsError::Internal(format!("decode object HEAD for {namespace:?}: {error}"))
         })?;
         validate_head(namespace, &head)?;
         let catalog_ref = head.catalog.as_option().ok_or_else(|| {
             StatsError::Internal(format!(
-                "native HEAD for {namespace:?} has no catalog reference"
+                "object HEAD for {namespace:?} has no catalog reference"
             ))
         })?;
-        let catalog_key = catalog_ref.uri.as_deref().ok_or_else(|| {
+        let catalog_object_id = catalog_ref.object_id.as_deref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "native HEAD for {namespace:?} has an empty catalog URI"
+                "table HEAD for {namespace:?} has an empty catalog object ID"
             ))
         })?;
-        let catalog_object = self
-            .remote
-            .get_native(namespace, catalog_key)
-            .await?
-            .ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "native HEAD for {namespace:?} references missing catalog {catalog_key:?}"
-                ))
-            })?;
+        let catalog_id = ObjectId::parse(catalog_object_id)?;
+        if catalog_id.table_relative(namespace).is_none() {
+            return Err(StatsError::Internal(format!(
+                "table HEAD for {namespace:?} references an object from another table"
+            )));
+        }
+        let catalog_object = self.storage.read(&catalog_id).await?.ok_or_else(|| {
+            StatsError::Internal(format!(
+                "table HEAD for {namespace:?} references missing catalog {catalog_object_id:?}"
+            ))
+        })?;
         if catalog_ref.sha256.as_deref() != Some(catalog_object.version.content_sha256.as_slice()) {
             return Err(StatsError::Internal(format!(
-                "native catalog {catalog_key:?} for {namespace:?} failed SHA-256 validation"
+                "table catalog {catalog_object_id:?} for {namespace:?} failed SHA-256 validation"
             )));
         }
         let catalog: NamespaceCatalog =
             serde_json::from_slice(&catalog_object.bytes).map_err(|error| {
                 StatsError::Internal(format!(
-                    "decode native catalog {catalog_key:?} for {namespace:?}: {error}"
+                    "decode table catalog {catalog_object_id:?} for {namespace:?}: {error}"
                 ))
             })?;
         validate_catalog(namespace, &head, &catalog)?;
@@ -84,7 +120,38 @@ impl NativeCatalog {
 
     /// Remove the query and recovery pointer while retaining immutable history.
     pub async fn delete_head(&self, namespace: &str) -> Result<(), StatsError> {
-        self.remote.delete_native(namespace, HEAD_KEY).await
+        self.storage
+            .delete(&ObjectId::table(namespace, HEAD_KEY)?)
+            .await
+    }
+
+    pub async fn claim_writer(
+        &self,
+        namespace: &str,
+        writer_epoch: u64,
+        snapshot: &CatalogSnapshot,
+    ) -> Result<CatalogSnapshot, StatsError> {
+        if snapshot.head.writer_epoch == Some(writer_epoch) {
+            return Ok(snapshot.clone());
+        }
+        let mut head = snapshot.head.clone();
+        head.writer_epoch = Some(writer_epoch);
+        let head_bytes = serde_json::to_vec(&head).map_err(|error| {
+            StatsError::Internal(format!("encode table HEAD for {namespace:?}: {error}"))
+        })?;
+        let head_version = self
+            .storage
+            .compare_and_swap(
+                &ObjectId::table(namespace, HEAD_KEY)?,
+                Some(&snapshot.head_version),
+                Bytes::from(head_bytes),
+            )
+            .await?;
+        Ok(CatalogSnapshot {
+            head,
+            catalog: snapshot.catalog.clone(),
+            head_version,
+        })
     }
 
     pub async fn publish(
@@ -99,37 +166,38 @@ impl NativeCatalog {
             expected.map(|snapshot| snapshot.head.catalog_generation.unwrap_or(0));
         if generation == 0 || previous_generation.is_some_and(|previous| generation <= previous) {
             return Err(StatsError::SchemaConflict(format!(
-                "native catalog generation {generation} does not advance {previous_generation:?} for {namespace:?}"
+                "object catalog generation {generation} does not advance {previous_generation:?} for {namespace:?}"
             )));
         }
-        if catalog.format_version.unwrap_or(0) != NATIVE_FORMAT_VERSION
+        if catalog.format_version.unwrap_or(0) != OBJECT_CATALOG_FORMAT_VERSION
             || catalog.namespace.as_deref() != Some(namespace)
         {
             return Err(StatsError::SchemaValidation(format!(
-                "native catalog identity does not match namespace {namespace:?}"
+                "object catalog identity does not match namespace {namespace:?}"
             )));
         }
 
         let catalog_bytes = serde_json::to_vec(&catalog).map_err(|error| {
-            StatsError::Internal(format!("encode native catalog for {namespace:?}: {error}"))
+            StatsError::Internal(format!("encode object catalog for {namespace:?}: {error}"))
         })?;
         let catalog_sha256: [u8; 32] = Sha256::digest(&catalog_bytes).into();
         let catalog_key = format!(
             "{CATALOGS_PREFIX}/{generation:020}-{}.json",
             short_hex(&catalog_sha256)
         );
+        let catalog_id = ObjectId::table(namespace, &catalog_key)?;
         let catalog_version = self
-            .remote
-            .put_native_immutable(namespace, &catalog_key, Bytes::from(catalog_bytes.clone()))
+            .storage
+            .write(&catalog_id, Bytes::from(catalog_bytes.clone()))
             .await?;
         let head = CatalogHead {
-            format_version: Some(NATIVE_FORMAT_VERSION),
+            format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
             namespace: Some(namespace.to_string()),
             writer_epoch: Some(writer_epoch),
             catalog_generation: Some(generation),
             active_table_spec_version: catalog.active_table_spec_version,
             catalog: buffa::MessageField::some(ObjectRef {
-                uri: Some(catalog_key),
+                object_id: Some(catalog_id.as_str().to_string()),
                 provider_version: catalog_version.provider_version.clone(),
                 etag: catalog_version.e_tag.clone(),
                 byte_size: Some(catalog_bytes.len() as u64),
@@ -139,13 +207,12 @@ impl NativeCatalog {
             ..Default::default()
         };
         let head_bytes = serde_json::to_vec(&head).map_err(|error| {
-            StatsError::Internal(format!("encode native HEAD for {namespace:?}: {error}"))
+            StatsError::Internal(format!("encode object HEAD for {namespace:?}: {error}"))
         })?;
         let head_version = self
-            .remote
-            .compare_and_swap_native(
-                namespace,
-                HEAD_KEY,
+            .storage
+            .compare_and_swap(
+                &ObjectId::table(namespace, HEAD_KEY)?,
                 expected.map(|snapshot| &snapshot.head_version),
                 Bytes::from(head_bytes),
             )
@@ -159,9 +226,12 @@ impl NativeCatalog {
 
     #[cfg(test)]
     async fn catalog_keys(&self, namespace: &str) -> Result<Vec<String>, StatsError> {
-        self.remote
-            .list_native_keys(namespace, CATALOGS_PREFIX)
-            .await
+        Ok(self
+            .table_objects(namespace, CATALOGS_PREFIX)
+            .await?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect())
     }
 
     /// Remove superseded catalog documents after the maximum query lifetime.
@@ -169,32 +239,52 @@ impl NativeCatalog {
         &self,
         namespace: &str,
         now_ms: i64,
-        max_query_time_ms: u64,
+        catalog_retention_ms: u64,
+        orphan_grace_ms: u64,
+        writer_epoch: u64,
     ) -> Result<usize, StatsError> {
         let Some(snapshot) = self.load(namespace).await? else {
             return Ok(0);
         };
-        let current = snapshot
-            .head
-            .catalog
-            .as_option()
-            .and_then(|reference| reference.uri.as_deref())
-            .ok_or_else(|| {
-                StatsError::Internal(format!("native HEAD for {namespace:?} has no catalog URI"))
-            })?;
-        let cutoff = now_ms.saturating_sub(i64::try_from(max_query_time_ms).unwrap_or(i64::MAX));
+        if snapshot.head.writer_epoch != Some(writer_epoch) {
+            tracing::warn!(
+                namespace,
+                expected_writer_epoch = writer_epoch,
+                head_writer_epoch = snapshot.head.writer_epoch.unwrap_or(0),
+                "skipping object GC from a fenced writer"
+            );
+            return Ok(0);
+        }
+        let current_id = ObjectId::parse(
+            snapshot
+                .head
+                .catalog
+                .as_option()
+                .and_then(|reference| reference.object_id.as_deref())
+                .ok_or_else(|| {
+                    StatsError::Internal(format!(
+                        "table HEAD for {namespace:?} has no catalog object ID"
+                    ))
+                })?,
+        )?;
+        let current = current_id.table_relative(namespace).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "table HEAD for {namespace:?} points outside its table"
+            ))
+        })?;
+        let catalog_cutoff =
+            now_ms.saturating_sub(i64::try_from(catalog_retention_ms).unwrap_or(i64::MAX));
+        let orphan_cutoff =
+            now_ms.saturating_sub(i64::try_from(orphan_grace_ms).unwrap_or(i64::MAX));
         let current_generation = snapshot.head.catalog_generation.unwrap_or(0);
-        let catalog_objects = self
-            .remote
-            .list_native_objects(namespace, CATALOGS_PREFIX)
-            .await?;
+        let catalog_objects = self.table_objects(namespace, CATALOGS_PREFIX).await?;
         let mut removed = 0;
         for (key, meta) in &catalog_objects {
             if key == current {
                 continue;
             }
             let Some(generation) = catalog_generation_from_key(key) else {
-                tracing::warn!(namespace, key, "retaining unrecognized native catalog key");
+                tracing::warn!(namespace, key, "retaining unrecognized object catalog key");
                 continue;
             };
             let obsolete_at_ms = if generation < current_generation {
@@ -204,51 +294,77 @@ impl NativeCatalog {
                         let candidate_generation = catalog_generation_from_key(candidate_key)?;
                         (candidate_generation > generation
                             && candidate_generation <= current_generation)
-                            .then_some(candidate_meta.last_modified.timestamp_millis())
+                            .then_some(candidate_meta.modified_at_ms)
                     })
                     .min()
             } else {
                 // Same-generation and future-generation objects never won HEAD.
-                Some(meta.last_modified.timestamp_millis())
+                Some(meta.modified_at_ms)
             };
-            if obsolete_at_ms.is_none_or(|obsolete_at_ms| obsolete_at_ms > cutoff) {
+            if obsolete_at_ms.is_none_or(|obsolete_at_ms| obsolete_at_ms > catalog_cutoff) {
                 continue;
             }
-            self.remote.delete_native(namespace, key).await?;
+            self.storage
+                .delete(&ObjectId::table(namespace, key)?)
+                .await?;
             removed += 1;
         }
         let mut referenced = referenced_object_keys(&snapshot.catalog);
-        for key in self
-            .remote
-            .list_native_keys(namespace, CATALOGS_PREFIX)
-            .await?
-        {
+        for (key, _) in self.table_objects(namespace, CATALOGS_PREFIX).await? {
             if key == current {
                 continue;
             }
-            let Some(object) = self.remote.get_native(namespace, &key).await? else {
+            let Some(object) = self
+                .storage
+                .read(&ObjectId::table(namespace, &key)?)
+                .await?
+            else {
                 continue;
             };
             let catalog: NamespaceCatalog =
                 serde_json::from_slice(&object.bytes).map_err(|error| {
                     StatsError::Internal(format!(
-                        "decode retained native catalog {key:?} for {namespace:?}: {error}"
+                        "decode retained object catalog {key:?} for {namespace:?}: {error}"
                     ))
                 })?;
             referenced.extend(referenced_object_keys(&catalog));
         }
-        for (key, meta) in self
-            .remote
-            .list_native_objects(namespace, "objects")
-            .await?
-        {
-            if referenced.contains(&key) || meta.last_modified.timestamp_millis() > cutoff {
+        for (key, meta) in self.table_objects(namespace, "objects").await? {
+            let id = ObjectId::table(namespace, &key)?;
+            if referenced.contains(id.as_str()) || meta.modified_at_ms > orphan_cutoff {
                 continue;
             }
-            self.remote.delete_native(namespace, &key).await?;
+            self.storage.delete(&id).await?;
             removed += 1;
         }
         Ok(removed)
+    }
+
+    async fn table_objects(
+        &self,
+        namespace: &str,
+        relative_prefix: &str,
+    ) -> Result<Vec<(String, ObjectMetadata)>, StatsError> {
+        let objects = self
+            .storage
+            .list(&ObjectPrefix::table(namespace, relative_prefix)?)
+            .await?;
+        objects
+            .into_iter()
+            .map(|metadata| {
+                let key = metadata
+                    .id
+                    .table_relative(namespace)
+                    .ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "object {:?} escaped table {namespace:?}",
+                            metadata.id.as_str()
+                        ))
+                    })?
+                    .to_string();
+                Ok((key, metadata))
+            })
+            .collect()
     }
 
     /// Publish the recoverable SQLite view unless HEAD already selects it.
@@ -283,6 +399,55 @@ impl NativeCatalog {
     }
 }
 
+#[async_trait]
+impl PublishedCatalog for ObjectCatalog {
+    async fn load(&self, table: &str) -> Result<Option<CatalogSnapshot>, StatsError> {
+        ObjectCatalog::load(self, table).await
+    }
+
+    async fn claim_writer(
+        &self,
+        table: &str,
+        writer_epoch: u64,
+        snapshot: &CatalogSnapshot,
+    ) -> Result<CatalogSnapshot, StatsError> {
+        ObjectCatalog::claim_writer(self, table, writer_epoch, snapshot).await
+    }
+
+    async fn publish_local(
+        &self,
+        catalog: &Catalog,
+        table: &str,
+        table_dir: &Path,
+        writer_epoch: u64,
+    ) -> Result<CatalogSnapshot, StatsError> {
+        ObjectCatalog::publish_local(self, catalog, table, table_dir, writer_epoch).await
+    }
+
+    async fn delete_head(&self, table: &str) -> Result<(), StatsError> {
+        ObjectCatalog::delete_head(self, table).await
+    }
+
+    async fn gc_obsolete_catalogs(
+        &self,
+        table: &str,
+        now_ms: i64,
+        catalog_retention_ms: u64,
+        orphan_grace_ms: u64,
+        writer_epoch: u64,
+    ) -> Result<usize, StatsError> {
+        ObjectCatalog::gc_obsolete_catalogs(
+            self,
+            table,
+            now_ms,
+            catalog_retention_ms,
+            orphan_grace_ms,
+            writer_epoch,
+        )
+        .await
+    }
+}
+
 fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashSet<String> {
     catalog
         .version_segments
@@ -297,8 +462,14 @@ fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashS
             segment
                 .source
                 .as_option()
-                .and_then(|source| source.uri.clone())
+                .and_then(|source| source.object_id.clone())
         })
+        .chain(catalog.direct_query_segments.iter().filter_map(|segment| {
+            segment
+                .source
+                .as_option()
+                .and_then(|source| source.object_id.clone())
+        }))
         .collect()
 }
 
@@ -313,14 +484,14 @@ pub fn build_namespace_catalog(
             "namespace {namespace:?} has no versioned table specification"
         )));
     }
-    let native_segments: HashMap<_, _> = catalog
-        .native_segments(namespace)?
+    let object_segments: HashMap<_, _> = catalog
+        .object_segments(namespace)?
         .into_iter()
         .map(|record| (record.path.clone(), record))
         .collect();
     let mut by_version: BTreeMap<u64, Vec<CatalogSegment>> = BTreeMap::new();
     for row in catalog.list_segments(namespace)? {
-        let (version, source) = match native_segments.get(&row.path) {
+        let (version, source) = match object_segments.get(&row.path) {
             Some(record) => (record.table_spec_version, record.source.clone()),
             None if row.location != SegmentLocation::Local => {
                 let Some(relative_key) = segment_relative_key(namespace_dir, &row.path) else {
@@ -329,7 +500,7 @@ pub fn build_namespace_catalog(
                 (
                     0,
                     ObjectRef {
-                        uri: Some(relative_key),
+                        object_id: Some(relative_key),
                         byte_size: u64::try_from(row.byte_size).ok(),
                         ..Default::default()
                     },
@@ -352,13 +523,13 @@ pub fn build_namespace_catalog(
                 .as_ref()
                 .and_then(|partition| serde_json::to_string(partition).ok()),
             schema_revision: Some(version),
-            migration_source_id: native_segments
+            migration_source_id: object_segments
                 .get(&row.path)
                 .and_then(|record| record.migration_source_id.clone()),
-            migration_source_rows: native_segments
+            migration_source_rows: object_segments
                 .get(&row.path)
                 .and_then(|record| record.migration_source_rows),
-            migration_backfill: native_segments
+            migration_backfill: object_segments
                 .get(&row.path)
                 .map(|record| record.migration_backfill),
             ..Default::default()
@@ -381,7 +552,7 @@ pub fn build_namespace_catalog(
         };
         if let Some(rollback_write_version) = rollback_write_version {
             if rollback_write_version != version
-                && native_segments
+                && object_segments
                     .get(&row.path)
                     .is_some_and(|record| !record.migration_backfill)
             {
@@ -396,6 +567,25 @@ pub fn build_namespace_catalog(
     if status.desired_version() > 0 {
         by_version.entry(status.desired_version()).or_default();
     }
+    let stats = catalog.aggregate_namespace_stats(namespace)?;
+    let active_segments = by_version
+        .get(&status.active_version())
+        .cloned()
+        .unwrap_or_default();
+    let direct_query_high_water = active_segments
+        .iter()
+        .filter(|segment| segment.level.unwrap_or(0) == 0)
+        .filter_map(|segment| segment.min_seq)
+        .min()
+        .map(|first_unstable_seq| first_unstable_seq.saturating_sub(1))
+        .unwrap_or(stats.max_seq);
+    let direct_query_segments = active_segments
+        .into_iter()
+        .filter(|segment| {
+            segment.level.unwrap_or(0) >= 1
+                && segment.max_seq.unwrap_or(i64::MAX) <= direct_query_high_water
+        })
+        .collect();
     let version_segments: Vec<TableVersionSegments> = by_version
         .into_iter()
         .map(|(version, live_segments)| TableVersionSegments {
@@ -405,7 +595,6 @@ pub fn build_namespace_catalog(
         })
         .collect();
     let desired_version = status.desired_version();
-    let stats = catalog.aggregate_namespace_stats(namespace)?;
     let max_query_time_ms = status
         .active
         .as_ref()
@@ -414,7 +603,7 @@ pub fn build_namespace_catalog(
         .and_then(|policy| policy.max_query_time_ms)
         .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
     Ok(NamespaceCatalog {
-        format_version: Some(NATIVE_FORMAT_VERSION),
+        format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
         namespace: Some(namespace.to_string()),
         catalog_generation: Some(status.catalog_generation),
         active_table_spec_version: Some(status.active_version()),
@@ -425,17 +614,19 @@ pub fn build_namespace_catalog(
         migration: status.migration.into(),
         max_query_time_ms: Some(max_query_time_ms),
         forward_cursors: catalog.forward_cursors(namespace)?,
+        direct_query_segments,
+        direct_query_high_water: Some(direct_query_high_water),
         ..Default::default()
     })
 }
 
 fn validate_head(namespace: &str, head: &CatalogHead) -> Result<(), StatsError> {
-    if head.format_version.unwrap_or(0) != NATIVE_FORMAT_VERSION
+    if head.format_version.unwrap_or(0) != OBJECT_CATALOG_FORMAT_VERSION
         || head.namespace.as_deref() != Some(namespace)
         || head.catalog_generation.unwrap_or(0) == 0
     {
         return Err(StatsError::Internal(format!(
-            "invalid native HEAD for namespace {namespace:?}"
+            "invalid object HEAD for namespace {namespace:?}"
         )));
     }
     Ok(())
@@ -446,13 +637,13 @@ fn validate_catalog(
     head: &CatalogHead,
     catalog: &NamespaceCatalog,
 ) -> Result<(), StatsError> {
-    if catalog.format_version.unwrap_or(0) != NATIVE_FORMAT_VERSION
+    if catalog.format_version.unwrap_or(0) != OBJECT_CATALOG_FORMAT_VERSION
         || catalog.namespace.as_deref() != Some(namespace)
         || catalog.catalog_generation != head.catalog_generation
         || catalog.active_table_spec_version != head.active_table_spec_version
     {
         return Err(StatsError::Internal(format!(
-            "native catalog does not match HEAD for namespace {namespace:?}"
+            "object catalog does not match HEAD for namespace {namespace:?}"
         )));
     }
     Ok(())
@@ -477,11 +668,11 @@ fn catalog_generation_from_key(key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::remote::build_remote_store;
+    use crate::store::object_store::build_object_storage;
 
     fn catalog(namespace: &str, generation: u64, active_version: u64) -> NamespaceCatalog {
         NamespaceCatalog {
-            format_version: Some(NATIVE_FORMAT_VERSION),
+            format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
             namespace: Some(namespace.to_string()),
             catalog_generation: Some(generation),
             active_table_spec_version: Some(active_version),
@@ -492,21 +683,21 @@ mod tests {
 
     #[tokio::test]
     async fn local_head_cas_publishes_one_complete_generation() {
-        let remote_dir = crate::test_support::unique_dir("native_catalog_cas");
-        let remote = build_remote_store(remote_dir.to_str().unwrap())
+        let remote_dir = crate::test_support::unique_dir("object_catalog_cas");
+        let remote = build_object_storage(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let native = NativeCatalog::new(remote);
+        let object = ObjectCatalog::new(remote.clone());
 
-        let first = native
+        let first = object
             .publish("iris.worker", 11, catalog("iris.worker", 1, 1), None)
             .await
             .unwrap();
-        let loaded = native.load("iris.worker").await.unwrap().unwrap();
+        let loaded = object.load("iris.worker").await.unwrap().unwrap();
         assert_eq!(loaded.head.writer_epoch, Some(11));
         assert_eq!(loaded.catalog.catalog_generation, Some(1));
 
-        let second = native
+        let second = object
             .publish(
                 "iris.worker",
                 11,
@@ -515,7 +706,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let stale = native
+        let stale = object
             .publish(
                 "iris.worker",
                 12,
@@ -526,60 +717,65 @@ mod tests {
             .unwrap_err();
         assert!(matches!(stale, StatsError::SchemaConflict(_)));
 
-        let loaded = native.load("iris.worker").await.unwrap().unwrap();
+        let loaded = object.load("iris.worker").await.unwrap().unwrap();
         assert_eq!(loaded.catalog.active_table_spec_version, Some(2));
         assert_eq!(loaded.head.writer_epoch, Some(11));
         assert_eq!(second.catalog, loaded.catalog);
 
         // A losing writer may leave one immutable, unreachable catalog. HEAD is
         // still the sole visibility boundary, and later GC can remove the orphan.
-        let keys = native.catalog_keys("iris.worker").await.unwrap();
+        let keys = object.catalog_keys("iris.worker").await.unwrap();
         assert_eq!(keys.len(), 3);
         let current_key = second
             .head
             .catalog
             .as_option()
             .unwrap()
-            .uri
+            .object_id
             .as_deref()
             .unwrap();
-        let current_modified_ms = native
-            .remote
-            .list_native_objects("iris.worker", CATALOGS_PREFIX)
+        let current_modified_ms = remote
+            .list(&ObjectPrefix::table("iris.worker", CATALOGS_PREFIX).unwrap())
             .await
             .unwrap()
             .into_iter()
-            .find(|(key, _)| key == current_key)
+            .find(|metadata| metadata.id.as_str() == current_key)
             .unwrap()
-            .1
-            .last_modified
-            .timestamp_millis();
+            .modified_at_ms;
         assert_eq!(
-            native
-                .gc_obsolete_catalogs("iris.worker", current_modified_ms + 5, 10)
+            object
+                .gc_obsolete_catalogs("iris.worker", current_modified_ms + 5, 10, 10, 11)
                 .await
                 .unwrap(),
             0
         );
         let future = i64::MAX;
         assert_eq!(
-            native
-                .gc_obsolete_catalogs("iris.worker", future, 600_000)
+            object
+                .gc_obsolete_catalogs("iris.worker", future, 0, 0, 12)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(object.catalog_keys("iris.worker").await.unwrap().len(), 3);
+        assert_eq!(
+            object
+                .gc_obsolete_catalogs("iris.worker", future, 600_000, 600_000, 11)
                 .await
                 .unwrap(),
             2
         );
-        assert_eq!(native.catalog_keys("iris.worker").await.unwrap().len(), 1);
+        assert_eq!(object.catalog_keys("iris.worker").await.unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn immutable_catalog_retries_require_identical_bytes() {
-        let remote_dir = crate::test_support::unique_dir("native_catalog_immutable");
-        let remote = build_remote_store(remote_dir.to_str().unwrap())
+        let remote_dir = crate::test_support::unique_dir("object_catalog_immutable");
+        let remote = build_object_storage(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let native = NativeCatalog::new(remote.clone());
-        let published = native
+        let object = ObjectCatalog::new(remote.clone());
+        let published = object
             .publish("iris.worker", 1, catalog("iris.worker", 1, 1), None)
             .await
             .unwrap();
@@ -588,20 +784,14 @@ mod tests {
             .catalog
             .as_option()
             .unwrap()
-            .uri
+            .object_id
             .as_deref()
             .unwrap();
-        let existing = remote
-            .get_native("iris.worker", key)
-            .await
-            .unwrap()
-            .unwrap();
-        remote
-            .put_native_immutable("iris.worker", key, existing.bytes)
-            .await
-            .unwrap();
+        let object_id = ObjectId::parse(key).unwrap();
+        let existing = remote.read(&object_id).await.unwrap().unwrap();
+        remote.write(&object_id, existing.bytes).await.unwrap();
         let error = remote
-            .put_native_immutable("iris.worker", key, Bytes::from_static(b"different"))
+            .write(&object_id, Bytes::from_static(b"different"))
             .await
             .unwrap_err();
         assert!(matches!(error, StatsError::SchemaConflict(_)));
@@ -609,36 +799,30 @@ mod tests {
 
     #[tokio::test]
     async fn garbage_collection_removes_unreferenced_objects_after_query_grace() {
-        let remote_dir = crate::test_support::unique_dir("native_catalog_orphan_gc");
-        let remote = build_remote_store(remote_dir.to_str().unwrap())
+        let remote_dir = crate::test_support::unique_dir("object_catalog_orphan_gc");
+        let remote = build_object_storage(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let native = NativeCatalog::new(remote.clone());
-        native
+        let object = ObjectCatalog::new(remote.clone());
+        object
             .publish("iris.worker", 1, catalog("iris.worker", 1, 1), None)
             .await
             .unwrap();
+        let orphan_id =
+            ObjectId::table("iris.worker", "objects/v1/l0/orphan/source.parquet").unwrap();
         remote
-            .put_native_immutable(
-                "iris.worker",
-                "objects/v1/l0/orphan/source.parquet",
-                Bytes::from_static(b"orphan"),
-            )
+            .write(&orphan_id, Bytes::from_static(b"orphan"))
             .await
             .unwrap();
 
         let future = i64::MAX;
         assert_eq!(
-            native
-                .gc_obsolete_catalogs("iris.worker", future, 600_000)
+            object
+                .gc_obsolete_catalogs("iris.worker", future, 600_000, 600_000, 1)
                 .await
                 .unwrap(),
             1
         );
-        assert!(remote
-            .get_native("iris.worker", "objects/v1/l0/orphan/source.parquet")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(remote.read(&orphan_id).await.unwrap().is_none());
     }
 }

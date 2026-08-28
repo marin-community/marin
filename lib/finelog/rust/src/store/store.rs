@@ -32,15 +32,16 @@ use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
+use crate::store::cache::{legacy_cache_path, object_cache_path, table_cache_root};
+use crate::store::catalog::objects::{CatalogSnapshot, ObjectCatalog, PublishedCatalog};
 use crate::store::catalog::{
-    Catalog, RecoveredNativeSegment, RegisteredNamespace, TableSpecStatus,
+    Catalog, RecoveredObjectSegment, RegisteredNamespace, TableSpecStatus,
 };
 use crate::store::ipc::decode_one_record_batch;
-use crate::store::namespace::{native_cache_path, relative_cache_path, Namespace};
+use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
-use crate::store::native_catalog::{CatalogSnapshot, NativeCatalog};
+use crate::store::object_store::{build_object_storage, ObjectId};
 use crate::store::policy::StoragePolicy;
-use crate::store::remote::build_remote_store;
 use crate::store::schema::{
     merge_managed_schema, merge_schemas, resolve_key_column, schema_from_proto_view,
     stamp_cluster_column, stored_form, validate_and_align_batch,
@@ -69,12 +70,12 @@ fn recovered_segment_cache_path(
     namespace_dir: &Path,
     namespace: &str,
     object_key: &str,
-    table_spec_version: u64,
+    canonical_object: bool,
 ) -> Result<PathBuf, StatsError> {
-    if table_spec_version > 0 {
-        return native_cache_path(namespace_dir, namespace, object_key);
+    if canonical_object {
+        return object_cache_path(namespace_dir, namespace, object_key);
     }
-    relative_cache_path(namespace_dir, object_key)
+    legacy_cache_path(namespace_dir, object_key)
 }
 
 /// Bounded budget for stopping + joining a namespace's background tasks during a
@@ -95,7 +96,7 @@ pub struct VersionedRegistration {
     pub schema: Schema,
     pub policy: StoragePolicy,
     pub table_spec_status: TableSpecStatus,
-    pub object_native: bool,
+    pub object_backed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -186,7 +187,7 @@ pub struct Store {
     remote_log_dir: String,
     mode: ServeMode,
     catalog: Arc<Catalog>,
-    native_catalog: Option<NativeCatalog>,
+    object_catalog: Option<Arc<dyn PublishedCatalog>>,
     writer_epoch: u64,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
@@ -297,8 +298,9 @@ impl Store {
             .transpose()?;
         let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
-        let native_catalog = if data_dir.is_some() {
-            build_remote_store(&remote_log_dir)?.map(NativeCatalog::new)
+        let object_catalog = if data_dir.is_some() {
+            build_object_storage(&remote_log_dir)?
+                .map(|storage| Arc::new(ObjectCatalog::new(storage)) as Arc<dyn PublishedCatalog>)
         } else {
             None
         };
@@ -320,7 +322,7 @@ impl Store {
             remote_log_dir,
             mode,
             catalog,
-            native_catalog,
+            object_catalog,
             writer_epoch: writer_epoch(),
             engines: Mutex::new(HashMap::new()),
             namespace_registration_locks: Mutex::new(HashMap::new()),
@@ -395,19 +397,22 @@ impl Store {
     /// from remote HEAD/catalog snapshots before the server accepts traffic.
     ///
     /// Returns the number of namespaces whose remote generation was recovered.
-    pub async fn recover_native_namespaces(&self) -> Result<usize, StatsError> {
-        let Some(native_catalog) = &self.native_catalog else {
+    pub async fn recover_object_tables(&self) -> Result<usize, StatsError> {
+        let Some(object_catalog) = &self.object_catalog else {
             return Ok(0);
         };
-        let remote = build_remote_store(&self.remote_log_dir)?.ok_or_else(|| {
-            StatsError::Internal("native catalog configured without a remote store".to_string())
+        let remote = build_object_storage(&self.remote_log_dir)?.ok_or_else(|| {
+            StatsError::Internal("object catalog configured without a remote store".to_string())
         })?;
         let mut recovered_count = 0;
-        for namespace in remote.list_native_namespaces().await? {
+        for namespace in remote.list_tables().await? {
             validate_namespace_name(&namespace, self.data_dir.as_deref())?;
-            let Some(snapshot) = native_catalog.load(&namespace).await? else {
+            let Some(snapshot) = object_catalog.load(&namespace).await? else {
                 continue;
             };
+            let snapshot = object_catalog
+                .claim_writer(&namespace, self.writer_epoch, &snapshot)
+                .await?;
             let remote_generation = snapshot.catalog.catalog_generation.unwrap_or(0);
             if self
                 .catalog
@@ -431,12 +436,12 @@ impl Store {
                     .or_else(|| snapshot.catalog.retained_table_specs.last())
                     .ok_or_else(|| {
                         StatsError::Internal(format!(
-                            "native catalog for {namespace:?} has no retained TableSpec"
+                            "object catalog for {namespace:?} has no retained TableSpec"
                         ))
                     })?;
             let schema_proto = schema_spec.logical_schema.as_option().ok_or_else(|| {
                 StatsError::Internal(format!(
-                    "native catalog TableSpec for {namespace:?} has no logical schema"
+                    "object catalog TableSpec for {namespace:?} has no logical schema"
                 ))
             })?;
             let schema_bytes = schema_proto.encode_to_vec();
@@ -453,9 +458,9 @@ impl Store {
                 .map(StoragePolicy::from_proto_owned)
                 .unwrap_or_default();
             let namespace_dir = self.namespace_dir(&namespace)?.ok_or_else(|| {
-                StatsError::Internal("native recovery requires a disk-backed store".to_string())
+                StatsError::Internal("object recovery requires a disk-backed store".to_string())
             })?;
-            let mut recovered = HashMap::<String, RecoveredNativeSegment>::new();
+            let mut recovered = HashMap::<String, RecoveredObjectSegment>::new();
             for version in &snapshot.catalog.version_segments {
                 for segment in version
                     .live_segments
@@ -464,27 +469,46 @@ impl Store {
                 {
                     let source = segment.source.as_option().ok_or_else(|| {
                         StatsError::Internal(format!(
-                            "native catalog segment for {namespace:?} has no source"
+                            "object catalog segment for {namespace:?} has no source"
                         ))
                     })?;
-                    let object_key = source.uri.as_deref().ok_or_else(|| {
+                    let source_id = source.object_id.as_deref().ok_or_else(|| {
                         StatsError::Internal(format!(
-                            "native catalog segment for {namespace:?} has an empty source URI"
+                            "object catalog segment for {namespace:?} has an empty object ID"
                         ))
                     })?;
                     let table_spec_version = segment
                         .schema_revision
                         .unwrap_or(version.table_spec_version.unwrap_or(0));
+                    let (object_key, canonical_object) = match ObjectId::parse(source_id) {
+                        Ok(object_id) => (
+                            object_id
+                            .table_relative(&namespace)
+                            .ok_or_else(|| {
+                                StatsError::Internal(format!(
+                                    "object catalog segment for {namespace:?} references another table"
+                                ))
+                            })?
+                            .to_string(),
+                            true,
+                        ),
+                        Err(_) if table_spec_version == 0 => (source_id.to_string(), false),
+                        Err(error) => {
+                            return Err(StatsError::Internal(format!(
+                                "object catalog segment for {namespace:?} has invalid object ID {source_id:?}: {error}"
+                            )))
+                        }
+                    };
                     let cache_path = recovered_segment_cache_path(
                         &namespace_dir,
                         &namespace,
-                        object_key,
-                        table_spec_version,
+                        &object_key,
+                        canonical_object,
                     )?;
                     let path = cache_path.to_string_lossy().into_owned();
                     recovered
                         .entry(path.clone())
-                        .or_insert_with(|| RecoveredNativeSegment {
+                        .or_insert_with(|| RecoveredObjectSegment {
                             row: crate::store::types::SegmentRow {
                                 namespace: namespace.clone(),
                                 path,
@@ -514,7 +538,7 @@ impl Store {
                 }
             }
             let recovered: Vec<_> = recovered.into_values().collect();
-            self.catalog.restore_native_snapshot(
+            self.catalog.restore_object_snapshot(
                 &namespace,
                 schema.clone(),
                 policy.clone(),
@@ -720,11 +744,11 @@ impl Store {
         name: &str,
         validated: ValidatedTableSpec,
     ) -> Result<VersionedRegistration, StatsError> {
-        if validated.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE
+        if validated.l0_mode == L0Mode::L0_MODE_OBJECT_STORE
             && self.remote_log_dir.trim().is_empty()
         {
             return Err(StatsError::SchemaValidation(
-                "object-native table specifications require a configured remote_log_dir"
+                "object-backed table specifications require a configured remote_log_dir"
                     .to_string(),
             ));
         }
@@ -742,29 +766,29 @@ impl Store {
             schema,
             policy,
             table_spec_status: table_spec_status.expect("versioned registration returns status"),
-            object_native: validated.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE,
+            object_backed: validated.l0_mode == L0Mode::L0_MODE_OBJECT_STORE,
         })
     }
 
     /// Make one complete local metadata snapshot visible to direct readers.
     ///
     /// Returns the selected remote snapshot after publication.
-    pub async fn publish_native_catalog(
+    pub async fn publish_object_catalog(
         &self,
         namespace: &str,
     ) -> Result<CatalogSnapshot, StatsError> {
-        let native = self.native_catalog.as_ref().ok_or_else(|| {
+        let published_catalog = self.object_catalog.as_ref().ok_or_else(|| {
             StatsError::SchemaValidation(
-                "object-native table specifications require a configured remote_log_dir"
+                "object-backed table specifications require a configured remote_log_dir"
                     .to_string(),
             )
         })?;
         let namespace_dir = self.namespace_dir(namespace)?.ok_or_else(|| {
             StatsError::SchemaValidation(
-                "object-native catalogs require a disk-backed store".to_string(),
+                "object-backed catalogs require a disk-backed store".to_string(),
             )
         })?;
-        native
+        published_catalog
             .publish_local(&self.catalog, namespace, &namespace_dir, self.writer_epoch)
             .await
     }
@@ -1108,10 +1132,10 @@ impl Store {
     }
 
     /// Restore missing mirrored cache files before a server-directed query.
-    pub async fn ensure_native_query_cache(&self) -> Result<(), StatsError> {
+    pub async fn ensure_query_cache(&self) -> Result<(), StatsError> {
         let engines: Vec<_> = self.engines.lock().unwrap().values().cloned().collect();
         for engine in engines {
-            engine.ensure_native_query_cache().await?;
+            engine.ensure_query_cache().await?;
         }
         Ok(())
     }
@@ -1159,7 +1183,7 @@ impl Store {
     ) -> Result<(), StatsError> {
         if self.catalog.set_forward_cursor(target, namespace, cursor)? {
             self.require_engine(namespace)?
-                .mark_native_publish_pending();
+                .mark_object_publish_pending();
         }
         Ok(())
     }
@@ -1193,17 +1217,20 @@ impl Store {
         self.catalog.table_spec_status(name)
     }
 
-    pub async fn rollback_table_version(
-        &self,
-        name: &str,
-        retained_version: u64,
-    ) -> Result<TableSpecStatus, StatsError> {
+    pub async fn abort_table_migration(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
         self.catalog.require_live(name)?;
         let _visibility_guard = self.query_visibility.write().await;
-        let status = self.catalog.rollback_table_spec(name, retained_version)?;
+        let (status, discarded_cache_paths) = self.catalog.abort_table_migration(name)?;
         self.apply_table_spec_status(name, &status)?;
-        if let Err(error) = self.publish_native_catalog(name).await {
-            self.require_engine(name)?.mark_native_publish_pending();
+        for path in discarded_cache_paths {
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(namespace = name, %path, %error, "remove aborted migration cache failed");
+                }
+            }
+        }
+        if let Err(error) = self.publish_object_catalog(name).await {
+            self.require_engine(name)?.mark_object_publish_pending();
             return Err(error);
         }
         Ok(status)
@@ -1277,7 +1304,7 @@ impl Store {
 
     /// Remove `name` from the registry and delete its local catalog and cache.
     ///
-    /// Native tables also lose their remote HEAD so retained immutable history
+    /// Object-backed tables also lose their remote HEAD so retained immutable history
     /// cannot restore the table. Rejects the privileged `log` namespace.
     pub fn drop_table(&self, name: &str) -> Result<(), StatsError> {
         if name == LOG_NAMESPACE_NAME {
@@ -1286,7 +1313,7 @@ impl Store {
             )));
         }
         self.catalog.begin_drop(name)?;
-        let native_generation = self.catalog.table_spec_status(name)?.catalog_generation;
+        let object_generation = self.catalog.table_spec_status(name)?.catalog_generation;
         // Drop the engine first so its flush task stops touching the dir/catalog
         // before we delete rows + files.
         let engine = self.engines.lock().unwrap().remove(name);
@@ -1307,13 +1334,13 @@ impl Store {
                     engine.request_stop();
                 }
             }
-            if native_generation > 0 {
-                let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+            if object_generation > 0 {
+                let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
                     StatsError::Internal(format!(
-                        "namespace {name:?} has a native generation without a remote catalog"
+                        "namespace {name:?} has an object generation without a published catalog"
                     ))
                 })?;
-                tokio::runtime::Handle::current().block_on(native_catalog.delete_head(name))?;
+                tokio::runtime::Handle::current().block_on(object_catalog.delete_head(name))?;
             }
             self.catalog.delete(name)?;
             if let Some(dir) = &self.data_dir {
@@ -1321,6 +1348,15 @@ impl Store {
                 if sub.exists() {
                     std::fs::remove_dir_all(&sub).map_err(|e| {
                         StatsError::Internal(format!("remove namespace dir {}: {e}", sub.display()))
+                    })?;
+                }
+                let object_cache = table_cache_root(dir, name)?;
+                if object_cache.exists() {
+                    std::fs::remove_dir_all(&object_cache).map_err(|error| {
+                        StatsError::Internal(format!(
+                            "remove object cache {}: {error}",
+                            object_cache.display()
+                        ))
                     })?;
                 }
             }
@@ -1410,11 +1446,11 @@ mod tests {
         .unwrap()
     }
 
-    fn object_native_spec(version: u64) -> ValidatedTableSpec {
-        object_native_spec_with_query_time(version, 0)
+    fn object_backed_spec(version: u64) -> ValidatedTableSpec {
+        object_backed_spec_with_query_time(version, 0)
     }
 
-    fn object_native_spec_with_query_time(
+    fn object_backed_spec_with_query_time(
         version: u64,
         max_query_time_ms: u64,
     ) -> ValidatedTableSpec {
@@ -1423,7 +1459,7 @@ mod tests {
             version: Some(version),
             logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
             operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
                 remote_retention: MessageField::some(RemoteRetentionPolicy {
                     retain_forever: Some(true),
                     ..Default::default()
@@ -1438,7 +1474,7 @@ mod tests {
         ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
     }
 
-    fn partitioned_object_native_spec(version: u64) -> ValidatedTableSpec {
+    fn partitioned_object_backed_spec(version: u64) -> ValidatedTableSpec {
         let schema = worker_schema();
         let spec = TableSpec {
             version: Some(version),
@@ -1457,7 +1493,7 @@ mod tests {
                 ..Default::default()
             }),
             operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
                 remote_retention: MessageField::some(RemoteRetentionPolicy {
                     retain_forever: Some(true),
                     ..Default::default()
@@ -1471,7 +1507,7 @@ mod tests {
         ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
     }
 
-    fn sorted_object_native_spec(version: u64) -> ValidatedTableSpec {
+    fn sorted_object_backed_spec(version: u64) -> ValidatedTableSpec {
         let schema = worker_schema().with_sort_columns(["mem_bytes"]);
         let spec = TableSpec {
             version: Some(version),
@@ -1481,7 +1517,7 @@ mod tests {
                 ..Default::default()
             }),
             operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
                 remote_retention: MessageField::some(RemoteRetentionPolicy {
                     retain_forever: Some(true),
                     ..Default::default()
@@ -1508,11 +1544,11 @@ mod tests {
         .unwrap();
 
         let registration = store
-            .register_versioned_table("iris.worker", object_native_spec(1))
+            .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        assert!(registration.object_native);
+        assert!(registration.object_backed);
         assert_eq!(registration.table_spec_status.active_version(), 1);
-        let first = store.publish_native_catalog("iris.worker").await.unwrap();
+        let first = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(first.catalog.active_table_spec_version, Some(1));
         assert_eq!(first.catalog.retained_table_specs.len(), 1);
 
@@ -1534,8 +1570,8 @@ mod tests {
             .unwrap();
         let paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].contains("/_native/namespaces/iris.worker/objects/v1/l0/"));
-        let after_flush = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert!(paths[0].contains("/_finelog/tables/iris.worker/objects/v1/l0/"));
+        let after_flush = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(after_flush.catalog.catalog_generation, Some(2));
         let version = after_flush
             .catalog
@@ -1549,20 +1585,20 @@ mod tests {
             .source
             .as_option()
             .unwrap()
-            .uri
+            .object_id
             .as_deref()
             .unwrap()
-            .starts_with("objects/v1/l0/"));
+            .starts_with("_finelog/tables/iris.worker/objects/v1/l0/"));
 
         // An identical registration and publication is a retry, not a new
-        // generation. Loading from a fresh RemoteStore recovers the same HEAD.
+        // generation. Loading from a fresh ObjectStorage recovers the same HEAD.
         store
-            .register_versioned_table("iris.worker", object_native_spec(1))
+            .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        let retry = store.publish_native_catalog("iris.worker").await.unwrap();
+        let retry = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(retry.catalog, after_flush.catalog);
-        let recovered = NativeCatalog::new(
-            build_remote_store(remote_dir.to_str().unwrap())
+        let recovered = ObjectCatalog::new(
+            build_object_storage(remote_dir.to_str().unwrap())
                 .unwrap()
                 .unwrap(),
         )
@@ -1579,8 +1615,8 @@ mod tests {
             .maintain_namespace("iris.worker", false)
             .await
             .unwrap();
-        let with_cursor = NativeCatalog::new(
-            build_remote_store(remote_dir.to_str().unwrap())
+        let with_cursor = ObjectCatalog::new(
+            build_object_storage(remote_dir.to_str().unwrap())
                 .unwrap()
                 .unwrap(),
         )
@@ -1595,13 +1631,13 @@ mod tests {
         );
 
         std::fs::remove_file(&paths[0]).unwrap();
-        store.ensure_native_query_cache().await.unwrap();
+        store.ensure_query_cache().await.unwrap();
         assert!(Path::new(&paths[0]).exists());
 
         // Simulate a crash after SQLite accepted the next version but before
         // its HEAD CAS. Remote HEAD remains the canonical committed state.
         let unpublished = store
-            .register_versioned_table("iris.worker", object_native_spec(2))
+            .register_versioned_table("iris.worker", object_backed_spec(2))
             .unwrap();
         assert_eq!(unpublished.table_spec_status.desired_version(), 2);
 
@@ -1622,7 +1658,7 @@ mod tests {
                 .desired_version(),
             2
         );
-        assert_eq!(reopened.recover_native_namespaces().await.unwrap(), 1);
+        assert_eq!(reopened.recover_object_tables().await.unwrap(), 1);
         let recovered_status = reopened.table_spec_status("iris.worker").unwrap();
         assert_eq!(recovered_status.active_version(), 1);
         assert_eq!(recovered_status.desired_version(), 0);
@@ -1662,8 +1698,8 @@ mod tests {
             .unwrap()
             .paths
             .is_empty());
-        assert_eq!(cached_reopen.recover_native_namespaces().await.unwrap(), 0);
-        cached_reopen.ensure_native_query_cache().await.unwrap();
+        assert_eq!(cached_reopen.recover_object_tables().await.unwrap(), 0);
+        cached_reopen.ensure_query_cache().await.unwrap();
         assert_eq!(
             cached_reopen.query_snapshot("iris.worker").unwrap().paths,
             paths
@@ -1679,10 +1715,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert_eq!(
-            recovered_store.recover_native_namespaces().await.unwrap(),
-            1
-        );
+        assert_eq!(recovered_store.recover_object_tables().await.unwrap(), 1);
         assert_eq!(
             recovered_store
                 .table_spec_status("iris.worker")
@@ -1695,7 +1728,7 @@ mod tests {
             .unwrap()
             .paths
             .is_empty());
-        recovered_store.ensure_native_query_cache().await.unwrap();
+        recovered_store.ensure_query_cache().await.unwrap();
         assert_eq!(
             recovered_store
                 .query_snapshot("iris.worker")
@@ -1740,9 +1773,9 @@ mod tests {
         )
         .unwrap();
         store
-            .register_versioned_table("iris.worker", object_native_spec_with_query_time(1, 100))
+            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(1, 100))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
 
         let batch_schema = schema_to_arrow(&worker_schema());
         for (worker, mem_bytes) in [("existing-a", 128), ("existing-b", 256)] {
@@ -1764,11 +1797,11 @@ mod tests {
         }
 
         let registration = store
-            .register_versioned_table("iris.worker", object_native_spec_with_query_time(2, 100))
+            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(2, 100))
             .unwrap();
         assert_eq!(registration.table_spec_status.active_version(), 1);
         assert_eq!(registration.table_spec_status.desired_version(), 2);
-        let transition = store.publish_native_catalog("iris.worker").await.unwrap();
+        let transition = store.publish_object_catalog("iris.worker").await.unwrap();
         let active = transition
             .catalog
             .version_segments
@@ -1794,14 +1827,14 @@ mod tests {
             .unwrap();
         let compacted = store
             .catalog
-            .native_segments("iris.worker")
+            .object_segments("iris.worker")
             .unwrap()
             .into_iter()
             .filter(|segment| segment.table_spec_version == 2)
             .collect::<Vec<_>>();
         assert_eq!(compacted.len(), 1);
         assert!(compacted[0].migration_backfill);
-        let compacted_snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let compacted_snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let compacted_active = compacted_snapshot
             .catalog
             .version_segments
@@ -1830,17 +1863,17 @@ mod tests {
         );
         assert!(store
             .catalog
-            .native_segments("iris.worker")
+            .object_segments("iris.worker")
             .unwrap()
             .iter()
             .all(|segment| segment.table_spec_version == 2));
         assert!(store
             .catalog
-            .native_segments("iris.worker")
+            .object_segments("iris.worker")
             .unwrap()
             .iter()
             .all(|segment| !segment.migration_backfill));
-        let retired_catalog = store.publish_native_catalog("iris.worker").await.unwrap();
+        let retired_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
         assert!(retired_catalog
             .catalog
             .version_segments
@@ -1853,7 +1886,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn legacy_table_migrates_automatically_and_rolls_back_without_duplicate_rows() {
+    async fn legacy_table_migrates_automatically_and_aborts_without_duplicate_rows() {
         let data_dir = crate::test_support::unique_dir("table_spec_migration_data");
         let remote_dir = crate::test_support::unique_dir("table_spec_migration_remote");
         let store = Store::new(
@@ -1885,14 +1918,14 @@ mod tests {
             .unwrap();
         let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(legacy_paths.len(), 1);
-        assert!(!legacy_paths[0].contains("/_native/"));
+        assert!(!legacy_paths[0].contains("/_finelog/"));
 
         let registration = store
-            .register_versioned_table("iris.worker", object_native_spec_with_query_time(1, 1))
+            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(1, 1))
             .unwrap();
         assert_eq!(registration.table_spec_status.active_version(), 0);
         assert_eq!(registration.table_spec_status.desired_version(), 1);
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
 
         store
             .maintain_namespace("iris.worker", false)
@@ -1907,7 +1940,7 @@ mod tests {
         );
         let active_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(active_paths.len(), 1);
-        assert!(active_paths[0].contains("/_native/namespaces/iris.worker/objects/v1/backfill/"));
+        assert!(active_paths[0].contains("/_finelog/tables/iris.worker/objects/v1/backfill/"));
 
         let current_batch = RecordBatch::try_new(
             batch_schema.clone(),
@@ -1925,19 +1958,16 @@ mod tests {
             .await
             .unwrap();
 
-        let rolled_back = store
-            .rollback_table_version("iris.worker", 0)
-            .await
-            .unwrap();
-        assert_eq!(rolled_back.active_version(), 0);
+        let aborted = store.abort_table_migration("iris.worker").await.unwrap();
+        assert_eq!(aborted.active_version(), 0);
         let rollback_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(rollback_paths.len(), 2);
         assert!(rollback_paths.iter().any(|path| path == &legacy_paths[0]));
         assert!(rollback_paths
             .iter()
-            .any(|path| path.contains("/_native/namespaces/iris.worker/objects/v1/l0/")));
+            .any(|path| path.contains("/_finelog/tables/iris.worker/objects/v1/l0/")));
 
-        let snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let rollback_version = snapshot
             .catalog
             .version_segments
@@ -1953,15 +1983,7 @@ mod tests {
             1
         );
 
-        store
-            .catalog
-            .expire_migration_observation("iris.worker")
-            .unwrap();
-        store
-            .maintain_namespace("iris.worker", false)
-            .await
-            .unwrap();
-        let cleaned_records = store.catalog.native_segments("iris.worker").unwrap();
+        let cleaned_records = store.catalog.object_segments("iris.worker").unwrap();
         assert_eq!(cleaned_records.len(), 1);
         assert_eq!(cleaned_records[0].table_spec_version, 0);
         assert!(!cleaned_records[0].migration_backfill);
@@ -1974,9 +1996,62 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn object_native_transition_never_deletes_the_legacy_archive() {
-        let data_dir = crate::test_support::unique_dir("native_archive_data");
-        let remote_dir = crate::test_support::unique_dir("native_archive_remote");
+    async fn migration_can_be_aborted_before_background_activation() {
+        let data_dir = crate::test_support::unique_dir("abort_pending_migration_data");
+        let remote_dir = crate::test_support::unique_dir("abort_pending_migration_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        let pending = store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        assert_eq!(pending.table_spec_status.desired_version(), 1);
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        let aborted = store.abort_table_migration("iris.worker").await.unwrap();
+
+        assert_eq!(aborted.active_version(), 0);
+        assert_eq!(aborted.desired_version(), 0);
+        assert!(aborted.migration.is_none());
+        assert!(store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .is_empty());
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 1);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_backed_transition_never_deletes_the_legacy_archive() {
+        let data_dir = crate::test_support::unique_dir("object_archive_data");
+        let remote_dir = crate::test_support::unique_dir("object_archive_remote");
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -2016,13 +2091,13 @@ mod tests {
                     .is_some_and(|extension| extension == "parquet")
             })
             .unwrap();
-        let retained_orphan = archive_dir.join("pre-native-archive.parquet");
+        let retained_orphan = archive_dir.join("pre-object-archive.parquet");
         std::fs::copy(&archived, &retained_orphan).unwrap();
 
         store
-            .register_versioned_table("iris.worker", object_native_spec(1))
+            .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
         store
             .require_engine("iris.worker")
             .unwrap()
@@ -2038,9 +2113,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn object_native_l0_applies_declared_sort_order() {
-        let data_dir = crate::test_support::unique_dir("sorted_native_data");
-        let remote_dir = crate::test_support::unique_dir("sorted_native_remote");
+    async fn object_backed_l0_applies_declared_sort_order() {
+        let data_dir = crate::test_support::unique_dir("sorted_object_data");
+        let remote_dir = crate::test_support::unique_dir("sorted_object_remote");
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -2049,9 +2124,9 @@ mod tests {
         )
         .unwrap();
         store
-            .register_versioned_table("iris.worker", sorted_object_native_spec(1))
+            .register_versioned_table("iris.worker", sorted_object_backed_spec(1))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
         let batch_schema = schema_to_arrow(&worker_schema().with_sort_columns(["mem_bytes"]));
         let batch = RecordBatch::try_new(
             batch_schema.clone(),
@@ -2094,9 +2169,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn object_native_compaction_replaces_inputs_in_one_catalog_generation() {
-        let data_dir = crate::test_support::unique_dir("native_compaction_data");
-        let remote_dir = crate::test_support::unique_dir("native_compaction_remote");
+    async fn object_backed_compaction_replaces_inputs_in_one_catalog_generation() {
+        let data_dir = crate::test_support::unique_dir("object_compaction_data");
+        let remote_dir = crate::test_support::unique_dir("object_compaction_remote");
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -2105,9 +2180,9 @@ mod tests {
         )
         .unwrap();
         store
-            .register_versioned_table("iris.worker", object_native_spec(1))
+            .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
         let batch_schema = schema_to_arrow(&worker_schema());
         for (worker, mem_bytes) in [("w1", 10), ("w2", 20)] {
             let batch = RecordBatch::try_new(
@@ -2127,7 +2202,8 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 2);
-        let before = store.publish_native_catalog("iris.worker").await.unwrap();
+        let before = store.publish_object_catalog("iris.worker").await.unwrap();
+        assert!(before.catalog.direct_query_segments.is_empty());
         store
             .maintain_namespace("iris.worker", false)
             .await
@@ -2135,7 +2211,7 @@ mod tests {
         let paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(paths.len(), 1);
         assert!(paths[0].contains("/objects/v1/compact/"));
-        let after = store.publish_native_catalog("iris.worker").await.unwrap();
+        let after = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(
             after.catalog.catalog_generation,
             before
@@ -2152,6 +2228,8 @@ mod tests {
         assert_eq!(version.live_segments.len(), 1);
         assert_eq!(version.live_segments[0].row_count, Some(2));
         assert_eq!(version.live_segments[0].level, Some(1));
+        assert_eq!(after.catalog.direct_query_segments.len(), 1);
+        assert_eq!(after.catalog.direct_query_high_water, Some(2));
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
@@ -2190,9 +2268,9 @@ mod tests {
             .unwrap();
 
         store
-            .register_versioned_table("iris.worker", partitioned_object_native_spec(1))
+            .register_versioned_table("iris.worker", partitioned_object_backed_spec(1))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
         store
             .maintain_namespace("iris.worker", false)
             .await
@@ -2200,7 +2278,7 @@ mod tests {
 
         let status = store.table_spec_status("iris.worker").unwrap();
         assert_eq!(status.active_version(), 1);
-        let snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let snapshot = store.publish_object_catalog("iris.worker").await.unwrap();
         let version = snapshot
             .catalog
             .version_segments
@@ -2595,10 +2673,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn dropped_native_table_is_not_recovered_from_retained_objects() {
-        let data_dir = crate::test_support::unique_dir("native_drop_data");
-        let recovered_data_dir = crate::test_support::unique_dir("native_drop_recovered");
-        let remote_dir = crate::test_support::unique_dir("native_drop_remote");
+    async fn dropped_object_table_is_not_recovered_from_retained_objects() {
+        let data_dir = crate::test_support::unique_dir("object_drop_data");
+        let recovered_data_dir = crate::test_support::unique_dir("object_drop_recovered");
+        let remote_dir = crate::test_support::unique_dir("object_drop_remote");
         let store = Arc::new(
             Store::new(
                 Some(data_dir.clone()),
@@ -2609,9 +2687,27 @@ mod tests {
             .unwrap(),
         );
         store
-            .register_versioned_table("iris.worker", object_native_spec(1))
+            .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        store.publish_native_catalog("iris.worker").await.unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w1"])),
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let cache_root = data_dir.join("_finelog/tables/iris.worker");
+        assert!(cache_root.exists());
 
         let dropping = Arc::clone(&store);
         tokio::task::spawn_blocking(move || dropping.drop_table("iris.worker"))
@@ -2619,11 +2715,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!remote_dir
-            .join("_native/namespaces/iris.worker/HEAD.json")
+            .join("_finelog/tables/iris.worker/HEAD.json")
             .exists());
         assert!(remote_dir
-            .join("_native/namespaces/iris.worker/catalogs")
+            .join("_finelog/tables/iris.worker/catalogs")
             .exists());
+        assert!(!cache_root.exists());
 
         let recovered = Store::new(
             Some(recovered_data_dir.clone()),
@@ -2632,7 +2729,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert_eq!(recovered.recover_native_namespaces().await.unwrap(), 0);
+        assert_eq!(recovered.recover_object_tables().await.unwrap(), 0);
         assert!(matches!(
             recovered.get_table_schema("iris.worker"),
             Err(StatsError::NamespaceNotFound(_))

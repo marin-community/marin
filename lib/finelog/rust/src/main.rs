@@ -18,7 +18,7 @@ use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
-use finelog::store::remote::is_object_store;
+use finelog::store::object_store::is_object_store;
 use finelog::store::{ServeMode, Store, TelemetryRootWriteMode};
 use tokio::sync::Notify;
 
@@ -150,14 +150,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
-    let recovered_native_namespaces = store
-        .recover_native_namespaces()
+    let recovered_object_tables = store
+        .recover_object_tables()
         .await
-        .map_err(|e| format!("failed to recover native catalogs: {e}"))?;
-    if recovered_native_namespaces > 0 {
+        .map_err(|e| format!("failed to recover object catalogs: {e}"))?;
+    if recovered_object_tables > 0 {
         tracing::info!(
-            namespaces = recovered_native_namespaces,
-            "recovered object-native namespaces before serving"
+            namespaces = recovered_object_tables,
+            "recovered object-backed namespaces before serving"
         );
     }
     if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {

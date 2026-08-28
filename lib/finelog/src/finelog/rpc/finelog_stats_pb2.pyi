@@ -25,7 +25,7 @@ class L0Mode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     L0_MODE_UNSPECIFIED: _ClassVar[L0Mode]
     L0_MODE_LEGACY_LOCAL: _ClassVar[L0Mode]
-    L0_MODE_OBJECT_NATIVE: _ClassVar[L0Mode]
+    L0_MODE_OBJECT_STORE: _ClassVar[L0Mode]
     L0_MODE_LOCAL_EPHEMERAL: _ClassVar[L0Mode]
 
 class MigrationPhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
@@ -50,7 +50,7 @@ COLUMN_TYPE_FLOAT64_LIST: ColumnType
 COLUMN_TYPE_INT64_LIST: ColumnType
 L0_MODE_UNSPECIFIED: L0Mode
 L0_MODE_LEGACY_LOCAL: L0Mode
-L0_MODE_OBJECT_NATIVE: L0Mode
+L0_MODE_OBJECT_STORE: L0Mode
 L0_MODE_LOCAL_EPHEMERAL: L0Mode
 MIGRATION_PHASE_UNSPECIFIED: MigrationPhase
 MIGRATION_PHASE_DUAL_WRITE: MigrationPhase
@@ -231,18 +231,18 @@ class TableSpec(_message.Message):
     def __init__(self, version: _Optional[int] = ..., logical_schema: _Optional[_Union[Schema, _Mapping]] = ..., source_layout: _Optional[_Union[SourceLayout, _Mapping]] = ..., artifact_policy: _Optional[_Union[ArtifactPolicy, _Mapping]] = ..., operating_policy: _Optional[_Union[OperatingPolicy, _Mapping]] = ...) -> None: ...
 
 class ObjectRef(_message.Message):
-    __slots__ = ("uri", "provider_version", "etag", "byte_size", "sha256")
-    URI_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("object_id", "provider_version", "etag", "byte_size", "sha256")
+    OBJECT_ID_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_VERSION_FIELD_NUMBER: _ClassVar[int]
     ETAG_FIELD_NUMBER: _ClassVar[int]
     BYTE_SIZE_FIELD_NUMBER: _ClassVar[int]
     SHA256_FIELD_NUMBER: _ClassVar[int]
-    uri: str
+    object_id: str
     provider_version: str
     etag: str
     byte_size: int
     sha256: bytes
-    def __init__(self, uri: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
+    def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
     __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "schema_revision", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill")
@@ -291,7 +291,7 @@ class TableVersionSegments(_message.Message):
     def __init__(self, table_spec_version: _Optional[int] = ..., live_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., retired_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ...) -> None: ...
 
 class TableMigrationStatus(_message.Message):
-    __slots__ = ("migration_id", "from_version", "to_version", "phase", "fence_seq", "source_generation", "rows_total", "rows_completed")
+    __slots__ = ("migration_id", "from_version", "to_version", "phase", "fence_seq", "source_generation", "rows_total", "rows_completed", "observation_deadline_ms")
     MIGRATION_ID_FIELD_NUMBER: _ClassVar[int]
     FROM_VERSION_FIELD_NUMBER: _ClassVar[int]
     TO_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -300,6 +300,7 @@ class TableMigrationStatus(_message.Message):
     SOURCE_GENERATION_FIELD_NUMBER: _ClassVar[int]
     ROWS_TOTAL_FIELD_NUMBER: _ClassVar[int]
     ROWS_COMPLETED_FIELD_NUMBER: _ClassVar[int]
+    OBSERVATION_DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
     migration_id: str
     from_version: int
     to_version: int
@@ -308,7 +309,8 @@ class TableMigrationStatus(_message.Message):
     source_generation: int
     rows_total: int
     rows_completed: int
-    def __init__(self, migration_id: _Optional[str] = ..., from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., phase: _Optional[_Union[MigrationPhase, str]] = ..., fence_seq: _Optional[int] = ..., source_generation: _Optional[int] = ..., rows_total: _Optional[int] = ..., rows_completed: _Optional[int] = ...) -> None: ...
+    observation_deadline_ms: int
+    def __init__(self, migration_id: _Optional[str] = ..., from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., phase: _Optional[_Union[MigrationPhase, str]] = ..., fence_seq: _Optional[int] = ..., source_generation: _Optional[int] = ..., rows_total: _Optional[int] = ..., rows_completed: _Optional[int] = ..., observation_deadline_ms: _Optional[int] = ...) -> None: ...
 
 class ForwardCursor(_message.Message):
     __slots__ = ("target", "cursor")
@@ -319,7 +321,7 @@ class ForwardCursor(_message.Message):
     def __init__(self, target: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
 
 class NamespaceCatalog(_message.Message):
-    __slots__ = ("format_version", "namespace", "catalog_generation", "active_table_spec_version", "desired_table_spec_version", "retained_table_specs", "persisted_high_water", "version_segments", "migration", "max_query_time_ms", "forward_cursors")
+    __slots__ = ("format_version", "namespace", "catalog_generation", "active_table_spec_version", "desired_table_spec_version", "retained_table_specs", "persisted_high_water", "version_segments", "migration", "max_query_time_ms", "forward_cursors", "direct_query_segments", "direct_query_high_water")
     FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
@@ -331,6 +333,8 @@ class NamespaceCatalog(_message.Message):
     MIGRATION_FIELD_NUMBER: _ClassVar[int]
     MAX_QUERY_TIME_MS_FIELD_NUMBER: _ClassVar[int]
     FORWARD_CURSORS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_SEGMENTS_FIELD_NUMBER: _ClassVar[int]
+    DIRECT_QUERY_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
     format_version: int
     namespace: str
     catalog_generation: int
@@ -342,7 +346,9 @@ class NamespaceCatalog(_message.Message):
     migration: TableMigrationStatus
     max_query_time_ms: int
     forward_cursors: _containers.RepeatedCompositeFieldContainer[ForwardCursor]
-    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., desired_table_spec_version: _Optional[int] = ..., retained_table_specs: _Optional[_Iterable[_Union[TableSpec, _Mapping]]] = ..., persisted_high_water: _Optional[int] = ..., version_segments: _Optional[_Iterable[_Union[TableVersionSegments, _Mapping]]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., max_query_time_ms: _Optional[int] = ..., forward_cursors: _Optional[_Iterable[_Union[ForwardCursor, _Mapping]]] = ...) -> None: ...
+    direct_query_segments: _containers.RepeatedCompositeFieldContainer[CatalogSegment]
+    direct_query_high_water: int
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., desired_table_spec_version: _Optional[int] = ..., retained_table_specs: _Optional[_Iterable[_Union[TableSpec, _Mapping]]] = ..., persisted_high_water: _Optional[int] = ..., version_segments: _Optional[_Iterable[_Union[TableVersionSegments, _Mapping]]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., max_query_time_ms: _Optional[int] = ..., forward_cursors: _Optional[_Iterable[_Union[ForwardCursor, _Mapping]]] = ..., direct_query_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., direct_query_high_water: _Optional[int] = ...) -> None: ...
 
 class CatalogHead(_message.Message):
     __slots__ = ("format_version", "namespace", "writer_epoch", "catalog_generation", "active_table_spec_version", "catalog")
@@ -466,44 +472,6 @@ class GetTableSchemaResponse(_message.Message):
     schema: Schema
     def __init__(self, schema: _Optional[_Union[Schema, _Mapping]] = ...) -> None: ...
 
-class QueryCatalogVersion(_message.Message):
-    __slots__ = ("namespace", "catalog_generation", "table_spec_version")
-    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-    CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
-    TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]
-    namespace: str
-    catalog_generation: int
-    table_spec_version: int
-    def __init__(self, namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., table_spec_version: _Optional[int] = ...) -> None: ...
-
-class ReportQueryStartRequest(_message.Message):
-    __slots__ = ("query_id", "sql", "catalogs")
-    QUERY_ID_FIELD_NUMBER: _ClassVar[int]
-    SQL_FIELD_NUMBER: _ClassVar[int]
-    CATALOGS_FIELD_NUMBER: _ClassVar[int]
-    query_id: str
-    sql: str
-    catalogs: _containers.RepeatedCompositeFieldContainer[QueryCatalogVersion]
-    def __init__(self, query_id: _Optional[str] = ..., sql: _Optional[str] = ..., catalogs: _Optional[_Iterable[_Union[QueryCatalogVersion, _Mapping]]] = ...) -> None: ...
-
-class ReportQueryFinishRequest(_message.Message):
-    __slots__ = ("query_id", "elapsed_ms", "row_count", "succeeded", "error_code")
-    QUERY_ID_FIELD_NUMBER: _ClassVar[int]
-    ELAPSED_MS_FIELD_NUMBER: _ClassVar[int]
-    ROW_COUNT_FIELD_NUMBER: _ClassVar[int]
-    SUCCEEDED_FIELD_NUMBER: _ClassVar[int]
-    ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
-    query_id: str
-    elapsed_ms: int
-    row_count: int
-    succeeded: bool
-    error_code: str
-    def __init__(self, query_id: _Optional[str] = ..., elapsed_ms: _Optional[int] = ..., row_count: _Optional[int] = ..., succeeded: _Optional[bool] = ..., error_code: _Optional[str] = ...) -> None: ...
-
-class ReportQueryResponse(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
-
 class GetTableStatusRequest(_message.Message):
     __slots__ = ("namespace",)
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
@@ -522,15 +490,13 @@ class GetTableStatusResponse(_message.Message):
     catalog_generation: int
     def __init__(self, active_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., desired_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., catalog_generation: _Optional[int] = ...) -> None: ...
 
-class RollbackTableVersionRequest(_message.Message):
-    __slots__ = ("namespace", "retained_version")
+class AbortTableMigrationRequest(_message.Message):
+    __slots__ = ("namespace",)
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-    RETAINED_VERSION_FIELD_NUMBER: _ClassVar[int]
     namespace: str
-    retained_version: int
-    def __init__(self, namespace: _Optional[str] = ..., retained_version: _Optional[int] = ...) -> None: ...
+    def __init__(self, namespace: _Optional[str] = ...) -> None: ...
 
-class RollbackTableVersionResponse(_message.Message):
+class AbortTableMigrationResponse(_message.Message):
     __slots__ = ("catalog_generation", "active_table_spec_version")
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]

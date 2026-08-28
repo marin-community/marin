@@ -15,13 +15,12 @@ use datafusion::error::DataFusionError;
 use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
-    DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse, ListNamespacesResponse,
-    NamespaceInfo, OwnedDropTableRequestView, OwnedGetTableSchemaRequestView,
-    OwnedGetTableStatusRequestView, OwnedListNamespacesRequestView, OwnedQueryRequestView,
-    OwnedRegisterTableRequestView, OwnedReportQueryFinishRequestView,
-    OwnedReportQueryStartRequestView, OwnedRollbackTableVersionRequestView,
-    OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, ReportQueryResponse,
-    RollbackTableVersionResponse, StatsService, WriteRowsResponse,
+    AbortTableMigrationResponse, DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse,
+    ListNamespacesResponse, NamespaceInfo, OwnedAbortTableMigrationRequestView,
+    OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedGetTableStatusRequestView,
+    OwnedListNamespacesRequestView, OwnedQueryRequestView, OwnedRegisterTableRequestView,
+    OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, StatsService,
+    WriteRowsResponse,
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
@@ -160,7 +159,7 @@ impl StatsService for StatsServiceImpl {
             effective_policy,
             ignored_columns,
             table_spec_status,
-            object_native,
+            object_backed,
         ) = run_blocking(move || {
             let ns = registration_namespace_for(&requested_namespace)?;
             let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
@@ -202,7 +201,7 @@ impl StatsService for StatsServiceImpl {
                     registration.policy,
                     Vec::new(),
                     registration.table_spec_status,
-                    registration.object_native,
+                    registration.object_backed,
                 ));
             }
             let effective = store.register_table(&ns, schema, policy)?;
@@ -219,9 +218,9 @@ impl StatsService for StatsServiceImpl {
         })
         .await?;
         self.report_ignored_forwarded_telemetry_columns(ignored_columns);
-        if object_native {
+        if object_backed {
             self.store
-                .publish_native_catalog(&registered_namespace)
+                .publish_object_catalog(&registered_namespace)
                 .await?;
         }
 
@@ -302,7 +301,7 @@ impl StatsService for StatsServiceImpl {
         let _read_guard = self.store.query_visibility().read().await;
         // Cache paths mirror immutable object keys. Rehydrate missing visible
         // objects while eviction is fenced, then snapshot exact local paths.
-        self.store.ensure_native_query_cache().await?;
+        self.store.ensure_query_cache().await?;
 
         // Snapshot every live namespace (schema + sealed-segment paths) under
         // the engine locks on the blocking pool.
@@ -421,63 +420,6 @@ impl StatsService for StatsServiceImpl {
         })
     }
 
-    async fn report_query_start(
-        &self,
-        _ctx: RequestContext,
-        request: OwnedReportQueryStartRequestView,
-    ) -> ServiceResult<ReportQueryResponse> {
-        let query_id = request.query_id.unwrap_or("").to_string();
-        if query_id.is_empty() {
-            return Err(ConnectError::invalid_argument("query_id required"));
-        }
-        let catalogs = request
-            .catalogs
-            .iter()
-            .map(|catalog| {
-                (
-                    catalog.namespace.unwrap_or("").to_string(),
-                    catalog.catalog_generation.unwrap_or(0),
-                    catalog.table_spec_version.unwrap_or(0),
-                )
-            })
-            .collect::<Vec<_>>();
-        if catalogs
-            .iter()
-            .any(|(namespace, _, _)| namespace.is_empty())
-        {
-            return Err(ConnectError::invalid_argument(
-                "reported query catalog namespace required",
-            ));
-        }
-        tracing::info!(
-            query_id,
-            sql = %truncate_sql_for_log(request.sql.unwrap_or("")),
-            catalogs = ?catalogs,
-            "direct query started"
-        );
-        connectrpc::Response::ok(ReportQueryResponse::default())
-    }
-
-    async fn report_query_finish(
-        &self,
-        _ctx: RequestContext,
-        request: OwnedReportQueryFinishRequestView,
-    ) -> ServiceResult<ReportQueryResponse> {
-        let query_id = request.query_id.unwrap_or("").to_string();
-        if query_id.is_empty() {
-            return Err(ConnectError::invalid_argument("query_id required"));
-        }
-        tracing::info!(
-            query_id,
-            reported_elapsed_ms = request.elapsed_ms.unwrap_or(0),
-            row_count = request.row_count.unwrap_or(0),
-            succeeded = request.succeeded.unwrap_or(false),
-            error_code = request.error_code.unwrap_or(""),
-            "direct query finished"
-        );
-        connectrpc::Response::ok(ReportQueryResponse::default())
-    }
-
     async fn get_table_status(
         &self,
         _ctx: RequestContext,
@@ -507,21 +449,17 @@ impl StatsService for StatsServiceImpl {
         })
     }
 
-    async fn rollback_table_version(
+    async fn abort_table_migration(
         &self,
         _ctx: RequestContext,
-        request: OwnedRollbackTableVersionRequestView,
-    ) -> ServiceResult<RollbackTableVersionResponse> {
+        request: OwnedAbortTableMigrationRequestView,
+    ) -> ServiceResult<AbortTableMigrationResponse> {
         let namespace = request
             .namespace
             .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
             .to_string();
-        let retained_version = request.retained_version.unwrap_or(0);
-        let status = self
-            .store
-            .rollback_table_version(&namespace, retained_version)
-            .await?;
-        connectrpc::Response::ok(RollbackTableVersionResponse {
+        let status = self.store.abort_table_migration(&namespace).await?;
+        connectrpc::Response::ok(AbortTableMigrationResponse {
             catalog_generation: Some(status.catalog_generation),
             active_table_spec_version: Some(status.active_version()),
             ..Default::default()

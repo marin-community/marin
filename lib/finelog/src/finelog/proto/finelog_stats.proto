@@ -132,7 +132,7 @@ message StoragePolicy {
 enum L0Mode {
   L0_MODE_UNSPECIFIED = 0;
   L0_MODE_LEGACY_LOCAL = 1;
-  L0_MODE_OBJECT_NATIVE = 2;
+  L0_MODE_OBJECT_STORE = 2;
   L0_MODE_LOCAL_EPHEMERAL = 3;
 }
 
@@ -199,7 +199,7 @@ message TableSpec {
 }
 
 message ObjectRef {
-  string uri = 1;
+  string object_id = 1;
   string provider_version = 2;
   string etag = 3;
   uint64 byte_size = 4;
@@ -252,6 +252,7 @@ message TableMigrationStatus {
   uint64 source_generation = 6;
   int64 rows_total = 7;
   int64 rows_completed = 8;
+  int64 observation_deadline_ms = 9;
 }
 
 message ForwardCursor {
@@ -271,6 +272,10 @@ message NamespaceCatalog {
   TableMigrationStatus migration = 9;
   uint64 max_query_time_ms = 10;
   repeated ForwardCursor forward_cursors = 11;
+  // Stable L1+ projection exposed to clients that query the object store
+  // directly. It covers rows through direct_query_high_water only.
+  repeated CatalogSegment direct_query_segments = 12;
+  int64 direct_query_high_water = 13;
 }
 
 message CatalogHead {
@@ -386,28 +391,6 @@ message GetTableSchemaResponse {
   Schema schema = 1;
 }
 
-message QueryCatalogVersion {
-  string namespace = 1;
-  uint64 catalog_generation = 2;
-  uint64 table_spec_version = 3;
-}
-
-message ReportQueryStartRequest {
-  string query_id = 1;
-  string sql = 2;
-  repeated QueryCatalogVersion catalogs = 3;
-}
-
-message ReportQueryFinishRequest {
-  string query_id = 1;
-  uint64 elapsed_ms = 2;
-  uint64 row_count = 3;
-  bool succeeded = 4;
-  string error_code = 5;
-}
-
-message ReportQueryResponse {}
-
 message GetTableStatusRequest {
   string namespace = 1;
 }
@@ -419,12 +402,11 @@ message GetTableStatusResponse {
   uint64 catalog_generation = 4;
 }
 
-message RollbackTableVersionRequest {
+message AbortTableMigrationRequest {
   string namespace = 1;
-  uint64 retained_version = 2;
 }
 
-message RollbackTableVersionResponse {
+message AbortTableMigrationResponse {
   uint64 catalog_generation = 1;
   uint64 active_table_spec_version = 2;
 }
@@ -436,8 +418,6 @@ service StatsService {
   rpc DropTable(DropTableRequest) returns (DropTableResponse);
   rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
   rpc GetTableSchema(GetTableSchemaRequest) returns (GetTableSchemaResponse);
-  rpc ReportQueryStart(ReportQueryStartRequest) returns (ReportQueryResponse);
-  rpc ReportQueryFinish(ReportQueryFinishRequest) returns (ReportQueryResponse);
   rpc GetTableStatus(GetTableStatusRequest) returns (GetTableStatusResponse);
-  rpc RollbackTableVersion(RollbackTableVersionRequest) returns (RollbackTableVersionResponse);
+  rpc AbortTableMigration(AbortTableMigrationRequest) returns (AbortTableMigrationResponse);
 }

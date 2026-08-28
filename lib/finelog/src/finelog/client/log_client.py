@@ -26,12 +26,7 @@ from connectrpc.interceptor import Interceptor
 from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
-from finelog.client.object_query_client import (
-    CatalogPin,
-    ObjectQueryClient,
-    QueryMode,
-    query_catalog_versions,
-)
+from finelog.client.object_query_client import ObjectQueryClient, QueryMode
 from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -668,48 +663,8 @@ class LogClient:
         return result
 
     def object_query_client(self, object_store_root: str) -> ObjectQueryClient:
-        """Create a direct query client with best-effort Finelog reporting."""
-        return ObjectQueryClient(
-            object_store_root,
-            report_start=self._report_direct_query_start,
-            report_finish=self._report_direct_query_finish,
-        )
-
-    def _report_direct_query_start(
-        self,
-        query_id: str,
-        sql: str,
-        pins: tuple[CatalogPin, ...],
-    ) -> None:
-        self._stats_rpc(
-            lambda client: client.report_query_start(
-                stats_pb2.ReportQueryStartRequest(
-                    query_id=query_id,
-                    sql=sql,
-                    catalogs=query_catalog_versions(pins),
-                )
-            )
-        )
-
-    def _report_direct_query_finish(
-        self,
-        query_id: str,
-        elapsed_ms: int,
-        row_count: int,
-        succeeded: bool,
-        error_code: str,
-    ) -> None:
-        self._stats_rpc(
-            lambda client: client.report_query_finish(
-                stats_pb2.ReportQueryFinishRequest(
-                    query_id=query_id,
-                    elapsed_ms=elapsed_ms,
-                    row_count=row_count,
-                    succeeded=succeeded,
-                    error_code=error_code,
-                )
-            )
-        )
+        """Create a direct object-store query client."""
+        return ObjectQueryClient(object_store_root)
 
     def list_namespaces(self) -> list[NamespaceInfo]:
         """Return every queryable namespace with its schema and storage statistics."""
@@ -742,12 +697,10 @@ class LogClient:
         )
         return table_status_from_proto(response)
 
-    def rollback_table_version(self, namespace: str, retained_version: int) -> TableStatus:
-        """Move a table's active pointer to a retained version."""
+    def abort_table_migration(self, namespace: str) -> TableStatus:
+        """Abort the current migration and restore its source version."""
         self._stats_rpc(
-            lambda client: client.rollback_table_version(
-                stats_pb2.RollbackTableVersionRequest(namespace=namespace, retained_version=retained_version)
-            )
+            lambda client: client.abort_table_migration(stats_pb2.AbortTableMigrationRequest(namespace=namespace))
         )
         return self.get_table_status(namespace)
 

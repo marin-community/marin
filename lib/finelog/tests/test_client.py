@@ -117,8 +117,6 @@ class _FakeStatsServiceClient:
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
         self.queries: list[str] = []
-        self.query_starts: list[stats_pb2.ReportQueryStartRequest] = []
-        self.query_finishes: list[stats_pb2.ReportQueryFinishRequest] = []
         self.errors: list[Exception] = []
         self.query_handler = None
         self.namespaces: list[stats_pb2.NamespaceInfo] = []
@@ -173,21 +171,12 @@ class _FakeStatsServiceClient:
             raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} has no table spec")
         return stats_pb2.GetTableStatusResponse(active_table_spec=spec, catalog_generation=7)
 
-    def rollback_table_version(self, request):
+    def abort_table_migration(self, request):
         spec = self.registered_specs[request.namespace]
-        spec.version = request.retained_version
-        return stats_pb2.RollbackTableVersionResponse(
+        return stats_pb2.AbortTableMigrationResponse(
             catalog_generation=8,
-            active_table_spec_version=request.retained_version,
+            active_table_spec_version=spec.version,
         )
-
-    def report_query_start(self, request):
-        self.query_starts.append(request)
-        return stats_pb2.ReportQueryResponse()
-
-    def report_query_finish(self, request):
-        self.query_finishes.append(request)
-        return stats_pb2.ReportQueryResponse()
 
     def close(self):
         pass
@@ -530,7 +519,7 @@ def test_get_table_forwards_storage_policy(tracked_clients):
         client.close()
 
 
-def test_get_table_registers_complete_versioned_object_native_spec(tracked_clients):
+def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clients):
     schema = Schema(
         columns=(
             Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, trigram_index=True),
@@ -551,7 +540,7 @@ def test_get_table_registers_complete_versioned_object_native_spec(tracked_clien
         ),
         artifact_revision=4,
         operating_policy=OperatingPolicy(
-            l0_mode=L0Mode.OBJECT_NATIVE,
+            l0_mode=L0Mode.OBJECT_STORE,
             max_buffer_bytes=64 * 1024 * 1024,
             max_flush_age_ms=5_000,
             max_query_time_ms=600_000,
@@ -571,7 +560,7 @@ def test_get_table_registers_complete_versioned_object_native_spec(tracked_clien
         assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
         assert registered.artifact_policy.revision == 4
         assert registered.artifact_policy.indexes[0].column == "worker_id"
-        assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_NATIVE
+        assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
         assert registered.operating_policy.local_cache.max_bytes == 1024
         assert registered.operating_policy.remote_retention.retain_forever
     finally:
@@ -600,7 +589,7 @@ def test_cached_table_handle_registers_a_new_table_spec_version(tracked_clients)
         client.close()
 
 
-def test_table_status_and_rollback_use_versioned_contract(tracked_clients):
+def test_table_status_and_abort_use_versioned_contract(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
         table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=2))
@@ -612,8 +601,8 @@ def test_table_status_and_rollback_use_versioned_contract(tracked_clients):
         assert status.desired_version is None
         assert status.catalog_generation == 7
 
-        rolled_back = client.rollback_table_version("iris.worker", 1)
-        assert rolled_back.active_version == 1
+        aborted = client.abort_table_migration("iris.worker")
+        assert aborted.active_version == 2
     finally:
         client.close()
 

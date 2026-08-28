@@ -88,8 +88,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::store::catalog::Catalog;
+use crate::store::legacy_archive::LegacyArchive;
 use crate::store::namespace_name::validate_namespace_name;
-use crate::store::remote::RemoteStore;
 use crate::store::schema::{
     arrow_to_column_type, resolve_key_column, Column, Schema, IMPLICIT_KEY_COLUMN,
     IMPLICIT_SEQ_COLUMN,
@@ -347,7 +347,7 @@ pub fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
 /// `None`.
 pub async fn adopt_remote_segments(
     catalog: &Catalog,
-    remote: Option<&RemoteStore>,
+    remote: Option<&LegacyArchive>,
     namespace: &str,
     local_dir: &Path,
     schema: &Schema,
@@ -371,7 +371,7 @@ pub async fn adopt_remote_segments(
 // ---------------------------------------------------------------------------
 
 /// Enumerate valid namespace subdirectories of `data_dir`. Internal roots such
-/// as `_native` and migration scratch directories are excluded by the same
+/// as `_finelog` and migration scratch directories are excluded by the same
 /// validator used at registration. The `log` dir is included (the privileged
 /// namespace is adopted like any other, then
 /// `ensure_log_namespace_registered` re-establishes its canonical schema).
@@ -832,15 +832,14 @@ mod tests {
     }
 
     #[test]
-    fn catalog_adoption_never_treats_native_cache_as_a_namespace() {
-        let data_dir = tempdir("native_cache_reserved");
+    fn catalog_adoption_never_treats_object_cache_as_a_namespace() {
+        let data_dir = tempdir("object_cache_reserved");
         let worker_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&worker_dir).unwrap();
         write_segment_to_dir(&worker_dir, 0, 1, &worker_batch(1, vec![10])).unwrap();
-        let native_cache =
-            data_dir.join("_native/namespaces/iris.worker/objects/v1/backfill/source");
-        std::fs::create_dir_all(&native_cache).unwrap();
-        write_segment_to_dir(&native_cache, 0, 2, &worker_batch(2, vec![20])).unwrap();
+        let object_cache = data_dir.join("_finelog/tables/iris.worker/objects/v1/backfill/source");
+        std::fs::create_dir_all(&object_cache).unwrap();
+        write_segment_to_dir(&object_cache, 0, 2, &worker_batch(2, vec![20])).unwrap();
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
@@ -853,7 +852,7 @@ mod tests {
         assert!(namespaces
             .iter()
             .any(|namespace| namespace == "iris.worker"));
-        assert!(!namespaces.iter().any(|namespace| namespace == "_native"));
+        assert!(!namespaces.iter().any(|namespace| namespace == "_finelog"));
 
         std::fs::remove_dir_all(&data_dir).ok();
     }
@@ -1004,22 +1003,23 @@ mod tests {
 
     #[tokio::test]
     async fn adopt_remote_adopts_remote_only_segments_as_remote() {
-        use crate::store::remote::build_remote_store;
+        use crate::store::object_store::build_object_storage;
 
         let data_dir = tempdir("remote_adopt");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
         let remote_dir = tempdir("remote_bucket");
-        let remote = build_remote_store(remote_dir.to_str().unwrap())
+        let remote = build_object_storage(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
+        let archive = LegacyArchive::new(remote);
 
         // Seed a remote-only L1 segment by writing a real parquet then uploading.
         let staging = tempdir("staging");
         let (l1_path, _) =
             write_segment_to_dir(&staging, 1, 1, &worker_batch(1, vec![10, 20])).unwrap();
         assert!(
-            remote
+            archive
                 .upload(
                     "iris.worker",
                     l1_path.file_name().unwrap().to_str().unwrap(),
@@ -1031,7 +1031,7 @@ mod tests {
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         adopt_remote_segments(
             &catalog,
-            Some(&remote),
+            Some(&archive),
             "iris.worker",
             &ns_dir,
             &worker_store_schema(),

@@ -22,13 +22,15 @@ def _write_catalog(
     *,
     catalog_bytes_override: bytes | None = None,
     active_version: int = 1,
-    l0_mode: str = "L0_MODE_OBJECT_NATIVE",
+    l0_mode: str = "L0_MODE_OBJECT_STORE",
     max_query_time_ms: int = 600_000,
+    object_id_override: str | None = None,
 ) -> Path:
     namespace = "iris.worker"
-    native = root / "_native" / "namespaces" / namespace
-    object_key = "objects/v1/l0/content/seg_L0_0000000000000000001.parquet"
-    object_path = native / object_key
+    table_root = root / "_finelog" / "tables" / namespace
+    canonical_object_id = f"_finelog/tables/{namespace}/objects/v1/l1/content/seg_L1_0000000000000000001.parquet"
+    object_id = object_id_override or canonical_object_id
+    object_path = root / canonical_object_id
     object_path.parent.mkdir(parents=True)
     pq.write_table(
         pa.table(
@@ -48,6 +50,7 @@ def _write_catalog(
         "activeTableSpecVersion": str(active_version),
         "desiredTableSpecVersion": "0",
         "maxQueryTimeMs": str(max_query_time_ms),
+        "directQueryHighWater": "2",
         "retainedTableSpecs": [
             {
                 "version": "1",
@@ -66,16 +69,28 @@ def _write_catalog(
                 "liveSegments": [
                     {
                         "segmentId": object_path.name,
-                        "source": {"uri": object_key},
+                        "source": {"objectId": object_id},
+                        "level": 1,
                         "rowCount": "2",
                     }
                 ],
             }
         ],
+        "directQuerySegments": [
+            {
+                "segmentId": object_path.name,
+                "source": {"objectId": object_id},
+                "level": 1,
+                "minSeq": "1",
+                "maxSeq": "2",
+                "rowCount": "2",
+            }
+        ],
     }
     catalog_bytes = catalog_bytes_override or json.dumps(catalog, separators=(",", ":")).encode()
     catalog_key = "catalogs/00000000000000000007-test.json"
-    catalog_path = native / catalog_key
+    catalog_id = f"_finelog/tables/{namespace}/{catalog_key}"
+    catalog_path = root / catalog_id
     catalog_path.parent.mkdir(parents=True)
     catalog_path.write_bytes(catalog_bytes)
     head = {
@@ -84,23 +99,18 @@ def _write_catalog(
         "catalogGeneration": "7",
         "activeTableSpecVersion": str(active_version),
         "catalog": {
-            "uri": catalog_key,
+            "objectId": catalog_id,
             "sha256": base64.b64encode(hashlib.sha256(catalog_bytes).digest()).decode(),
         },
     }
-    (native / "HEAD.json").write_text(json.dumps(head))
+    (table_root / "HEAD.json").write_text(json.dumps(head))
     return catalog_path
 
 
-def test_object_query_reads_the_pinned_active_catalog_and_reports(tmp_path: Path) -> None:
+def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> None:
     _write_catalog(tmp_path)
-    starts: list[tuple] = []
-    finishes: list[tuple] = []
-    client = ObjectQueryClient(
-        str(tmp_path),
-        report_start=lambda *args: starts.append(args),
-        report_finish=lambda *args: finishes.append(args),
-    )
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
 
     result = client.query(
         'SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY seq',
@@ -111,12 +121,7 @@ def test_object_query_reads_the_pinned_active_catalog_and_reports(tmp_path: Path
         "worker_id": ["w-1", "w-2"],
         "mem_bytes": [10, 20],
     }
-    assert len(starts) == 1
-    assert starts[0][2][0].catalog_generation == 7
-    assert starts[0][2][0].table_spec_version == 1
-    assert len(finishes) == 1
-    assert finishes[0][3] is True
-    assert finishes[0][2] == 2
+    assert pin.high_water == 2
 
 
 def test_object_query_rejects_catalog_bytes_that_do_not_match_head(tmp_path: Path) -> None:
@@ -130,19 +135,14 @@ def test_object_query_rejects_catalog_bytes_that_do_not_match_head(tmp_path: Pat
         )
 
 
-def test_object_query_reporting_is_best_effort(tmp_path: Path) -> None:
-    _write_catalog(tmp_path)
+def test_object_query_rejects_noncanonical_object_ids(tmp_path: Path) -> None:
+    _write_catalog(
+        tmp_path,
+        object_id_override="_finelog/tables/iris.worker/objects/v1/../escaped.parquet",
+    )
 
-    def unavailable(*_args) -> None:
-        raise ConnectionError("server unavailable")
-
-    result = ObjectQueryClient(
-        str(tmp_path),
-        report_start=unavailable,
-        report_finish=unavailable,
-    ).query('SELECT count(*) AS rows FROM "iris.worker"', namespaces=["iris.worker"])
-
-    assert result.column("rows").to_pylist() == [2]
+    with pytest.raises(StatsError, match="canonical relative object ID"):
+        ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
 
 
 def test_object_query_stops_at_the_catalog_lifetime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,11 +199,11 @@ def test_object_query_stops_at_the_catalog_lifetime(tmp_path: Path, monkeypatch:
 @pytest.mark.parametrize(
     ("active_version", "l0_mode"),
     [
-        (0, "L0_MODE_OBJECT_NATIVE"),
+        (0, "L0_MODE_OBJECT_STORE"),
         (1, "L0_MODE_LEGACY_LOCAL"),
     ],
 )
-def test_object_query_rejects_catalog_without_an_active_native_version(
+def test_object_query_rejects_catalog_without_an_active_object_version(
     tmp_path: Path,
     active_version: int,
     l0_mode: str,

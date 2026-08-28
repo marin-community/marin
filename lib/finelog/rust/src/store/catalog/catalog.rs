@@ -22,6 +22,7 @@ use crate::proto::finelog::stats::{
     ForwardCursor, MigrationPhase, NamespaceCatalog, ObjectRef, TableMigrationStatus,
     TableSpec as ProtoTableSpec,
 };
+use crate::store::object_store::ObjectId;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
 use crate::store::table_spec::{
@@ -50,7 +51,7 @@ pub struct TableSpecStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct NativeSegmentRecord {
+pub struct ObjectSegmentRecord {
     pub path: String,
     pub table_spec_version: u64,
     pub source: ObjectRef,
@@ -60,7 +61,7 @@ pub struct NativeSegmentRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecoveredNativeSegment {
+pub struct RecoveredObjectSegment {
     pub row: SegmentRow,
     pub table_spec_version: u64,
     pub source: ObjectRef,
@@ -69,7 +70,7 @@ pub struct RecoveredNativeSegment {
     pub migration_source_rows: Option<i64>,
 }
 
-type MigrationStatusRow = (String, i64, i64, String, i64, i64, i64, i64);
+type MigrationStatusRow = (String, i64, i64, String, i64, i64, i64, i64, i64);
 
 impl TableSpecStatus {
     /// Return the query-visible TableSpec version, or zero for a legacy table.
@@ -138,7 +139,7 @@ fn table_spec_status_in(conn: &Connection, namespace: &str) -> Result<TableSpecS
     let head: Option<(i64, i64, Option<i64>)> = conn
         .query_row(
             "SELECT catalog_generation, active_table_spec_version, desired_table_spec_version
-             FROM namespace_heads WHERE namespace = ?1",
+             FROM table_heads WHERE namespace = ?1",
             [namespace],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -180,7 +181,7 @@ fn migration_status_in(
     let row: Option<MigrationStatusRow> = conn
         .query_row(
             "SELECT migration_id, from_version, to_version, phase, fence_seq,
-                    source_generation, rows_total, rows_completed
+                    source_generation, rows_total, rows_completed, observation_deadline_ms
              FROM table_migrations WHERE namespace = ?1",
             [namespace],
             |row| {
@@ -193,6 +194,7 @@ fn migration_status_in(
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
                 ))
             },
         )
@@ -208,6 +210,7 @@ fn migration_status_in(
             source_generation,
             rows_total,
             rows_completed,
+            observation_deadline_ms,
         )| {
             Ok(TableMigrationStatus {
                 migration_id: Some(migration_id),
@@ -218,6 +221,7 @@ fn migration_status_in(
                 source_generation: Some(source_generation as u64),
                 rows_total: Some(rows_total),
                 rows_completed: Some(rows_completed),
+                observation_deadline_ms: Some(observation_deadline_ms),
                 ..Default::default()
             })
         },
@@ -334,7 +338,7 @@ fn remove_segments_in(
         )
         .map_err(sqlite_err)?;
         conn.execute(
-            "DELETE FROM native_segments WHERE namespace = ?1 AND path = ?2",
+            "DELETE FROM object_segments WHERE namespace = ?1 AND path = ?2",
             rusqlite::params![namespace, path],
         )
         .map_err(sqlite_err)?;
@@ -347,7 +351,7 @@ impl Catalog {
     /// lives at `{data_dir}/_finelog_catalog.sqlite`. Initializes its schema
     /// idempotently.
     pub fn open(data_dir: Option<&Path>) -> Result<Catalog, StatsError> {
-        let conn = match data_dir {
+        let mut conn = match data_dir {
             None => Connection::open_in_memory().map_err(sqlite_err)?,
             Some(dir) => Connection::open(dir.join(CATALOG_DB_FILENAME)).map_err(sqlite_err)?,
         };
@@ -366,7 +370,7 @@ impl Catalog {
         let synchronous: i64 = conn
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
             .map_err(sqlite_err)?;
-        Self::create_tables(&conn)?;
+        super::migrations::migrate(&mut conn)?;
         tracing::info!(
             persistent = data_dir.is_some(),
             journal_mode,
@@ -384,202 +388,31 @@ impl Catalog {
         })
     }
 
-    fn create_tables(conn: &Connection) -> Result<(), StatsError> {
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS namespaces (
-                namespace        TEXT PRIMARY KEY,
-                schema_json      TEXT NOT NULL,
-                registered_at_ms INTEGER NOT NULL,
-                last_modified_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS storage_policies (
-                namespace        TEXT PRIMARY KEY,
-                max_segments     INTEGER,
-                max_bytes        INTEGER,
-                max_age_seconds  INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS segments (
-                namespace     TEXT    NOT NULL,
-                path          TEXT    NOT NULL,
-                level         INTEGER NOT NULL,
-                min_seq       INTEGER NOT NULL,
-                max_seq       INTEGER NOT NULL,
-                row_count     INTEGER NOT NULL,
-                byte_size     INTEGER NOT NULL,
-                created_at_ms INTEGER NOT NULL,
-                min_key_value TEXT,
-                max_key_value TEXT,
-                location      TEXT    NOT NULL,
-                partition_json TEXT,
-                PRIMARY KEY (namespace, path)
-            );
-            CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq);
-            CREATE TABLE IF NOT EXISTS forward_state (
-                target    TEXT    NOT NULL,
-                namespace TEXT    NOT NULL,
-                cursor    INTEGER NOT NULL,
-                PRIMARY KEY (target, namespace)
-            );
-            CREATE TABLE IF NOT EXISTS table_specs (
-                namespace TEXT    NOT NULL,
-                version   INTEGER NOT NULL,
-                spec_json TEXT    NOT NULL,
-                spec_hash BLOB    NOT NULL,
-                state     TEXT    NOT NULL,
-                PRIMARY KEY (namespace, version)
-            );
-            CREATE TABLE IF NOT EXISTS namespace_heads (
-                namespace                 TEXT    PRIMARY KEY,
-                catalog_generation        INTEGER NOT NULL,
-                active_table_spec_version INTEGER NOT NULL,
-                desired_table_spec_version INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS native_segments (
-                namespace         TEXT    NOT NULL,
-                path              TEXT    NOT NULL,
-                table_spec_version INTEGER NOT NULL,
-                source_json       TEXT    NOT NULL,
-                migration_backfill INTEGER NOT NULL DEFAULT 0,
-                migration_source_id TEXT,
-                migration_source_rows INTEGER,
-                PRIMARY KEY (namespace, path)
-            );
-            CREATE TABLE IF NOT EXISTS table_migrations (
-                namespace        TEXT    PRIMARY KEY,
-                migration_id     TEXT    NOT NULL,
-                from_version     INTEGER NOT NULL,
-                to_version       INTEGER NOT NULL,
-                phase            TEXT    NOT NULL,
-                fence_seq        INTEGER NOT NULL,
-                source_generation INTEGER NOT NULL,
-                rows_total       INTEGER NOT NULL,
-                rows_completed   INTEGER NOT NULL,
-                phase_updated_at_ms INTEGER NOT NULL
-            );
-            "#,
-        )
-        .map_err(sqlite_err)?;
-        let has_partition_column = {
-            let mut statement = conn
-                .prepare("PRAGMA table_info(segments)")
-                .map_err(sqlite_err)?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(sqlite_err)?;
-            let mut found = false;
-            for column in columns {
-                if column.map_err(sqlite_err)? == "partition_json" {
-                    found = true;
-                }
-            }
-            found
-        };
-        if !has_partition_column {
-            conn.execute("ALTER TABLE segments ADD COLUMN partition_json TEXT", [])
-                .map_err(sqlite_err)?;
-        }
-        let has_migration_backfill_column = {
-            let mut statement = conn
-                .prepare("PRAGMA table_info(native_segments)")
-                .map_err(sqlite_err)?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(sqlite_err)?;
-            let mut found = false;
-            for column in columns {
-                if column.map_err(sqlite_err)? == "migration_backfill" {
-                    found = true;
-                }
-            }
-            found
-        };
-        if !has_migration_backfill_column {
-            conn.execute(
-                "ALTER TABLE native_segments ADD COLUMN migration_backfill INTEGER NOT NULL DEFAULT 0",
-                [],
-            )
-            .map_err(sqlite_err)?;
-        }
-        for (column, sql) in [
-            (
-                "migration_source_id",
-                "ALTER TABLE native_segments ADD COLUMN migration_source_id TEXT",
-            ),
-            (
-                "migration_source_rows",
-                "ALTER TABLE native_segments ADD COLUMN migration_source_rows INTEGER",
-            ),
-        ] {
-            let exists = {
-                let mut statement = conn
-                    .prepare("PRAGMA table_info(native_segments)")
-                    .map_err(sqlite_err)?;
-                let columns = statement
-                    .query_map([], |row| row.get::<_, String>(1))
-                    .map_err(sqlite_err)?;
-                let mut found = false;
-                for existing in columns {
-                    if existing.map_err(sqlite_err)? == column {
-                        found = true;
-                    }
-                }
-                found
-            };
-            if !exists {
-                conn.execute(sql, []).map_err(sqlite_err)?;
-            }
-        }
-        let has_phase_updated_at_column = {
-            let mut statement = conn
-                .prepare("PRAGMA table_info(table_migrations)")
-                .map_err(sqlite_err)?;
-            let columns = statement
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(sqlite_err)?;
-            let mut found = false;
-            for column in columns {
-                if column.map_err(sqlite_err)? == "phase_updated_at_ms" {
-                    found = true;
-                }
-            }
-            found
-        };
-        if !has_phase_updated_at_column {
-            conn.execute(
-                "ALTER TABLE table_migrations ADD COLUMN phase_updated_at_ms INTEGER NOT NULL DEFAULT 0",
-                [],
-            )
-            .map_err(sqlite_err)?;
-        }
-        Ok(())
-    }
-
     pub fn table_spec_status(&self, namespace: &str) -> Result<TableSpecStatus, StatsError> {
         let inner = self.inner.lock().unwrap();
         table_spec_status_in(&inner.conn, namespace)
     }
 
     /// Rebuild the complete local projection from a verified remote catalog.
-    pub fn restore_native_snapshot(
+    pub fn restore_object_snapshot(
         &self,
         namespace: &str,
         schema: Schema,
         policy: StoragePolicy,
         snapshot: &NamespaceCatalog,
-        segments: &[RecoveredNativeSegment],
+        segments: &[RecoveredObjectSegment],
     ) -> Result<(), StatsError> {
         let remote_generation = snapshot.catalog_generation.unwrap_or(0);
         if remote_generation == 0 {
             return Err(StatsError::Internal(format!(
-                "native recovery catalog for {namespace:?} has no generation"
+                "object recovery catalog for {namespace:?} has no generation"
             )));
         }
         let mut inner = self.inner.lock().unwrap();
         let local_generation: Option<i64> = inner
             .conn
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |row| row.get(0),
             )
@@ -594,7 +427,7 @@ impl Catalog {
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         for table in [
             "segments",
-            "native_segments",
+            "object_segments",
             "table_specs",
             "table_migrations",
             "forward_state",
@@ -632,7 +465,7 @@ impl Catalog {
         }
         transaction
             .execute(
-                "INSERT INTO namespace_heads
+                "INSERT INTO table_heads
                     (namespace, catalog_generation, active_table_spec_version,
                      desired_table_spec_version)
                  VALUES (?1, ?2, ?3, ?4)
@@ -651,15 +484,20 @@ impl Catalog {
             .map_err(sqlite_err)?;
         for recovered in segments {
             upsert_segment_in(&transaction, &recovered.row)?;
-            if recovered.table_spec_version == 0 {
+            if recovered
+                .source
+                .object_id
+                .as_deref()
+                .is_none_or(|id| ObjectId::parse(id).is_err())
+            {
                 continue;
             }
             let source_json = serde_json::to_string(&recovered.source).map_err(|error| {
-                StatsError::Internal(format!("serialize recovered native source: {error}"))
+                StatsError::Internal(format!("serialize recovered object source: {error}"))
             })?;
             transaction
                 .execute(
-                    "INSERT OR REPLACE INTO native_segments
+                    "INSERT OR REPLACE INTO object_segments
                         (namespace, path, table_spec_version, source_json, migration_backfill,
                          migration_source_id, migration_source_rows)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -685,8 +523,8 @@ impl Catalog {
                     "INSERT INTO table_migrations
                         (namespace, migration_id, from_version, to_version, phase,
                          fence_seq, source_generation, rows_total, rows_completed,
-                         phase_updated_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                         phase_updated_at_ms, observation_deadline_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     rusqlite::params![
                         namespace,
                         migration.migration_id.as_deref().unwrap_or("recovered"),
@@ -698,6 +536,7 @@ impl Catalog {
                         migration.rows_total.unwrap_or(0),
                         migration.rows_completed.unwrap_or(0),
                         now_ms(),
+                        migration.observation_deadline_ms.unwrap_or(0),
                     ],
                 )
                 .map_err(sqlite_err)?;
@@ -872,8 +711,8 @@ impl Catalog {
                     "INSERT OR REPLACE INTO table_migrations
                         (namespace, migration_id, from_version, to_version, phase,
                          fence_seq, source_generation, rows_total, rows_completed,
-                         phase_updated_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
+                         phase_updated_at_ms, observation_deadline_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, 0)",
                     rusqlite::params![
                         namespace,
                         format!("{namespace}-{active_version}-{version}-{next_generation}"),
@@ -900,7 +739,7 @@ impl Catalog {
         }
         transaction
             .execute(
-                "INSERT INTO namespace_heads
+                "INSERT INTO table_heads
                     (namespace, catalog_generation, active_table_spec_version,
                      desired_table_spec_version)
                  VALUES (?1, ?2, ?3, ?4)
@@ -932,6 +771,15 @@ impl Catalog {
         }
         let active = status.active_version();
         let next_generation = status.catalog_generation + 1;
+        let observation_ms = status
+            .desired
+            .as_ref()
+            .and_then(|spec| spec.operating_policy.as_option())
+            .and_then(|policy| policy.max_query_time_ms)
+            .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
+        let activated_at_ms = now_ms();
+        let observation_deadline_ms =
+            activated_at_ms.saturating_add(i64::try_from(observation_ms).unwrap_or(i64::MAX));
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         if active > 0 {
             transaction
@@ -951,18 +799,20 @@ impl Catalog {
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3
+                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3,
+                    observation_deadline_ms = ?4
                  WHERE namespace = ?1",
                 rusqlite::params![
                     namespace,
                     migration_phase_str(MigrationPhase::MIGRATION_PHASE_OBSERVING),
-                    now_ms(),
+                    activated_at_ms,
+                    observation_deadline_ms,
                 ],
             )
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = ?2,
+                "UPDATE table_heads SET catalog_generation = ?2,
                     active_table_spec_version = ?3,
                     desired_table_spec_version = NULL
                  WHERE namespace = ?1",
@@ -973,85 +823,102 @@ impl Catalog {
         table_spec_status_in(&inner.conn, namespace)
     }
 
-    pub fn rollback_table_spec(
+    /// Abort the one in-flight migration and restore its source version.
+    ///
+    /// Backfill-only target objects become unreachable; writes accepted during
+    /// the migration are reassigned to the source version so abort never drops
+    /// rows. Published snapshots retain remote bytes until catalog GC.
+    pub fn abort_table_migration(
         &self,
         namespace: &str,
-        retained_version: u64,
-    ) -> Result<TableSpecStatus, StatsError> {
+    ) -> Result<(TableSpecStatus, Vec<String>), StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let status = table_spec_status_in(&inner.conn, namespace)?;
-        if status.desired.is_some() {
+        let migration = status.migration.as_ref().ok_or_else(|| {
+            StatsError::SchemaConflict(format!(
+                "namespace {namespace:?} has no table migration to abort"
+            ))
+        })?;
+        if status.phase == MigrationPhase::MIGRATION_PHASE_RETIRED {
             return Err(StatsError::SchemaConflict(format!(
-                "namespace {namespace:?} cannot roll back while a table specification transition is active"
+                "namespace {namespace:?} migration is already retired"
             )));
         }
-        if status.phase != MigrationPhase::MIGRATION_PHASE_OBSERVING {
-            return Err(StatsError::SchemaConflict(format!(
-                "namespace {namespace:?} can only roll back during its observation window"
-            )));
-        }
-        let target = table_spec_for_version(&inner.conn, namespace, retained_version)?;
-        if retained_version != 0 && target.is_none() {
-            return Err(StatsError::SchemaConflict(format!(
-                "table_spec version {retained_version} is not retained for namespace {namespace:?}"
-            )));
-        }
-        if retained_version == 0
-            && !status
-                .migration
-                .as_ref()
-                .is_some_and(|migration| migration.from_version == Some(0))
-        {
-            return Err(StatsError::SchemaConflict(format!(
-                "legacy table version 0 is not retained for namespace {namespace:?}"
-            )));
-        }
-        if status.active_version() == retained_version {
-            return Ok(status);
-        }
+        let from_version = migration.from_version.unwrap_or(0);
+        let to_version = migration.to_version.unwrap_or(0);
         let next_generation = status.catalog_generation + 1;
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        if status.active_version() > 0 {
-            transaction
-                .execute(
-                    "UPDATE table_specs SET state = 'RETAINED'
-                     WHERE namespace = ?1 AND version = ?2",
-                    rusqlite::params![namespace, status.active_version() as i64],
+        let backfill_paths = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT path FROM object_segments
+                     WHERE namespace = ?1 AND table_spec_version = ?2
+                       AND migration_backfill = 1",
                 )
                 .map_err(sqlite_err)?;
-        }
-        if retained_version > 0 {
+            let rows = statement
+                .query_map(rusqlite::params![namespace, to_version as i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(sqlite_err)?;
+            let mut paths = Vec::new();
+            for row in rows {
+                paths.push(row.map_err(sqlite_err)?);
+            }
+            paths
+        };
+        remove_segments_in(&transaction, namespace, &backfill_paths)?;
+        transaction
+            .execute(
+                "UPDATE object_segments
+                 SET table_spec_version = ?3,
+                     migration_backfill = 0,
+                     migration_source_id = NULL,
+                     migration_source_rows = NULL
+                 WHERE namespace = ?1 AND table_spec_version = ?2",
+                rusqlite::params![namespace, to_version as i64, from_version as i64],
+            )
+            .map_err(sqlite_err)?;
+        transaction
+            .execute(
+                "DELETE FROM table_specs WHERE namespace = ?1 AND version = ?2",
+                rusqlite::params![namespace, to_version as i64],
+            )
+            .map_err(sqlite_err)?;
+        if from_version > 0 {
             transaction
                 .execute(
                     "UPDATE table_specs SET state = 'ACTIVE'
                      WHERE namespace = ?1 AND version = ?2",
-                    rusqlite::params![namespace, retained_version as i64],
+                    rusqlite::params![namespace, from_version as i64],
                 )
                 .map_err(sqlite_err)?;
         }
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = ?2,
+                "UPDATE table_heads SET catalog_generation = ?2,
                     active_table_spec_version = ?3
                  WHERE namespace = ?1",
-                rusqlite::params![namespace, next_generation as i64, retained_version as i64],
+                rusqlite::params![namespace, next_generation as i64, from_version as i64],
             )
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE table_migrations SET phase = ?2, phase_updated_at_ms = ?3
-                 WHERE namespace = ?1",
-                rusqlite::params![
-                    namespace,
-                    migration_phase_str(MigrationPhase::MIGRATION_PHASE_RETIRED),
-                    now_ms(),
-                ],
+                "UPDATE table_heads SET desired_table_spec_version = NULL WHERE namespace = ?1",
+                [namespace],
+            )
+            .map_err(sqlite_err)?;
+        transaction
+            .execute(
+                "DELETE FROM table_migrations WHERE namespace = ?1",
+                [namespace],
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        let updated = table_spec_status_in(&inner.conn, namespace)?;
-        debug_assert_eq!(updated.active.as_ref(), target.as_ref());
-        Ok(updated)
+        Ok((
+            table_spec_status_in(&inner.conn, namespace)?,
+            backfill_paths,
+        ))
     }
 
     pub fn update_migration_phase(
@@ -1081,7 +948,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
@@ -1093,23 +960,21 @@ impl Catalog {
     pub fn retire_observed_migration(
         &self,
         namespace: &str,
-        max_query_time_ms: u64,
     ) -> Result<(TableSpecStatus, Vec<String>), StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let status = table_spec_status_in(&inner.conn, namespace)?;
         if status.phase != MigrationPhase::MIGRATION_PHASE_OBSERVING {
             return Ok((status, Vec::new()));
         }
-        let phase_updated_at_ms: i64 = inner
+        let observation_deadline_ms: i64 = inner
             .conn
             .query_row(
-                "SELECT phase_updated_at_ms FROM table_migrations WHERE namespace = ?1",
+                "SELECT observation_deadline_ms FROM table_migrations WHERE namespace = ?1",
                 [namespace],
                 |row| row.get(0),
             )
             .map_err(sqlite_err)?;
-        let observation_ms = i64::try_from(max_query_time_ms).unwrap_or(i64::MAX);
-        if now_ms().saturating_sub(phase_updated_at_ms) < observation_ms {
+        if now_ms() < observation_deadline_ms {
             return Ok((status, Vec::new()));
         }
         let migration = status.migration.as_ref().ok_or_else(|| {
@@ -1124,17 +989,17 @@ impl Catalog {
             let (sql, version): (&str, Option<i64>) = if from_version == 0 {
                 (
                     "SELECT segments.path FROM segments
-                     LEFT JOIN native_segments
-                       ON native_segments.namespace = segments.namespace
-                      AND native_segments.path = segments.path
+                     LEFT JOIN object_segments
+                       ON object_segments.namespace = segments.namespace
+                      AND object_segments.path = segments.path
                      WHERE segments.namespace = ?1
                        AND segments.max_seq <= ?2
-                       AND native_segments.path IS NULL",
+                       AND object_segments.path IS NULL",
                     None,
                 )
             } else {
                 (
-                    "SELECT path FROM native_segments
+                    "SELECT path FROM object_segments
                      WHERE namespace = ?1 AND table_spec_version = ?2",
                     Some(from_version as i64),
                 )
@@ -1155,7 +1020,7 @@ impl Catalog {
         remove_segments_in(&transaction, namespace, &retired_paths)?;
         transaction
             .execute(
-                "UPDATE native_segments
+                "UPDATE object_segments
                  SET migration_backfill = 0,
                      migration_source_id = NULL,
                      migration_source_rows = NULL
@@ -1176,92 +1041,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
-                 WHERE namespace = ?1",
-                [namespace],
-            )
-            .map_err(sqlite_err)?;
-        transaction.commit().map_err(sqlite_err)?;
-        Ok((table_spec_status_in(&inner.conn, namespace)?, retired_paths))
-    }
-
-    /// Retire the abandoned target of a rollback after its pinned readers age out.
-    pub fn cleanup_rolled_back_migration(
-        &self,
-        namespace: &str,
-    ) -> Result<(TableSpecStatus, Vec<String>), StatsError> {
-        let mut inner = self.inner.lock().unwrap();
-        let status = table_spec_status_in(&inner.conn, namespace)?;
-        let Some(migration) = status.migration.as_ref() else {
-            return Ok((status, Vec::new()));
-        };
-        let from_version = migration.from_version.unwrap_or(0);
-        let to_version = migration.to_version.unwrap_or(0);
-        if status.phase != MigrationPhase::MIGRATION_PHASE_RETIRED
-            || status.active_version() != from_version
-            || to_version == 0
-        {
-            return Ok((status, Vec::new()));
-        }
-        let max_query_time_ms = table_spec_for_version(&inner.conn, namespace, to_version)?
-            .and_then(|spec| {
-                spec.operating_policy
-                    .as_option()
-                    .and_then(|policy| policy.max_query_time_ms)
-            })
-            .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
-        let phase_updated_at_ms: i64 = inner
-            .conn
-            .query_row(
-                "SELECT phase_updated_at_ms FROM table_migrations WHERE namespace = ?1",
-                [namespace],
-                |row| row.get(0),
-            )
-            .map_err(sqlite_err)?;
-        let observation_ms = i64::try_from(max_query_time_ms).unwrap_or(i64::MAX);
-        if now_ms().saturating_sub(phase_updated_at_ms) < observation_ms {
-            return Ok((status, Vec::new()));
-        }
-
-        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let retired_paths = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT path FROM native_segments
-                     WHERE namespace = ?1
-                       AND table_spec_version = ?2
-                       AND migration_backfill = 1",
-                )
-                .map_err(sqlite_err)?;
-            let rows = statement
-                .query_map(rusqlite::params![namespace, to_version as i64], |row| {
-                    row.get::<_, String>(0)
-                })
-                .map_err(sqlite_err)?;
-            let mut paths = Vec::new();
-            for row in rows {
-                paths.push(row.map_err(sqlite_err)?);
-            }
-            paths
-        };
-        remove_segments_in(&transaction, namespace, &retired_paths)?;
-        let reassigned = transaction
-            .execute(
-                "UPDATE native_segments
-                 SET table_spec_version = ?3
-                 WHERE namespace = ?1
-                   AND table_spec_version = ?2
-                   AND migration_backfill = 0",
-                rusqlite::params![namespace, to_version as i64, from_version as i64],
-            )
-            .map_err(sqlite_err)?;
-        if retired_paths.is_empty() && reassigned == 0 {
-            transaction.rollback().map_err(sqlite_err)?;
-            return Ok((status, Vec::new()));
-        }
-        transaction
-            .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
@@ -1287,7 +1067,7 @@ impl Catalog {
     }
 
     /// Commit every object produced by one sealed buffer in one generation.
-    pub fn commit_native_segments(
+    pub fn commit_object_segments(
         &self,
         rows: &[SegmentRow],
         table_spec_version: u64,
@@ -1296,7 +1076,7 @@ impl Catalog {
     ) -> Result<u64, StatsError> {
         if rows.is_empty() || rows.len() != sources.len() {
             return Err(StatsError::Internal(
-                "native segment rows and sources must be non-empty and equal length".to_string(),
+                "object segment rows and sources must be non-empty and equal length".to_string(),
             ));
         }
         let mut inner = self.inner.lock().unwrap();
@@ -1305,16 +1085,16 @@ impl Catalog {
         for (row, source) in rows.iter().zip(sources) {
             if &row.namespace != namespace {
                 return Err(StatsError::Internal(
-                    "one native commit cannot span namespaces".to_string(),
+                    "one object commit cannot span namespaces".to_string(),
                 ));
             }
             let source_json = serde_json::to_string(source).map_err(|error| {
-                StatsError::Internal(format!("serialize native segment source: {error}"))
+                StatsError::Internal(format!("serialize object segment source: {error}"))
             })?;
             upsert_segment_in(&transaction, row)?;
             transaction
                 .execute(
-                    "INSERT INTO native_segments
+                    "INSERT INTO object_segments
                         (namespace, path, table_spec_version, source_json, migration_backfill,
                          migration_source_id, migration_source_rows)
                      VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL)
@@ -1336,7 +1116,7 @@ impl Catalog {
         }
         let changed = transaction
             .execute(
-                "UPDATE namespace_heads
+                "UPDATE table_heads
                  SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
@@ -1344,13 +1124,13 @@ impl Catalog {
             .map_err(sqlite_err)?;
         if changed != 1 {
             return Err(StatsError::Internal(format!(
-                "native segment committed for {:?} without a namespace head",
+                "object segment committed for {:?} without a namespace head",
                 namespace
             )));
         }
         let generation: i64 = transaction
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |result| result.get(0),
             )
@@ -1360,7 +1140,7 @@ impl Catalog {
     }
 
     /// Replace immutable objects atomically and advance one catalog generation.
-    pub fn replace_native_segments(
+    pub fn replace_object_segments(
         &self,
         namespace: &str,
         removed_paths: &[String],
@@ -1371,7 +1151,7 @@ impl Catalog {
     ) -> Result<u64, StatsError> {
         if removed_paths.is_empty() || rows.is_empty() || rows.len() != sources.len() {
             return Err(StatsError::Internal(
-                "native replacement inputs and outputs must be non-empty".to_string(),
+                "object replacement inputs and outputs must be non-empty".to_string(),
             ));
         }
         let mut inner = self.inner.lock().unwrap();
@@ -1380,13 +1160,13 @@ impl Catalog {
         for (row, source) in rows.iter().zip(sources) {
             if row.namespace != namespace {
                 return Err(StatsError::Internal(
-                    "one native replacement cannot span namespaces".to_string(),
+                    "one object replacement cannot span namespaces".to_string(),
                 ));
             }
             upsert_segment_in(&transaction, row)?;
             transaction
                 .execute(
-                    "INSERT INTO native_segments
+                    "INSERT INTO object_segments
                         (namespace, path, table_spec_version, source_json, migration_backfill,
                          migration_source_id, migration_source_rows)
                      VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL)",
@@ -1404,14 +1184,14 @@ impl Catalog {
         }
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
             .map_err(sqlite_err)?;
         let generation: i64 = transaction
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |row| row.get(0),
             )
@@ -1421,11 +1201,11 @@ impl Catalog {
     }
 
     /// Restore a replacement's input records when its HEAD publication fails.
-    pub fn rollback_native_replacement(
+    pub fn rollback_object_replacement(
         &self,
         namespace: &str,
         removed_rows: &[SegmentRow],
-        removed_records: &[NativeSegmentRecord],
+        removed_records: &[ObjectSegmentRecord],
         added_paths: &[String],
         committed_generation: u64,
     ) -> Result<(), StatsError> {
@@ -1438,21 +1218,21 @@ impl Catalog {
             .any(|row| !records.contains_key(row.path.as_str()))
         {
             return Err(StatsError::Internal(
-                "native replacement rollback is missing an input record".to_string(),
+                "object replacement rollback is missing an input record".to_string(),
             ));
         }
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         let current: i64 = transaction
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |row| row.get(0),
             )
             .map_err(sqlite_err)?;
         if current as u64 != committed_generation {
             return Err(StatsError::Internal(format!(
-                "cannot roll back native replacement for {namespace:?}: local generation {current} advanced past {committed_generation}"
+                "cannot roll back object replacement for {namespace:?}: local generation {current} advanced past {committed_generation}"
             )));
         }
         remove_segments_in(&transaction, namespace, added_paths)?;
@@ -1461,7 +1241,7 @@ impl Catalog {
             upsert_segment_in(&transaction, row)?;
             transaction
                 .execute(
-                    "INSERT INTO native_segments
+                    "INSERT INTO object_segments
                         (namespace, path, table_spec_version, source_json, migration_backfill,
                          migration_source_id, migration_source_rows)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1481,7 +1261,7 @@ impl Catalog {
         }
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation - 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation - 1
                  WHERE namespace = ?1",
                 [namespace],
             )
@@ -1542,7 +1322,7 @@ impl Catalog {
             upsert_segment_in(&transaction, row)?;
             transaction
                 .execute(
-                    "INSERT INTO native_segments
+                    "INSERT INTO object_segments
                         (namespace, path, table_spec_version, source_json, migration_backfill,
                          migration_source_id, migration_source_rows)
                      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
@@ -1580,14 +1360,14 @@ impl Catalog {
         }
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
             .map_err(sqlite_err)?;
         let generation: i64 = transaction
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |result| result.get(0),
             )
@@ -1596,7 +1376,7 @@ impl Catalog {
         Ok(generation as u64)
     }
 
-    pub fn rollback_native_segments(
+    pub fn rollback_object_segments(
         &self,
         namespace: &str,
         paths: &[String],
@@ -1606,7 +1386,7 @@ impl Catalog {
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         let current: i64 = transaction
             .query_row(
-                "SELECT catalog_generation FROM namespace_heads WHERE namespace = ?1",
+                "SELECT catalog_generation FROM table_heads WHERE namespace = ?1",
                 [namespace],
                 |row| row.get(0),
             )
@@ -1620,13 +1400,13 @@ impl Catalog {
         for path in paths {
             if let Some((source_id, source_rows)) = transaction
                 .query_row(
-                    "SELECT COALESCE(native_segments.migration_source_id, native_segments.path),
-                            COALESCE(native_segments.migration_source_rows, segments.row_count)
-                     FROM native_segments
+                    "SELECT COALESCE(object_segments.migration_source_id, object_segments.path),
+                            COALESCE(object_segments.migration_source_rows, segments.row_count)
+                     FROM object_segments
                      JOIN segments USING (namespace, path)
-                     WHERE native_segments.namespace = ?1
-                       AND native_segments.path = ?2
-                       AND native_segments.migration_backfill = 1",
+                     WHERE object_segments.namespace = ?1
+                       AND object_segments.path = ?2
+                       AND object_segments.migration_backfill = 1",
                     rusqlite::params![namespace, path],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -1650,7 +1430,7 @@ impl Catalog {
         }
         transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation - 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation - 1
                  WHERE namespace = ?1",
                 [namespace],
             )
@@ -1658,14 +1438,14 @@ impl Catalog {
         transaction.commit().map_err(sqlite_err)
     }
 
-    pub fn native_segments(&self, namespace: &str) -> Result<Vec<NativeSegmentRecord>, StatsError> {
+    pub fn object_segments(&self, namespace: &str) -> Result<Vec<ObjectSegmentRecord>, StatsError> {
         let inner = self.inner.lock().unwrap();
         let mut statement = inner
             .conn
             .prepare(
                 "SELECT path, table_spec_version, source_json, migration_backfill,
                         migration_source_id, migration_source_rows
-                 FROM native_segments WHERE namespace = ?1 ORDER BY path",
+                 FROM object_segments WHERE namespace = ?1 ORDER BY path",
             )
             .map_err(sqlite_err)?;
         let rows = statement
@@ -1691,9 +1471,9 @@ impl Catalog {
                 migration_source_rows,
             ) = row.map_err(sqlite_err)?;
             let source = serde_json::from_str(&source_json).map_err(|error| {
-                StatsError::Internal(format!("decode native segment source: {error}"))
+                StatsError::Internal(format!("decode object segment source: {error}"))
             })?;
-            records.push(NativeSegmentRecord {
+            records.push(ObjectSegmentRecord {
                 path,
                 table_spec_version: table_spec_version as u64,
                 source,
@@ -1766,16 +1546,16 @@ impl Catalog {
                 rusqlite::params![target, namespace, cursor],
             )
             .map_err(sqlite_err)?;
-        let native_generation_changed = transaction
+        let object_generation_changed = transaction
             .execute(
-                "UPDATE namespace_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
                  WHERE namespace = ?1",
                 [namespace],
             )
             .map_err(sqlite_err)?
             == 1;
         transaction.commit().map_err(sqlite_err)?;
-        Ok(native_generation_changed)
+        Ok(object_generation_changed)
     }
 
     // ----- live namespace registry --------------------------------------
@@ -1927,7 +1707,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         inner
             .conn
-            .execute("DELETE FROM native_segments WHERE namespace = ?1", [name])
+            .execute("DELETE FROM object_segments WHERE namespace = ?1", [name])
             .map_err(sqlite_err)?;
         inner
             .conn
@@ -1935,7 +1715,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         inner
             .conn
-            .execute("DELETE FROM namespace_heads WHERE namespace = ?1", [name])
+            .execute("DELETE FROM table_heads WHERE namespace = ?1", [name])
             .map_err(sqlite_err)?;
         inner
             .conn
@@ -2200,14 +1980,24 @@ impl Catalog {
 
     #[cfg(test)]
     pub(crate) fn expire_migration_observation(&self, namespace: &str) -> Result<(), StatsError> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .conn
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let updated = transaction
             .execute(
-                "UPDATE table_migrations SET phase_updated_at_ms = 0 WHERE namespace = ?1",
+                "UPDATE table_migrations SET observation_deadline_ms = 0 WHERE namespace = ?1",
                 [namespace],
             )
             .map_err(sqlite_err)?;
+        if updated == 1 {
+            transaction
+                .execute(
+                    "UPDATE table_heads SET catalog_generation = catalog_generation + 1
+                     WHERE namespace = ?1",
+                    [namespace],
+                )
+                .map_err(sqlite_err)?;
+        }
+        transaction.commit().map_err(sqlite_err)?;
         Ok(())
     }
 
@@ -2388,7 +2178,7 @@ mod tests {
     }
 
     #[test]
-    fn source_layout_change_queues_activation_and_supports_rollback() {
+    fn source_layout_change_queues_activation_and_supports_abort() {
         let catalog = Catalog::open(None).unwrap();
         let v1 = table_spec(1, 128);
         catalog
@@ -2405,9 +2195,16 @@ mod tests {
         let activated = catalog.activate_desired_table_spec("a").unwrap();
         assert_eq!(activated.active_version(), 2);
         assert_eq!(activated.desired_version(), 0);
-        let rolled_back = catalog.rollback_table_spec("a", 1).unwrap();
-        assert_eq!(rolled_back.active_version(), 1);
-        assert!(rolled_back.catalog_generation > activated.catalog_generation);
+        assert!(activated
+            .migration
+            .as_ref()
+            .and_then(|migration| migration.observation_deadline_ms)
+            .is_some_and(|deadline| deadline > now_ms()));
+        let (aborted, discarded_paths) = catalog.abort_table_migration("a").unwrap();
+        assert_eq!(aborted.active_version(), 1);
+        assert!(aborted.migration.is_none());
+        assert!(discarded_paths.is_empty());
+        assert!(aborted.catalog_generation > activated.catalog_generation);
     }
 
     #[test]

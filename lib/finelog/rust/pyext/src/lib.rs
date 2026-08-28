@@ -80,8 +80,8 @@ impl EmbeddedServer {
                 )
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
-            store.recover_native_namespaces().await.map_err(|e| {
-                PyRuntimeError::new_err(format!("failed to recover native catalogs: {e}"))
+            store.recover_object_tables().await.map_err(|e| {
+                PyRuntimeError::new_err(format!("failed to recover object catalogs: {e}"))
             })?;
             store.bootstrap_maintenance();
             // No policy → the private allow-localhost default (loopback only); a

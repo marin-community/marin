@@ -21,7 +21,7 @@ use futures::StreamExt;
 use crate::errors::StatsError;
 use crate::partition_policy::SegmentPartition;
 use crate::store::catalog::Catalog;
-use crate::store::remote::RemoteStore;
+use crate::store::legacy_archive::LegacyArchive;
 use crate::store::types::{parse_seg_filename, segment_relative_key, SegmentLocation, SegmentRow};
 
 /// Bounded concurrency for the boot reconcile's remote footer reads. High enough
@@ -45,14 +45,14 @@ fn now_ms() -> i64 {
 /// recovery.
 pub async fn reconcile_remote_segments(
     catalog: &Catalog,
-    remote: &RemoteStore,
+    remote: &LegacyArchive,
     namespace: &str,
     local_dir: &std::path::Path,
     key_column: Option<&str>,
 ) -> Result<(), StatsError> {
     let started = std::time::Instant::now();
     let list_started = std::time::Instant::now();
-    let objects = match remote.list_segment_objects(namespace).await {
+    let objects = match remote.list_segments(namespace).await {
         Ok(o) => o,
         Err(e) => {
             tracing::warn!(namespace, error = %e, "remote reconcile list failed");

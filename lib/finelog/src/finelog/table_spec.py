@@ -15,12 +15,12 @@ class L0Mode(StrEnum):
     """Durability boundary for newly sealed L0 segments."""
 
     LEGACY_LOCAL = "legacy_local"
-    OBJECT_NATIVE = "object_native"
+    OBJECT_STORE = "object_store"
 
 
 _L0_MODE_TO_PROTO = {
     L0Mode.LEGACY_LOCAL: stats_pb2.L0_MODE_LEGACY_LOCAL,
-    L0Mode.OBJECT_NATIVE: stats_pb2.L0_MODE_OBJECT_NATIVE,
+    L0Mode.OBJECT_STORE: stats_pb2.L0_MODE_OBJECT_STORE,
 }
 
 
@@ -100,7 +100,7 @@ class SourceLayout:
 class OperatingPolicy:
     """Buffering, durability, cache, and query-lifetime policy."""
 
-    l0_mode: L0Mode = L0Mode.OBJECT_NATIVE
+    l0_mode: L0Mode = L0Mode.OBJECT_STORE
     max_buffer_bytes: int = 0
     max_flush_age_ms: int = 0
     max_query_time_ms: int = 0
