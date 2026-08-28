@@ -5,7 +5,7 @@
 
 Builds a hero or hero-shaped small train state, writes it to a one-day temporary prefix, and
 reads it back into the same exemplar a resume restores into. Offloaded optimizer state is
-included, and the master-parameter mode follows the checkpoint. It trains nothing, so a run
+included, and the master-parameter mode matches the hero's. It trains nothing, so a run
 measures the checkpoint paths alone.
 
 The save timing is what a training step is blocked for. The first read is the only one that

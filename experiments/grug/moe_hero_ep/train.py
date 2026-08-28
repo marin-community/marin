@@ -188,7 +188,7 @@ def adopt_restored_master(loaded: "GrugTrainState | dict") -> "GrugTrainState":
         return loaded
     loaded = dict(loaded)
     loaded["params"] = loaded.pop(MASTER_PARAMS_KEY)
-    loaded["master_params"] = None
+    loaded[MASTER_PARAMS_KEY] = None
     return GrugTrainState(**loaded)
 
 
