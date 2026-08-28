@@ -145,17 +145,21 @@ maximum. Later stages can reshard while reusing that group. More shards than wor
 normal because workers pull multiple tasks. Read shard progress with alive-worker state;
 the registered-worker count alone can overstate available capacity.
 
-### Straggler Detection
+### Stragglers and Data Skew
 
-1. **Progress line**: `in-flight >> 0` with `queued == 0` means stragglers — no new work to assign, waiting on slow shards.
-2. **Memory/disk distribution**: Query `ListTasks` and bucket by `memoryMb` and `diskMb`. Idle workers: <200 MB. Finished: 1-5 GB. Stragglers: >5 GB (or high CPU/disk).
-3. **THR on high-memory workers**: Confirm they're in `_execute_shard` with `active+gil`. The user function in the stack identifies the bottleneck.
+`in-flight >> 0` with `queued == 0` means stragglers: no new work to assign,
+waiting on slow shards.
 
-### Data Skew
+```bash
+# Bucket workers by memoryMb/diskMb: <200 MB idle, 1-5 GB finished, >5 GB straggler.
+uv run iris rpc controller list-tasks --job-id <JOB_ID>
+```
 
-Symptom: most shards complete fast, a few take orders of magnitude longer.
-
-Diagnosis: THR on the straggler worker shows the user-level reduce function holding the GIL. Compare memory across workers — skewed keys produce 10-100x memory outliers.
+Take a few THR samples of a straggler (dashboard THR button, ~2s apart). The
+`zephyr-poll-*` stack in `_execute_shard` with `active+gil` names the user
+function that is the bottleneck; `idle` at `write_table` means I/O bound. Data
+skew looks like a handful of shards 10-100x slower and heavier than the rest,
+with the user-level reduce function holding the GIL.
 
 ### Worker Failures / Reassignment
 
@@ -164,18 +168,6 @@ Workers that failed and got reassigned show in the task table with `Worker ... f
 ### Misleading Diagnostics
 
 **"Terminated by user"** does not necessarily mean a human killed the job. The system uses this message for various internal termination reasons. Always check the actual logs at each level (parent job, coordinator, workers) to determine the real cause.
-
-### Poor Man's Profiling
-
-Take 5-10 THR samples from the same worker with ~2s intervals. The `zephyr-poll-*` thread stack shows where time is spent:
-
-| Thread state | Location | Meaning |
-|---|---|---|
-| `active+gil` in `_execute_shard` | `_reduce_gen`, `_scatter_items`, user fn | Doing work |
-| `idle` at `_poll_loop:1163` | — | Waiting for tasks |
-| `idle` at `write_table` (pyarrow) | — | I/O bound |
-
-Coordinator: `actor-method_0` in `_wait_for_stage` means it's blocked waiting for the current stage to finish.
 
 ## Requesting New Tools
 
