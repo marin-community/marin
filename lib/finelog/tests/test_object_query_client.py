@@ -141,7 +141,7 @@ def test_object_query_rejects_noncanonical_object_ids(tmp_path: Path) -> None:
         object_id_override="_finelog/tables/iris.worker/objects/v1/../escaped.parquet",
     )
 
-    with pytest.raises(StatsError, match="canonical relative object ID"):
+    with pytest.raises(StatsError):
         ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
 
 

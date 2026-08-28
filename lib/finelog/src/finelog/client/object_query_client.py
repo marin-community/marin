@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Client-directed SQL over one immutable Finelog object catalog snapshot."""
+"""Client-directed SQL over immutable per-table Finelog catalog snapshots."""
 
 import base64
 import hashlib
@@ -29,6 +29,12 @@ class QueryMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class CatalogColumn:
+    name: str
+    duckdb_type: str
+
+
+@dataclass(frozen=True)
 class CatalogPin:
     namespace: str
     catalog_generation: int
@@ -36,7 +42,10 @@ class CatalogPin:
     max_query_time_ms: int
     high_water: int
     object_uris: tuple[str, ...]
-    logical_schema: dict[str, object]
+    columns: tuple[CatalogColumn, ...]
+
+
+_OBJECT_CATALOG_ROOT = ("_finelog", "tables")
 
 
 class ObjectQueryClient:
@@ -176,7 +185,7 @@ class ObjectQueryClient:
         operating_policy = _mapping(spec.get("operatingPolicy"), "TableSpec.operatingPolicy")
         if operating_policy.get("l0Mode") != "L0_MODE_OBJECT_STORE":
             raise StatsError(f"namespace {namespace!r} active TableSpec {active_version} is not object-backed")
-        logical_schema = _mapping(spec.get("logicalSchema"), "TableSpec.logicalSchema")
+        columns = _catalog_columns(_mapping(spec.get("logicalSchema"), "TableSpec.logicalSchema"))
         max_query_time_ms = _integer(catalog.get("maxQueryTimeMs"), "catalog.maxQueryTimeMs")
         if max_query_time_ms == 0:
             raise StatsError(f"catalog for namespace {namespace!r} has no direct-query lifetime")
@@ -187,7 +196,7 @@ class ObjectQueryClient:
             max_query_time_ms=max_query_time_ms,
             high_water=_integer(catalog.get("directQueryHighWater", 0), "catalog.directQueryHighWater"),
             object_uris=object_uris,
-            logical_schema=logical_schema,
+            columns=columns,
         )
 
     def _register_namespace(self, connection: duckdb.DuckDBPyConnection, pin: CatalogPin) -> None:
@@ -198,11 +207,11 @@ class ObjectQueryClient:
                 f'CREATE VIEW "{escaped_namespace}" AS ' f"SELECT * FROM read_parquet([{files}], union_by_name=true)"
             )
             return
-        columns = _empty_columns(pin.logical_schema)
+        columns = _empty_columns(pin.columns)
         connection.execute(f'CREATE VIEW "{escaped_namespace}" AS SELECT {columns} WHERE FALSE')
 
     def _table_root(self, namespace: str) -> StoragePath:
-        return self._root / "_finelog" / "tables" / namespace
+        return self._root / _OBJECT_CATALOG_ROOT[0] / _OBJECT_CATALOG_ROOT[1] / namespace
 
     def _object_uri(self, object_id: str) -> str:
         return str(self._root / object_id)
@@ -259,7 +268,7 @@ def _table_object_id(value: object, namespace: str, field: str) -> str:
     path = PurePosixPath(value)
     if path.is_absolute() or str(path) != value or ".." in path.parts or "\\" in value or "://" in value:
         raise StatsError(f"{field} must be a canonical relative object ID")
-    expected = ("_finelog", "tables", namespace)
+    expected = (*_OBJECT_CATALOG_ROOT, namespace)
     if path.parts[:3] != expected or len(path.parts) < 4:
         raise StatsError(f"{field} must identify an object in table {namespace!r}")
     return str(path)
@@ -279,8 +288,8 @@ _DUCKDB_TYPES = {
 }
 
 
-def _empty_columns(logical_schema: dict[str, object]) -> str:
-    declarations = [("seq", "BIGINT")]
+def _catalog_columns(logical_schema: dict[str, object]) -> tuple[CatalogColumn, ...]:
+    declarations = [CatalogColumn("seq", "BIGINT")]
     for raw in _sequence(logical_schema.get("columns", []), "logicalSchema.columns"):
         column = _mapping(raw, "logicalSchema.columns[]")
         name = column.get("name")
@@ -289,9 +298,13 @@ def _empty_columns(logical_schema: dict[str, object]) -> str:
             raise StatsError("logicalSchema column name must be non-empty")
         if not isinstance(type_name, str) or type_name not in _DUCKDB_TYPES:
             raise StatsError(f"unsupported logicalSchema type {type_name!r}")
-        declarations.append((name, _DUCKDB_TYPES[type_name]))
-    if all(name != "cluster" for name, _ in declarations):
-        declarations.append(("cluster", "VARCHAR"))
+        declarations.append(CatalogColumn(name, _DUCKDB_TYPES[type_name]))
+    if all(column.name != "cluster" for column in declarations):
+        declarations.append(CatalogColumn("cluster", "VARCHAR"))
+    return tuple(declarations)
+
+
+def _empty_columns(columns: tuple[CatalogColumn, ...]) -> str:
     return ", ".join(
-        f'CAST(NULL AS {type_name}) AS "{name.replace(chr(34), chr(34) * 2)}"' for name, type_name in declarations
+        f'CAST(NULL AS {column.duckdb_type}) AS "{column.name.replace(chr(34), chr(34) * 2)}"' for column in columns
     )

@@ -29,6 +29,10 @@ impl LegacyArchive {
         self.storage.read_legacy(table, relative_key).await
     }
 
+    /// Upload one legacy segment.
+    ///
+    /// Returns `true` on success. A `false` result has already been logged and
+    /// leaves the segment eligible for the next maintenance retry.
     pub async fn upload(&self, table: &str, relative_key: &str, local_path: &Path) -> bool {
         self.storage
             .upload_legacy(table, relative_key, local_path)

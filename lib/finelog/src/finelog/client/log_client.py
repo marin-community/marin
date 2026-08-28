@@ -259,10 +259,10 @@ class Table:
         self._arrow_schema = schema_to_arrow(schema)
         self._flusher = flusher
         self._querier = querier
-        # When set, the flush thread calls this once before its first send to
-        # register the namespace; the returned effective schema replaces the
-        # locally-requested one for Arrow encoding. ``None`` means the
-        # namespace is already registered server-side (e.g. ``log``).
+        # When set, the flush thread registers before sending and repeats the
+        # registration after the requested schema, policy, or TableSpec changes.
+        # The returned effective schema controls Arrow encoding. ``None`` means
+        # the namespace is already registered server-side (e.g. ``log``).
         self._registrar = registrar
         self._registration_key = registration_key
         self._registration_generation = 0
@@ -633,7 +633,7 @@ class LogClient:
         sql: str,
         *,
         max_rows: int = 100_000,
-        mode: QueryMode | str = QueryMode.SERVER,
+        mode: QueryMode = QueryMode.SERVER,
         object_store_root: str | None = None,
         namespaces: Iterable[str] = (),
     ) -> pa.Table:
@@ -645,8 +645,7 @@ class LogClient:
         :class:`QueryResultTooLargeError` if the row count exceeds
         ``max_rows``.
         """
-        query_mode = QueryMode(mode)
-        if query_mode is QueryMode.CLIENT:
+        if mode is QueryMode.CLIENT:
             if object_store_root is None:
                 raise ValueError("client query mode requires object_store_root")
             return self.object_query_client(object_store_root).query(
@@ -722,12 +721,12 @@ class LogClient:
         """Return a Table handle for ``namespace``, registering it lazily.
 
         The handle is returned immediately without contacting the server: the
-        ``register_table`` RPC is deferred to the Table's flush thread, which
-        runs it once before the first send. A connectivity or schema failure
-        there is handled as a normal flush failure (retried with backoff, or
-        the batch dropped) and never propagates to this caller, so a caller
-        that only needs to enqueue rows is never blocked by an unavailable
-        finelog server.
+        ``register_table`` RPC is deferred to the Table's flush thread. It runs
+        before the first send and again after the requested schema, policy, or
+        TableSpec changes. A connectivity or schema failure there is handled as
+        a normal flush failure (retried with backoff, or the batch dropped) and
+        never propagates to this caller, so enqueueing rows does not wait for an
+        unavailable finelog server.
 
         ``storage_policy`` is a per-namespace retention override; an
         empty policy inherits the server defaults. A non-empty policy

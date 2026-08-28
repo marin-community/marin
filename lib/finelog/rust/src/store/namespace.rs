@@ -40,6 +40,7 @@ use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::{
     partition_field, ColumnType, L0Mode, MigrationPhase, ObjectRef, SourceLayout,
+    TableMigrationStatus,
 };
 use crate::query::index_cache::IndexCache;
 use crate::store::cache::{object_cache_path, write_cache_file};
@@ -489,6 +490,38 @@ fn decode_migration_source(
         })?;
     concat_batches(target_schema, &batches)
         .map_err(|error| StatsError::Internal(format!("merge migration Parquet batches: {error}")))
+}
+
+struct EncodedMigrationSegment {
+    partition: Option<SegmentPartition>,
+    batch: RecordBatch,
+    parquet: Vec<u8>,
+    min_seq: i64,
+    max_seq: i64,
+}
+
+fn encode_migration_segments(
+    bytes: Bytes,
+    target_schema: &SchemaRef,
+    source_layout: Option<&SourceLayout>,
+    max_row_group_rows: usize,
+) -> Result<Vec<EncodedMigrationSegment>, StatsError> {
+    let decoded = decode_migration_source(bytes, target_schema)?;
+    let sorted = sorted_object_batch(&decoded, source_layout)?;
+    partition_object_batch(&sorted, source_layout)?
+        .into_iter()
+        .map(|(partition, batch)| {
+            let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
+            let parquet = write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
+            Ok(EncodedMigrationSegment {
+                partition,
+                batch,
+                parquet,
+                min_seq,
+                max_seq,
+            })
+        })
+        .collect()
 }
 
 fn object_partition_directory(partition: Option<&SegmentPartition>) -> String {
@@ -1247,6 +1280,15 @@ impl Namespace {
             | MigrationPhase::MIGRATION_PHASE_BACKFILL => {}
         }
 
+        self.backfill_table_spec_migration(&status, &migration)
+            .await
+    }
+
+    async fn backfill_table_spec_migration(
+        &self,
+        status: &TableSpecStatus,
+        migration: &TableMigrationStatus,
+    ) -> Result<bool, StatsError> {
         let _migration_guard = self.object_flush_lock.lock().await;
         let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
             StatsError::Internal(format!(
@@ -1322,17 +1364,12 @@ impl Namespace {
             let layout_for_rewrite = target_layout.clone();
             let arrow_schema = Arc::clone(&self.arrow_schema);
             let rewritten = tokio::task::spawn_blocking(move || {
-                let decoded = decode_migration_source(bytes_for_rewrite, &arrow_schema)?;
-                let sorted = sorted_object_batch(&decoded, layout_for_rewrite.as_ref())?;
-                partition_object_batch(&sorted, layout_for_rewrite.as_ref())?
-                    .into_iter()
-                    .map(|(partition, batch)| {
-                        let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
-                        let parquet =
-                            write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
-                        Ok((partition, batch, parquet, min_seq, max_seq))
-                    })
-                    .collect::<Result<Vec<_>, StatsError>>()
+                encode_migration_segments(
+                    bytes_for_rewrite,
+                    &arrow_schema,
+                    layout_for_rewrite.as_ref(),
+                    max_row_group_rows,
+                )
             })
             .await
             .map_err(|error| {
@@ -1340,7 +1377,7 @@ impl Namespace {
             })??;
             let rewritten_rows = rewritten
                 .iter()
-                .map(|(_, batch, _, _, _)| batch.num_rows() as i64)
+                .map(|segment| segment.batch.num_rows() as i64)
                 .sum::<i64>();
             if rewritten_rows != row.row_count {
                 return Err(StatsError::Internal(format!(
@@ -1350,7 +1387,14 @@ impl Namespace {
             }
             let mut migrated = Vec::with_capacity(rewritten.len());
             let mut sources = Vec::with_capacity(rewritten.len());
-            for (partition, batch, parquet, min_seq, max_seq) in rewritten {
+            for EncodedMigrationSegment {
+                partition,
+                batch,
+                parquet,
+                min_seq,
+                max_seq,
+            } in rewritten
+            {
                 let sha256: [u8; 32] = Sha256::digest(&parquet).into();
                 let hash = full_hex(&sha256);
                 let partition_directory = object_partition_directory(partition.as_ref());
@@ -3704,15 +3748,24 @@ impl Namespace {
     /// matches the catalog at shutdown.
     pub async fn shutdown(self: &Arc<Self>, timeout: Duration) {
         self.stop_and_join(timeout).await;
-        // Final drain so no acked-but-still-RAM rows are lost (best-effort;
-        // failures are already logged inside flush_once).
-        let _ = self.flush_once_async().await;
+        // Final drain so no acked-but-still-RAM rows are lost.
+        if let Err(error) = self.flush_once_async().await {
+            tracing::warn!(namespace = %self.name, %error, "shutdown: final flush failed");
+        }
         // Final reconcile so the bucket matches the catalog at shutdown.
         // Best-effort + bounded by the same per-namespace `timeout`; if it
         // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
         // (early return) without a remote dir.
         if self.has_remote() {
-            let _ = tokio::time::timeout(timeout, self.sync_step()).await;
+            match tokio::time::timeout(timeout, self.sync_step()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(namespace = %self.name, %error, "shutdown: final remote sync failed");
+                }
+                Err(_) => {
+                    tracing::warn!(namespace = %self.name, "shutdown: final remote sync timed out");
+                }
+            }
         }
     }
 

@@ -25,6 +25,7 @@ use crate::proto::finelog::stats::{
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
+use crate::store::catalog::TableSpecStatus;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
@@ -39,6 +40,15 @@ use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESP
 pub struct StatsServiceImpl {
     store: Arc<Store>,
     ignored_forwarded_telemetry_columns: Mutex<HashSet<String>>,
+}
+
+struct RegistrationOutcome {
+    namespace: String,
+    schema: Schema,
+    policy: StoragePolicy,
+    ignored_columns: Vec<String>,
+    table_spec_status: TableSpecStatus,
+    object_backed: bool,
 }
 
 impl StatsServiceImpl {
@@ -153,14 +163,7 @@ impl StatsService for StatsServiceImpl {
 
         let store = Arc::clone(&self.store);
         let requested_namespace = namespace.clone();
-        let (
-            registered_namespace,
-            effective,
-            effective_policy,
-            ignored_columns,
-            table_spec_status,
-            object_backed,
-        ) = run_blocking(move || {
+        let outcome = run_blocking(move || {
             let ns = registration_namespace_for(&requested_namespace)?;
             let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
             if forwarded_telemetry {
@@ -174,14 +177,14 @@ impl StatsService for StatsServiceImpl {
                         let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
                         let effective_policy = store.get_policy(&ns)?;
                         let table_spec_status = store.table_spec_status(&ns)?;
-                        return Ok((
-                            ns,
-                            effective,
-                            effective_policy,
-                            ignored,
+                        return Ok(RegistrationOutcome {
+                            namespace: ns,
+                            schema: effective,
+                            policy: effective_policy,
+                            ignored_columns: ignored,
                             table_spec_status,
-                            false,
-                        ));
+                            object_backed: false,
+                        });
                     }
                     Err(StatsError::NamespaceNotFound(_)) => {}
                     Err(error) => return Err(error),
@@ -195,41 +198,41 @@ impl StatsService for StatsServiceImpl {
                     ));
                 }
                 let registration = store.register_versioned_table(&ns, validated)?;
-                return Ok((
-                    ns,
-                    registration.schema,
-                    registration.policy,
-                    Vec::new(),
-                    registration.table_spec_status,
-                    registration.object_backed,
-                ));
+                return Ok(RegistrationOutcome {
+                    namespace: ns,
+                    schema: registration.schema,
+                    policy: registration.policy,
+                    ignored_columns: Vec::new(),
+                    table_spec_status: registration.table_spec_status,
+                    object_backed: registration.object_backed,
+                });
             }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
             let table_spec_status = store.table_spec_status(&ns)?;
-            Ok((
-                ns,
-                effective,
-                effective_policy,
-                Vec::new(),
+            Ok(RegistrationOutcome {
+                namespace: ns,
+                schema: effective,
+                policy: effective_policy,
+                ignored_columns: Vec::new(),
                 table_spec_status,
-                false,
-            ))
+                object_backed: false,
+            })
         })
         .await?;
-        self.report_ignored_forwarded_telemetry_columns(ignored_columns);
-        if object_backed {
+        self.report_ignored_forwarded_telemetry_columns(outcome.ignored_columns);
+        if outcome.object_backed {
             self.store
-                .publish_object_catalog(&registered_namespace)
+                .publish_object_catalog(&outcome.namespace)
                 .await?;
         }
 
         connectrpc::Response::ok(RegisterTableResponse {
-            effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
-            effective_policy: MessageField::some(effective_policy.to_proto_owned()),
-            active_table_spec_version: Some(table_spec_status.active_version()),
-            desired_table_spec_version: Some(table_spec_status.desired_version()),
-            transition_phase: Some(table_spec_status.phase.into()),
+            effective_schema: MessageField::some(schema_to_proto_owned(&outcome.schema)),
+            effective_policy: MessageField::some(outcome.policy.to_proto_owned()),
+            active_table_spec_version: Some(outcome.table_spec_status.active_version()),
+            desired_table_spec_version: Some(outcome.table_spec_status.desired_version()),
+            transition_phase: Some(outcome.table_spec_status.phase.into()),
             ..Default::default()
         })
     }

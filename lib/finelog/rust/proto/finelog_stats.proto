@@ -217,7 +217,7 @@ message CatalogSegment {
   string min_key_value = 8;
   string max_key_value = 9;
   string partition_json = 10;
-  uint64 schema_revision = 11;
+  uint64 table_spec_version = 11;
   int64 retired_at_ms = 12;
   int64 delete_after_ms = 13;
   // Set on backfill outputs so a source is checkpointed exactly once even
@@ -300,8 +300,8 @@ message RegisterTableRequest {
   // preserved — so an older client that doesn't know about policies
   // can't wipe a tighter policy set by a newer client.
   StoragePolicy storage_policy = 3;
-  // Complete immutable specification. Fields 1-3 remain the legacy
-  // registration contract and are ignored when this field is present.
+  // Complete immutable specification. Fields 1-3 identify the table and must
+  // agree with the schema and local cache policy resolved from this field.
   TableSpec table_spec = 4;
 }
 

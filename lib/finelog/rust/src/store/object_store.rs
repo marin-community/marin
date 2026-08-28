@@ -17,6 +17,7 @@
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -137,6 +138,10 @@ pub struct ObjectMetadata {
     pub modified_at_ms: i64,
 }
 
+/// Canonical object persistence independent of provider-specific locations.
+///
+/// Catalog code carries [`ObjectId`] values through this boundary. Only the
+/// implementation resolves those IDs to GCS, S3, or local object locations.
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
     fn location_for(&self, id: &ObjectId) -> Result<ObjectLocation, StatsError>;
@@ -215,7 +220,7 @@ pub fn is_object_store(remote_log_dir: &str) -> bool {
 /// Any other value -> a `LocalFileSystem` rooted at that (created) directory,
 /// with an empty prefix, writing into `{remote_log_dir}/{namespace}/{relative segment key}`.
 pub fn build_object_storage(remote_log_dir: &str) -> Result<Option<ObjectStorage>, StatsError> {
-    let dir = remote_log_dir.trim_end_matches('/');
+    let dir = remote_log_dir;
     if dir.is_empty() {
         return Ok(None);
     }
@@ -270,9 +275,14 @@ pub fn build_object_storage(remote_log_dir: &str) -> Result<Option<ObjectStorage
 }
 
 fn object_store_root_url(value: &str) -> Result<Url, StatsError> {
-    Url::parse(&format!("{}/", value.trim_end_matches('/'))).map_err(|error| {
+    let mut url = Url::parse(value).map_err(|error| {
         StatsError::Internal(format!("invalid object-store root {value:?}: {error}"))
-    })
+    })?;
+    if !url.path().ends_with('/') {
+        let directory_path = format!("{}/", url.path());
+        url.set_path(&directory_path);
+    }
+    Ok(url)
 }
 
 impl ObjectStorage {
@@ -824,7 +834,6 @@ fn local_compare_and_swap(
 }
 
 fn monotonic_nonce() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }

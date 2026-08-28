@@ -35,6 +35,10 @@ pub struct ObjectCatalog {
     storage: Arc<dyn ObjectStore>,
 }
 
+/// Published-catalog boundary used by store orchestration and namespace tasks.
+///
+/// Keeping publication behind this interface prevents the transactional SQLite
+/// catalog from depending on object-store paths or a concrete provider.
 #[async_trait]
 pub trait PublishedCatalog: Send + Sync {
     async fn load(&self, table: &str) -> Result<Option<CatalogSnapshot>, StatsError>;
@@ -52,6 +56,10 @@ pub trait PublishedCatalog: Send + Sync {
         writer_epoch: u64,
     ) -> Result<CatalogSnapshot, StatsError>;
     async fn delete_head(&self, table: &str) -> Result<(), StatsError>;
+    /// Delete expired catalog documents and unreferenced data objects.
+    ///
+    /// Returns the combined number of catalog documents and data objects
+    /// deleted during this pass.
     async fn gc_obsolete_catalogs(
         &self,
         table: &str,
@@ -522,7 +530,7 @@ pub fn build_namespace_catalog(
                 .partition
                 .as_ref()
                 .and_then(|partition| serde_json::to_string(partition).ok()),
-            schema_revision: Some(version),
+            table_spec_version: Some(version),
             migration_source_id: object_segments
                 .get(&row.path)
                 .and_then(|record| record.migration_source_id.clone()),

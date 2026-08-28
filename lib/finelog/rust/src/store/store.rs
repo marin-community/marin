@@ -58,12 +58,14 @@ pub const LOG_NAMESPACE_NAME: &str = "log";
 pub const LOG_NAMESPACE_DIR: &str = "log";
 const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
 
-fn writer_epoch() -> u64 {
+fn writer_epoch() -> Result<u64, StatsError> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0);
-    nanos ^ u64::from(std::process::id())
+        .map_err(|error| {
+            StatsError::Internal(format!("system clock precedes Unix epoch: {error}"))
+        })?
+        .as_nanos() as u64;
+    Ok(nanos ^ u64::from(std::process::id()))
 }
 
 fn recovered_segment_cache_path(
@@ -323,7 +325,7 @@ impl Store {
             mode,
             catalog,
             object_catalog,
-            writer_epoch: writer_epoch(),
+            writer_epoch: writer_epoch()?,
             engines: Mutex::new(HashMap::new()),
             namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -478,7 +480,7 @@ impl Store {
                         ))
                     })?;
                     let table_spec_version = segment
-                        .schema_revision
+                        .table_spec_version
                         .unwrap_or(version.table_spec_version.unwrap_or(0));
                     let (object_key, canonical_object) = match ObjectId::parse(source_id) {
                         Ok(object_id) => (
@@ -505,6 +507,16 @@ impl Store {
                         &object_key,
                         canonical_object,
                     )?;
+                    let partition = segment
+                        .partition_json
+                        .as_deref()
+                        .map(serde_json::from_str)
+                        .transpose()
+                        .map_err(|error| {
+                            StatsError::Internal(format!(
+                                "object catalog segment for {namespace:?} has invalid partition metadata: {error}"
+                            ))
+                        })?;
                     let path = cache_path.to_string_lossy().into_owned();
                     recovered
                         .entry(path.clone())
@@ -521,10 +533,7 @@ impl Store {
                                 created_at_ms: segment.created_at_ms.unwrap_or(0),
                                 min_key_value: segment.min_key_value.clone(),
                                 max_key_value: segment.max_key_value.clone(),
-                                partition: segment
-                                    .partition_json
-                                    .as_deref()
-                                    .and_then(|value| serde_json::from_str(value).ok()),
+                                partition,
                                 location: crate::store::types::SegmentLocation::Remote,
                             },
                             table_spec_version,
@@ -1531,10 +1540,20 @@ mod tests {
         ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn versioned_registration_publishes_and_recovers_remote_head() {
-        let data_dir = crate::test_support::unique_dir("versioned_registration_data");
-        let remote_dir = crate::test_support::unique_dir("versioned_registration_remote");
+    struct PublishedObjectTableFixture {
+        store: Store,
+        data_dir: PathBuf,
+        remote_dir: PathBuf,
+        batch_schema: SchemaRef,
+        paths: Vec<String>,
+        last_seq: i64,
+        initial_catalog: CatalogSnapshot,
+        current_catalog: CatalogSnapshot,
+    }
+
+    async fn published_object_table(tag: &str) -> PublishedObjectTableFixture {
+        let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+        let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -1542,15 +1561,10 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-
-        let registration = store
+        store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
-        assert!(registration.object_backed);
-        assert_eq!(registration.table_spec_status.active_version(), 1);
-        let first = store.publish_object_catalog("iris.worker").await.unwrap();
-        assert_eq!(first.catalog.active_table_spec_version, Some(1));
-        assert_eq!(first.catalog.retained_table_specs.len(), 1);
+        let initial_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
 
         let batch_schema = schema_to_arrow(&worker_schema());
         let batch = RecordBatch::try_new(
@@ -1569,9 +1583,43 @@ mod tests {
             .await
             .unwrap();
         let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        let current_catalog = store.publish_object_catalog("iris.worker").await.unwrap();
+        PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            batch_schema,
+            paths,
+            last_seq,
+            initial_catalog,
+            current_catalog,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn versioned_registration_publishes_and_recovers_remote_head() {
+        let fixture = published_object_table("versioned_registration").await;
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            paths,
+            last_seq,
+            initial_catalog: first,
+            current_catalog: after_flush,
+            ..
+        } = fixture;
+        assert_eq!(
+            store
+                .table_spec_status("iris.worker")
+                .unwrap()
+                .active_version(),
+            1
+        );
+        assert_eq!(first.catalog.active_table_spec_version, Some(1));
+        assert_eq!(first.catalog.retained_table_specs.len(), 1);
         assert_eq!(paths.len(), 1);
         assert!(paths[0].contains("/_finelog/tables/iris.worker/objects/v1/l0/"));
-        let after_flush = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(after_flush.catalog.catalog_generation, Some(2));
         let version = after_flush
             .catalog
@@ -1634,8 +1682,20 @@ mod tests {
         store.ensure_query_cache().await.unwrap();
         assert!(Path::new(&paths[0]).exists());
 
-        // Simulate a crash after SQLite accepted the next version but before
-        // its HEAD CAS. Remote HEAD remains the canonical committed state.
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_head_supersedes_an_unpublished_sqlite_version() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            paths,
+            ..
+        } = published_object_table("unpublished_sqlite_version").await;
         let unpublished = store
             .register_versioned_table("iris.worker", object_backed_spec(2))
             .unwrap();
@@ -1676,11 +1736,21 @@ mod tests {
         let reopened_paths = reopened.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(reopened_paths, paths);
         reopened.shutdown(Duration::from_secs(1)).await;
-        drop(reopened);
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
 
-        // A crash can leave the mirrored file present while the process-local
-        // deque is empty. Recovery must adopt that cache file even when remote
-        // HEAD and SQLite already name the same generation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_adopts_an_existing_cache_file_into_an_empty_query_view() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            paths,
+            ..
+        } = published_object_table("existing_cache_recovery").await;
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
         let cached_reopen = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -1705,9 +1775,22 @@ mod tests {
             paths
         );
         cached_reopen.shutdown(Duration::from_secs(1)).await;
-        drop(cached_reopen);
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
 
-        let empty_data_dir = crate::test_support::unique_dir("versioned_empty_recovery_data");
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_head_recovers_an_empty_store_and_preserves_sequence_high_water() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            batch_schema,
+            ..
+        } = published_object_table("empty_store_recovery").await;
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        let empty_data_dir = crate::test_support::unique_dir("empty_store_recovery_target");
         let recovered_store = Store::new(
             Some(empty_data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),

@@ -70,7 +70,23 @@ pub struct RecoveredObjectSegment {
     pub migration_source_rows: Option<i64>,
 }
 
-type MigrationStatusRow = (String, i64, i64, String, i64, i64, i64, i64, i64);
+struct MigrationStatusRow {
+    migration_id: String,
+    from_version: i64,
+    to_version: i64,
+    phase: String,
+    fence_seq: i64,
+    source_generation: i64,
+    rows_total: i64,
+    rows_completed: i64,
+    observation_deadline_ms: i64,
+}
+
+struct MigrationCheckpoint {
+    to_version: i64,
+    rows_total: i64,
+    phase: String,
+}
 
 impl TableSpecStatus {
     /// Return the query-visible TableSpec version, or zero for a legacy table.
@@ -185,47 +201,35 @@ fn migration_status_in(
              FROM table_migrations WHERE namespace = ?1",
             [namespace],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                ))
+                Ok(MigrationStatusRow {
+                    migration_id: row.get(0)?,
+                    from_version: row.get(1)?,
+                    to_version: row.get(2)?,
+                    phase: row.get(3)?,
+                    fence_seq: row.get(4)?,
+                    source_generation: row.get(5)?,
+                    rows_total: row.get(6)?,
+                    rows_completed: row.get(7)?,
+                    observation_deadline_ms: row.get(8)?,
+                })
             },
         )
         .optional()
         .map_err(sqlite_err)?;
-    row.map(
-        |(
-            migration_id,
-            from_version,
-            to_version,
-            phase,
-            fence_seq,
-            source_generation,
-            rows_total,
-            rows_completed,
-            observation_deadline_ms,
-        )| {
-            Ok(TableMigrationStatus {
-                migration_id: Some(migration_id),
-                from_version: Some(from_version as u64),
-                to_version: Some(to_version as u64),
-                phase: Some(migration_phase_from_str(&phase)?.into()),
-                fence_seq: Some(fence_seq),
-                source_generation: Some(source_generation as u64),
-                rows_total: Some(rows_total),
-                rows_completed: Some(rows_completed),
-                observation_deadline_ms: Some(observation_deadline_ms),
-                ..Default::default()
-            })
-        },
-    )
+    row.map(|row| {
+        Ok(TableMigrationStatus {
+            migration_id: Some(row.migration_id),
+            from_version: Some(row.from_version as u64),
+            to_version: Some(row.to_version as u64),
+            phase: Some(migration_phase_from_str(&row.phase)?.into()),
+            fence_seq: Some(row.fence_seq),
+            source_generation: Some(row.source_generation as u64),
+            rows_total: Some(row.rows_total),
+            rows_completed: Some(row.rows_completed),
+            observation_deadline_ms: Some(row.observation_deadline_ms),
+            ..Default::default()
+        })
+    })
     .transpose()
 }
 
@@ -1286,21 +1290,27 @@ impl Catalog {
         let namespace = &rows[0].namespace;
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        let migration: (i64, i64, String) = transaction
+        let migration: MigrationCheckpoint = transaction
             .query_row(
                 "SELECT to_version, rows_total, phase FROM table_migrations
                  WHERE namespace = ?1",
                 [namespace],
-                |result| Ok((result.get(0)?, result.get(1)?, result.get(2)?)),
+                |result| {
+                    Ok(MigrationCheckpoint {
+                        to_version: result.get(0)?,
+                        rows_total: result.get(1)?,
+                        phase: result.get(2)?,
+                    })
+                },
             )
             .map_err(sqlite_err)?;
-        if migration.0 as u64 != table_spec_version {
+        if migration.to_version as u64 != table_spec_version {
             return Err(StatsError::SchemaConflict(format!(
                 "migration for {:?} targets version {}, not {table_spec_version}",
-                namespace, migration.0
+                namespace, migration.to_version
             )));
         }
-        let phase = migration_phase_from_str(&migration.2)?;
+        let phase = migration_phase_from_str(&migration.phase)?;
         if !matches!(
             phase,
             MigrationPhase::MIGRATION_PHASE_DUAL_WRITE | MigrationPhase::MIGRATION_PHASE_BACKFILL
@@ -1355,7 +1365,7 @@ impl Catalog {
         if changed != 1 {
             return Err(StatsError::SchemaConflict(format!(
                 "migration progress for {:?} exceeds its frozen row total {}",
-                namespace, migration.1
+                namespace, migration.rows_total
             )));
         }
         transaction
@@ -1448,38 +1458,20 @@ impl Catalog {
                  FROM object_segments WHERE namespace = ?1 ORDER BY path",
             )
             .map_err(sqlite_err)?;
-        let rows = statement
-            .query_map([namespace], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, bool>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                ))
-            })
-            .map_err(sqlite_err)?;
+        let mut rows = statement.query([namespace]).map_err(sqlite_err)?;
         let mut records = Vec::new();
-        for row in rows {
-            let (
-                path,
-                table_spec_version,
-                source_json,
-                migration_backfill,
-                migration_source_id,
-                migration_source_rows,
-            ) = row.map_err(sqlite_err)?;
+        while let Some(row) = rows.next().map_err(sqlite_err)? {
+            let source_json: String = row.get(2).map_err(sqlite_err)?;
             let source = serde_json::from_str(&source_json).map_err(|error| {
                 StatsError::Internal(format!("decode object segment source: {error}"))
             })?;
             records.push(ObjectSegmentRecord {
-                path,
-                table_spec_version: table_spec_version as u64,
+                path: row.get(0).map_err(sqlite_err)?,
+                table_spec_version: row.get::<_, i64>(1).map_err(sqlite_err)? as u64,
                 source,
-                migration_backfill,
-                migration_source_id,
-                migration_source_rows,
+                migration_backfill: row.get(3).map_err(sqlite_err)?,
+                migration_source_id: row.get(4).map_err(sqlite_err)?,
+                migration_source_rows: row.get(5).map_err(sqlite_err)?,
             });
         }
         Ok(records)

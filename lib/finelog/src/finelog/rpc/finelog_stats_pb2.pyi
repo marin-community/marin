@@ -245,7 +245,7 @@ class ObjectRef(_message.Message):
     def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
-    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "schema_revision", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill")
+    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill")
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
@@ -256,7 +256,7 @@ class CatalogSegment(_message.Message):
     MIN_KEY_VALUE_FIELD_NUMBER: _ClassVar[int]
     MAX_KEY_VALUE_FIELD_NUMBER: _ClassVar[int]
     PARTITION_JSON_FIELD_NUMBER: _ClassVar[int]
-    SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
+    TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]
     RETIRED_AT_MS_FIELD_NUMBER: _ClassVar[int]
     DELETE_AFTER_MS_FIELD_NUMBER: _ClassVar[int]
     MIGRATION_SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -272,13 +272,13 @@ class CatalogSegment(_message.Message):
     min_key_value: str
     max_key_value: str
     partition_json: str
-    schema_revision: int
+    table_spec_version: int
     retired_at_ms: int
     delete_after_ms: int
     migration_source_id: str
     migration_source_rows: int
     migration_backfill: bool
-    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., schema_revision: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ...) -> None: ...
+    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., table_spec_version: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ...) -> None: ...
 
 class TableVersionSegments(_message.Message):
     __slots__ = ("table_spec_version", "live_segments", "retired_segments")

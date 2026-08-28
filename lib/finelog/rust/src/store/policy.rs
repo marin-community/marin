@@ -26,18 +26,26 @@ impl StoragePolicy {
         let Some(p) = view else {
             return StoragePolicy::default();
         };
-        StoragePolicy {
-            max_segments: nonzero_i32(p.max_segments.unwrap_or(0)),
-            max_bytes: nonzero_i64(p.max_bytes.unwrap_or(0)),
-            max_age_seconds: nonzero_i64(p.max_age_seconds.unwrap_or(0)),
-        }
+        StoragePolicy::from_wire_values(
+            p.max_segments.unwrap_or(0),
+            p.max_bytes.unwrap_or(0),
+            p.max_age_seconds.unwrap_or(0),
+        )
     }
 
     pub fn from_proto_owned(policy: &ProtoStoragePolicy) -> StoragePolicy {
+        StoragePolicy::from_wire_values(
+            policy.max_segments.unwrap_or(0),
+            policy.max_bytes.unwrap_or(0),
+            policy.max_age_seconds.unwrap_or(0),
+        )
+    }
+
+    fn from_wire_values(max_segments: i32, max_bytes: i64, max_age_seconds: i64) -> StoragePolicy {
         StoragePolicy {
-            max_segments: nonzero_i32(policy.max_segments.unwrap_or(0)),
-            max_bytes: nonzero_i64(policy.max_bytes.unwrap_or(0)),
-            max_age_seconds: nonzero_i64(policy.max_age_seconds.unwrap_or(0)),
+            max_segments: nonzero_i32(max_segments),
+            max_bytes: nonzero_i64(max_bytes),
+            max_age_seconds: nonzero_i64(max_age_seconds),
         }
     }
 
@@ -82,13 +90,7 @@ mod tests {
             max_age_seconds: Some(0),
             ..Default::default()
         };
-        // We can't construct a StoragePolicyView here directly, so exercise the
-        // owned-roundtrip path via the field-level nonzero helpers.
-        let p = StoragePolicy {
-            max_segments: nonzero_i32(proto.max_segments.unwrap()),
-            max_bytes: nonzero_i64(proto.max_bytes.unwrap()),
-            max_age_seconds: nonzero_i64(proto.max_age_seconds.unwrap()),
-        };
+        let p = StoragePolicy::from_proto_owned(&proto);
         assert_eq!(p.max_segments, None);
         assert_eq!(p.max_bytes, Some(100));
         assert_eq!(p.max_age_seconds, None);

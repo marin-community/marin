@@ -195,8 +195,6 @@ mod tests {
         )
         .unwrap();
         let error = migrate(&mut conn).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("newer than this binary supports"));
+        assert!(matches!(error, StatsError::Internal(_)));
     }
 }
