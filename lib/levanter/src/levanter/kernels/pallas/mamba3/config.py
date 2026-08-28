@@ -6,9 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from levanter.kernels.pallas.ssd.config import BlockSizes
-
-
 Mamba3Mode: TypeAlias = Literal["siso", "mimo"]
 
 MAMBA3_TPU_DEFAULT_SISO_CHUNK_SIZE = 512
@@ -46,7 +43,6 @@ class HybridModeConfig:
 
 
 __all__ = [
-    "BlockSizes",
     "HybridModeConfig",
     "MAMBA3_TPU_DEFAULT_MIMO_R4_CHUNK_SIZE",
     "MAMBA3_TPU_DEFAULT_SISO_CHUNK_SIZE",
