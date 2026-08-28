@@ -73,11 +73,16 @@ Follow these steps precisely:
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. Launch one limited-attention opus agent per changed, human-authored file to
-   review maintainability. Split a large diff into cohesive hunks. Give each
-   agent only its file path, its diff or hunk, and a small amount of local
-   context. Do not give it the PR description, related files, or review
-   summaries, and do not let it open more context.
+5. Review maintainability with at most four limited-attention opus agents so the
+   full review stays within the CI job's 15-minute and 200-turn limits. Rank
+   changed, human-authored areas by design impact. Prefer public interfaces,
+   invariants, state transitions, abstraction boundaries, policy, and prose that
+   makes novel claims. Skip generated files, formatting, mechanical renames,
+   data-only changes, and repetitive call-site edits.
+
+   Give each agent one selected file or cohesive hunk, with only its path and a
+   small amount of local context. Do not give it the PR description, related
+   files, or review summaries, and do not let it open more context.
 
    Prefer shallow, concrete code that can be copied, deleted, and recombined
    locally. Treat small duplication as useful when it keeps variants independent.
@@ -89,7 +94,8 @@ Follow these steps precisely:
    unneeded abstraction and indirection that constrain future work. The final
    finding must identify the structural obstacle and explain how it reduces
    flexibility. Omit the hypothetical edit from the review. Do not flag
-   unfamiliar code, personal taste, or broad requests to simplify.
+   unfamiliar code, personal taste, or broad requests to simplify. Return only
+   the strongest finding, or no finding.
 
    Validate each finding with a parallel opus agent that receives the PR
    description and broader code context. Keep it only when the validator

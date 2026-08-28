@@ -22,8 +22,11 @@ For durable prose or any text that must stand alone, give a context-less
 subagent only the finished draft and its intended audience. Do not provide the
 conversation, source notes, diff, or author intent. Ask what terms, referents,
 claims, or causal links a first-time reader cannot recover from the text.
-Revise concrete gaps. Do not add background that the intended audience does not
-need, and do not turn personal style preferences into findings.
+Fix concrete gaps with the smallest local edit. Extra context can hide the main
+claim and overload a first-time reader. Narrow or reshape a claim when its full
+explanation would interrupt the text; put optional background behind a link. Do
+not add conversation history that the intended audience does not need, and do
+not turn personal style preferences into findings.
 
 ## Cut Empty Sentences
 
