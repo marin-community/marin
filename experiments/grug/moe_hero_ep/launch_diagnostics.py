@@ -30,6 +30,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
+    HERO_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
     HERO_NODE_DISK,
@@ -72,7 +73,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -357,7 +358,7 @@ def build_diagnostic_run(
 @click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
-    default=MasterParamMode.DISABLED.value,
+    default=HERO_MASTER_PARAM_MODE.value,
     show_default=True,
     help=("Whether to keep fp32 weights in host pinned memory. Disabling the master keeps them on device."),
 )

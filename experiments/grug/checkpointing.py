@@ -21,6 +21,8 @@ StateT = TypeVar("StateT")
 RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
 # Older grug runs saved {"train_state": state}, so their leaves carry this prefix.
 LEGACY_STATE_KEY = "train_state"
+# Field name of the optional fp32 pinned-host master in a grug train state's checkpoint layout.
+MASTER_PARAMS_KEY = "master_params"
 # The barrier runs one clock, started by the first rank to arrive, so this bounds the spread
 # between arrivals rather than the length of a restore. A gang whose object-store caches are only
 # partly warm spreads widest, since re-reading a checkpoint is an order of magnitude faster than

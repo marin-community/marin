@@ -37,6 +37,8 @@ HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+# The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
+HERO_MASTER_PARAM_MODE = MasterParamMode.DISABLED
 # An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
@@ -64,7 +66,7 @@ def hero_grug_trainer_config(
     training_data_mode: TrainingDataMode,
     watch_mode: WatchMode,
     save_checkpoints: bool,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
@@ -96,7 +98,7 @@ def hero_trainer_config(
     checkpointer: CheckpointerConfig,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
-    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
+    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
 ) -> TrainerConfig:
     """Set the Levanter options that affect the compiled hero step."""
     return TrainerConfig(

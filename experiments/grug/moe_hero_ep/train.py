@@ -53,7 +53,11 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    LEGACY_STATE_KEY,
+    MASTER_PARAMS_KEY,
+    restore_grug_state_from_checkpoint,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -152,7 +156,7 @@ def refuse_master_layout_mismatch(candidate: str, run_mode: MasterParamMode) -> 
     manifest = read_manifest(candidate)
     if manifest is None:
         raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
-    markers = ("master_params", f"{LEGACY_STATE_KEY}/master_params")
+    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
     has_master = any(
         path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers
     )

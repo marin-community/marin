@@ -44,6 +44,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_GPUS_PER_NODE,
+    HERO_MASTER_PARAM_MODE,
     HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
@@ -63,7 +64,6 @@ from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
-    MasterParamMode,
     TrainingDataMode,
     WatchMode,
     run_grug,
@@ -90,8 +90,6 @@ MAX_SOAK_TRAYS = 2
 # The schedule the hero's optimizer heuristic was tuned against. The soak trains 100 steps of its
 # head, so the learning rates match the hero's early steps instead of a 100-step schedule's.
 SOAK_SCHEDULE_STEPS = 390_251
-# Matches the hero, and the mixed-precision policy has to follow it or the weights are bf16.
-SOAK_MASTER_PARAM_MODE = MasterParamMode.DISABLED
 CHECKPOINT_TTL_DAYS = 1
 # Falsy `timedelta(0)` disables time-policy saves outright. A microsecond is below even a compiled
 # no-op step, making every call a real temporary save without retaining 100 permanent checkpoints.
@@ -188,7 +186,7 @@ def build_memory_soak_run(
         # Matches the hero: the MuonH state is what the checkpoint reads out of pinned host
         # memory, which is the path under suspicion.
         offload_opt_state=True,
-        master_param_mode=SOAK_MASTER_PARAM_MODE,
+        master_param_mode=HERO_MASTER_PARAM_MODE,
         training_data_mode=TrainingDataMode.SYNTHETIC,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
@@ -216,7 +214,7 @@ def build_memory_soak_run(
             train_batch_size=batch_size,
             num_train_steps=SOAK_SCHEDULE_STEPS,
             profiler=ProfilerConfig(enabled=False),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[SOAK_MASTER_PARAM_MODE]),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,

@@ -22,20 +22,20 @@ import asyncio
 import datetime
 import json
 import logging
-import os
 
 import click
-import fsspec
 import tensorstore as ts
 from levanter.checkpoint_manifest import CheckpointArray, CheckpointManifest, read_manifest, write_manifest
 from levanter.tensorstore_serialization import KVSTORE_DRIVER, build_kvstore_spec
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 
 logger = logging.getLogger(__name__)
 
-MASTER_FIELD = "master_params"
+MASTER_FIELD = MASTER_PARAMS_KEY
 PARAMS_FIELD = "params"
+METADATA_FILENAME = "metadata.json"
 COPY_CONCURRENCY = 16
 
 
@@ -120,8 +120,8 @@ def main(source: str, output: str) -> None:
     manifest = read_manifest(source)
     if manifest is None:
         raise click.ClickException(f"{source} has no manifest.json; only manifest-bearing checkpoints convert")
-    fs, _, (output_path,) = fsspec.get_fs_token_paths(output)
-    if fs.exists(os.path.join(output_path, "metadata.json")):
+    output_metadata = StoragePath(prefix_join(output, METADATA_FILENAME))
+    if output_metadata.exists():
         raise click.ClickException(f"{output} already holds a checkpoint")
 
     mapping = promoted_array_paths(manifest)
@@ -129,13 +129,10 @@ def main(source: str, output: str) -> None:
     logger.info("Copied %d kvstore keys from %s", copied, source)
 
     write_manifest(output, _promoted_manifest(manifest, mapping))
-    source_fs, _, (source_path,) = fsspec.get_fs_token_paths(source)
-    with source_fs.open(os.path.join(source_path, "metadata.json")) as metadata_in:
-        metadata = json.load(metadata_in)
+    metadata = json.loads(StoragePath(prefix_join(source, METADATA_FILENAME)).read_text())
     # A fresh timestamp makes the converted checkpoint the newest candidate at its step.
     metadata["timestamp"] = datetime.datetime.now().isoformat()
-    with fs.open(os.path.join(output_path, "metadata.json"), "w") as metadata_out:
-        json.dump(metadata, metadata_out)
+    output_metadata.write_text(json.dumps(metadata))
     logger.info("Wrote converted checkpoint (step %s) to %s", metadata.get("step"), output)
 
 

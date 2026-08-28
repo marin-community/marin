@@ -52,6 +52,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_GPUS_PER_NODE,
+    HERO_MASTER_PARAM_MODE,
     HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE,
     HERO_MODEL_CONFIG,
     HERO_NODE_CPU,
@@ -63,16 +64,12 @@ from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic, build_hero_conf
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.small_scale_abl_launch import SMALL_SHAPES, _small_model
 from experiments.grug.moe_hero_ep.train import (
-    MasterParamMode,
     _apply_hero_ep_runtime_defaults,
     initial_state,
     restore_template_from,
 )
 
 logger = logging.getLogger(__name__)
-
-# Matches the hero. The benchmark writes the checkpoint it reads, so nothing infers this.
-BENCHMARK_MASTER_PARAM_MODE = MasterParamMode.DISABLED
 
 # The hero's own schedule length, so this pytree matches the one a hero resume restores into.
 HERO_SCHEDULE_STEPS = 390_251
@@ -109,7 +106,7 @@ def _benchmark_state(config: RestoreBenchmarkConfig, mesh):
             key=key,
             ema_beta=None,
             offload_opt_state=True,
-            master_param_mode=BENCHMARK_MASTER_PARAM_MODE,
+            master_param_mode=HERO_MASTER_PARAM_MODE,
         )
 
     with set_mesh(mesh):
@@ -298,7 +295,7 @@ def main(
             seed=0,
             train_batch_size=batch_size,
             num_train_steps=HERO_SCHEDULE_STEPS,
-            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[BENCHMARK_MASTER_PARAM_MODE]),
+            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
             tracker=TelemetryConfig(),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
