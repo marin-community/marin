@@ -16,6 +16,15 @@ because another source used it hides uncertainty and spreads undefined
 language. Break a rule when following it would make the prose less clear or
 accurate.
 
+## Test With A Cold Reader
+
+For durable prose or any text that must stand alone, give a context-less
+subagent only the finished draft and its intended audience. Do not provide the
+conversation, source notes, diff, or author intent. Ask what terms, referents,
+claims, or causal links a first-time reader cannot recover from the text.
+Revise concrete gaps. Do not add background that the intended audience does not
+need, and do not turn personal style preferences into findings.
+
 ## Cut Empty Sentences
 
 Delete a sentence when removing it loses no information. Common waste:
