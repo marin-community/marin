@@ -12,19 +12,23 @@ Provide a code review for the given pull request.
 
 Follow these steps precisely:
 
-1. Launch a sub-agent to check if any of the following are true:
+1. Launch a fast scout sub-agent to check if any of the following are true:
    - The PR is closed
    - The PR is a draft
    - The PR does not need code review (e.g. automated PR, trivial obviously-correct change)
-   - This review workflow has already commented on the PR (check `gh pr view <PR> --comments`) AND a re-review was not explicitly requested. When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
+   - A prior automated correctness review contains `<!-- marin-correctness-review -->`
+     in either issue comments or inline review comments, and a re-review was not
+     explicitly requested. Check both `gh pr view <PR> --json comments` and
+     `gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate`. When a
+     maintainer explicitly requests a re-review, always proceed.
 
-   If any condition is true, stop. Note: still review agent-generated PRs.
+   If any condition is true, stop. Still review agent-generated PRs.
 
-2. Launch a sub-agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
+2. Launch a fast scout sub-agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
    - The root CLAUDE.md and AGENTS.md files, if they exist
    - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
-3. Launch a sub-agent to view the PR and return a summary of the changes. The
+3. Launch a deep-review sub-agent to view the PR and return a summary of the changes. The
    same agent also checks the PR title and description against
    `.agents/skills/writing-style/pull-requests.md` and returns any problems it
    finds:
@@ -53,9 +57,9 @@ Follow these steps precisely:
 
 4. Launch four sub-agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "instruction-following", "bug").
 
-   Sub-agents 1 and 2: Instruction-following reviewers. Audit changes against scoped CLAUDE.md and AGENTS.md instructions. When evaluating a file, only consider instruction files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
+   Sub-agents 1 and 2: deep-review instruction-following reviewers. Audit changes against scoped CLAUDE.md and AGENTS.md instructions. When evaluating a file, only consider instruction files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
 
-   Sub-agents 3 and 4: Bug reviewers. Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
+   Sub-agents 3 and 4: deep-review bug reviewers. Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
 
    **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
    - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
@@ -114,7 +118,7 @@ Follow these steps precisely:
      "tool": "review-pr",
      "invocation": {
        "trigger": "local",
-       "agent_cli": "<agent-cli>",
+       "agent_cli": "codex",
        "pr_number": <PR>,
        "agent_exit_code": 0,
        "timed_out": false
@@ -126,7 +130,6 @@ Follow these steps precisely:
    EOF
    ```
 
-   - `<agent-cli>` is the CLI running the review.
    - `<category>` is one of: `bug`, `instruction-following`, `maintainability`.
    - One `findings` row per validated issue. Pass `"findings": []` if there
      were none — the empty row in the `invocations` table is the
@@ -143,8 +146,9 @@ Follow these steps precisely:
    If `--comment` IS provided and step 3 found PR-description problems, post **one**
    top-level comment with `gh pr comment` (prefixed `🤖`, not inline) naming the
    specific problems and the concrete fix (e.g. "drop the Testing section; lead
-   with what changed and why"). This is independent of the code review — post it
-   whether or not code issues were found, but skip it when the description is fine.
+   with what changed and why"). End it with `<!-- marin-correctness-review -->`.
+   This is independent of the code review — post it whether or not code issues
+   were found, but skip it when the description is fine.
 
    If `--comment` argument IS provided and NO code issues were found, post the
    no-issues summary comment using `gh pr comment` and stop.
@@ -158,6 +162,7 @@ Follow these steps precisely:
     - For small, self-contained fixes, include a committable suggestion block
     - For larger fixes (6+ lines, structural changes, or changes spanning multiple locations), describe the issue and suggested fix without a suggestion block
     - Never post a committable suggestion UNLESS committing the suggestion fixes the issue entirely. If follow up steps are required, do not leave a committable suggestion.
+    - End the body with `<!-- marin-correctness-review -->`.
 
     **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
 
@@ -176,6 +181,8 @@ Notes:
 ## Code review
 
 No issues found.
+
+<!-- marin-correctness-review -->
 
 ---
 

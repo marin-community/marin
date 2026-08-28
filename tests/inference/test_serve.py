@@ -583,6 +583,40 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert "Submitted" in result.output
 
 
+def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
+    config = tmp_path / "metrics.toml"
+    config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--vllm-metrics-config",
+        str(config),
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    client.submit.assert_called_once()
+    assert services[0].engine.extra_metric_families == frozenset({"vllm:custom_scheduler_pressure"})
+
+
+def test_iris_serve_rejects_invalid_metric_config_before_submission(monkeypatch, tmp_path):
+    config = tmp_path / "metrics.toml"
+    config.write_text('families = "vllm:not-an-array"\n')
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--vllm-metrics-config",
+        str(config),
+        "--no-wait",
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "vLLM metrics config" in str(result.exception)
+    client.submit.assert_not_called()
+    assert services == []
+
+
 @pytest.mark.parametrize(
     ("broker_args", "expects_coordinator_region", "expected_worker_regions"),
     [([], True, None), (["--broker"], False, [ANY_REGION])],

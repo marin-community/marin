@@ -849,6 +849,13 @@ class Controller(_message.Message):
         unroutable_job_count: int
         unroutable_sample: _containers.RepeatedCompositeFieldContainer[Controller.UnroutableJob]
         def __init__(self, backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ..., unroutable_job_count: _Optional[int] = ..., unroutable_sample: _Optional[_Iterable[_Union[Controller.UnroutableJob, _Mapping]]] = ...) -> None: ...
+    class BackendListMetadata(_message.Message):
+        __slots__ = ("unroutable_job_count", "unroutable_sample")
+        UNROUTABLE_JOB_COUNT_FIELD_NUMBER: _ClassVar[int]
+        UNROUTABLE_SAMPLE_FIELD_NUMBER: _ClassVar[int]
+        unroutable_job_count: int
+        unroutable_sample: _containers.RepeatedCompositeFieldContainer[Controller.UnroutableJob]
+        def __init__(self, unroutable_job_count: _Optional[int] = ..., unroutable_sample: _Optional[_Iterable[_Union[Controller.UnroutableJob, _Mapping]]] = ...) -> None: ...
     class ListPeersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...

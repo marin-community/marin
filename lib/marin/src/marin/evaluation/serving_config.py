@@ -39,6 +39,8 @@ _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
+_VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
+_VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
 
 # vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
 # loader stages shard buffers on the way to device memory. Both are charged to the serve child's
@@ -190,6 +192,20 @@ def _vllm_engine_config(
     )
 
 
+def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
+    """Validate and render catalog-owned vLLM process settings."""
+    has_process_setting = serve.vllm_batch_invariant is not None or serve.vllm_use_flashinfer_sampler is not None
+    if has_process_setting and (serve.backend is not ServeBackend.VLLM or platform is not Platform.GPU):
+        raise ValueError("vLLM process settings require the vLLM backend on GPU")
+
+    environment: dict[str, str] = {}
+    if serve.vllm_batch_invariant is not None:
+        environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
+    if serve.vllm_use_flashinfer_sampler is not None:
+        environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    return environment
+
+
 def inference_config_for_model(
     model: ModelConfig,
     accelerator: AcceleratorChoice,
@@ -203,6 +219,7 @@ def inference_config_for_model(
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = model.serve
+    vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
     if serve.backend is ServeBackend.VLLM and serve.auto_overrides:
@@ -234,7 +251,7 @@ def inference_config_for_model(
             )
             environment = create_environment(
                 setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=dict(env_vars),
+                env_vars={**env_vars, **vllm_environment_variables},
             )
         else:
             engine = LevanterEngineConfig()

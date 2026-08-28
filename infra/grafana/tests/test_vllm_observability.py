@@ -394,6 +394,117 @@ def _histogram_records(
     return rows
 
 
+def test_query_health_only_reports_healthy_without_serving_freshness():
+    current = _attributes("current_snapshot", metric_source="vllm")
+    cumulative = _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape")
+    records = [
+        _record("a", "prometheus_source_available", 1, 135_000, current),
+        _record("a", "prometheus_stage_failures", 0, 105_000, cumulative),
+        _record("a", "prometheus_stage_failures", 0, 135_000, cumulative),
+        _record(
+            "a",
+            "prometheus_dropped_samples",
+            0,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+        ),
+    ]
+
+    rows = _query_rows(_database(records))
+
+    assert [row for row in rows if row["section"] == "telemetry_health"] == [
+        {
+            "t": None,
+            "section": "telemetry_health",
+            "metric": "collector",
+            "stat": "polls",
+            "series": "all resources",
+            "value": 1.0,
+            "unit": "polls",
+            "status": "healthy",
+            "samples": 1,
+            "gap_seconds": None,
+        }
+    ]
+    assert _one(rows, "freshness", "telemetry", "latest_sample_age")["status"] == "no_data"
+
+
+def test_query_reports_combined_collector_loss_across_replicas():
+    current = _attributes("current_snapshot", metric_source="vllm")
+    records = [
+        _record("unhealthy", "num_requests_running", 1, 150_000, _attributes("current_snapshot")),
+        _record("unhealthy", "prometheus_source_available", 0, 135_000, current),
+        _record("healthy", "prometheus_source_available", 1, 135_000, current),
+        _record(
+            "unhealthy",
+            "prometheus_stage_failures",
+            4,
+            105_000,
+            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_stage_failures",
+            6,
+            135_000,
+            _attributes("cumulative_snapshot", metric_source="vllm", stage="process"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_stage_failures",
+            3,
+            105_000,
+            _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_stage_failures",
+            3,
+            135_000,
+            _attributes("cumulative_snapshot", metric_source="vllm", stage="scrape"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_dropped_samples",
+            4,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_dropped_samples",
+            1,
+            150_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+        ),
+        _record(
+            "unhealthy",
+            "prometheus_dropped_samples",
+            2,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="telemetry_loss"),
+        ),
+        _record(
+            "healthy",
+            "prometheus_dropped_samples",
+            0,
+            135_000,
+            _attributes("current_snapshot", metric_source="vllm", drop_reason="sample_limit"),
+        ),
+    ]
+
+    rows = _query_rows(_database(records))
+    health = [row for row in rows if row["section"] == "telemetry_health"]
+
+    assert [(row["metric"], row["stat"], row["series"], row["value"], row["unit"], row["status"]) for row in health] == [
+        ("collector", "polls", "all resources", 2.0, "polls", "incomplete"),
+        ("collection failures", "delta", "process", 2.0, "failures", None),
+        ("dropped samples", "total", "sample_limit", 5.0, "samples", None),
+        ("dropped samples", "total", "telemetry_loss", 2.0, "samples", None),
+        ("source availability", "unavailable polls", "all resources", 1.0, "polls", None),
+    ]
+
+
 def test_query_returns_explicit_no_data_row():
     rows = _query_rows(_database([]))
     assert rows == [
@@ -408,7 +519,19 @@ def test_query_returns_explicit_no_data_row():
             "status": "no_data",
             "samples": 0,
             "gap_seconds": None,
-        }
+        },
+        {
+            "t": None,
+            "section": "telemetry_health",
+            "metric": "collector",
+            "stat": "polls",
+            "series": "all resources",
+            "value": 0.0,
+            "unit": "polls",
+            "status": "unknown",
+            "samples": 0,
+            "gap_seconds": None,
+        },
     ]
 
 

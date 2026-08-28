@@ -7,7 +7,7 @@ description: A guide for porting model architectures to the Levanter ecosystem u
 
 This guide outlines the steps to port a model architecture (e.g. from Hugging Face or another JAX framework) to
 the Levanter ecosystem using Haliax and Equinox. This guide is focused on LLMs, but the principles apply to other models as well.
-Agents can also refer to [Port-Models.md](../docs/dev/Port-Models.md), which contains a more detailed, human-oriented guide.
+Agents can also refer to [Port-Models.md](../dev/Port-Models.md), which contains a more detailed, human-oriented guide.
 
 In general, pattern match on `llama.py` or `mixtral.py` for examples of how to implement a model.
 

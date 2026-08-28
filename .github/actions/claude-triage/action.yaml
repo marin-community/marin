@@ -48,7 +48,7 @@ runs:
   steps:
     - name: Run claude-code-action
       id: claude
-      uses: marin-community/marin-style/actions/consult-agent@main
+      uses: marin-community/marin-style/actions/consult-agent@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
       with:
         claude_code_oauth_token: ${{ inputs.oauth-token }}
         prompt: |

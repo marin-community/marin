@@ -1,0 +1,58 @@
+name: "Ops - Loom Review"
+
+# This workflow runs from the trusted default branch and never checks out or
+# executes pull-request code. The Loom session starts from the immutable head
+# SHA after Loom verifies this workflow's OIDC identity.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        github.event.pull_request.author_association == 'OWNER' ||
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - review: correctness
+            skill: review-pr
+          - review: lint-catalog
+            skill: lint-review
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+
+      - name: Launch Loom review
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}
+          idempotency-key: pr-review:${{ matrix.review }}:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "${{ matrix.review }} review for PR #${{ github.event.pull_request.number }}"
+          goal: >-
+            Review pull request #${{ github.event.pull_request.number }} at head
+            ${{ github.event.pull_request.head.sha }}. Remain read-only except for
+            GitHub review comments. Run only the ${{ matrix.skill }} skill with
+            --comment and report its result in the session result.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}

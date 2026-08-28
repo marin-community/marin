@@ -200,7 +200,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Grug multislice smoke failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

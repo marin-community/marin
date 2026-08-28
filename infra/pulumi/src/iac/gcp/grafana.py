@@ -65,9 +65,17 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                     GcpRoleGrant(
                         role="roles/iap.httpsResourceAccessor",
                         members=(
+                            f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+                            "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
+                            principals["human-014"],
+                            principals["human-032"],
+                            principals["human-024"],
+                            principals["human-012"],
+                            principals["human-067"],
+                            principals["human-021"],
+                            principals["human-006"],
                             "domain:openathena.ai",
                             loom_account,
-                            principals["human-012"],
                             principals["human-064"],
                             principals["human-070"],
                             principals["human-071"],
