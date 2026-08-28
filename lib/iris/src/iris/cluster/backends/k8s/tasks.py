@@ -1965,8 +1965,8 @@ class ClusterState:
         is dropped from the split (still counted as held) — it cannot be preempted on
         a band the parent can reason about.
 
-        Deliberately imperfect — it lags the sync and ignores per-node packing, which
-        the meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        Deliberately imperfect — it lags the sync and ignores per-node packing,
+        which federation routing tolerates (the peer's own Kueue is the backstop)."""
         band_by_class = {name: band for band, name in priority_class_names.items()}
         with self._lock:
             nodes = self._nodes[:]
@@ -2397,8 +2397,7 @@ class K8sTaskProvider:
     cluster_scan_interval: float = 5.0
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
-    # A cluster backend tracks no Iris worker liveness; the controller's union read
-    # skips a None tracker, and no worker registers into a k8s scale group.
+    # A Kubernetes backend tracks no Iris worker liveness.
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, passed by the composer at construction (a cluster backend has no

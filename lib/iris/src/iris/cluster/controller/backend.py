@@ -1,33 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TaskBackend: the contract every Iris execution backend implements.
+"""TaskBackend: the contract an Iris controller uses to drive its cluster.
 
-The controller owns task lifecycle and routing; each backend owns its live
-workers. Per tick the controller routes pending *tasks* to backends (the
-meta-scheduler), threads the per-user budget, and drives each backend through
-three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.reconcile`,
-:meth:`TaskBackend.autoscale` — passing controller-owned inputs
+Each controller owns one backend. Per tick the controller drives that backend
+through three uniform methods — :meth:`TaskBackend.schedule`,
+:meth:`TaskBackend.reconcile`, and :meth:`TaskBackend.autoscale` — passing
+controller-owned inputs
 (:class:`ScheduleRequest` / :class:`ReconcileRequest` / :class:`AutoscaleRequest`)
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
-complete, backend-partitioned scheduling workspace, so scheduling never reads
-controller storage. Reconcile and autoscale use a scale-group-scoped store over
-the controller database.
+complete scheduling workspace, so scheduling never reads controller storage.
+Reconcile and autoscale still use the controller database through the bound
+worker store.
 
-:attr:`TaskBackend.descriptor` is the backend's immutable identity, routing, and
-capability declaration. Capabilities drive the dashboard tab list and on-demand
-service-RPC routing (worker-daemon vs direct-pod exec). One narrow
-exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
-the controller drains the dispatch queue (a DB write it owns) and hands the
-promoted tasks to that backend's ``reconcile``. A worker-daemon backend instead
-sources its own placement and folds the liveness it observed; a cluster backend
-has no Iris workers, so its ``run_teardown`` is a no-op.
+:attr:`TaskBackend.descriptor` declares the backend's immutable identity, kind,
+and advertised capacity. The two backend kinds have deliberately different
+mechanisms: a worker backend runs the Iris scheduler and worker RPCs, while a
+Kubernetes backend hands placement to Kueue and reconciles Pods directly.
 """
 
 import logging
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -74,43 +69,25 @@ class ProviderUnsupportedError(ProviderError):
     """Operation not supported by this backend implementation."""
 
 
-class BackendCapability(StrEnum):
-    """A descriptor flag the dashboard and on-demand RPC routing key on.
+class BackendKind(StrEnum):
+    """The execution mechanism owned by a controller's backend."""
 
-    Mostly metadata: the controller calls ``schedule``/``reconcile``/``autoscale``
-    uniformly regardless of these flags, and stores each backend's authored
-    projection the same way. The one per-tick exception is ``CLUSTER_VIEW``, which
-    tells the controller to drain the dispatch queue into the reconcile request (a
-    DB write the placement-owning backend can't do).
-    """
-
-    WORKER_DAEMON = "workers"
-    """Iris tracks worker daemons (Fleet tab; exec/profile route by worker)."""
-
-    IRIS_AUTOSCALER = "autoscaler"
-    """The Iris autoscaler provisions capacity for this backend (Autoscaler tab)."""
-
-    CLUSTER_VIEW = "cluster"
-    """The backend places tasks on its own cluster (Cluster tab; exec by task/pod)."""
-
-
-STANDARD_WORKER_BACKEND_CAPABILITIES = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-CLUSTER_VIEW_BACKEND_CAPABILITIES = frozenset({BackendCapability.CLUSTER_VIEW})
+    WORKER = "worker-daemon"
+    KUBERNETES = "kubernetes"
 
 
 @dataclass(frozen=True, slots=True)
 class BackendDescriptor:
-    """Immutable declaration used to register one execution backend."""
+    """Immutable identity and advertised metadata for one controller backend."""
 
     backend_id: str
-    capabilities: frozenset[BackendCapability]
+    kind: BackendKind
     advertised_attributes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     scale_groups: frozenset[str] = field(default_factory=frozenset)
     display_name: str | None = None
 
     def __post_init__(self) -> None:
         normalized = {key: frozenset(values) for key, values in self.advertised_attributes.items()}
-        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
         object.__setattr__(self, "advertised_attributes", MappingProxyType(normalized))
         object.__setattr__(self, "scale_groups", frozenset(self.scale_groups))
 
@@ -125,9 +102,15 @@ class DashboardBackendDescriptor:
 
 def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
     descriptor = backend.descriptor
+    if descriptor.kind is BackendKind.KUBERNETES:
+        capabilities = ["cluster"]
+    else:
+        capabilities = ["workers"]
+        if backend.autoscaler is not None:
+            capabilities.append("autoscaler")
     return DashboardBackendDescriptor(
         name=descriptor.display_name or descriptor.backend_id,
-        capabilities=sorted(capability.value for capability in descriptor.capabilities),
+        capabilities=capabilities,
     )
 
 
@@ -239,10 +222,9 @@ class AutoscaleResult:
 class ScheduleRequest:
     """Complete single-use scheduling workspace for one backend and tick.
 
-    The controller builds this from one read snapshot, partitions workers and
-    pending tasks by registered backend ownership, and threads ``user_spend`` in
-    deterministic backend order. The backend performs a pure decision over the
-    supplied context and never reads controller storage while scheduling.
+    The controller builds this from one read snapshot. The backend performs a
+    pure decision over the supplied context and never reads controller storage
+    while scheduling.
     """
 
     context: SchedulingContext
@@ -255,7 +237,7 @@ class ReconcileRequest:
     """Controller-owned inputs for one backend's reconcile tick.
 
     A worker-daemon backend sources its own worker/placement snapshot and ignores
-    this; a ``CLUSTER_VIEW`` backend that owns placement receives the dispatch
+    this; a Kubernetes backend that owns placement receives the dispatch
     drain (the PENDING->ASSIGNED promotion the controller commits as a DB write)
     and applies it to its cluster.
     """
@@ -401,17 +383,13 @@ def apply_placements(
 
 @dataclass(frozen=True)
 class BackendRuntime:
-    """Controller-owned values used to build a scoped
-    :class:`~iris.cluster.controller.backend_store.BackendWorkerStore`.
+    """Controller-owned values used to build a worker backend's store.
 
     Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
 
     db: ControllerDB
     """The controller database."""
-    owns_scale_group: Callable[[str], bool]
-    """Whether a scale group belongs to this backend (the default backend also claims
-    scale groups mapped to no backend)."""
 
 
 class TaskBackend(Protocol):
@@ -423,7 +401,7 @@ class TaskBackend(Protocol):
     """
 
     descriptor: BackendDescriptor
-    """Stable identity, routing ownership, and supported mechanisms."""
+    """Stable identity, backend kind, and advertised capacity."""
 
     autoscaler: Autoscaler | None
     """The Iris :class:`Autoscaler` driving capacity, or None for backends that
@@ -433,7 +411,7 @@ class TaskBackend(Protocol):
 
     @property
     def health(self) -> WorkerHealthTracker | None:
-        """The tracker for this backend's scale groups, or None without Iris workers."""
+        """The backend's worker tracker, or None for Kubernetes."""
         ...
 
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
@@ -447,7 +425,7 @@ class TaskBackend(Protocol):
         the scheduler uses.
 
         Returns ``None`` when this backend does not supply the metric (a placement-
-        owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the
+        owning Kubernetes backend that does not track per-worker capacity); the
         controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
         it falls back to shape-only federation. An empty dict is an authoritative
         "nothing free"."""
@@ -465,10 +443,9 @@ class TaskBackend(Protocol):
     def status(self) -> controller_pb2.Controller.BackendStatus:
         """Author this backend's expanded status for the dashboard Backends tab.
 
-        Each backend authors its own ``BackendStatus`` variant uniformly,
-        selected by :attr:`BackendDescriptor.capabilities`: a ``CLUSTER_VIEW`` backend fills
-        ``kubernetes`` from its cached cluster-state snapshot; a
-        ``WORKER_DAEMON`` backend fills ``worker`` in full from the state it owns
+        Each backend authors the variant selected by :attr:`BackendDescriptor.kind`:
+        Kubernetes fills ``kubernetes`` from its cached cluster-state snapshot;
+        a worker backend fills ``worker`` in full from the state it owns
         — its liveness tracker (health counts + per-VM usability) and running-task
         rows, with its :meth:`autoscaler_status` embedded. The controller reads the
         result verbatim; it overlays nothing.
@@ -479,9 +456,8 @@ class TaskBackend(Protocol):
         """This backend's autoscaler status, fully populated and self-contained.
 
         Every group is tagged with this backend's id and every VM carries its
-        usability / running-task-count / capacity verdict, so the controller can
-        merge statuses across backends without reaching into any backend's state.
-        Empty for a backend with no autoscaler.
+        usability, running-task count, and capacity verdict. Empty for a backend
+        with no autoscaler.
         """
         ...
 
@@ -555,10 +531,10 @@ class TaskBackend(Protocol):
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         """Build this backend's live-worker read surface from controller-owned deps.
 
-        Called once by the controller for worker-daemon backends. The backend joins
-        ``runtime`` with its own liveness tracker to build the scale-group-scoped
+        Called once by the controller for a worker-daemon backend. The backend joins
+        ``runtime`` with its own liveness tracker to build the
         :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` it reads
-        through; capacity-managing backends (k8s) track no Iris workers and no-op.
+        through; Kubernetes backends track no Iris workers and no-op.
         """
         ...
 
@@ -567,8 +543,8 @@ class TaskBackend(Protocol):
 
         Called by the controller at start and after a DB reopen (checkpoint
         restore), only on worker-daemon backends. The backend reads its own
-        scale-group-scoped workers and heartbeats them into the tracker it owns.
-        Capacity-managing backends (k8s) track no liveness and no-op.
+        persisted workers and heartbeats them into the tracker it owns.
+        Kubernetes backends track no liveness and no-op.
         """
         ...
 

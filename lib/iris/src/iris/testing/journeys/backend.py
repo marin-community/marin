@@ -6,17 +6,15 @@
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import ClassVar
 
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.backend import (
-    CLUSTER_VIEW_BACKEND_CAPABILITIES,
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
     BackendDescriptor,
+    BackendKind,
     BackendRuntime,
     DeviceCapacity,
     ProviderUnsupportedError,
@@ -61,7 +59,6 @@ class ScriptedTaskBackend:
     effects and never reads or writes controller tables.
     """
 
-    _capabilities: ClassVar[frozenset[BackendCapability]] = CLUSTER_VIEW_BACKEND_CAPABILITIES
     autoscaler = None
     health: WorkerHealthTracker | None = None
 
@@ -71,12 +68,13 @@ class ScriptedTaskBackend:
         *,
         backend_id: str = DEFAULT_BACKEND_ID,
         advertised_attributes: dict[str, set[str]] | None = None,
+        kind: BackendKind = BackendKind.KUBERNETES,
     ) -> None:
         self._transition_reader = transition_reader
         self.descriptor = BackendDescriptor(
             backend_id=backend_id,
             display_name="journey",
-            capabilities=self._capabilities,
+            kind=kind,
             advertised_attributes=advertised_attributes or {"region": {"us-central1"}},
         )
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
@@ -84,6 +82,7 @@ class ScriptedTaskBackend:
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self.health = WorkerHealthTracker() if kind is BackendKind.WORKER else None
         self.closed = False
 
     @property
@@ -229,9 +228,10 @@ class ScriptedTaskBackend:
 
 
 class UnavailableTaskBackend(ScriptedTaskBackend):
-    """Worker-style backend that advertises a route but has no capacity."""
+    """Backend that advertises a route but has no capacity."""
 
-    _capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.WORKER_DAEMON})
+    def __init__(self, transition_reader: TransitionReader, **kwargs) -> None:
+        super().__init__(transition_reader, kind=BackendKind.WORKER, **kwargs)
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")

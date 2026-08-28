@@ -30,7 +30,7 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.backend import BackendCapability, BackendDescriptor
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
@@ -85,16 +85,13 @@ def _make_service(db, log_client, auth=None):
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.last_scheduling_context = None
-    controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
-    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    controller_mock.provider.descriptor = BackendDescriptor(
+    controller_mock.backend = Mock()
+    controller_mock.backend.autoscaler = None
+    controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="worker",
-        capabilities=capabilities,
+        kind=BackendKind.WORKER,
     )
-    controller_mock.capabilities = capabilities
-    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
@@ -125,16 +122,13 @@ def state(db, tmp_path):
 def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.autoscaler = None
-    worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    controller_mock.provider = Mock()
-    controller_mock.provider.descriptor = BackendDescriptor(
+    controller_mock.backend = Mock()
+    controller_mock.backend.autoscaler = None
+    controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="worker",
-        capabilities=worker_caps,
+        kind=BackendKind.WORKER,
     )
-    controller_mock.capabilities = worker_caps
-    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

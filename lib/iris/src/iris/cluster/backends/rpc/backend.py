@@ -8,8 +8,8 @@ local clusters. The Iris scheduler assigns task→worker; this backend fans the
 per-worker Reconcile RPC out to the worker daemons, resolves the observations
 into task ``effects`` from its own read snapshot, and folds the per-worker
 liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
-through the liveness tracker it constructs and owns (``self.health``, holding
-only the workers in this backend's scale groups). The workers its fold reaps are
+through the liveness tracker it constructs and owns (``self.health``). The
+workers its fold reaps are
 stashed and torn down by ``run_teardown`` after the controller commits the
 effects, so no worker identity crosses the reconcile result boundary.
 """
@@ -179,17 +179,15 @@ class RpcTaskBackend:
     # composer at construction after it builds the autoscaler from the provider
     # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
-    # Reconcile, status, autoscale, and teardown use this scale-group-scoped store.
+    # Reconcile, status, autoscale, and teardown use this controller-backed store.
     # Scheduling receives its complete worker workspace from the controller.
     _store: BackendWorkerStore | None = field(default=None, init=False, repr=False)
     # Wall-clock window a worker may stay continuously unreachable before this
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.
     unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
-    # This backend's liveness tracker, constructed and owned here, holding only the
-    # workers in this backend's scale groups. The backend folds (reconcile) and
-    # forgets (teardown) through it; the controller reads it for its
-    # Fleet/exec/capacity/prune paths and routes a registering worker's liveness to
-    # it by scale group.
+    # This backend's liveness tracker, constructed and owned here. The backend
+    # folds (reconcile) and forgets (teardown) through it; the controller reads it
+    # for Fleet/exec/capacity/prune paths.
     health: WorkerHealthTracker = field(init=False, repr=False)
     # One shared scheduler instance reused across cycles; the controller supplies
     # the complete per-tick workspace.
@@ -207,7 +205,6 @@ class RpcTaskBackend:
         liveness tracker and autoscale callback."""
         self._store = DbBackendWorkerStore(
             db=runtime.db,
-            owns_scale_group=runtime.owns_scale_group,
             health=self.health,
             autoscale=self.autoscale,
         )
@@ -220,7 +217,7 @@ class RpcTaskBackend:
         failures through the reconcile fold and is reaped once over threshold.
         """
         assert self._store is not None, "RpcTaskBackend.seed_liveness called before worker store attached"
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 

@@ -634,12 +634,7 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
 
 
 def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
-    provider.bind_runtime(
-        BackendRuntime(
-            db=state._db,
-            owns_scale_group=lambda _scale_group: True,
-        )
-    )
+    provider.bind_runtime(BackendRuntime(db=state._db))
     provider.seed_liveness()
 
 
@@ -1328,7 +1323,7 @@ class _ScriptedProvider:
 
     def seed_liveness(self) -> None:
         assert self._store is not None
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -1398,7 +1393,7 @@ class _UnreachableProvider:
 
     def seed_liveness(self) -> None:
         assert self._store is not None
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -1478,7 +1473,7 @@ _GRACE = Duration.from_seconds(4)
 def _expire_grace(ctrl, wid: WorkerId) -> None:
     """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
     aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
-    ctrl.provider.health.set_last_heartbeat_for_test(wid, aged)
+    ctrl.backend.health.set_last_heartbeat_for_test(wid, aged)
 
 
 def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_controller):
@@ -1490,7 +1485,7 @@ def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_con
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1508,7 +1503,7 @@ def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_con
     reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
-    assert wid not in ctrl.provider.health.all(), "failed worker should be forgotten from the tracker"
+    assert wid not in ctrl.backend.health.all(), "failed worker should be forgotten from the tracker"
 
 
 def test_reconcile_failure_reaps_slice_siblings(make_controller):
@@ -1526,7 +1521,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1541,7 +1536,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
-    assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
+    assert ctrl.backend.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
 def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
@@ -1581,7 +1576,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1609,13 +1604,13 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     for expected_failures in range(1, BUILD_FAILURE_THRESHOLD):
         reconcile_once(ctrl)
         assert query_worker(state, wid) is not None, "worker reaped before reaching the build-failure threshold"
-        assert ctrl.provider.health.liveness(wid).build_failures == expected_failures
+        assert ctrl.backend.health.liveness(wid).build_failures == expected_failures
 
     # The THRESHOLD-th build failure trips the bar: the backend's fold returns the
     # worker dead and the controller reaps it.
     reconcile_once(ctrl)
     assert query_worker(state, wid) is None, "worker should be reaped at the build-failure threshold"
-    assert wid not in ctrl.provider.health.all(), "reaped worker should be forgotten from the tracker"
+    assert wid not in ctrl.backend.health.all(), "reaped worker should be forgotten from the tracker"
 
 
 # ===========================================================================

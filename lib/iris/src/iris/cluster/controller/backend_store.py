@@ -60,8 +60,8 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
 class BackendWorkerStore(TransitionReader, Protocol):
     """The worker-state operations a worker-daemon backend depends on."""
 
-    def owned_worker_ids(self) -> set[WorkerId]:
-        """The worker IDs this backend owns, by scale group."""
+    def worker_ids(self) -> set[WorkerId]:
+        """The worker IDs registered with this controller."""
         ...
 
     def worker_snapshots(self) -> list[WorkerSnapshot]:
@@ -102,13 +102,13 @@ class BackendWorkerStore(TransitionReader, Protocol):
 class DbBackendWorkerStore:
     """:class:`BackendWorkerStore` backed by the controller database.
 
-    Built per backend with the controller DB plus the backend's own liveness tracker
-    and ``autoscale`` callback, which ``reap_workers`` uses to fail workers and
-    terminate their slices.
+    Built with the controller DB plus the backend's liveness tracker and
+    ``autoscale`` callback, which ``reap_workers`` uses to fail workers and
+    terminate their slices. A controller owns one backend, so every worker row
+    belongs to this store.
     """
 
     db: ControllerDB
-    owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
 
@@ -130,9 +130,9 @@ class DbBackendWorkerStore:
             extra_attempt_keys=extra_attempt_keys,
         )
 
-    def owned_worker_ids(self) -> set[WorkerId]:
+    def worker_ids(self) -> set[WorkerId]:
         with self.db.control_read_snapshot() as snap:
-            return self._owned_worker_ids(snap)
+            return reads.all_worker_ids(snap)
 
     def worker_snapshots(self) -> list[WorkerSnapshot]:
         with self.db.control_read_snapshot() as snap:
@@ -142,23 +142,15 @@ class DbBackendWorkerStore:
                 snap.caches[WorkerAttrsProjection],
             )
             usage_by_worker = reads.resource_usage_by_worker(snap)
-            owned = self._owned_worker_ids(snap)
-        return [
-            worker_snapshot_from_row(worker, usage_by_worker.get(worker.worker_id))
-            for worker in workers
-            if worker.worker_id in owned
-        ]
+        return [worker_snapshot_from_row(worker, usage_by_worker.get(worker.worker_id)) for worker in workers]
 
     def reconcile_snapshot(self) -> ControlSnapshot:
         with self.db.control_read_snapshot() as snap:
             control = reads.load_control_snapshot(snap, self.health, scan_timeouts=False)
-            owned = self._owned_worker_ids(snap)
-            worker_addresses = {wid: addr for wid, addr in control.worker_addresses.items() if wid in owned}
-            reconcile_rows = [r for r in control.reconcile_rows if r.worker_id in owned]
-            job_specs = self._run_templates(snap, reconcile_rows)
+            job_specs = self._run_templates(snap, control.reconcile_rows)
         return ControlSnapshot(
-            worker_addresses=worker_addresses,
-            reconcile_rows=reconcile_rows,
+            worker_addresses=control.worker_addresses,
+            reconcile_rows=control.reconcile_rows,
             timeout_rows=[],
             job_specs=job_specs,
         )
@@ -168,11 +160,8 @@ class DbBackendWorkerStore:
         worker_ids = {wid for wid, use in usability.items() if use is not WorkerUsability.DEAD}
         with self.db.control_read_snapshot() as snap:
             running_by_worker = reads.running_tasks_by_worker(snap, worker_ids)
-            wid_to_scale_group = reads.worker_scale_groups(snap)
         result: WorkerStatusMap = {}
         for wid in worker_ids:
-            if not self.owns_scale_group(wid_to_scale_group.get(wid, "")):
-                continue
             result[wid] = WorkerStatus(
                 worker_id=wid,
                 running_task_ids=frozenset(tid.to_wire() for tid in running_by_worker.get(wid, set())),
@@ -249,10 +238,6 @@ class DbBackendWorkerStore:
             deleted += 1
             time.sleep(pause)
         return deleted
-
-    def _owned_worker_ids(self, snap: Tx) -> set[WorkerId]:
-        """The workers this backend owns, by scale group, in the read ``snap``."""
-        return reads.owned_worker_ids(snap, self.owns_scale_group)
 
     def _run_templates(self, snap: Tx, reconcile_rows: Sequence[ReconcileRow]) -> dict[JobName, job_pb2.RunTaskRequest]:
         """Per-job ``RunTaskRequest`` templates for the ASSIGNED rows."""

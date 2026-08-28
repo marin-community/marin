@@ -16,7 +16,6 @@ see :func:`_prune_orphan_slices`.
 import logging
 import threading
 import time
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
@@ -72,19 +71,9 @@ def _prune_terminal_jobs(
     return deleted
 
 
-def _prune_dead_workers(
-    backends: Iterable[TaskBackend], cutoff_ms: int, stop_event: threading.Event | None, pause: float
-) -> int:
-    """Delete each backend's DEAD workers whose last heartbeat predates ``cutoff_ms``.
-
-    Each backend garbage-collects the dead workers in its own tracker (the trackers
-    are disjoint by scale group); a backend that tracks no Iris workers prunes
-    nothing. The per-worker delete cadence (one CASCADE per transaction, ``pause``
-    between deletes, early stop on ``stop_event``) lives in the backend.
-    """
-    return sum(
-        backend.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause) for backend in backends
-    )
+def _prune_dead_workers(backend: TaskBackend, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+    """Delete the backend's DEAD workers whose last heartbeat predates ``cutoff_ms``."""
+    return backend.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
 
 def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
@@ -126,7 +115,7 @@ def _sweep_expired_endpoints(db: ControllerDB, now: Timestamp) -> int:
 
 def prune_old_data(
     db: ControllerDB,
-    backends: Iterable[TaskBackend],
+    backend: TaskBackend,
     *,
     job_retention: Duration,
     worker_retention: Duration,
@@ -145,7 +134,7 @@ def prune_old_data(
             each CASCADE also drops the job's derived-count memo (reached via
             ``cur.caches``); slice/endpoint prunes use the same handle and reach
             ``EndpointsProjection`` the same way.
-        backends: The backends, each of which garbage-collects its own dead workers.
+        backend: The controller's backend, which garbage-collects its dead workers.
         job_retention: Delete terminal jobs whose finished_at is older than this.
         worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
         slice_retention: Delete orphaned slices from abandoned scale groups (no backing worker row) older than this.
@@ -156,7 +145,7 @@ def prune_old_data(
     now_ms = now.epoch_ms()
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
-        workers_deleted=_prune_dead_workers(backends, now_ms - worker_retention.to_ms(), stop_event, pause_between_s),
+        workers_deleted=_prune_dead_workers(backend, now_ms - worker_retention.to_ms(), stop_event, pause_between_s),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, now),
     )

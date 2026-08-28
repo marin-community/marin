@@ -406,23 +406,24 @@ class ControllerDashboard:
             if self._reports_native_identity
             else _request_is_authenticated(self._auth_policy, request)
         )
-        descriptors = {bid: dashboard_backend_descriptor(b) for bid, b in self._service.backends.items()}
-        union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
-        representative = dashboard_backend_descriptor(self._service.provider)
+        backend = self._service.backend
+        descriptor = dashboard_backend_descriptor(backend)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "authenticated": authenticated,
-                # Union of every backend's capabilities gates which tabs the dashboard shows.
-                "capabilities": union_capabilities,
+                "capabilities": descriptor.capabilities,
                 "backends": [
-                    {"id": bid, "name": d.name, "capabilities": d.capabilities} for bid, d in descriptors.items()
+                    {
+                        "id": backend.descriptor.backend_id,
+                        "name": descriptor.name,
+                        "capabilities": descriptor.capabilities,
+                    }
                 ],
-                # Representative backend for the single-backend frontend path.
                 "backend": {
-                    "name": representative.name,
-                    "capabilities": representative.capabilities,
+                    "name": descriptor.name,
+                    "capabilities": descriptor.capabilities,
                 },
                 "optional": self._auth_optional,
             }

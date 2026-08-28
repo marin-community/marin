@@ -19,7 +19,7 @@ Areas covered:
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol
 
@@ -1510,6 +1510,11 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
     ).first()
 
 
+def all_worker_ids(tx: Tx) -> set[WorkerId]:
+    """Return every registered worker ID."""
+    return {WorkerId(str(row.worker_id)) for row in tx.execute(select(workers_table.c.worker_id)).all()}
+
+
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
     """Reconcile-target worker ids: every non-``DEAD`` worker (``HEALTHY | DEGRADED``).
 
@@ -1733,21 +1738,6 @@ def row_counts(tx: Tx) -> RowCounts:
         tasks=int(tx.execute(select(func.count()).select_from(tasks_table)).scalar() or 0),
         workers=int(tx.execute(select(func.count()).select_from(workers_table)).scalar() or 0),
     )
-
-
-def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
-    """Return ``{worker_id: scale_group}`` for every persisted worker.
-
-    The controller maps each worker's scale group to its owning backend to
-    partition the per-tick snapshot. Workers with no scale group map to ``""``.
-    """
-    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
-    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
-
-
-def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[WorkerId]:
-    """The workers whose scale group ``owns_scale_group`` claims, in the read ``tx``."""
-    return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
 
 
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))

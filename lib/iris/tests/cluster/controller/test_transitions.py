@@ -42,8 +42,7 @@ from iris.cluster.controller.reconcile.snapshot import (
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.scheduling.policy import (
-    build_routing_inputs,
-    build_worker_scheduling_context,
+    build_scheduling_context,
     compute_demand_entries,
 )
 from iris.cluster.controller.scheduling.scheduler import (
@@ -72,7 +71,7 @@ from iris.testing.controller import (
     register_worker,
     submit_job,
     transition_task,
-    worker_daemon_backends_for_prune,
+    worker_backend_for_prune,
     worker_running_tasks,
 )
 from iris.testing.controller import (
@@ -130,12 +129,11 @@ def _demand_entries(state: ControllerTestState):
     """
     defaults = UserBudgetDefaults()
     with state._db.read_snapshot() as snap:
-        ctx = build_worker_scheduling_context(
+        ctx = build_scheduling_context(
             snap,
             state._health,
             state._worker_attrs,
-            build_routing_inputs(snap, defaults),
-            lambda _scale_group: True,
+            defaults,
         )
     return compute_demand_entries(ctx, Scheduler(), {})
 
@@ -803,7 +801,7 @@ def test_endpoint_survives_terminal_and_clears_on_prune(state):
         _tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(finished_at_ms=1000))
     prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3213,7 +3211,7 @@ def test_prune_old_terminal_jobs(state):
     # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3247,7 +3245,7 @@ def test_prune_old_inactive_workers(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3263,7 +3261,7 @@ def test_prune_noop_when_nothing_old(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(86400),
@@ -3317,7 +3315,7 @@ def test_prune_orphaned_slices(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),
@@ -3345,7 +3343,7 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
 
     result = prune_old_data(
         state._db,
-        worker_daemon_backends_for_prune(state),
+        worker_backend_for_prune(state),
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
         slice_retention=Duration.from_seconds(3600),

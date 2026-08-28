@@ -25,7 +25,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendDescriptor, BackendRuntime, DeviceCapacity
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -159,7 +159,14 @@ def scheduler():
     return Scheduler()
 
 
-def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
+def _worker_backend(
+    state,
+    autoscaler,
+    backend_id=DEFAULT_BACKEND_ID,
+    *,
+    advertised_attributes=None,
+    scale_groups=frozenset(),
+):
     """A real ``RpcTaskBackend`` bound to the test DB and shared liveness tracker.
 
     It authors its own ``status()`` / ``autoscaler_status()`` exactly as in
@@ -167,15 +174,17 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
     overlay from its own state, groups tagged with its own ``backend_id`` — so the
     controller reads the result verbatim. The stub factory is unused by the status
     paths, so a bare ``Mock`` suffices."""
-    backend = RpcTaskBackend(descriptor=worker_backend_descriptor(backend_id), stub_factory=Mock())
+    backend = RpcTaskBackend(
+        descriptor=worker_backend_descriptor(
+            backend_id,
+            advertised_attributes=advertised_attributes,
+            scale_groups=scale_groups,
+        ),
+        stub_factory=Mock(),
+    )
     backend.health = state._health
     backend.autoscaler = autoscaler
-    backend.bind_runtime(
-        BackendRuntime(
-            db=state._db,
-            owns_scale_group=lambda _scale_group: True,
-        )
-    )
+    backend.bind_runtime(BackendRuntime(db=state._db))
     return backend
 
 
@@ -249,31 +258,25 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
-    worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    controller_mock.provider = Mock()
-    controller_mock.provider.descriptor = BackendDescriptor(
+    controller_mock.backend = Mock()
+    controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="worker",
-        capabilities=worker_caps,
+        kind=BackendKind.WORKER,
     )
-    controller_mock.provider.autoscaler = autoscaler
-    # The single backend owns the liveness tracker; the service reads liveness through
-    # the controller's union over the backends' trackers.
-    controller_mock.provider.health = state._health
+    controller_mock.backend.autoscaler = autoscaler
+    # The backend owns the liveness tracker; the service reads it through the controller.
+    controller_mock.backend.health = state._health
     # status()/autoscaler_status() are delegated to a real backend bound to the same
     # DB + tracker, so the provider authors them exactly as production — the service
     # overlays nothing on top.
     _authoring_backend = _worker_backend(state, autoscaler)
-    controller_mock.provider.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
-    controller_mock.provider.status.side_effect = _authoring_backend.status
-    controller_mock.provider.runtime_image.side_effect = _authoring_backend.runtime_image
-    controller_mock.capabilities = worker_caps
-    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
-    controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
+    controller_mock.backend.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
+    controller_mock.backend.status.side_effect = _authoring_backend.status
+    controller_mock.backend.runtime_image.side_effect = _authoring_backend.runtime_image
+    controller_mock.backend.resource_capacity.side_effect = _authoring_backend.resource_capacity
     controller_mock.all_liveness = lambda: state._health.all()
     controller_mock.liveness_for_worker = lambda wid: state._health.liveness(wid)
-    controller_mock.last_unroutable_jobs = {}
-    controller_mock.scale_group_to_backend = {}
     return controller_mock
 
 
@@ -1469,7 +1472,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
 
 
 def test_auth_config_worker_capabilities(client):
-    """auth/config advertises worker + autoscaler capabilities for an Iris backend."""
+    """auth/config derives capabilities from the worker backend's live features."""
     resp = client.get("/auth/config")
     assert resp.status_code == 200
     backend = resp.json()["backend"]
@@ -1477,22 +1480,20 @@ def test_auth_config_worker_capabilities(client):
     assert "placement" not in backend
     assert "manages_capacity" not in backend
     assert "workers" in backend["capabilities"]
-    assert "autoscaler" in backend["capabilities"]
+    assert "autoscaler" not in backend["capabilities"]
     assert "cluster" not in backend["capabilities"]
 
 
 def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_client):
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    cluster_caps = frozenset({BackendCapability.CLUSTER_VIEW})
-    controller_mock.capabilities = cluster_caps
-    controller_mock.provider = Mock()
-    controller_mock.provider.descriptor = BackendDescriptor(
+    controller_mock.backend = Mock()
+    controller_mock.backend.autoscaler = None
+    controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="kubernetes",
-        capabilities=cluster_caps,
+        kind=BackendKind.KUBERNETES,
     )
-    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1529,9 +1530,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         cluster_scan_interval=0.0,
     )
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
-    controller_mock.provider = provider
-    controller_mock.backends = {DEFAULT_BACKEND_ID: provider}
+    controller_mock.backend = provider
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1707,54 +1706,13 @@ def test_k8s_cluster_status_without_direct_provider(client):
 
 
 # =============================================================================
-# Multi-backend RPC surface
+# Backend RPC surface
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, advertised=None, scale_groups=()):
-    backend = Mock()
-    backend.descriptor = BackendDescriptor(
-        backend_id=name,
-        display_name=name,
-        capabilities=capabilities,
-        advertised_attributes=advertised or {},
-        scale_groups=frozenset(scale_groups),
-    )
-    backend.autoscaler = autoscaler
-    # Default: this backend supplies no federation availability metric (UNSET). Tests
-    # exercising the metric override the return value explicitly.
-    backend.resource_capacity.return_value = None
-    # status() authors the BackendStatus variant the backend's capability selects:
-    # a cluster view returns ``kubernetes``; everything else returns ``worker``.
-    if cluster_status is not None:
-        backend.get_cluster_status.return_value = cluster_status
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(kubernetes=cluster_status)
-    else:
-        autoscaler_status = autoscaler.get_status.return_value if autoscaler is not None else vm_pb2.AutoscalerStatus()
-        backend.status.return_value = controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
-        )
-
-    # autoscaler_status() authors this backend's groups tagged with its own id (the
-    # dict key is the backend_id in these tests), mirroring the real backend.
-    def _autoscaler_status():
-        status = autoscaler.get_status() if autoscaler is not None else vm_pb2.AutoscalerStatus()
-        for group in status.groups:
-            group.backend_id = name
-        return status
-
-    backend.autoscaler_status.side_effect = _autoscaler_status
-    return backend
-
-
-def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
-    """A dashboard client whose controller fronts several backends (representative = first)."""
+def _backend_client(state, scheduler, tmp_path, log_client, backend):
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backends = dict(backends)
-    controller_mock.provider = next(iter(backends.values()))
-    controller_mock.capabilities = frozenset(
-        capability for backend in backends.values() for capability in backend.descriptor.capabilities
-    )
+    controller_mock.backend = backend
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1776,71 +1734,6 @@ def _status_autoscaler(group_name):
         ),
     )
     return autoscaler
-
-
-def test_auth_config_unions_capabilities_across_backends(state, scheduler, tmp_path, log_client):
-    """/auth/config advertises the union of every backend's capabilities, not just the representative's."""
-    client = _multi_backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        {
-            "gcp": _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})),
-            "eu-k8s": _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW})),
-        },
-    )
-    config = client.get("/auth/config").json()
-    assert set(config["capabilities"]) == {"workers", "autoscaler", "cluster"}
-    assert {b["id"] for b in config["backends"]} == {"gcp", "eu-k8s"}
-
-
-def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, log_client):
-    """GetAutoscalerStatus merges every backend's autoscaler and tags each group with its backend_id."""
-    client = _multi_backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        {
-            "gcp": _backend_mock(
-                "gcp", frozenset({BackendCapability.IRIS_AUTOSCALER}), autoscaler=_status_autoscaler("gcp-v5e")
-            ),
-            "cw": _backend_mock(
-                "cw", frozenset({BackendCapability.IRIS_AUTOSCALER}), autoscaler=_status_autoscaler("cw-h100")
-            ),
-        },
-    )
-    status = rpc_post(client, "GetAutoscalerStatus")["status"]
-    assert {g["name"]: g.get("backendId", "") for g in status["groups"]} == {"gcp-v5e": "gcp", "cw-h100": "cw"}
-    # Each backend's routing decision folds into the merged decision (disjoint
-    # groups), so the dashboard's pools table sees every backend's pools.
-    assert {s["group"] for s in status["lastRoutingDecision"]["groupStatuses"]} == {"gcp-v5e", "cw-h100"}
-
-    # backend_id drill-down restricts the merged view to one backend.
-    scoped = rpc_post(client, "GetAutoscalerStatus", {"backendId": "gcp"})["status"]
-    assert [g["name"] for g in scoped["groups"]] == ["gcp-v5e"]
-    assert [s["group"] for s in scoped["lastRoutingDecision"]["groupStatuses"]] == ["gcp-v5e"]
-
-
-def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
-    """GetKubernetesClusterStatus locates the CLUSTER_VIEW backend even when it is not the representative one."""
-    cluster_status = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
-    client = _multi_backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        {
-            "gcp": _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON})),
-            "eu-k8s": _backend_mock(
-                "eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_status
-            ),
-        },
-    )
-    data = rpc_post(client, "GetKubernetesClusterStatus")
-    assert data["namespace"] == "eu"
-    assert data["totalNodes"] == 2
 
 
 def test_task_backend_id_propagated_to_proto(client, state, job_request):
@@ -1895,9 +1788,9 @@ def test_list_jobs_filters_by_backend_id(client, state, job_request):
 
 
 def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_path, log_client, job_request):
-    """ListWorkers stamps backend_id (resolved via backend_id_for_scale_group) and scale_group."""
+    """ListWorkers stamps the controller backend ID and worker scale group."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
+    controller_mock.backend.descriptor = worker_backend_descriptor("gcp")
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1917,9 +1810,9 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
 
 
 def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp_path, log_client):
-    """GetWorkerStatus stamps backend_id (resolved via scale_group) and scale_group (worker detail page)."""
+    """GetWorkerStatus stamps the controller backend ID and worker scale group."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
+    controller_mock.backend.descriptor = worker_backend_descriptor("gcp")
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1937,9 +1830,9 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
 
 
 def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_client):
-    """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
+    """ListWorkers.query.backendId accepts the local backend and rejects another cluster's backend."""
     controller_mock = _make_controller_mock(state, scheduler)
-    controller_mock.backend_id_for_scale_group = lambda sg: {"tpu-v5e": "gcp", "h100": "cw"}.get(sg, DEFAULT_BACKEND_ID)
+    controller_mock.backend.descriptor = worker_backend_descriptor("gcp")
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1950,79 +1843,54 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
     client = TestClient(ControllerDashboard(svc).app)
 
     register_worker(state, "w-gcp", "10.0.0.1", make_worker_metadata(), scale_group="tpu-v5e")
-    register_worker(state, "w-cw", "10.0.0.2", make_worker_metadata(), scale_group="h100")
 
     resp_gcp = rpc_post(client, "ListWorkers", {"query": {"backendId": "gcp"}})
     assert [w["workerId"] for w in resp_gcp["workers"]] == ["w-gcp"]
 
     resp_cw = rpc_post(client, "ListWorkers", {"query": {"backendId": "cw"}})
-    assert [w["workerId"] for w in resp_cw["workers"]] == ["w-cw"]
+    assert resp_cw.get("workers", []) == []
 
 
-def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, log_client):
-    """ListBackends returns one BackendSummary per backend with correct kind and capabilities."""
-    controller_mock = _make_controller_mock(state, scheduler)
-    gcp_backend = _backend_mock(
+def test_list_backends_returns_controller_backend_summary(state, scheduler, tmp_path, log_client):
+    """ListBackends exposes the controller's one backend and its available capacity."""
+    backend = _worker_backend(
+        state,
+        None,
         "gcp",
-        frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
-        advertised={"device-variant": {"v6e-16", "v5e-4"}},
-        scale_groups={"tpu-v5e"},
+        advertised_attributes={"device-variant": {"v6e-16", "v5e-4"}},
+        scale_groups=frozenset({"tpu-v5e"}),
     )
-    gcp_backend.resource_capacity.return_value = {
-        "v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})
-    }
-    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
-    controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
-    controller_mock.backend_id_for_scale_group = lambda scale_group: {"tpu-v5e": "gcp"}.get(
-        scale_group, DEFAULT_BACKEND_ID
+    backend.resource_capacity = Mock(
+        return_value={"v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})}
     )
-    controller_mock.last_unroutable_jobs = {"/alice/exp": "no backend matches the job's constraints"}
-    svc = ControllerServiceImpl(
-        controller=controller_mock,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=log_client,
-        db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
-    )
-    client = TestClient(ControllerDashboard(svc).app)
+    client = _backend_client(state, scheduler, tmp_path, log_client, backend)
 
     resp = rpc_post(client, "ListBackends")
-    summaries = {b["backendId"]: b for b in resp["backends"]}
+    [summary] = resp["backends"]
 
-    assert set(summaries) == {"gcp", "eu-k8s"}
-    assert summaries["gcp"]["kind"] == "worker-daemon"
-    assert summaries["eu-k8s"]["kind"] == "kubernetes"
-    assert "workers" in summaries["gcp"]["capabilities"]
-    assert "cluster" in summaries["eu-k8s"]["capabilities"]
-    assert summaries["gcp"]["scaleGroups"] == ["tpu-v5e"]
-    assert summaries["eu-k8s"].get("scaleGroups", []) == []
+    assert summary["backendId"] == "gcp"
+    assert summary["kind"] == "worker-daemon"
+    assert summary["capabilities"] == ["workers"]
+    assert summary["scaleGroups"] == ["tpu-v5e"]
     # Advertised attributes round-trip through the proto map<string, StringList>.
-    assert summaries["gcp"]["advertisedAttributes"]["device-variant"]["values"] == ["v5e-4", "v6e-16"]
-    # The federation availability metric is populated for a supplying backend and left
-    # UNSET (absent) for one that returns None.
-    assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
-    assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 3  # wire contract; not the constant
+    assert summary["advertisedAttributes"]["device-variant"]["values"] == ["v5e-4", "v6e-16"]
+    assert summary["availability"]["amounts"] == {"v6e-16": "32"}
+    assert summary["availability"]["totalAmounts"] == {"v6e-16": "64"}
+    assert summary["availability"]["version"] == 3
     # Held capacity is reported per priority band so a parent can see what a
     # higher-priority job would reclaim there.
-    assert summaries["gcp"]["availability"]["heldByBand"] == [
-        {"band": "PRIORITY_BAND_BATCH", "amounts": {"v6e-16": "32"}}
-    ]
-    assert "availability" not in summaries["eu-k8s"]
-    # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
-    assert resp["unroutableJobCount"] == 1
-    assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"
+    assert summary["availability"]["heldByBand"] == [{"band": "PRIORITY_BAND_BATCH", "amounts": {"v6e-16": "32"}}]
 
 
 def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state, scheduler, tmp_path, log_client):
     """ListBackends.detail.worker carries the backend's autoscaler groups plus the
     health counts the backend authors from its own liveness tracker."""
-    client = _multi_backend_client(
+    client = _backend_client(
         state,
         scheduler,
         tmp_path,
         log_client,
-        {DEFAULT_BACKEND_ID: _worker_backend(state, _status_autoscaler("tpu-v5e-us"))},
+        _worker_backend(state, _status_autoscaler("tpu-v5e-us")),
     )
     register_worker(state, "w-healthy-1", "10.0.0.1:8080", make_worker_metadata(), scale_group="tpu-v5e")
     register_worker(state, "w-healthy-2", "10.0.0.2:8080", make_worker_metadata(), scale_group="tpu-v5e")
@@ -2056,12 +1924,12 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
             )
         ],
     )
-    client = _multi_backend_client(
+    client = _backend_client(
         state,
         scheduler,
         tmp_path,
         log_client,
-        {DEFAULT_BACKEND_ID: _worker_backend(state, autoscaler)},
+        _worker_backend(state, autoscaler),
     )
     # Place a running task on the VM's worker so the overlay's DB lookup finds it.
     wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")
@@ -2089,7 +1957,7 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
 
 
 def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tmp_path, log_client):
-    """ListBackends.detail.kubernetes carries the CLUSTER_VIEW backend's synced node/pod snapshot."""
+    """ListBackends.detail.kubernetes carries the backend's synced node/pod snapshot."""
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
     k8s.seed_resource(
         K8sResource.NODES,
@@ -2123,34 +1991,6 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
     assert detail["podStatuses"][0]["phase"] == "Running"
 
     provider.close()
-
-
-def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_path, log_client):
-    """GetKubernetesClusterStatus raises INVALID_ARGUMENT when >1 CLUSTER_VIEW backends and no backend_id."""
-    cluster_a = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
-    cluster_b = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="us", total_nodes=4)
-    client = _multi_backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        {
-            "eu-k8s": _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_a),
-            "us-k8s": _backend_mock("us-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_b),
-        },
-    )
-    resp = client.post(
-        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
-        json={},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 400
-
-    # With explicit backend_id, resolves correctly
-    data_eu = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "eu-k8s"})
-    assert data_eu["namespace"] == "eu"
-    data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
-    assert data_us["namespace"] == "us"
 
 
 def _proxy_dashboard_with_transport(monkeypatch, credentials=None):

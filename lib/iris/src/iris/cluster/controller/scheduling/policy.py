@@ -12,7 +12,7 @@ and preemption passes are pure transforms over an in-memory ``SchedulingContext`
 import logging
 import sys
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
@@ -27,7 +27,6 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     is_availability_key,
     split_hard_soft,
-    strip_backend_constraints,
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -153,10 +152,7 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
         req_gpu_count=dc.gpu,
         req_tpu_count=dc.tpu,
         device_variant=device_variant_from_json(job.res_device_json),
-        # The reserved ``backend`` routing directive is consumed by the
-        # meta-scheduler; strip it so it never reaches per-worker matching (no
-        # worker advertises a ``backend`` attribute, so it would starve the task).
-        constraints=strip_backend_constraints(constraints_from_json(job.constraints_json)),
+        constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
@@ -767,54 +763,47 @@ def _sort_pending_tasks_by_resolved_band(
     )
 
 
-@dataclass(frozen=True)
-class RoutingInputs:
-    """Controller-owned per-tick scheduling state: pending tasks + budgets.
-
-    Carries no worker data. The controller joins this with each registered
-    backend's worker partition to build its scheduling context.
-    """
-
-    pending_task_rows: list[PendingTask]
-    requested_bands: dict[JobName, int]
-    user_spend: dict[str, int]
-    user_budget_limits: dict[str, int]
-    user_budget_defaults: UserBudgetDefaults
-
-
-def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInputs:
-    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads)."""
-    pending = reads.pending_tasks_with_jobs(snap)
-    requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
-    return RoutingInputs(
-        pending_task_rows=_sort_pending_tasks_by_resolved_band(pending, requested_bands),
-        requested_bands=requested_bands,
-        user_spend=compute_user_spend(snap),
-        user_budget_limits=reads.get_all_user_budget_limits(snap),
-        user_budget_defaults=defaults,
-    )
-
-
-def build_worker_scheduling_context(
+def build_scheduling_context(
     snap: Tx,
-    health: WorkerHealthTracker,
+    health: WorkerHealthTracker | None,
     worker_attrs: WorkerAttrsSource,
-    routing: RoutingInputs,
-    owns_scale_group: Callable[[str], bool],
+    defaults: UserBudgetDefaults,
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
 ) -> SchedulingContext:
-    """Join one worker backend's partition with controller routing state.
+    """Build the complete scheduling workspace for the controller's backend.
 
-    All scheduling-tick DB reads live here. Every query shares the caller's
-    transaction snapshot.
+    Worker backends receive the live worker and running-attempt state. A backend
+    whose substrate owns placement passes ``health=None`` and receives the same
+    pending/budget inputs with an empty worker view. Every database query shares
+    the caller's transaction snapshot.
     """
+    pending = reads.pending_tasks_with_jobs(snap)
+    requested_bands = reads.get_priority_bands(snap, {task.job_id for task in pending})
+    pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
+    user_spend = compute_user_spend(snap)
+    user_budget_limits = reads.get_all_user_budget_limits(snap)
+
+    if health is None or not pending:
+        return SchedulingContext(
+            workers=[],
+            building_counts={},
+            max_building_tasks=max_building_tasks,
+            max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+            pending_tasks=[],
+            jobs={},
+            pending_task_rows=pending,
+            user_spend=user_spend,
+            user_budget_limits=user_budget_limits,
+            requested_bands=requested_bands,
+            user_budget_defaults=defaults,
+            running_for_preemption=[],
+        )
+
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
         workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
         usage_by_worker = reads.resource_usage_by_worker(snap)
-        owned = reads.owned_worker_ids(snap, owns_scale_group)
-        workers = [worker for worker in workers if worker.worker_id in owned]
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-        running = [task for task in _running_tasks_with_band_and_value(snap) if task.worker_id in owned]
+        running = _running_tasks_with_band_and_value(snap)
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     return SchedulingContext(
@@ -824,30 +813,12 @@ def build_worker_scheduling_context(
         max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
         pending_tasks=[],
         jobs={},
-        pending_task_rows=routing.pending_task_rows,
-        user_spend=routing.user_spend,
-        user_budget_limits=routing.user_budget_limits,
-        requested_bands=routing.requested_bands,
-        user_budget_defaults=routing.user_budget_defaults,
+        pending_task_rows=pending,
+        user_spend=user_spend,
+        user_budget_limits=user_budget_limits,
+        requested_bands=requested_bands,
+        user_budget_defaults=defaults,
         running_for_preemption=running,
-    )
-
-
-def build_cluster_scheduling_context(routing: RoutingInputs) -> SchedulingContext:
-    """Carry routed work through a backend whose substrate owns placement."""
-    return SchedulingContext(
-        workers=[],
-        building_counts={},
-        max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-        pending_tasks=[],
-        jobs={},
-        pending_task_rows=routing.pending_task_rows,
-        user_spend=routing.user_spend,
-        user_budget_limits=routing.user_budget_limits,
-        requested_bands=routing.requested_bands,
-        user_budget_defaults=routing.user_budget_defaults,
-        running_for_preemption=[],
     )
 
 

@@ -40,7 +40,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.cluster.controller.backend import STANDARD_WORKER_BACKEND_CAPABILITIES, BackendDescriptor
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
@@ -250,7 +250,7 @@ class LocalCluster:
             descriptor=BackendDescriptor(
                 backend_id=DEFAULT_BACKEND_ID,
                 display_name="worker",
-                capabilities=STANDARD_WORKER_BACKEND_CAPABILITIES,
+                kind=BackendKind.WORKER,
                 scale_groups=frozenset(self._config.scale_groups),
             ),
             stub_factory=RpcWorkerStubFactory(),

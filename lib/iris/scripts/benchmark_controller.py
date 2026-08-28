@@ -82,8 +82,7 @@ from iris.cluster.controller.reconcile.worker import (
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.policy import (
-    build_routing_inputs,
-    build_worker_scheduling_context,
+    build_scheduling_context,
     compute_demand_entries,
 )
 from iris.cluster.controller.scheduling.scheduler import Scheduler
@@ -1160,12 +1159,11 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     sched = Scheduler()
     defaults = UserBudgetDefaults()
     with db.read_snapshot() as _sched_snap:
-        demand_ctx = build_worker_scheduling_context(
+        demand_ctx = build_scheduling_context(
             _sched_snap,
             health,
             _NoAttrs(),
-            build_routing_inputs(_sched_snap, defaults),
-            lambda _scale_group: True,
+            defaults,
         )
 
     def _demand():

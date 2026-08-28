@@ -3,16 +3,13 @@
 
 """Submit-time classification: local execution, the federation queue, or reject.
 
-A separate layer from the meta-scheduler's static, startup-built backend index:
-peer capabilities are dynamic (learned live over the heartbeat), so peer
-selection cannot fold into that index. Submit no longer *picks* a peer — that is a
-scheduling decision, and all peer scheduling decisions live on the control tick's
+Peer availability is dynamic and learned over the heartbeat. Submit therefore
+does not *pick* a peer: all peer scheduling decisions live on the control tick's
 federation pass. Submit only classifies, in order:
 
 1. An explicit ``cluster=<peer>`` pin routes the job to the federation **queue**
-   pinned to that peer (the caller validated the peer exists and that no local
-   ``backend`` pin was also set). The tick waits for that peer's availability.
-2. Otherwise **prefer-local**: if any local backend is feasible for the job's
+   pinned to that peer. The tick waits for that peer's availability.
+2. Otherwise **prefer-local**: if the local backend is feasible for the job's
    shape, run it here.
 3. Otherwise, if any reachable peer advertises the job's shape, route it to the
    federation **queue** (unpinned); the tick assigns it to a peer that has room.
@@ -33,7 +30,6 @@ from iris.cluster.constraints import (
     ConstraintOp,
     evaluate_constraint,
     routing_constraints,
-    strip_backend_constraints,
     strip_cluster_constraints,
 )
 from iris.cluster.federation.peer import FederationPeer
@@ -48,7 +44,7 @@ class RoutingRequest:
     # feasibility gate before routing).
     local_feasible: bool
     # An explicit ``cluster=<peer>`` pin, or "" for none. The caller validates the
-    # peer exists and that no local ``backend`` pin was also set.
+    # peer exists.
     cluster_pin: str = ""
 
 
@@ -93,7 +89,7 @@ def _peer_can_host(peer: FederationPeer, constraints: Sequence[Constraint]) -> b
     heartbeat = peer.heartbeat()
     if not heartbeat.reachable:
         return False
-    routing = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+    routing = routing_constraints(strip_cluster_constraints(constraints))
     if not routing:
         return True
     for backend in heartbeat.backends:

@@ -45,10 +45,10 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
-    STANDARD_WORKER_BACKEND_CAPABILITIES,
     AutoscaleRequest,
     AutoscaleResult,
     BackendDescriptor,
+    BackendKind,
     BackendRuntime,
     DeviceCapacity,
     ProviderUnsupportedError,
@@ -127,7 +127,7 @@ def worker_backend_descriptor(
     return BackendDescriptor(
         backend_id=backend_id,
         display_name="worker",
-        capabilities=STANDARD_WORKER_BACKEND_CAPABILITIES,
+        kind=BackendKind.WORKER,
         advertised_attributes=advertised_attributes or {},
         scale_groups=scale_groups,
     )
@@ -167,7 +167,6 @@ def store_from_runtime(
     ``RpcTaskBackend.bind_runtime``."""
     return DbBackendWorkerStore(
         db=runtime.db,
-        owns_scale_group=runtime.owns_scale_group,
         health=health,
         autoscale=autoscale,
     )
@@ -248,7 +247,7 @@ class FakeProvider:
 
     def seed_liveness(self) -> None:
         assert self._store is not None, "FakeProvider.seed_liveness called before worker store attached"
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -279,20 +278,12 @@ class FakeProvider:
         pass
 
 
-def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakeProvider]:
-    """A single worker-daemon backend bound to ``state``'s db/health, for tests
-    that drive ``prune_old_data``'s per-backend dead-worker GC. Pruning never
-    reads attribute content; the global ``WorkerAttrsProjection`` serves from
-    ``db.caches``."""
+def worker_backend_for_prune(state: ControllerTestState) -> FakeProvider:
+    """A worker backend bound to ``state`` for pruning behavior tests."""
     provider = FakeProvider()
     provider.health = state._health
-    provider.bind_runtime(
-        BackendRuntime(
-            db=state._db,
-            owns_scale_group=lambda _scale_group: True,
-        )
-    )
-    return [provider]
+    provider.bind_runtime(BackendRuntime(db=state._db))
+    return provider
 
 
 class MockController:
@@ -304,32 +295,21 @@ class MockController:
         self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
-        self.provider = Mock()
-        self.provider.descriptor = worker_backend_descriptor()
-        # A bare Mock would auto-create a truthy .autoscaler; the per-backend
+        self.backend = Mock()
+        self.backend.descriptor = worker_backend_descriptor()
+        # A bare Mock would auto-create a truthy .autoscaler; the backend
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
-        self.provider.autoscaler = None
-        self.provider.runtime_image.return_value = ""
+        self.backend.autoscaler = None
+        self.backend.runtime_image.return_value = ""
         # The backend owns its liveness tracker; the service registers workers into
         # it and the controller's union reads back through it. Tests that inspect a
         # specific ``state._health`` point this at that tracker.
-        self.provider.health = WorkerHealthTracker()
-        self.capabilities = STANDARD_WORKER_BACKEND_CAPABILITIES
-        self.scale_group_to_backend: dict[str, str] = {}
-        self.last_unroutable_jobs: dict[str, str] = {}
-        self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
+        self.backend.health = WorkerHealthTracker()
         # Zero-peer federation: route_submit returns local, ListPeers is empty.
         self.federation = FederationManager([], threads=get_thread_container())
 
-    def backend_id_for_scale_group(self, scale_group: str) -> str:
-        return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
-
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
-        merged: dict[WorkerId, WorkerLiveness] = {}
-        for backend in self.backends.values():
-            if backend.health is not None:
-                merged.update(backend.health.all())
-        return merged
+        return self.backend.health.all() if self.backend.health is not None else {}
 
     def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
         return self.all_liveness().get(worker_id, WorkerLiveness())
@@ -346,7 +326,7 @@ def make_controller_service(state, log_client, mock_controller, tmp_path) -> Con
     backend, so point the mock backend's tracker at this state's ``_health`` so
     writes and reads land on the same object the test inspects.
     """
-    mock_controller.provider.health = state._health
+    mock_controller.backend.health = state._health
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -405,7 +385,6 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
         config: ControllerConfig | None = None,
         *,
         provider: TaskBackend | None = None,
-        backends: list[TaskBackend] | None = None,
         db: ControllerDB | None = None,
         **config_kwargs,
     ) -> Controller:
@@ -421,18 +400,13 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
             host=config.host,
             worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
         )
-        resolved_backends = (
-            backends
-            if backends is not None
-            else [provider if provider is not None else FakeProvider(unreachable_grace=config.worker_unreachable_grace)]
-        )
+        backend = provider if provider is not None else FakeProvider(unreachable_grace=config.worker_unreachable_grace)
         controller = Controller(
             config=config,
             log_stack=log_stack,
             db=db,
         )
-        for backend in resolved_backends:
-            controller.register_backend(backend)
+        controller.register_backend(backend)
         created.append(controller)
         return controller
 
