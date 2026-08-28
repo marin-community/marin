@@ -150,7 +150,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         return q
 
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, *, wide_forward_tile: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
     mesh = AbstractMesh(
         axis_sizes=(1, 2, 8, 1),

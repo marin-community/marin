@@ -281,7 +281,7 @@ def _fa4_cute_attention_forward_sharded(
     return _local_fa4_attention(q, k, v, lower_bounds, valid)
 
 
-def _segmented_kernel_config(head_dim: int):
+def _segmented_kernel_config(head_dim: int, *, wide_forward_tile: bool):
     arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
@@ -290,8 +290,15 @@ def _segmented_kernel_config(head_dim: int):
     # kernel: it carries dynamic lower-bound metadata through the SM80/SM120
     # segmented fork. On B200 d5120 Grug shapes, 64x64 fwd/bwd is consistently
     # faster than both the prior 128x64/64x64 config and dense-upstream 128x128.
+    # The d6144 EP64 hero measures the other way: a 128x64 forward tile gains
+    # 0.28 MFU at its 24k-restore operating point. Tile preference does not
+    # follow from any shape the kernel can see (the hero and moe_hero_fsdp
+    # launch identical local shapes with different sliding windows), so the
+    # caller chooses via the "gpu_fa4_cute_wide" implementation name. The
+    # backward tile is hard-locked to 64x64 (the SM120 kernel raises on 128).
     if arch // 10 == 10 and head_dim == 128:
-        return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
+        forward_tile = (128, 64) if wide_forward_tile else (64, 64)
+        return replace(kernel_config, forward_tile=forward_tile, backward_tile=(64, 64), num_threads=128)
     return kernel_config
 
 
@@ -300,6 +307,8 @@ def gpu_fa4_cute_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    wide_forward_tile: bool = False,
 ) -> Float[Array, "B Q Hq D"]:
     """Run causal self-attention through a FlashAttention-4/CuTe JAX FFI backend."""
     if jax.default_backend() != "gpu":
@@ -317,7 +326,7 @@ def gpu_fa4_cute_attention(
             mask,
             backend_name="gpu_fa4_cute_attention",
         )
-    kernel_config = _segmented_kernel_config(q.shape[-1])
+    kernel_config = _segmented_kernel_config(q.shape[-1], wide_forward_tile=wide_forward_tile)
 
     return _fa4_cute_attention_forward_sharded(
         q,
