@@ -6,7 +6,6 @@
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import ClassVar
 
 from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
@@ -14,7 +13,8 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
+    BackendKind,
     BackendRuntime,
     DeviceCapacity,
     ProviderUnsupportedError,
@@ -59,21 +59,31 @@ class ScriptedTaskBackend:
     effects and never reads or writes controller tables.
     """
 
-    name = "journey"
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
     autoscaler = None
     health: WorkerHealthTracker | None = None
 
-    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = DEFAULT_BACKEND_ID) -> None:
+    def __init__(
+        self,
+        transition_reader: TransitionReader,
+        *,
+        backend_id: str = DEFAULT_BACKEND_ID,
+        advertised_attributes: dict[str, set[str]] | None = None,
+        kind: BackendKind = BackendKind.KUBERNETES,
+    ) -> None:
         self._transition_reader = transition_reader
-        self.backend_id = backend_id
+        self.descriptor = BackendDescriptor(
+            backend_id=backend_id,
+            display_name="journey",
+            kind=kind,
+            advertised_attributes=advertised_attributes or {"region": {"us-central1"}},
+        )
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
         self._desired: set[tuple[str, int]] = set()
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self.health = WorkerHealthTracker() if kind is BackendKind.WORKER else None
         self.closed = False
-        self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
 
     @property
     def has_pending_observations(self) -> bool:
@@ -93,12 +103,6 @@ class ScriptedTaskBackend:
 
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
 
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         return None
@@ -125,12 +129,12 @@ class ScriptedTaskBackend:
             (entry.task_id.to_wire(), entry.attempt_id) for entry in request.running_tasks
         }
         for task_id, attempt_id in sorted(self._desired - desired):
-            self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.backend_id))
+            self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.descriptor.backend_id))
 
         updates: list[TaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired):
-            self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.backend_id))
+            self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.descriptor.backend_id))
             queued = self._pop_observation(task_id)
             if queued is None:
                 queued = ScriptedObservation(job_pb2.TASK_STATE_RUNNING)
@@ -159,7 +163,7 @@ class ScriptedTaskBackend:
         return observation
 
     def _task_update(self, task_id: str, attempt_id: int, observation: ScriptedObservation) -> TaskUpdate:
-        self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.backend_id))
+        self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.descriptor.backend_id))
         return TaskUpdate(
             task_id=JobName.from_wire(task_id),
             attempt_id=attempt_id,
@@ -224,14 +228,15 @@ class ScriptedTaskBackend:
 
 
 class UnavailableTaskBackend(ScriptedTaskBackend):
-    """Worker-style backend that advertises a route but has no capacity."""
+    """Backend that advertises a route but has no capacity."""
 
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.WORKER_DAEMON})
+    def __init__(self, transition_reader: TransitionReader, **kwargs) -> None:
+        super().__init__(transition_reader, kind=BackendKind.WORKER, **kwargs)
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")
         expired = []
-        for task in request.pending_task_rows:
+        for task in request.context.pending_task_rows:
             deadline = job_scheduling_deadline(task.scheduling_deadline_epoch_ms)
             if deadline is not None and deadline.expired():
                 expired.append(task)

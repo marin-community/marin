@@ -678,7 +678,7 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
         manager = _attach_federation(parent_service, connection)
         # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
         # (a locally feasible job would just run here).
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._controller.backend.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("no-room", replicas=1)
         request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
@@ -721,7 +721,7 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _BatchOccupiedGpuPeerConnection(peer_service)
         manager = _attach_federation(parent_service, connection)
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._controller.backend.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
 
         request = make_direct_job_request("held-by-batch", replicas=1)
         request.priority_band = band

@@ -262,7 +262,6 @@ def drain_for_dispatch(
     cur: Tx,
     *,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
-    backend_id: str | None = None,
     defaults: UserBudgetDefaults | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
@@ -298,10 +297,6 @@ def drain_for_dispatch(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-    # In a multi-backend cluster, scope the drain to this backend's tasks; a
-    # single backend (``backend_id is None``) drains every pending task.
-    backend_pred = () if backend_id is None else (local_tasks.c.backend_id == backend_id,)
-
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
@@ -309,13 +304,12 @@ def drain_for_dispatch(
         cur,
         local_tasks.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
         local_tasks.c.current_worker_id.is_(None),
-        *backend_pred,
     )
 
     effective_bands: dict[JobName, int] = {}
     promote_units: list[list[_RankRow]] = []
     if max_promotions > 0:
-        candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING), *backend_pred)
+        candidates = _ranking_rows(cur, local_tasks.c.state == int(job_pb2.TASK_STATE_PENDING))
         if candidates:
             job_ids = {row.job_id for row in candidates}
             resolved_bands = reads.get_priority_bands(cur, job_ids)
@@ -358,7 +352,6 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
-        backend_id=backend_id,
     )
     # The K8s provider rebuilds each pod name from (task_id, attempt_id, uid), so
     # poll must carry the current attempt's uid to target the right incarnation.

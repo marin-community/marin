@@ -16,7 +16,7 @@ Three layers, exercised in order:
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 from iris.cluster.backends.rpc.backend import (
@@ -27,13 +27,14 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     plans_from_snapshot,
+    run_scheduling_decision,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
@@ -59,7 +60,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
 )
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.testing.controller import (
     assign_task,
@@ -74,9 +75,9 @@ from iris.testing.controller import (
     reconcile_once,
     register_worker,
     run_worker_daemon_reconcile,
-    run_worker_daemon_schedule,
     store_from_runtime,
     submit_job,
+    worker_backend_descriptor,
 )
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import (
@@ -629,18 +630,11 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
     if stub is None:
         stub = _FakeWorkerStub(address=_W1_ADDR)
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    return RpcTaskBackend(stub_factory=factory), stub
+    return RpcTaskBackend(descriptor=worker_backend_descriptor(), stub_factory=factory), stub
 
 
 def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
-    provider.bind_runtime(
-        BackendRuntime(
-            backend_id=DEFAULT_BACKEND_ID,
-            db=state._db,
-            owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
-        )
-    )
+    provider.bind_runtime(BackendRuntime(db=state._db))
     provider.seed_liveness()
 
 
@@ -1311,25 +1305,15 @@ class _ScriptedProvider:
 
     script: list[Any] = field(default_factory=list)
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
-    name: str = "worker"
+    descriptor: BackendDescriptor = field(default_factory=worker_backend_descriptor)
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    advertised: dict[str, set[str]] = field(default_factory=dict)
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
-        {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
-    )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, self._store, request)
+        return run_scheduling_decision(self._scheduler, request)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1339,7 +1323,7 @@ class _ScriptedProvider:
 
     def seed_liveness(self) -> None:
         assert self._store is not None
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -1397,34 +1381,24 @@ class _UnreachableProvider:
     unhealthy: set[str] = field(default_factory=set)
     siblings: dict[str, list[str]] = field(default_factory=dict)
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
-    name: str = "worker"
+    descriptor: BackendDescriptor = field(default_factory=worker_backend_descriptor)
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    advertised: dict[str, set[str]] = field(default_factory=dict)
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
-        {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
-    )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None
-        worker_ids = self._store.owned_worker_ids()
+        worker_ids = self._store.worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, self._store, request)
+        return run_scheduling_decision(self._scheduler, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         assert self._store is not None, "_UnreachableProvider.reconcile called before worker store attached"
@@ -1499,16 +1473,19 @@ _GRACE = Duration.from_seconds(4)
 def _expire_grace(ctrl, wid: WorkerId) -> None:
     """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
     aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
-    ctrl.provider.health.set_last_heartbeat_for_test(wid, aged)
+    ctrl.backend.health.set_last_heartbeat_for_test(wid, aged)
 
 
 def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_controller):
     """A reached worker reporting unhealthy is reaped through reconciliation."""
-    provider = _UnreachableProvider(unhealthy={_W1})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
+    provider = _UnreachableProvider(
+        unhealthy={_W1},
+        health=WorkerHealthTracker(unreachable_grace=_GRACE),
+    )
+    ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1526,7 +1503,7 @@ def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_con
     reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
-    assert wid not in ctrl.provider.health.all(), "failed worker should be forgotten from the tracker"
+    assert wid not in ctrl.backend.health.all(), "failed worker should be forgotten from the tracker"
 
 
 def test_reconcile_failure_reaps_slice_siblings(make_controller):
@@ -1536,11 +1513,15 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     ``removed_workers``; the controller fails those siblings and forgets the
     whole slice, even though the siblings were reachable every tick.
     """
-    provider = _UnreachableProvider(unreachable={_W1}, siblings={_W1: [_W2]})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
+    provider = _UnreachableProvider(
+        unreachable={_W1},
+        siblings={_W1: [_W2]},
+        health=WorkerHealthTracker(unreachable_grace=_GRACE),
+    )
+    ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     dead = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1555,7 +1536,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
-    assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
+    assert ctrl.backend.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
 def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
@@ -1595,7 +1576,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl.provider.health,
+        health=ctrl.backend.health,
     )
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1623,13 +1604,13 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     for expected_failures in range(1, BUILD_FAILURE_THRESHOLD):
         reconcile_once(ctrl)
         assert query_worker(state, wid) is not None, "worker reaped before reaching the build-failure threshold"
-        assert ctrl.provider.health.liveness(wid).build_failures == expected_failures
+        assert ctrl.backend.health.liveness(wid).build_failures == expected_failures
 
     # The THRESHOLD-th build failure trips the bar: the backend's fold returns the
     # worker dead and the controller reaps it.
     reconcile_once(ctrl)
     assert query_worker(state, wid) is None, "worker should be reaped at the build-failure threshold"
-    assert wid not in ctrl.provider.health.all(), "reaped worker should be forgotten from the tracker"
+    assert wid not in ctrl.backend.health.all(), "reaped worker should be forgotten from the tracker"
 
 
 # ===========================================================================
