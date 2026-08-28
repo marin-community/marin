@@ -1,4 +1,4 @@
-# Multi-backend: a controller of controllers
+# Multi-backend controller
 
 One Iris controller can front several execution backends at once — an in-process
 pool of GCP/TPU workers, a Kubernetes cluster, and (in time) other Iris clusters
@@ -9,7 +9,7 @@ For the source layout and the `TaskBackend` Protocol's place in it, see
 [`architecture.md`](architecture.md). For the reconcile kernel, see
 [`reconcile_rpc.md`](reconcile_rpc.md).
 
-## The one idea: partition authority at the assignment line
+## Partition work at the assignment line
 
 A job is routed to exactly one backend (the *assignment*). Everything **above**
 that line is the main controller's; everything **below** it is the backend's.
@@ -17,42 +17,32 @@ that line is the main controller's; everything **below** it is the backend's.
 ```mermaid
 flowchart TB
     subgraph Above["ABOVE the line — MAIN CONTROLLER"]
-        a["job definitions · per-user retry budget<br/>task → backend routing<br/>status / placement projection (read-only)"]
+        a["job definitions · worker records · retry budget<br/>task → backend routing · scheduling facts"]
     end
     Above -- "schedule(tasks routed here + budget)" --> Below
     Below -- "effects (task-state projection) + status" --> Above
     subgraph Below["BELOW the line — BACKEND"]
-        b["placement: which worker runs each attempt<br/>worker liveness (its own WorkerHealthTracker)<br/>within-backend scheduling + retries<br/>capacity / slices (autoscale)"]
+        b["placement decision · provider observation<br/>worker liveness (transitional)<br/>capacity actuation"]
     end
 ```
 
-The main controller is a *controller of controllers*: it owns the global
-database (jobs, the `task → backend` routing, the per-user budget) and a
-**read-only projection** of every task's status and placement, kept current so
-the dashboard and the cross-backend directory work without round-tripping each
-backend. It does **not** know which worker ran a task, whether that worker is
-alive, or how the backend scheduled it — those never cross the boundary.
+The controller owns the global database, backend routing, worker records, task
+assignments, and per-user budget. It builds a complete scheduling workspace for
+each backend from one transaction snapshot. The backend decides placement and
+performs provider-specific I/O. The controller commits the returned effects.
 
-A backend owns everything below its assignment line: its worker inventory, the
-attempt→worker placement, worker liveness, within-backend scheduling, and
-capacity. It is authoritative there and nowhere else — no job definitions, no
-cross-backend budget, no global directory.
+Worker liveness and teardown still live in worker-daemon backends through a
+scale-group-scoped controller-DB store. That is transitional boundary debt, not
+part of the final ownership model. Kubernetes backends have no Iris workers and
+observe or actuate pods directly.
 
-## Projection, not state
+## Current storage boundary
 
-A backend does not hand its state to the controller to hold. It **authors a
-projection** — task-state `effects` plus a `status` snapshot — and the controller
-commits/stores that. Where a backend's *operational* state physically lives is an
-implementation detail behind the contract:
-
-- The in-process `default` backend has no separate store; its store *is* the
-  global DB, read scale-group-scoped. It authors `effects` the controller
-  commits, and holds its own `WorkerHealthTracker` in memory.
-- A remote backend keeps its operational state in its **own** DB. Only the
-  projection crosses the wire.
-
-This is why no `WorkerId` ever crosses the `reconcile` boundary: the controller
-commits `effects` without learning any worker identities.
+All current backends run in the controller process and share its database. The
+controller supplies scheduling state explicitly. The worker-daemon backend still
+uses `DbBackendWorkerStore` for reconcile, status, autoscale, and teardown, and
+holds its own `WorkerHealthTracker`. A later stage moves those reads and lifecycle
+decisions into controller-owned requests and commits.
 
 ## The contract
 
@@ -62,14 +52,19 @@ tick; it never branches on the concrete backend type.
 
 | Method | Controller → backend | Backend → controller |
 |---|---|---|
-| `schedule(ScheduleRequest)` | tasks routed here + per-user budget | `ScheduleResult` (placement decisions) |
+| `schedule(ScheduleRequest)` | complete controller-built workspace: owned workers, routed tasks, running attempts, per-user budget | `ScheduleResult` (placement decisions) |
 | `reconcile(ReconcileRequest)` | (cluster backends only: dispatch-drained pod updates) | `ReconcileResult` — **`effects` only**; the backend folds its own liveness and stashes the workers its fold reaped, internally |
 | `run_teardown()` | (no arguments) | fails its reaped workers, terminates their slices and healthy siblings, forgets them from its **own** tracker |
 | `autoscale(AutoscaleRequest)` | residual demand | `AutoscaleResult` (capacity changes) |
 | `status()` | — | `BackendStatus` (authored k8s pod/node detail or worker-fleet detail, for the dashboard) |
 
-**Owned by the backend:** its `WorkerHealthTracker`, `WorkerSource`, and
-`Autoscaler`. A worker-daemon backend constructs its own tracker and seeds it
+**Registered by the backend:** one immutable `BackendDescriptor` containing its
+ID, capabilities, advertised attributes, and scale groups. The composition root
+calls `controller.register_backend(backend)` before `start()`; no parallel
+backend map or routing config is passed to the controller.
+
+**Owned by the backend today:** its `WorkerHealthTracker`, transitional
+`DbBackendWorkerStore`, and `Autoscaler`. A worker-daemon backend constructs its own tracker and seeds it
 from its scale-group-scoped worker view; worker registration routes to the owning
 backend's tracker by scale group. **Owned by the controller:** the database, the
 meta-scheduler, the per-user budget, and the loop cadence; it reaches per-worker
@@ -103,9 +98,9 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant C as Controller
-    participant B as Backend (in-proc or remote)
+    participant B as Registered backend
     participant DB as Global DB
-    C->>B: schedule(pending tasks routed here + budget)
+    C->>B: schedule(complete backend-partitioned workspace)
     B-->>C: ScheduleResult (placements)
     C->>B: reconcile(request)
     Note over B: converge substrate · fold OWN liveness ·<br/>stash reaped workers internally
@@ -118,18 +113,12 @@ sequenceDiagram
 
 Teardown runs **after** the reconcile effects are committed, so each backend
 reads a fresh snapshot where the just-finalized attempts are already terminal and
-skipped. No worker identity passes through the controller at any step.
+skipped.
 
-## In-process and remote are the same contract
+## Extension boundary
 
-The `default` backend is the degenerate, single-process case of the same model:
-its store is the global DB and the call is a direct method invocation. A remote
-backend is a full Iris controller running in "backend mode" — its own DB,
-scheduler, autoscaler, and workers (or k8s) — with the identical `schedule` /
-`reconcile` / `autoscale` / `status` surface exposed as RPCs on a `RemoteAgent`.
-Because the remote backend is itself a controller, the main controller retains
-only the `task → backend` routing and the projection the remote reports; the
-remote handles everything below the assignment line. Adding a backend kind means
-implementing the Protocol and declaring its
-[capabilities](architecture.md#the-taskbackend-contract) — nothing in the control
-loop changes.
+The `default` worker backend and Kubernetes backends are in-process direct method
+calls. Adding another backend kind means implementing `TaskBackend`, supplying
+one immutable descriptor, and registering the object before controller start.
+The phase request/result boundary could support a remote adapter later, but Iris
+does not currently implement one.

@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
@@ -39,7 +39,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
     DeviceCapacity,
     ProviderError,
@@ -2369,8 +2369,7 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
-
+    descriptor: BackendDescriptor
     kubectl: K8sService
     # Cluster-level pod settings; also the source of the namespace and managed
     # label this backend uses for its own ConfigMap/PDB writes and kubectl scans.
@@ -2396,9 +2395,6 @@ class K8sTaskProvider:
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
     cluster_scan_interval: float = 5.0
-    name: str = "kubernetes"
-    # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
-    advertised: dict[str, set[str]] = field(default_factory=dict)
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     # A cluster backend tracks no Iris worker liveness; the controller's union read
@@ -2448,12 +2444,6 @@ class K8sTaskProvider:
             self._task_event_log = TaskEventLog(self.task_event_table)
         return self._task_event_log
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
     def runtime_image(self, requested_image: str) -> str:
         return requested_image or self.pods.default_image
 
@@ -2467,7 +2457,7 @@ class K8sTaskProvider:
         lines up. Only when the backend advertises exactly one GPU variant can the
         GPUs be attributed unambiguously; otherwise it returns ``None`` (unset —
         shape-only federation)."""
-        variants = self.advertised.get(WellKnownAttribute.DEVICE_VARIANT)
+        variants = self.descriptor.advertised_attributes.get(WellKnownAttribute.DEVICE_VARIANT)
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()

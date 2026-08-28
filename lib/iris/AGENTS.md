@@ -134,29 +134,31 @@ placement decision), `reconcile` (backend I/O: task observations + per-worker
 health events), `autoscale` (provision, or tear down dead workers' slices +
 healthy siblings) — plus the on-demand one-offs (`get_process_status`,
 `profile_task`, `exec_in_container`). Each phase returns its own frozen result
-type: `ScheduleResult`, `ReconcileResult`, `AutoscaleResult`. The controller is a
-thin dispatcher: it owns the database and the loop cadences, and each loop reads
-a DB snapshot → calls one backend method → commits the returned result
-(dispatching within a method on which result field is non-empty, never by
-`isinstance`). **The contract is DB-less**: backends take plain data in and
-return plain data out; they never touch the controller DB.
+type: `ScheduleResult`, `ReconcileResult`, `AutoscaleResult`. Composition creates
+an empty controller and calls `controller.register_backend(backend)` once per
+backend before `start()`. `BackendDescriptor` is the single source for backend
+ID, capabilities, advertised routing attributes, and owned scale groups.
 
-A backend declares `capabilities: frozenset[BackendCapability]` — metadata the
-dashboard and on-demand RPC routing key on. The controller calls all three
-phases uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes
-the controller drain the dispatch queue (a DB write it owns) into that backend's
-reconcile snapshot. The flags: `WORKER_DAEMON` (`"workers"`), `IRIS_AUTOSCALER`
-(`"autoscaler"`), `CLUSTER_VIEW` (`"cluster"`).
+The controller builds each `ScheduleRequest` completely from one read snapshot:
+owned workers, routed pending tasks, running attempts, and the per-user budget.
+`TaskBackend.schedule` is therefore DB-less and performs a pure decision. The
+current reconcile/autoscale path still binds a scale-group-scoped
+`DbBackendWorkerStore` through `BackendRuntime`; do not describe those phases as
+DB-less until that transitional store is removed.
 
-Worker health is OBSERVED only by worker-daemon backends — REACHED / UNREACHABLE
-events on `ReconcileResult.health_events` — and OWNED by the controller, which
-folds them (together with BUILD_FAILED events it synthesizes from the reconcile
-kernel's effects) through the single `WorkerHealthTracker.apply` site; a worker
-over the failure threshold is reaped via `autoscale(dead_workers=...)`.
-There is no ping loop and no separate liveness channel — the reconcile RPC
-outcome is the only liveness signal. Cluster-view backends (Kubernetes) have no
-Iris workers, so they emit no health events; pod status flows back as neutral
-task `updates`.
+`BackendDescriptor.capabilities` drives the dashboard and on-demand RPC routing.
+The controller calls all three phases uniformly regardless, with one per-tick
+exception: `CLUSTER_VIEW` makes the controller drain the dispatch queue into
+that backend's reconcile snapshot. The flags are `WORKER_DAEMON` (`"workers"`),
+`IRIS_AUTOSCALER` (`"autoscaler"`), and `CLUSTER_VIEW` (`"cluster"`).
+
+Worker health is observed and folded by worker-daemon backends. Each owns a
+`WorkerHealthTracker` for its scale groups and reaches the shared DB through the
+transitional `DbBackendWorkerStore`. There is no ping loop or separate liveness
+channel: reconcile RPC outcomes are the liveness signal. Cluster-view backends
+(Kubernetes) have no Iris workers; pod status flows back as task effects. Moving
+liveness, worker lifecycle, and teardown into the controller is a later refactor,
+not current behavior.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 `{WORKER_DAEMON, IRIS_AUTOSCALER}`, owns the `Scheduler` + `Autoscaler`) for

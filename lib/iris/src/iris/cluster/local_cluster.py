@@ -40,6 +40,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
+from iris.cluster.controller.backend import BackendCapability, BackendDescriptor
 from iris.cluster.controller.controller import (
     Controller,
     ControllerConfig,
@@ -246,6 +247,12 @@ class LocalCluster:
         # drives the autoscaler via backend.autoscale and persists the returned
         # state each tick.
         provider = RpcTaskBackend(
+            descriptor=BackendDescriptor(
+                backend_id=DEFAULT_BACKEND_ID,
+                display_name="worker",
+                capabilities=frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+                scale_groups=frozenset(self._config.scale_groups),
+            ),
             stub_factory=RpcWorkerStubFactory(),
             unreachable_grace=controller_config.worker_unreachable_grace,
             autoscaler=self._autoscaler,
@@ -253,11 +260,11 @@ class LocalCluster:
 
         self._controller = Controller(
             config=controller_config,
-            backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,
             threads=controller_threads,
             db=db,
         )
+        self._controller.register_backend(provider)
         self._controller.start()
 
         # Auto-login: mint an in-process admin JWT so the local dashboard can open a

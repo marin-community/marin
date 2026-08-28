@@ -110,11 +110,20 @@ are the canonical data layer; **one-off queries may stay in `service.py`** —
 ### The TaskBackend contract
 
 `controller/backend.py` defines `TaskBackend`: the single uniform Protocol that
-drives task execution and capacity for one cluster. The controller owns the
-database and the loop cadences; a backend takes a plain-data snapshot in and
-returns a plain-data, method-specific result out. A backend **authors a
-projection** — task-state `effects` plus a `status` snapshot — that the
-controller commits/stores; the controller never learns which worker ran a task.
+drives task execution and capacity for one cluster. Composition registers each
+self-described backend with `Controller.register_backend` before `start()`.
+`BackendDescriptor` is the sole declaration of backend ID, capabilities,
+advertised attributes, and scale-group ownership. The controller rejects
+duplicate IDs and scale-group owners and freezes registration at start.
+
+The controller owns the database and loop cadences. It builds a complete,
+single-use `ScheduleRequest` for each backend from one read snapshot, including
+the backend's worker partition, routed pending tasks, running attempts, and the
+threaded user budget. `schedule` is a DB-less decision. Reconcile and autoscale
+still use the transitional `BackendRuntime`/`DbBackendWorkerStore`; those phases
+will become DB-less when controller-owned liveness and teardown land. The
+controller stores worker records and task assignments; the backend owns the
+provider-specific observation and actuation that produces task-state effects.
 Every backend implements the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 
@@ -137,7 +146,7 @@ authority is split between the controller and its backends (and how a remote
 backend becomes a controller of its own) is described in
 [`multi_backend.md`](multi_backend.md).
 
-A backend declares `capabilities: frozenset[BackendCapability]`, metadata the
+A backend declares `BackendDescriptor.capabilities`, metadata the
 dashboard and on-demand RPC routing key on. The controller calls every phase
 uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes the
 controller drain the dispatch queue (a DB write it owns) into that backend's

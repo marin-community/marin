@@ -125,7 +125,7 @@ def _demand_entries(state: ControllerTestState):
     from the live DB and run the single demand computation over it.
     """
     with state._db.read_snapshot() as snap:
-        ctx = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults(), {})
+        ctx = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults())
     return compute_demand_entries(ctx, Scheduler(), {})
 
 

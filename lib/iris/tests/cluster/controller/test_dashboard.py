@@ -25,7 +25,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
+from iris.cluster.controller.backend import BackendCapability, BackendDescriptor, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -52,11 +52,13 @@ from iris.testing.controller import (
     make_test_entrypoint,
     make_worker_metadata,
     register_worker,
+    worker_backend_descriptor,
 )
 from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.k8s import k8s_backend_descriptor
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
@@ -165,15 +167,13 @@ def _worker_backend(state, autoscaler, backend_id=DEFAULT_BACKEND_ID):
     overlay from its own state, groups tagged with its own ``backend_id`` — so the
     controller reads the result verbatim. The stub factory is unused by the status
     paths, so a bare ``Mock`` suffices."""
-    backend = RpcTaskBackend(stub_factory=Mock())
+    backend = RpcTaskBackend(descriptor=worker_backend_descriptor(backend_id), stub_factory=Mock())
     backend.health = state._health
     backend.autoscaler = autoscaler
     backend.bind_runtime(
         BackendRuntime(
-            backend_id=backend_id,
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
         )
     )
     return backend
@@ -250,8 +250,12 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
     worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    controller_mock.provider = Mock(capabilities=worker_caps)
-    controller_mock.provider.name = "worker"
+    controller_mock.provider = Mock()
+    controller_mock.provider.descriptor = BackendDescriptor(
+        backend_id=DEFAULT_BACKEND_ID,
+        display_name="worker",
+        capabilities=worker_caps,
+    )
     controller_mock.provider.autoscaler = autoscaler
     # The single backend owns the liveness tracker; the service reads liveness through
     # the controller's union over the backends' trackers.
@@ -1482,8 +1486,12 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
     controller_mock = _make_controller_mock(state, scheduler)
     cluster_caps = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.capabilities = cluster_caps
-    controller_mock.provider = Mock(capabilities=cluster_caps)
-    controller_mock.provider.name = "kubernetes"
+    controller_mock.provider = Mock()
+    controller_mock.provider.descriptor = BackendDescriptor(
+        backend_id=DEFAULT_BACKEND_ID,
+        display_name="kubernetes",
+        capabilities=cluster_caps,
+    )
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     svc = ControllerServiceImpl(
         controller=controller_mock,
@@ -1515,7 +1523,10 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(
-        kubectl=k8s, pods=PodConfig(namespace="iris", default_image="img:latest"), cluster_scan_interval=0.0
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=PodConfig(namespace="iris", default_image="img:latest"),
+        cluster_scan_interval=0.0,
     )
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
@@ -1700,11 +1711,16 @@ def test_k8s_cluster_status_without_direct_provider(client):
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, advertised=None):
-    backend = Mock(capabilities=capabilities)
-    backend.name = name
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, advertised=None, scale_groups=()):
+    backend = Mock()
+    backend.descriptor = BackendDescriptor(
+        backend_id=name,
+        display_name=name,
+        capabilities=capabilities,
+        advertised_attributes=advertised or {},
+        scale_groups=frozenset(scale_groups),
+    )
     backend.autoscaler = autoscaler
-    backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     # Default: this backend supplies no federation availability metric (UNSET). Tests
     # exercising the metric override the return value explicitly.
     backend.resource_capacity.return_value = None
@@ -1736,7 +1752,9 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backends = dict(backends)
     controller_mock.provider = next(iter(backends.values()))
-    controller_mock.capabilities = frozenset(cap for backend in backends.values() for cap in backend.capabilities)
+    controller_mock.capabilities = frozenset(
+        capability for backend in backends.values() for capability in backend.descriptor.capabilities
+    )
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1948,15 +1966,15 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         "gcp",
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
+        scale_groups={"tpu-v5e"},
     )
     gcp_backend.resource_capacity.return_value = {
         "v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})
     }
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
-    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
-    controller_mock.backend_id_for_scale_group = lambda sg: controller_mock.scale_group_to_backend.get(
-        sg, DEFAULT_BACKEND_ID
+    controller_mock.backend_id_for_scale_group = lambda scale_group: {"tpu-v5e": "gcp"}.get(
+        scale_group, DEFAULT_BACKEND_ID
     )
     controller_mock.last_unroutable_jobs = {"/alice/exp": "no backend matches the job's constraints"}
     svc = ControllerServiceImpl(

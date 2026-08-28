@@ -21,6 +21,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import MockController, make_test_entrypoint
 from iris.testing.controller_state import ControllerTestState
+from iris.testing.k8s import k8s_backend_descriptor
 
 # ---------------------------------------------------------------------------
 # Constraint builders
@@ -114,6 +115,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     k8s_provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=PodConfig(
             namespace="default",

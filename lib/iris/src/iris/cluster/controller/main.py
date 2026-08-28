@@ -23,7 +23,7 @@ from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.composer import make_backends
-from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends, resolve_config_secrets
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import (
@@ -300,11 +300,11 @@ def run_controller_serve(
 
     controller = Controller(
         config=config,
-        backends=backends,
         log_stack=log_stack,
         db=db,
-        backend_configs=resolve_backends(cluster_config),
     )
+    for backend in backends:
+        controller.register_backend(backend)
     logger.info("Controller instance created")
 
     controller.start()

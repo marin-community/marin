@@ -12,6 +12,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
     ProviderUnsupportedError,
     ReconcileRequest,
@@ -24,7 +25,7 @@ from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import set_user_budget, stamp_backend
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_direct_job_request,
@@ -43,22 +44,18 @@ from sqlalchemy import update as sa_update
 class FakeDirectProvider:
     """Minimal cluster-view TaskBackend (K8s-like) for testing."""
 
-    name = "kubernetes"
-    capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     autoscaler = None
     health = None
 
     def __init__(self):
+        self.descriptor = BackendDescriptor(
+            backend_id=DEFAULT_BACKEND_ID,
+            display_name="kubernetes",
+            capabilities=frozenset({BackendCapability.CLUSTER_VIEW}),
+        )
         self.sync_calls: list[ReconcileRequest] = []
         self.sync_result = ReconcileResult()
         self.closed = False
-        self.advertised: dict[str, set[str]] = {}
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         self.sync_calls.append(request)

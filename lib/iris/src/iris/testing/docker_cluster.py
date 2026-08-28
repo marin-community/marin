@@ -33,6 +33,7 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
+from iris.cluster.controller.backend import BackendCapability, BackendDescriptor
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
@@ -178,11 +179,16 @@ class E2ECluster:
             host="127.0.0.1",
             worker_token=None,
         )
-        self._controller = Controller(
-            config=controller_config,
-            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
-            log_stack=log_stack,
+        backend = RpcTaskBackend(
+            descriptor=BackendDescriptor(
+                backend_id=DEFAULT_BACKEND_ID,
+                display_name="worker",
+                capabilities=frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+            ),
+            stub_factory=RpcWorkerStubFactory(),
         )
+        self._controller = Controller(config=controller_config, log_stack=log_stack)
+        self._controller.register_backend(backend)
         self._controller.start()
 
         self._controller_client = ControllerServiceClientSync(

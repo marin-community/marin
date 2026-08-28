@@ -10,15 +10,14 @@ three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.recon
 :meth:`TaskBackend.autoscale` — passing controller-owned inputs
 (:class:`ScheduleRequest` / :class:`ReconcileRequest` / :class:`AutoscaleRequest`)
 and getting back method-specific results (:class:`ScheduleResult` /
-:class:`ReconcileResult` / :class:`AutoscaleResult`). Worker and placement state
-never flow controller→backend: a backend sources its own workers through a
-:class:`~iris.cluster.controller.backend_store.BackendWorkerStore` and decides
-placement itself. Backends perform
-backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
-read or write the controller database directly.
+:class:`ReconcileResult` / :class:`AutoscaleResult`). The controller supplies a
+complete, backend-partitioned scheduling workspace, so scheduling never reads
+controller storage. Reconcile and autoscale still use a transitional,
+scale-group-scoped store while their DB ownership is moved in later stages.
 
-:attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
-and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
+:attr:`TaskBackend.descriptor` is the backend's immutable identity, routing, and
+capability declaration. Capabilities drive the dashboard tab list and on-demand
+service-RPC routing (worker-daemon vs direct-pod exec). One narrow
 exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
 the controller drains the dispatch queue (a DB write it owns) and hands the
 promoted tasks to that backend's ``reconcile``. A worker-daemon backend instead
@@ -31,7 +30,8 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import ClassVar, Protocol
+from types import MappingProxyType
+from typing import Protocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -57,18 +57,10 @@ from iris.cluster.controller.scheduling.policy import (
     demanded_availability_variants,
     enrich_workers_with_availability,
 )
-from iris.cluster.controller.scheduling.scheduler import (
-    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-    JobRequirements,
-    RunningTaskInfo,
-    Scheduler,
-    SchedulingContext,
-    WorkerSnapshot,
-)
+from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
+from iris.cluster.types import JobName, PendingTask, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -102,23 +94,37 @@ class BackendCapability(StrEnum):
     """The backend places tasks on its own cluster (Cluster tab; exec by task/pod)."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BackendDescriptor:
-    """Capabilities the dashboard uses to choose which panels to show.
+    """Immutable declaration used to register one execution backend."""
 
-    Derived from the live :class:`TaskBackend`; served (as JSON) by ``/auth/config``
-    so the frontend tab list is data-driven.
-    """
+    backend_id: str
+    capabilities: frozenset[BackendCapability]
+    advertised_attributes: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    scale_groups: frozenset[str] = field(default_factory=frozenset)
+    display_name: str | None = None
+
+    def __post_init__(self) -> None:
+        normalized = {key: frozenset(values) for key, values in self.advertised_attributes.items()}
+        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+        object.__setattr__(self, "advertised_attributes", MappingProxyType(normalized))
+        object.__setattr__(self, "scale_groups", frozenset(self.scale_groups))
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardBackendDescriptor:
+    """Backend metadata exposed by the dashboard config endpoint."""
 
     name: str
     capabilities: list[str]
 
 
-def backend_descriptor(backend: "TaskBackend") -> BackendDescriptor:
-    """Build the dashboard capability descriptor from a live backend."""
-    return BackendDescriptor(
-        name=backend.name,
-        capabilities=sorted(c.value for c in backend.capabilities),
+def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
+    """Build dashboard metadata from a registered backend."""
+    descriptor = backend.descriptor
+    return DashboardBackendDescriptor(
+        name=descriptor.display_name or descriptor.backend_id,
+        capabilities=sorted(capability.value for capability in descriptor.capabilities),
     )
 
 
@@ -175,18 +181,6 @@ class TaskTarget:
 
 
 @dataclass(frozen=True)
-class ScheduleInput:
-    """The read-only state a :class:`TaskBackend` needs to make placement
-    decisions for one scheduling tick."""
-
-    context: SchedulingContext
-    """Built by ``build_scheduling_context`` (workers + raw reads)."""
-    max_tasks_per_job_per_cycle: int
-    trace: bool = False
-    """Whether to emit the per-phase scheduling trace logs this cycle."""
-
-
-@dataclass(frozen=True)
 class ScheduleResult:
     """What :meth:`TaskBackend.schedule` decides for one scheduling tick.
 
@@ -239,39 +233,16 @@ class AutoscaleResult:
 
 
 @dataclass(frozen=True)
-class BackendSchedulingInputs:
-    """The worker-side scheduling state a backend reads from its own source.
-
-    The controller never supplies these — the backend assembles its
-    :class:`SchedulingContext` by joining these (its live workers, their building
-    counts, the attempts it is running) with the controller-owned
-    :class:`ScheduleRequest` (the routed pending tasks + budgets).
-    """
-
-    workers: list[WorkerSnapshot]
-    building_counts: dict[WorkerId, int]
-    running_for_preemption: list[RunningTaskInfo]
-    max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER
-    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
-
-
-@dataclass(frozen=True)
 class ScheduleRequest:
-    """Controller-owned inputs for one backend's scheduling tick.
+    """Complete single-use scheduling workspace for one backend and tick.
 
-    Carries only the routed pending tasks and the per-user budget state — never
-    worker data. The backend sources its own workers (a
-    :class:`BackendSchedulingInputs`) and assembles the full scheduling context
-    internally, so the controller does no worker partitioning. ``user_spend`` is
-    threaded across backends in a fixed order so two backends cannot double-spend
-    one user's budget in a single tick.
+    The controller builds this from one read snapshot, partitions workers and
+    pending tasks by registered backend ownership, and threads ``user_spend`` in
+    deterministic backend order. The backend performs a pure decision over the
+    supplied context and never reads controller storage while scheduling.
     """
 
-    pending_task_rows: list[PendingTask]
-    requested_bands: dict[JobName, int]
-    user_spend: dict[str, int]
-    user_budget_limits: dict[str, int]
-    user_budget_defaults: UserBudgetDefaults
+    context: SchedulingContext
     max_tasks_per_job_per_cycle: int
     trace: bool = False
 
@@ -305,32 +276,9 @@ class AutoscaleRequest:
     dead_workers: list[WorkerId] = field(default_factory=list)
 
 
-def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
-    """Join a backend's own worker-side inputs with the controller-owned request.
-
-    The backend sources its live workers (``inputs``); the controller routes the
-    pending tasks + budget state (``request``). Together they form the
-    :class:`SchedulingContext` the Iris pipeline decides over.
-    """
-    return SchedulingContext(
-        workers=inputs.workers,
-        building_counts=inputs.building_counts,
-        max_building_tasks=inputs.max_building_tasks,
-        max_assignments_per_worker=inputs.max_assignments_per_worker,
-        pending_tasks=[],
-        jobs={},
-        pending_task_rows=request.pending_task_rows,
-        user_spend=request.user_spend,
-        user_budget_limits=request.user_budget_limits,
-        requested_bands=request.requested_bands,
-        user_budget_defaults=request.user_budget_defaults,
-        running_for_preemption=inputs.running_for_preemption,
-    )
-
-
 def run_scheduling_decision(
     scheduler: Scheduler,
-    snapshot: ScheduleInput,
+    request: ScheduleRequest,
     zone_capabilities: Mapping[str, frozenset[str]] | None = None,
 ) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
@@ -346,8 +294,8 @@ def run_scheduling_decision(
     availability constraint confines a job to a zone where the accelerator has
     actually been obtained.
     """
-    ctx = snapshot.context
-    trace = snapshot.trace
+    ctx = request.context
+    trace = request.trace
 
     if zone_capabilities:
         # Inject only the availability markers some pending task actually constrains
@@ -367,7 +315,7 @@ def run_scheduling_decision(
 
     gated = apply_scheduling_gates(
         ctx,
-        max_tasks_per_job_per_cycle=snapshot.max_tasks_per_job_per_cycle,
+        max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
         trace=trace,
     )
 
@@ -451,41 +399,29 @@ def apply_placements(
 @dataclass(frozen=True)
 class BackendRuntime:
     """The controller-owned values a worker-daemon backend builds its
-    :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
+    transitional :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
 
     Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
 
-    backend_id: str
-    """The id the controller assigned this backend. The backend stamps it onto the
-    autoscaler groups it authors, so the controller never has to tag them afterward."""
     db: ControllerDB
     """The controller database."""
     owns_scale_group: Callable[[str], bool]
     """Whether a scale group belongs to this backend (the default backend also claims
     scale groups mapped to no backend)."""
-    budget_defaults: UserBudgetDefaults
-    """Per-user budget defaults."""
 
 
 class TaskBackend(Protocol):
     """Drives task execution + capacity reporting for a single cluster backend.
 
-    The controller routes pending *tasks* to a backend and threads the per-user
-    budget; the backend sources its own *workers* and decides placement — worker
-    and placement state never flow controller→backend. Implementations dispatch
-    backend-specific I/O and return plain data; they never touch the controller
-    database directly.
+    The controller supplies a complete scheduling workspace and threads the
+    per-user budget. Implementations dispatch backend-specific I/O and return
+    plain data. Reconcile/autoscale retain a transitional controller-DB store;
+    schedule is DB-less.
     """
 
-    name: str
-    """Stable identifier, e.g. ``"gcp"``, ``"coreweave"``, later ``"slurm-stanford"``."""
-
-    capabilities: ClassVar[frozenset[BackendCapability]]
-    """Descriptor for the dashboard + on-demand RPC routing. The controller calls
-    ``schedule``/``reconcile``/``autoscale`` uniformly regardless; the sole
-    per-tick exception is ``CLUSTER_VIEW`` (drives dispatch-drain into the
-    reconcile snapshot)."""
+    descriptor: BackendDescriptor
+    """Stable identity, routing ownership, and supported mechanisms."""
 
     autoscaler: Autoscaler | None
     """The Iris :class:`Autoscaler` driving capacity, or None for backends that
@@ -495,26 +431,7 @@ class TaskBackend(Protocol):
 
     @property
     def health(self) -> WorkerHealthTracker | None:
-        """The worker-liveness tracker this backend constructs and owns, holding only
-        the workers in its scale groups, or None for a backend that tracks no Iris
-        workers (k8s). The backend folds and reaps through it; the controller reaches
-        worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
-        prune readers and to seed/register a worker into its owning backend."""
-        ...
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        """Backend-global attributes the meta-scheduler routes against.
-
-        Each set-valued attribute (``device-variant: {"v5e-4", "v5p-8"}``) expands
-        into routing posting lists. A backend advertising nothing is a catch-all
-        that matches every job. Read once at startup (attributes are static)."""
-        ...
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        """Set the routing metadata the meta-scheduler reads.
-
-        Called once by the composer from the backend's config. ``advertised`` is
-        the (comma-expanded) attribute sets."""
+        """The tracker for this backend's scale groups, or None without Iris workers."""
         ...
 
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
@@ -547,7 +464,7 @@ class TaskBackend(Protocol):
         """Author this backend's expanded status for the dashboard Backends tab.
 
         Each backend authors its own ``BackendStatus`` variant uniformly,
-        selected by :attr:`capabilities`: a ``CLUSTER_VIEW`` backend fills
+        selected by :attr:`BackendDescriptor.capabilities`: a ``CLUSTER_VIEW`` backend fills
         ``kubernetes`` from its cached cluster-state snapshot; a
         ``WORKER_DAEMON`` backend fills ``worker`` in full from the state it owns
         — its liveness tracker (health counts + per-VM usability) and running-task
@@ -569,11 +486,9 @@ class TaskBackend(Protocol):
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """Decide task→worker placement for the routed tasks (pure decision).
 
-        The request carries only the routed pending tasks + budget state; the
-        backend sources its own workers (its worker store) and assembles the
-        scheduling context internally. Worker-daemon backends run the full
-        Iris scheduling pipeline; cluster backends (Kueue, slurmctld) return an
-        empty result — they place tasks themselves.
+        The request contains the controller-built scheduling context. Worker-daemon
+        backends run the full Iris scheduling pipeline; cluster backends (Kueue,
+        slurmctld) return an empty result because they place tasks themselves.
         """
         ...
 

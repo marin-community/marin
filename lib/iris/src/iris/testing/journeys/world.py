@@ -121,8 +121,11 @@ class JourneyWorld:
                 if not self._capacity_available or backend_id in self._unavailable_backend_ids
                 else ScriptedTaskBackend
             )
-            backend = backend_type(DbTransitionReader(db), backend_id=backend_id)
-            backend.configure_routing(advertised)
+            backend = backend_type(
+                DbTransitionReader(db),
+                backend_id=backend_id,
+                advertised_attributes=advertised,
+            )
             backends[backend_id] = backend
         log_stack = build_log_stack(
             log_service_address="",
@@ -133,12 +136,13 @@ class JourneyWorld:
         self.log_stack = log_stack
         controller = Controller(
             config=config,
-            backends=backends,
             log_stack=log_stack,
             threads=ThreadContainer(name=f"journey-{self._incarnation}"),
             db=db,
             federation_peers=self._federation_peers,
         )
+        for backend in backends.values():
+            controller.register_backend(backend)
         return controller, backends
 
     def close(self) -> None:

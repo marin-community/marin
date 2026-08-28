@@ -46,6 +46,7 @@ from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
+from iris.testing.k8s import k8s_backend_descriptor
 from rigging.timing import Duration
 
 
@@ -2098,7 +2099,11 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         kubernetes_provider=KubernetesProviderConfig(),  # no kueue.cluster_queue
     )
     with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
-        make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+        make_task_backend(
+            config,
+            descriptor=k8s_backend_descriptor(),
+            unreachable_grace=Duration.from_seconds(1),
+        )
 
 
 def test_kubernetes_provider_rejects_nonpositive_cache_max_age():
@@ -2112,7 +2117,11 @@ def test_k8s_backend_uses_canonical_default_task_image():
         kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
     )
 
-    backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
+    backend = make_task_backend(
+        config,
+        descriptor=k8s_backend_descriptor(),
+        unreachable_grace=Duration.from_seconds(1),
+    )
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"

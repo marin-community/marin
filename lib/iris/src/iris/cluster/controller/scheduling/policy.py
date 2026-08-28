@@ -12,7 +12,7 @@ and preemption passes are pure transforms over an in-memory ``SchedulingContext`
 import logging
 import sys
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
@@ -798,28 +798,32 @@ def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInput
 
 def build_scheduling_context(
     snap: Tx,
-    health: WorkerHealthTracker,
+    health: WorkerHealthTracker | None,
     worker_attrs: WorkerAttrsSource,
     defaults: UserBudgetDefaults,
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    *,
+    owns_scale_group: Callable[[str], bool] | None = None,
+    routing: RoutingInputs | None = None,
 ) -> SchedulingContext:
     """Build a ``SchedulingContext`` from the caller's read snapshot ``snap``.
 
-    All scheduling-tick DB reads live here. Every read shares the caller's
-    snapshot, so the control tick issues a single DB read for the whole tick.
+    All scheduling-tick DB reads live here. Every query shares the caller's
+    transaction snapshot.
     """
+    routing = routing or build_routing_inputs(snap, defaults)
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
-        pending = reads.pending_tasks_with_jobs(snap)
-        workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
-        usage_by_worker = reads.resource_usage_by_worker(snap)
-        user_spend = compute_user_spend(snap)
-        user_budget_limits = reads.get_all_user_budget_limits(snap)
-        requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
+        workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs) if health is not None else []
+        usage_by_worker = reads.resource_usage_by_worker(snap) if health is not None else {}
+        owned = reads.owned_worker_ids(snap, owns_scale_group) if owns_scale_group is not None else None
+        if owned is not None:
+            workers = [worker for worker in workers if worker.worker_id in owned]
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-        running = _running_tasks_with_band_and_value(snap)
+        running = _running_tasks_with_band_and_value(snap) if health is not None else []
+        if owned is not None:
+            running = [task for task in running if task.worker_id in owned]
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-    sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -827,10 +831,10 @@ def build_scheduling_context(
         max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
         pending_tasks=[],
         jobs={},
-        pending_task_rows=sorted_pending,
-        user_spend=user_spend,
-        user_budget_limits=user_budget_limits,
-        requested_bands=requested_bands,
+        pending_task_rows=routing.pending_task_rows,
+        user_spend=routing.user_spend,
+        user_budget_limits=routing.user_budget_limits,
+        requested_bands=routing.requested_bands,
         user_budget_defaults=defaults,
         running_for_preemption=running,
     )

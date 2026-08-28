@@ -57,7 +57,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
-from iris.cluster.controller.backend import backend_descriptor
+from iris.cluster.controller.backend import dashboard_backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
@@ -406,9 +406,9 @@ class ControllerDashboard:
             if self._reports_native_identity
             else _request_is_authenticated(self._auth_policy, request)
         )
-        descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
+        descriptors = {bid: dashboard_backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
-        representative = backend_descriptor(self._service.provider)
+        representative = dashboard_backend_descriptor(self._service.provider)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,

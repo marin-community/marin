@@ -60,14 +60,13 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
+    DeviceCapacity,
     ReconcileRequest,
     ReconcileResult,
-    ScheduleInput,
     ScheduleRequest,
     ScheduleResult,
-    TaskBackend,
-    assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -117,7 +116,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
-from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
@@ -163,6 +162,12 @@ def _marin_remote_state_dir() -> str:
 # RPC harness: real Controller(dry_run=True) + Connect sync client
 # ---------------------------------------------------------------------------
 
+_WORKER_BACKEND_DESCRIPTOR = BackendDescriptor(
+    backend_id=DEFAULT_BACKEND_ID,
+    display_name="worker",
+    capabilities=frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+)
+
 
 class _FakeProvider:
     """Minimal worker-daemon TaskBackend that satisfies Controller's wiring
@@ -174,34 +179,31 @@ class _FakeProvider:
     real provider object to satisfy the constructor's type contract.
     """
 
-    name = "worker"
-    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    descriptor = _WORKER_BACKEND_DESCRIPTOR
     autoscaler = None
 
     def __init__(self) -> None:
         self._scheduler = Scheduler()
         self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
-        self.advertised: dict[str, set[str]] = {}
         self._pending_dead: list[WorkerId] = []
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        assert self._store is not None
-        context = assemble_scheduling_context(self._store.scheduling_inputs(), request)
-        return run_scheduling_decision(
-            self._scheduler,
-            ScheduleInput(
-                context=context,
-                max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
-                trace=request.trace,
-            ),
+        return run_scheduling_decision(self._scheduler, request)
+
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        return None
+
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        return controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=self.autoscaler_status())
         )
+
+    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+        return vm_pb2.AutoscalerStatus()
 
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
@@ -211,7 +213,6 @@ class _FakeProvider:
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            defaults=runtime.budget_defaults,
             autoscale=self.autoscale,
         )
 
@@ -225,6 +226,9 @@ class _FakeProvider:
         pass
 
     def profile_task(self, target, request, timeout_ms):
+        raise RuntimeError("fake provider")
+
+    def exec_in_container(self, target, request, timeout_seconds=60):
         raise RuntimeError("fake provider")
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
@@ -252,6 +256,10 @@ class _FakeProvider:
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        assert self._store is not None
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def close(self):
         pass
@@ -2369,13 +2377,8 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         host=config.host,
         worker_token=None,
     )
-    controller = Controller(
-        config=config,
-        backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
-        log_stack=log_stack,
-        db=db,
-        threads=threads,
-    )
+    controller = Controller(config=config, log_stack=log_stack, db=db, threads=threads)
+    controller.register_backend(_FakeProvider())
     controller.start()
     try:
         _wait_for_server_start(
@@ -2763,7 +2766,7 @@ class _PrebuiltWorkerSource:
     def reconcile_snapshot(self) -> ControlSnapshot:
         return self.snapshot
 
-    def scheduling_inputs(self):
+    def worker_snapshots(self):
         raise NotImplementedError
 
     def worker_status(self):
@@ -2900,7 +2903,11 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(
+                descriptor=_WORKER_BACKEND_DESCRIPTOR,
+                stub_factory=stub_factory,
+                parallelism=parallelism,
+            )
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))

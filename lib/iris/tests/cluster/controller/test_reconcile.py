@@ -16,7 +16,7 @@ Three layers, exercised in order:
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 from iris.cluster.backends.rpc.backend import (
@@ -27,7 +27,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
@@ -59,7 +59,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
 )
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.testing.controller import (
     assign_task,
@@ -77,6 +77,7 @@ from iris.testing.controller import (
     run_worker_daemon_schedule,
     store_from_runtime,
     submit_job,
+    worker_backend_descriptor,
 )
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import (
@@ -629,16 +630,14 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
     if stub is None:
         stub = _FakeWorkerStub(address=_W1_ADDR)
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    return RpcTaskBackend(stub_factory=factory), stub
+    return RpcTaskBackend(descriptor=worker_backend_descriptor(), stub_factory=factory), stub
 
 
 def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
     provider.bind_runtime(
         BackendRuntime(
-            backend_id=DEFAULT_BACKEND_ID,
             db=state._db,
             owns_scale_group=lambda _scale_group: True,
-            budget_defaults=UserBudgetDefaults(),
         )
     )
     provider.seed_liveness()
@@ -1311,25 +1310,15 @@ class _ScriptedProvider:
 
     script: list[Any] = field(default_factory=list)
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
-    name: str = "worker"
+    descriptor: BackendDescriptor = field(default_factory=worker_backend_descriptor)
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    advertised: dict[str, set[str]] = field(default_factory=dict)
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
-        {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
-    )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, self._store, request)
+        return run_worker_daemon_schedule(self._scheduler, request)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1397,22 +1386,12 @@ class _UnreachableProvider:
     unhealthy: set[str] = field(default_factory=set)
     siblings: dict[str, list[str]] = field(default_factory=dict)
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
-    name: str = "worker"
+    descriptor: BackendDescriptor = field(default_factory=worker_backend_descriptor)
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
-    advertised: dict[str, set[str]] = field(default_factory=dict)
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
-        {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
-    )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self._store = store_from_runtime(runtime, self.health, self.autoscale)
@@ -1424,7 +1403,7 @@ class _UnreachableProvider:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, self._store, request)
+        return run_worker_daemon_schedule(self._scheduler, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         assert self._store is not None, "_UnreachableProvider.reconcile called before worker store attached"
@@ -1504,8 +1483,11 @@ def _expire_grace(ctrl, wid: WorkerId) -> None:
 
 def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_controller):
     """A reached worker reporting unhealthy is reaped through reconciliation."""
-    provider = _UnreachableProvider(unhealthy={_W1})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
+    provider = _UnreachableProvider(
+        unhealthy={_W1},
+        health=WorkerHealthTracker(unreachable_grace=_GRACE),
+    )
+    ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,
@@ -1536,8 +1518,12 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     ``removed_workers``; the controller fails those siblings and forgets the
     whole slice, even though the siblings were reachable every tick.
     """
-    provider = _UnreachableProvider(unreachable={_W1}, siblings={_W1: [_W2]})
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
+    provider = _UnreachableProvider(
+        unreachable={_W1},
+        siblings={_W1: [_W2]},
+        health=WorkerHealthTracker(unreachable_grace=_GRACE),
+    )
+    ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
         health=ctrl.provider.health,

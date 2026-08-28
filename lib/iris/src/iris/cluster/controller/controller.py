@@ -13,10 +13,11 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import uvicorn
 from finelog.client import RemoteLogHandler
@@ -27,7 +28,7 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, PeerConfig
+from iris.cluster.config import PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import (
@@ -102,6 +103,7 @@ from iris.cluster.controller.scheduling.meta_scheduler import (
 from iris.cluster.controller.scheduling.policy import (
     RoutingInputs,
     build_routing_inputs,
+    build_scheduling_context,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
@@ -177,8 +179,9 @@ _SCHEDULING_TRACE_INTERVAL = 50
 class _TickInputs:
     """Per-tick inputs the control driver assembles for the due phases.
 
-    The controller reads only its own task-lifecycle state: ``routing`` carries
-    the pending tasks + budgets the meta-scheduler and per-user budget thread off of;
+    The controller reads its task and worker state once: ``routing`` carries
+    the pending tasks + budgets the meta-scheduler and per-user budget thread off of,
+    while ``scheduling_contexts`` carries each backend's owned worker partition;
     ``reconcile_requests`` carries each ``CLUSTER_VIEW`` backend's dispatch drain
     (worker-daemon backends source their own reconcile snapshot, so they have no
     entry); ``timeout_rows`` is the global execution-timeout sweep. Workers are
@@ -186,6 +189,7 @@ class _TickInputs:
     """
 
     routing: RoutingInputs | None = None
+    scheduling_contexts: dict[str, SchedulingContext] = field(default_factory=dict)
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
     # Federated jobs queued on this parent awaiting a peer with free capacity, in
@@ -338,10 +342,8 @@ class Controller:
     Example:
         ```python
         config = ControllerConfig(port=8080)
-        controller = Controller(
-            config=config,
-            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
-        )
+        controller = Controller(config=config, log_stack=log_stack)
+        controller.register_backend(RpcTaskBackend(descriptor=descriptor, stub_factory=stub_factory))
         controller.start()
         try:
             job_id = controller.launch_job(request)
@@ -352,15 +354,6 @@ class Controller:
 
     Args:
         config: Controller configuration
-        backends: The ``{backend_id: TaskBackend}`` collection the controller
-            drives. Each control-tick phase runs per backend over a snapshot
-            filtered to that backend's workers/tasks; a single-backend mapping
-            keyed :data:`DEFAULT_BACKEND_ID` reproduces the single-backend behavior
-            exactly.
-        backend_configs: Per-backend ``BackendConfig`` map used to route tasks to
-            backends (the meta-scheduler index + allow policies) and to map each
-            worker's scale group to its owning backend. Defaults to one implicit
-            worker-daemon backend per entry in ``backends``.
         federation_peers: Optional prebuilt peer connections for an embedding
             that owns transport composition. Production builds peers from config.
     """
@@ -368,11 +361,9 @@ class Controller:
     def __init__(
         self,
         config: ControllerConfig,
-        backends: dict[str, TaskBackend],
         log_stack: LogStack,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
-        backend_configs: dict[str, BackendConfig] | None = None,
         federation_peers: Sequence[FederationPeer] | None = None,
     ):
         if not config.remote_state_dir:
@@ -380,39 +371,23 @@ class Controller:
                 "remote_state_dir is required. Set via ControllerConfig.remote_state_dir. "
                 "Example: remote_state_dir='gs://my-bucket/iris/state'"
             )
-        if not backends:
-            raise ValueError("Controller requires at least one backend")
-
         self._config = config
         self._stopped = False
-        self._backends: dict[str, TaskBackend] = dict(backends)
+        self._started = False
+        self._backends: dict[str, TaskBackend] = {}
         # Stable processing order: the per-tick loop and the in-tick user-budget
         # thread walk backends in this order so the decision is deterministic.
-        self._backend_ids: list[str] = sorted(self._backends)
+        self._backend_ids: list[str] = []
         # A cluster backend that owns placement (no Iris scheduler) needs the
         # reconcile tick to drain pending dispatch (promote PENDING→ASSIGNED) and
         # ride it on the snapshot; a worker-daemon backend reconciles the
         # already-scheduled worker-bound rows. Resolved per backend from capability.
-        self._dispatch_backends: set[str] = {
-            bid for bid, backend in self._backends.items() if BackendCapability.CLUSTER_VIEW in backend.capabilities
-        }
-
-        # Routing/partition config. Absent (tests with a bare backend) synthesizes
-        # one attribute-less worker-daemon backend per id: every job routes to it
-        # and every scale group maps to it, so routing/partition is the identity.
-        if backend_configs is None:
-            backend_configs = {bid: BackendConfig(kind="worker_daemon") for bid in self._backends}
-        # The meta-scheduler routes against what each backend advertises, not the
-        # config. Attributes are immutable, so the routing index is built once.
-        self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
-        }
+        self._dispatch_backends: set[str] = set()
+        self._backend_routing: dict[str, BackendRouting] = {}
         self._backend_index = build_backend_index(self._backend_routing)
         # Worker→backend ownership by scale group, used to wire each backend's
         # worker source and to route a failed worker's teardown to its owner.
-        self._scale_group_to_backend: dict[str, str] = {
-            scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
-        }
+        self._scale_group_to_backend: dict[str, str] = {}
         self._last_unroutable_jobs: dict[str, str] = {}
 
         self._promotion_bucket = TokenBucket(
@@ -485,21 +460,7 @@ class Controller:
         # starts the emitter thread, so it is built in start(), closed in stop().
         self._task_state_collector: TaskStateCollector | None = None
 
-        # Give each worker-daemon backend its own scale-group-scoped view of the DB
-        # so it sources its own workers (the controller never partitions a worker
-        # snapshot). Each such backend constructs and owns its liveness tracker, then
-        # builds its worker source from the runtime it is bound here; the controller
-        # reaches it through the backend, routed by scale group. A placement-owning
-        # backend (k8s) has no workers and reads its dispatch effects through the
-        # transition reader it received at construction.
-        for backend_id, backend in self._backends.items():
-            if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.bind_runtime(self._build_runtime(backend_id))
-
-        # Seed each backend's liveness from its persisted workers so the scheduler
-        # sees them at startup, and reseed after a DB reopen (checkpoint restore).
-        # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
-        self._seed_backend_liveness()
+        # A DB reopen reseeds the worker-daemon backends present in the catalog.
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
         self._endpoint_service = EndpointServiceImpl(
@@ -590,10 +551,6 @@ class Controller:
         # genuinely None before the first scheduling tick has run.
         self._last_scheduling_context: SchedulingContext | None = None
 
-        # Set to True once start() is called. Used to gate operations that
-        # are only valid before the controller loops begin (e.g. LoadCheckpoint).
-        self._started = False
-
         self._atexit_registered = False
 
         # Rate-limits periodic (best-effort) checkpoint writes.
@@ -608,6 +565,48 @@ class Controller:
         )
         if self._periodic_checkpoint_limiter is not None:
             self._periodic_checkpoint_limiter.mark_run()
+
+    def register_backend(self, backend: TaskBackend) -> None:
+        """Register one self-described backend before the controller starts."""
+        if self._started:
+            raise RuntimeError("backends must be registered before Controller.start()")
+
+        descriptor = backend.descriptor
+        backend_id = descriptor.backend_id
+        if not backend_id or backend_id != backend_id.strip():
+            raise ValueError("backend_id must be a non-empty canonical string")
+        if backend_id in self._backends:
+            raise ValueError(f"backend {backend_id!r} is already registered")
+
+        worker_daemon = BackendCapability.WORKER_DAEMON in descriptor.capabilities
+        cluster_view = BackendCapability.CLUSTER_VIEW in descriptor.capabilities
+        if worker_daemon == cluster_view:
+            raise ValueError(
+                f"backend {backend_id!r} must declare exactly one execution mechanism: "
+                f"{BackendCapability.WORKER_DAEMON.value!r} or {BackendCapability.CLUSTER_VIEW.value!r}"
+            )
+        if BackendCapability.IRIS_AUTOSCALER in descriptor.capabilities and not worker_daemon:
+            raise ValueError(f"backend {backend_id!r} cannot autoscale without worker-daemon execution")
+
+        for scale_group in descriptor.scale_groups:
+            owner = self._scale_group_to_backend.get(scale_group)
+            if owner is not None:
+                raise ValueError(f"scale group {scale_group!r} is already owned by backend {owner!r}")
+
+        self._backends[backend_id] = backend
+        self._backend_ids = sorted(self._backends)
+        self._backend_routing[backend_id] = BackendRouting(
+            advertised={key: set(values) for key, values in descriptor.advertised_attributes.items()}
+        )
+        self._backend_index = build_backend_index(self._backend_routing)
+        self._scale_group_to_backend.update({scale_group: backend_id for scale_group in descriptor.scale_groups})
+        if cluster_view:
+            self._dispatch_backends.add(backend_id)
+
+        # Reconcile/autoscale still use the transitional worker store. Scheduling
+        # is controller-built and does not read through this runtime.
+        if worker_daemon:
+            backend.bind_runtime(self._build_runtime(backend_id))
 
     def wake(self) -> None:
         """Wake the control tick to run a schedule-only mini-tick immediately.
@@ -654,7 +653,7 @@ class Controller:
         the reconcile fold and are torn down once over threshold.
         """
         for backend in self._backends.values():
-            if BackendCapability.WORKER_DAEMON in backend.capabilities:
+            if BackendCapability.WORKER_DAEMON in backend.descriptor.capabilities:
                 backend.seed_liveness()
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
@@ -698,13 +697,21 @@ class Controller:
         pods (cluster backends), folds the backend's observed health events, and
         tears down workers that cross the failure threshold.
         """
+        if not self._backends:
+            raise ValueError("Controller requires at least one registered backend")
+        if self._started:
+            raise RuntimeError("Controller has already started")
+        # Registration is complete now. Seed against the final scale-group index
+        # so the default backend cannot temporarily claim workers owned by a
+        # backend registered later.
+        self._seed_backend_liveness()
         self._started = True
         if self._config.dry_run:
             logger.info("[DRY-RUN] Controller started in dry-run mode — all side effects suppressed")
 
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
-            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
+            if any(BackendCapability.CLUSTER_VIEW in b.descriptor.capabilities for b in self._backends.values()):
                 self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
@@ -1133,9 +1140,9 @@ class Controller:
 
         A placement-owning (``CLUSTER_VIEW``) backend's reconcile request comes
         from its own dispatch drain (a write), built first. The controller then
-        reads only its own state in one read snapshot — the routing inputs
-        (pending tasks + budgets) for scheduling and the execution-timeout rows;
-        each backend reads its own workers, so nothing here is partitioned.
+        reads its state in one snapshot: routing inputs, a complete scheduling
+        workspace per backend, and the execution-timeout rows. Backends make pure
+        scheduling decisions and do not read controller storage in ``schedule``.
         """
         inputs = _TickInputs()
 
@@ -1153,6 +1160,19 @@ class Controller:
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
+                if inputs.routing.pending_task_rows:
+                    for backend_id in self._backend_ids:
+                        backend = self._backends[backend_id]
+                        inputs.scheduling_contexts[backend_id] = build_scheduling_context(
+                            snap,
+                            backend.health,
+                            snap.caches[WorkerAttrsProjection],
+                            self._config.user_budget_defaults,
+                            owns_scale_group=lambda scale_group, bid=backend_id: (
+                                self.backend_id_for_scale_group(scale_group) == bid
+                            ),
+                            routing=inputs.routing,
+                        )
                 if self._config.peers:
                     inputs.queued_federation = build_queued_candidates(snap)
                     inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
@@ -1176,17 +1196,15 @@ class Controller:
             return self.backend_id_for_scale_group(scale_group) == backend_id
 
         return BackendRuntime(
-            backend_id=backend_id,
             db=self._db,
             owns_scale_group=owns_scale_group,
-            budget_defaults=self._config.user_budget_defaults,
         )
 
     def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:
         """Map each persisted worker to its owning backend via its scale group.
 
         Used only to route a failed worker's slice teardown to its owning backend;
-        scheduling and reconcile do not partition workers in the controller.
+        scheduling builds its own backend partitions from the same ownership map.
         """
         return {
             wid: self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
@@ -1199,8 +1217,8 @@ class Controller:
         Returns the per-backend ``ScheduleResult``s, the ``(job_id, backend_id)``
         pins to stamp, and the ``(task, reason)`` pairs the meta-scheduler could
         not route (finalized UNSCHEDULABLE in the commit). The decisions do no DB
-        writes. The controller groups *pending tasks* by their routed backend and
-        hands each backend its slice; the backend sources its own workers. The
+        writes. The controller groups pending tasks and workers by registered
+        backend ownership and hands each backend a complete workspace. The
         global user budget is threaded across backends in ``self._backend_ids``
         order so two backends cannot double-spend one user's budget in a tick.
         """
@@ -1228,13 +1246,17 @@ class Controller:
                 results[backend_id] = ScheduleResult()
                 continue
             kept_jobs = {task.job_id for task in pending}
+            context = replace(
+                inputs.scheduling_contexts[backend_id],
+                pending_tasks=[],
+                jobs={},
+                pending_task_rows=pending,
+                requested_bands={jid: band for jid, band in routing.requested_bands.items() if jid in kept_jobs},
+                user_spend=dict(user_spend),
+            )
             result = self._backends[backend_id].schedule(
                 ScheduleRequest(
-                    pending_task_rows=pending,
-                    requested_bands={jid: band for jid, band in routing.requested_bands.items() if jid in kept_jobs},
-                    user_spend=user_spend,
-                    user_budget_limits=routing.user_budget_limits,
-                    user_budget_defaults=routing.user_budget_defaults,
+                    context=context,
                     max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                     trace=trace,
                 )
@@ -1486,8 +1508,8 @@ class Controller:
         transaction instead.
 
         The controller reads its own routing inputs (pending tasks + budgets) and
-        hands them to the representative backend, which sources its own workers and
-        returns the pure placement decision; the controller then commits the
+        builds the representative backend's complete workspace and asks it for a
+        pure placement decision; the controller then commits the
         assignments, preemptions, and unschedulable marks. A worker-daemon backend
         runs the full gates → order → find_assignments → preemption pipeline; a
         cluster backend returns an empty result (Kueue schedules).
@@ -1501,6 +1523,16 @@ class Controller:
 
         with self._db.control_read_snapshot() as snap:
             routing = build_routing_inputs(snap, self._config.user_budget_defaults)
+            backend = self._representative_backend
+            backend_id = backend.descriptor.backend_id
+            context = build_scheduling_context(
+                snap,
+                backend.health,
+                snap.caches[WorkerAttrsProjection],
+                self._config.user_budget_defaults,
+                owns_scale_group=lambda scale_group: self.backend_id_for_scale_group(scale_group) == backend_id,
+                routing=routing,
+            )
 
         if trace:
             logger.info(
@@ -1516,11 +1548,7 @@ class Controller:
 
         result = self._representative_backend.schedule(
             ScheduleRequest(
-                pending_task_rows=routing.pending_task_rows,
-                requested_bands=routing.requested_bands,
-                user_spend=routing.user_spend,
-                user_budget_limits=routing.user_budget_limits,
-                user_budget_defaults=routing.user_budget_defaults,
+                context=context,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -1924,9 +1952,9 @@ class Controller:
         return self._backends.get(DEFAULT_BACKEND_ID) or self._backends[self._backend_ids[0]]
 
     @property
-    def backends(self) -> dict[str, TaskBackend]:
-        """The controller's ``{backend_id: TaskBackend}`` collection."""
-        return self._backends
+    def backends(self) -> Mapping[str, TaskBackend]:
+        """The controller's read-only backend catalog."""
+        return MappingProxyType(self._backends)
 
     @property
     def federation(self) -> FederationManager:
@@ -1936,11 +1964,6 @@ class Controller:
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""
         return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
-
-    @property
-    def scale_group_to_backend(self) -> dict[str, str]:
-        """The ``{scale_group: backend_id}`` routing map."""
-        return self._scale_group_to_backend
 
     @property
     def last_unroutable_jobs(self) -> dict[str, str]:
@@ -1954,7 +1977,7 @@ class Controller:
     @property
     def capabilities(self) -> frozenset[BackendCapability]:
         """Union of every backend's capabilities (which dashboard tabs/RPCs apply)."""
-        return frozenset(cap for backend in self._backends.values() for cap in backend.capabilities)
+        return frozenset(cap for backend in self._backends.values() for cap in backend.descriptor.capabilities)
 
     @property
     def port(self) -> int:

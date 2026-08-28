@@ -11,7 +11,7 @@ aggregated from task states.
 import json
 import logging
 import secrets
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol, TypeVar
@@ -1251,7 +1251,7 @@ class ControllerProtocol(Protocol):
     def provider(self) -> Any: ...
 
     @property
-    def backends(self) -> dict[str, TaskBackend]: ...
+    def backends(self) -> Mapping[str, TaskBackend]: ...
 
     @property
     def federation(self) -> FederationManager: ...
@@ -1267,9 +1267,6 @@ class ControllerProtocol(Protocol):
 
     @property
     def last_unroutable_jobs(self) -> dict[str, str]: ...
-
-    @property
-    def scale_group_to_backend(self) -> dict[str, str]: ...
 
 
 def _profile_is_elevated(profile: int) -> bool:
@@ -2733,7 +2730,7 @@ class ControllerServiceImpl:
         return self._controller.provider
 
     @property
-    def backends(self) -> dict[str, TaskBackend]:
+    def backends(self) -> Mapping[str, TaskBackend]:
         """The controller's full backend collection (for the union capabilities descriptor)."""
         return self._controller.backends
 
@@ -2873,7 +2870,7 @@ class ControllerServiceImpl:
         cluster_view_backends = [
             (bid, backend)
             for bid, backend in sorted(self._controller.backends.items())
-            if BackendCapability.CLUSTER_VIEW in backend.capabilities
+            if BackendCapability.CLUSTER_VIEW in backend.descriptor.capabilities
         ]
 
         if request.backend_id:
@@ -3524,13 +3521,6 @@ class ControllerServiceImpl:
         require_identity()
 
         backends = self._controller.backends
-        sg_to_backend = self._controller.scale_group_to_backend
-
-        # Invert sg_to_backend: backend_id → list[scale_group]
-        backend_to_sgs: dict[str, list[str]] = {bid: [] for bid in backends}
-        for sg, bid in sg_to_backend.items():
-            if bid in backend_to_sgs:
-                backend_to_sgs[bid].append(sg)
 
         with self._db.read_snapshot() as snap:
             pending_by_backend: dict[str, int] = {}
@@ -3560,7 +3550,8 @@ class ControllerServiceImpl:
 
         summaries: list[controller_pb2.Controller.BackendSummary] = []
         for backend_id, backend in sorted(backends.items()):
-            caps = backend.capabilities
+            descriptor = backend.descriptor
+            caps = descriptor.capabilities
             if BackendCapability.CLUSTER_VIEW in caps:
                 kind = "kubernetes"
             elif BackendCapability.WORKER_DAEMON in caps:
@@ -3568,7 +3559,7 @@ class ControllerServiceImpl:
             else:
                 kind = "unknown"
 
-            adv: dict[str, set[str]] = backend.advertised_attributes()
+            adv = descriptor.advertised_attributes
 
             # Each backend authors its own expanded status variant in full: a
             # worker-daemon backend reads its own liveness tracker and running-task
@@ -3587,10 +3578,10 @@ class ControllerServiceImpl:
 
             summary = controller_pb2.Controller.BackendSummary(
                 backend_id=backend_id,
-                name=backend.name,
+                name=descriptor.display_name or descriptor.backend_id,
                 kind=kind,
                 capabilities=sorted(c.value for c in caps),
-                scale_groups=sorted(backend_to_sgs.get(backend_id, [])),
+                scale_groups=sorted(descriptor.scale_groups),
                 worker_count=worker_count_by_backend.get(backend_id, 0),
                 pending_task_count=pending_by_backend.get(backend_id, 0),
                 running_task_count=running_by_backend.get(backend_id, 0),
