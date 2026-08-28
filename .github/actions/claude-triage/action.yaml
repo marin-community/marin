@@ -35,10 +35,10 @@ inputs:
     default: ''
   allowed-tools:
     description: |
-      Override the --allowedTools list. Leave at default for GCP/TPU lanes (no kubectl); CoreWeave lanes
-      should pass the extended list including Bash(kubectl:*), Write, Read, Edit, etc.
+      Override the --allowedTools list. Overrides must retain the reporting tools needed to create an issue and
+      slack_message.md. CoreWeave overrides must also include kubectl and their cluster-inspection tools.
     required: false
-    default: 'Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*)'
+    default: 'Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(date:*),Bash(mktemp:*),Bash(rm:*),Write,Read'
   max-turns:
     description: Maximum agent turns.
     required: false
@@ -81,3 +81,23 @@ runs:
         WANDB_PROJECT: ${{ inputs.wandb-project }}
         WANDB_API_KEY: ${{ inputs.wandb-api-key }}
         GHA_RUN_URL: ${{ inputs.gha-run-url }}
+
+    # claude-code-action hides the transcript from the step log. Preserve it so
+    # incomplete triage can be diagnosed after the runner is gone.
+    - name: Upload Claude triage log
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: claude-triage-log-${{ github.run_id }}
+        path: ${{ runner.temp }}/claude-execution-output.json
+        retention-days: 30
+        if-no-files-found: warn
+
+    - name: Require Slack summary
+      if: always() && steps.claude.outputs.rate_limited != 'true'
+      shell: bash
+      run: |
+        if [ ! -s slack_message.md ]; then
+          echo "::error::Canary triage finished without writing slack_message.md"
+          exit 1
+        fi
