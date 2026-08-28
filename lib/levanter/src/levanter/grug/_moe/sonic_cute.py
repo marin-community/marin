@@ -25,7 +25,9 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _chunk_capacity_drops,
+    _interleave_gate_up,
     _prepare_moe_dispatch,
+    _swiglu_gate_up_backward,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
@@ -50,23 +52,6 @@ _QUACK_TILE_MN = (256, 256)
 _QUACK_USE_CLC = True
 _QUACK_GATED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 1, 1), use_clc_persistence=_QUACK_USE_CLC)
 _QUACK_GROUPED_KW = dict(tile_mn=_QUACK_TILE_MN, cluster_mnk=(2, 2, 1), use_clc_persistence=_QUACK_USE_CLC)
-
-
-def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
-    """grug w13 [E,H,2I] gate=[:I], up=[I:] -> interleaved [g0,u0,g1,u1,...] (QuACK layout)."""
-    gate = moe_w13[..., :moe_dim]
-    up = moe_w13[..., moe_dim:]
-    return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
-
-
-def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
-    """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
-    gate, up = gu[:, 0::2], gu[:, 1::2]
-    sg = jax.nn.sigmoid(gate)
-    silu = gate * sg
-    dgate = dh * up * (sg + silu * (1.0 - sg))
-    dup = dh * silu
-    return jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
 
 
 @jax.custom_vjp
