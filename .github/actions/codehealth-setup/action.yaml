@@ -1,0 +1,56 @@
+name: Set up code-health environment
+description: Install Python dependencies and authenticate to Finelog.
+
+inputs:
+  gcp-credentials-json:
+    description: Google Cloud service-account credentials.
+    required: true
+  gcp-project-id:
+    description: Google Cloud project ID.
+    required: true
+  ssh-key:
+    description: Private SSH key used by Iris.
+    required: true
+  ssh-key-pub:
+    description: Public SSH key used by Iris.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Sync environment
+      shell: bash
+      run: uv sync --all-packages --extra=cpu --no-default-groups
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        credentials_json: ${{ inputs.gcp-credentials-json }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Install SSH key
+      shell: bash
+      env:
+        SSH_KEY: ${{ inputs.ssh-key }}
+        SSH_KEY_PUB: ${{ inputs.ssh-key-pub }}
+      run: |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+        printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+        chmod 600 ~/.ssh/google_compute_engine
+        chmod 644 ~/.ssh/google_compute_engine.pub

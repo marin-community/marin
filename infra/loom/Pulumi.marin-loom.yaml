@@ -109,6 +109,32 @@ config:
       mcpAccess:
         mode: all
         groups: []
+    codehealth-refinement:
+      agent: codex
+      description: Analyze frozen review corpora and publish agentic-lint refinement reports
+      model: gpt-5.6-sol
+      effort: xhigh
+      protocol: acp
+      mode: plan
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 1
+      turnBudget: 400
+      prelude: weaver
+      instructionsFile: profiles/codehealth-refinement/AGENTS.md
+      # Loom reserves restricted profiles for Claude sessions without the Agent
+      # tool. Codex plan mode keeps this subagent workflow read-only.
+      restricted: false
+      githubRepositories: []
+      allowedTools: []
+      mcpAccess:
+        mode: groups
+        groups:
+          - artifact
+          - channel
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
@@ -167,6 +193,12 @@ config:
       profile: pr-review
       serviceTag: pr-review
       event: pull_request_target
+      ref: refs/heads/main
+    - name: codehealth-refinement
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main
+      profile: codehealth-refinement
+      serviceTag: codehealth-refinement
       ref: refs/heads/main
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6Qz1jQpqEr5LUAHWIXJ1B28qzqFuiJjtH5MdH2gce7ASSQCdtF6iKzVxOIFfT2S6vbjMsFHA0EBoefdLu86Qy6HXIN3WI1ybrmlHggGITXPSMgzZ7SWRrVR2iNAzI2PoriKx7a5plvnC6r8=

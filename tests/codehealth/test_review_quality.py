@@ -1,9 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import subprocess
-from pathlib import Path
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +35,7 @@ def _comment(**overrides) -> review.Comment:
         "file": "infra/example.py",
         "line": 12,
         "body": "This branch is inverted.",
+        "source_url": "https://example.test/inline/7",
         "context": "@@ -10,3 +10,3 @@\n-if ready:\n+if not ready:",
     }
     values.update(overrides)
@@ -91,10 +91,43 @@ def test_fetch_pr_comments_preserves_inline_and_pull_request_context(monkeypatch
 
     inline, review_body, issue = comments
     assert inline.context == "@@ -10,3 +10,3 @@\n-if ready:\n+if not ready:"
+    assert inline.source_url == "https://example.test/inline/7"
     assert review_body.context is not None
     assert "File: infra/example.py (modified, +2/-1)" in review_body.context
     assert review_body.context == issue.context
     assert issue.is_bot
+
+
+def test_fetch_pr_comment_sets_is_parallel_and_preserves_pr_order(monkeypatch) -> None:
+    barrier = threading.Barrier(2)
+
+    def paginated(args: list[str]) -> list[dict]:
+        endpoint = args[1]
+        if endpoint.endswith("/files"):
+            barrier.wait(timeout=2)
+            return []
+        if "/issues/" in endpoint:
+            pr_number = int(endpoint.split("/issues/")[1].split("/")[0])
+            return [
+                {
+                    "id": pr_number,
+                    "user": {"login": "reviewer", "type": "User"},
+                    "body": "Please simplify this branch.",
+                    "html_url": f"https://example.test/issue/{pr_number}",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(review, "_gh_paginated", paginated)
+    first = _pull_request()
+    first["number"] = 41
+    second = _pull_request()
+    second["number"] = 42
+
+    fetched = review.fetch_pr_comment_sets("marin-community/marin", [first, second], set(), concurrency=2)
+
+    assert list(fetched) == [41, 42]
+    assert [comments[0].pr_number for comments in fetched.values()] == [41, 42]
 
 
 def test_pull_request_context_is_bounded() -> None:
@@ -162,26 +195,41 @@ def test_resolution_sends_context_only_for_uncached_comments() -> None:
     assert seen[0].context == "new diff hunk"
 
 
-def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
-    calls: list[tuple[list[str], str]] = []
+def test_resolution_excludes_low_confidence_catchable_verdicts_from_outcomes() -> None:
+    comments = [
+        _comment(comment_id=1, body="cached"),
+        _comment(comment_id=2, body="fresh"),
+    ]
+    low_confidence = review.CommentClassification(
+        **{"class": "structure"},
+        catchable_strict=True,
+        catchable_generous=True,
+        confidence=review.MIN_CLASSIFICATION_CONFIDENCE - 0.01,
+        reason="possible catalog match",
+    )
 
-    def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
-        calls.append((command, kwargs["input"]))
-        schema_path = Path(command[command.index("--output-schema") + 1])
-        schema = json.loads(schema_path.read_text())
-        item_schema = schema["properties"]["results"]["items"]
-        assert item_schema["required"] == [
-            "id",
-            "class",
-            "catchable_strict",
-            "catchable_generous",
-            "confidence",
-            "reason",
-        ]
-        assert item_schema["additionalProperties"] is False
-        output_path = command[command.index("--output-last-message") + 1]
-        with open(output_path, "w") as output:
-            json.dump(
+    resolved = review.resolve_classifications(
+        comments,
+        {("inline", 1): ("cached", low_confidence)},
+        lambda items: {item.id: low_confidence for item in items},
+        batch_size=20,
+        concurrency=1,
+    )
+
+    assert [(item.klass, item.confidence, item.reason) for item in resolved] == [
+        ("structure", review.MIN_CLASSIFICATION_CONFIDENCE - 0.01, "possible catalog match"),
+        ("structure", review.MIN_CLASSIFICATION_CONFIDENCE - 0.01, "possible catalog match"),
+    ]
+    assert all(not item.catchable_strict and not item.catchable_generous for item in resolved)
+
+
+def test_model_classifier_uses_tool_free_structured_request(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class FakeResponses:
+        def parse(self, **kwargs):
+            calls.append(kwargs)
+            parsed = kwargs["text_format"].model_validate(
                 {
                     "results": [
                         {
@@ -193,13 +241,23 @@ def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
                             "reason": "deterministic branch check",
                         }
                     ]
-                },
-                output,
+                }
             )
-        return subprocess.CompletedProcess(command, 0, "", "")
+            return SimpleNamespace(output_parsed=parsed)
 
-    monkeypatch.setattr(review.subprocess, "run", run)
-    classifier = review.make_codex_classifier("gpt-5.6-terra", "medium")
+    class FakeOpenAI:
+        def __init__(self, *, timeout: float):
+            assert timeout == review.CLASSIFIER_TIMEOUT
+            self.responses = FakeResponses()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    monkeypatch.setattr(review, "OpenAI", FakeOpenAI)
+    classifier = review.make_model_classifier("gpt-5.6-terra", "medium")
     result = classifier(
         [
             review.CommentToClassify(
@@ -212,14 +270,31 @@ def test_codex_classifier_uses_read_only_configured_run(monkeypatch) -> None:
         ]
     )
 
-    command, prompt = calls[0]
-    assert command[:2] == ["codex", "exec"]
-    assert command[command.index("--sandbox") + 1] == "read-only"
-    assert command[command.index("--model") + 1] == "gpt-5.6-terra"
-    assert command[command.index("--config") + 1] == 'model_reasoning_effort="medium"'
-    assert "Diff context:" in prompt
+    call = calls[0]
+    assert set(call) == {"model", "input", "reasoning", "text_format"}
+    assert call["model"] == "gpt-5.6-terra"
+    assert call["reasoning"] == {"effort": "medium"}
+    assert "Diff context:" in call["input"]
     assert result[0].catchable_strict
     assert result[0].catchable_generous
+
+
+def test_model_classifier_preserves_structured_request_failure(monkeypatch) -> None:
+    failure = ValueError("invalid API key")
+
+    class FailingOpenAI:
+        def __init__(self, *, timeout: float):
+            del timeout
+            raise failure
+
+    monkeypatch.setattr(review, "OpenAI", FailingOpenAI)
+    classifier = review.make_model_classifier("gpt-5.6-terra", "medium")
+    items = [review.CommentToClassify(id=0, file=None, line=None, body="Review this.", context=None)]
+
+    with pytest.raises(RuntimeError, match="batch of 1 comments: invalid API key") as raised:
+        classifier(items)
+
+    assert raised.value.__cause__ is failure
 
 
 def test_classification_fails_when_a_batch_omits_a_comment() -> None:

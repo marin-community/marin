@@ -64,7 +64,16 @@ required `🤖` prefix are excluded. The command appends the two comment tables;
 into a markdown digest. Inline comments carry their GitHub diff hunk into the
 classifier. Review summaries and issue comments receive a bounded view of the
 pull request's changed-file patches. Both commands need `gh auth login`, and
-`aggregate` also needs a logged-in `codex` CLI.
+`aggregate` also needs an `OPENAI_API_KEY`.
+
+Each classified row retains the GitHub source URL, a SHA-256 context hash, and
+at most 6,000 characters of diff context. These classifications are dashboard
+annotations, not the source of the refinement corpus.
+
+The aggregator fetches at most four pull requests concurrently by default.
+Each worker reads that PR's GitHub endpoints sequentially, so the command never
+fans one PR into several simultaneous requests. `--github-concurrency` can
+lower that cap; GitHub errors fail the run without automatic retries.
 
 `Ops - Code-health Review Data` runs the aggregator directly every day. The
 runner uses the repository's CI Google credentials and SSH key to reach Finelog,
@@ -73,12 +82,60 @@ batches, GitHub fetch failures, and Finelog flush failures fail the job.
 Scheduled publication belongs to the refinement job that consumes these rows;
 `report` remains available for an operator with gist credentials.
 
+`Ops - Agentic-lint Refinement` freezes a 30-day corpus every Monday. It reads
+open, merged, and closed pull requests by GitHub activity time, retains full
+review bodies, thread state, changed-file metadata, commits, and GitHub-served
+diffs, and adds the matching Finelog automation telemetry and prior comment
+annotations. Changed-file metadata is paginated through GraphQL. Its
+REST-only SHA, URL, previous-filename, and per-file patch fields are null in
+the corpus. Endpoint counts, GraphQL thread membership, benchmark coverage,
+and every artifact hash must validate before the corpus is published.
+
+The workflow uploads the frozen archive to GitHub Actions for 90 days and
+attaches the identical archive to one plan-mode Loom session. It deletes the
+Google and SSH credentials before launching Loom and supplies no OpenAI key.
+Collection stages a GraphQL activity scan before hydrating only pull requests
+with in-window human review activity. Initial hydration, connection
+continuations, and snapshot fingerprint checks are batched. REST reads the two
+repository-wide edit streams and one raw diff per included pull request; its
+preflight reserves 150 requests for snapshot retries. Exact cursor and count
+reconciliation keeps the complete run within the repository's read-only
+Actions-token budget.
+The lead agent delegates overlapping pattern mining, complete-catalog matching,
+counterexample search, and evidence verification over the local archive. The
+session cannot receive GitHub credentials and is instructed not to use live
+network sources or mutate the repository or external systems.
+
 Run either command from the repository root:
 
 ```bash
 uv run python -m infra.codehealth.review_quality aggregate --days 7
 uv run python -m infra.codehealth.review_quality report --days 30
+uv run python -m infra.codehealth.review_corpus export --days 30 \
+  --output /tmp/refinement-corpus
+uv run python -m infra.codehealth.review_corpus validate \
+  /tmp/refinement-corpus
 ```
+
+The exporter publishes its directory atomically and refuses to replace an
+existing path. `--limit` and `--skip-telemetry` are probe options; either marks
+the manifest incomplete, and the validator rejects it by default. GitHub does
+not expose deleted comments or prior versions of edited bodies. The single
+GitHub-served pull-request diff is the frozen patch context when available;
+binary content may be absent. GitHub returns HTTP 406 `too_large` above its
+300-file diff render limit. Those pull-request records have a null `diff_path`,
+and their GraphQL file metadata is the only changed-file context. GitHub caps
+changed-file enumeration at 3,000 files, so the exporter fails above that cap.
+
+The lead agent derives both 7-day and 30-day views from the same complete
+snapshot. It treats prior classifications as annotations rather than filters,
+requires evidence from three distinct pull requests, and verifies cited
+comments against their threads and diffs. The fixed benchmark is isolated from
+discovery and scored once per catalog/corpus identity. A rule with a complete
+month of catalog presence and no production findings is retirement evidence
+even when its catalog-derived benchmark case still passes. When the frozen
+telemetry cannot prove month-long presence, the report records an exposure gap
+instead of recommending retirement.
 
 ## Access
 

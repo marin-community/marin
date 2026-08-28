@@ -179,6 +179,139 @@ def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
     assert '"$LOOM_URL/api/runs/create"' in launch_script
 
 
+def test_loom_launch_action_bounds_scratch_attachments_before_upload() -> None:
+    action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
+    action = yaml.safe_load(action_path.read_text())
+    scratch_input = action["inputs"]["scratch-file"]
+    launch_script = action["runs"]["steps"][0]["run"]
+
+    # The composite action's shell is the deployment boundary. These checks
+    # guard ordering and data transport that cannot be exercised without the
+    # GitHub OIDC runtime.
+    assert scratch_input["required"] is False
+    assert scratch_input["default"] == ""
+    assert '[[ -L "$SCRATCH_FILE" || ! -f "$SCRATCH_FILE" ]]' in launch_script
+    assert 'scratch_path=$(realpath -- "$SCRATCH_FILE")' in launch_script
+    assert '"$workspace"/*)' in launch_script
+    assert "scratch_bytes > 26214400" in launch_script
+    assert 'base64 --wrap=0 -- "$scratch_path"' in launch_script
+    assert ".session.scratch" in launch_script
+    assert '--rawfile scratch_content "$scratch_base64"' in launch_script
+    assert '--data-binary @"$request_file"' in launch_script
+    assert '-d "$request"' not in launch_script
+
+
+def _codehealth_refinement_workflow() -> tuple[dict, str, dict[str, dict]]:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
+    workflow_text = workflow_path.read_text()
+    workflow = yaml.safe_load(workflow_text)
+    steps = {step["name"]: step for step in workflow["jobs"]["refine"]["steps"]}
+    return workflow, workflow_text, steps
+
+
+def test_codehealth_refinement_workflow_collects_one_complete_corpus() -> None:
+    workflow, workflow_text, steps = _codehealth_refinement_workflow()
+    trigger = workflow.get("on", workflow.get(True))
+
+    assert set(trigger) == {"schedule", "workflow_dispatch"}
+    assert workflow["permissions"] == {
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+        "id-token": "write",
+    }
+    assert "OPENAI_API_KEY" not in workflow_text
+    assert "NIGHTSHIFT" not in workflow_text
+
+    checkout = steps["Checkout repository"]
+    assert checkout["with"]["persist-credentials"] is False
+    setup = steps["Set up code-health environment"]
+    assert setup["uses"] == "./.github/actions/codehealth-setup"
+    export_step = steps["Export frozen review corpus"]
+    assert export_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    export = export_step["run"]
+    assert "infra.codehealth.review_corpus export" in export
+    assert "--days 30" in export
+    assert "--github-concurrency" not in export
+    validate = steps["Validate corpus"]["run"]
+    assert "infra.codehealth.review_corpus validate refinement-corpus" in validate
+
+
+def test_codehealth_refinement_workflow_removes_credentials_before_handoff() -> None:
+    workflow, _, steps = _codehealth_refinement_workflow()
+    step_names = [step["name"] for step in workflow["jobs"]["refine"]["steps"]]
+    remove_credentials = steps["Remove export credentials"]["run"]
+    assert '"$GITHUB_WORKSPACE"/*)' in remove_credentials
+    assert 'rm -f -- "$CREDENTIAL_PATH"' in remove_credentials
+    archive = steps["Archive corpus"]
+    assert archive["env"] == {
+        "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": "",
+        "GOOGLE_APPLICATION_CREDENTIALS": "",
+        "GOOGLE_GHA_CREDS_PATH": "",
+    }
+    assert "tar --create --gzip --file refinement-corpus.tar.gz refinement-corpus" in archive["run"]
+    assert step_names.index("Remove export credentials") < step_names.index("Archive corpus")
+    assert step_names.index("Archive corpus") < step_names.index("Launch refinement analysis")
+
+    upload = steps["Upload frozen corpus"]
+    assert upload["with"]["path"] == "refinement-corpus.tar.gz"
+    launch = steps["Launch refinement analysis"]
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert launch["env"] == archive["env"]
+    assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
+    assert launch["with"]["channel"] == "codehealth-refinement"
+    assert launch["with"]["scratch-file"] == "refinement-corpus.tar.gz"
+
+
+def test_codehealth_refinement_workflow_delegates_read_only_analysis() -> None:
+    _, _, steps = _codehealth_refinement_workflow()
+    launch = steps["Launch refinement analysis"]
+    goal = " ".join(launch["with"]["goal"].split())
+    assert "Do not query live GitHub, Finelog, or any other network source" in goal
+    assert "at most five subagents" in goal
+    assert "three distinct pull requests" in goal
+    assert "benchmark labels hidden" in goal
+    assert "no production findings" in goal
+    assert "not production recall" in goal
+    assert "typed result" in goal
+
+
+def test_codehealth_refinement_profile_is_read_only_and_credential_free() -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    config = stack["config"]
+    profile = config["marin-loom:profiles"]["codehealth-refinement"]
+    federations = {federation["name"]: federation for federation in config["marin-loom:githubFederations"]}
+    instructions = (ROOT / profile["instructionsFile"]).read_text()
+
+    assert profile["class"] == "automation"
+    assert profile["strict"] is True
+    assert profile["envClear"] is True
+    assert profile["ambientAllowlist"] == []
+    assert profile["mode"] == "plan"
+    # Loom's restricted profiles remove the Agent tool. Codex plan mode keeps
+    # the required subagents while enforcing a read-only runtime.
+    assert profile["restricted"] is False
+    assert profile["githubRepositories"] == []
+    assert profile["maxConcurrent"] == 1
+    assert profile["mcpAccess"] == {"mode": "groups", "groups": ["artifact", "channel"]}
+    assert "Do not query GitHub, Finelog" in instructions
+    assert "same frozen archive" in instructions
+    assert "tar -xOzf" in instructions
+    assert "`benchmark/labels.jsonl`" in instructions
+    assert "synthetic regression check" in instructions
+    assert "only permitted writes" in instructions
+
+    federation = federations["codehealth-refinement"]
+    assert federation == {
+        "name": "codehealth-refinement",
+        "repositoryId": "775839592",
+        "workflowRef": "marin-community/marin/.github/workflows/ops-codehealth-refinement.yaml@refs/heads/main",
+        "profile": "codehealth-refinement",
+        "serviceTag": "codehealth-refinement",
+        "ref": "refs/heads/main",
+    }
+
+
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
     canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
     tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64

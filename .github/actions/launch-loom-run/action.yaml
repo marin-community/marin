@@ -30,6 +30,10 @@ inputs:
     description: Optional stable Loom conversation channel
     required: false
     default: ""
+  scratch-file:
+    description: Optional workspace file to attach to the session scratch directory
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -44,6 +48,7 @@ runs:
         IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
         LOOM_PROFILE: ${{ inputs.profile }}
         LOOM_URL: ${{ inputs.loom-url }}
+        SCRATCH_FILE: ${{ inputs.scratch-file }}
         TITLE: ${{ inputs.title }}
       run: |
         set -euo pipefail
@@ -52,16 +57,47 @@ runs:
           exit 1
         fi
 
+        request_file=$(mktemp "$RUNNER_TEMP/loom-run-request.XXXXXX.json")
+        scratch_base64=$(mktemp "$RUNNER_TEMP/loom-run-scratch.XXXXXX.base64")
+        trap 'rm -f -- "$request_file" "$scratch_base64"' EXIT
+
+        scratch_name=""
+        if [[ -n "$SCRATCH_FILE" ]]; then
+          if [[ -L "$SCRATCH_FILE" || ! -f "$SCRATCH_FILE" ]]; then
+            echo "::error::The Loom scratch attachment must be a regular, non-symlink file."
+            exit 1
+          fi
+          workspace=$(realpath -- "$GITHUB_WORKSPACE")
+          scratch_path=$(realpath -- "$SCRATCH_FILE")
+          case "$scratch_path" in
+            "$workspace"/*) ;;
+            *)
+              echo "::error::The Loom scratch attachment must be inside GITHUB_WORKSPACE."
+              exit 1
+              ;;
+          esac
+          scratch_bytes=$(stat --format='%s' -- "$scratch_path")
+          if (( scratch_bytes > 26214400 )); then
+            echo "::error::The Loom scratch attachment exceeds the 25 MiB limit."
+            exit 1
+          fi
+          scratch_name=$(basename -- "$scratch_path")
+          base64 --wrap=0 -- "$scratch_path" > "$scratch_base64"
+        fi
+
         audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
         oidc=$(curl --fail-with-body --silent --show-error \
           -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
-        loom_token=$(curl --fail-with-body --silent --show-error \
-          -X POST "$LOOM_URL/api/auth/federate" \
-          -H 'Content-Type: application/json' \
-          -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+        echo "::add-mask::$oidc"
+        loom_token=$(jq -n --arg token "$oidc" '{token: $token}' | \
+          curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/auth/federate" \
+            -H 'Content-Type: application/json' \
+            --data-binary @- | jq -r .token)
+        echo "::add-mask::$loom_token"
 
-        request=$(jq -n \
+        jq -n \
           --arg profile "$LOOM_PROFILE" \
           --arg key "$IDEMPOTENCY_KEY" \
           --arg channel "$CHANNEL" \
@@ -70,16 +106,22 @@ runs:
           --arg goal "$GOAL" \
           --arg base "$BASE" \
           --arg issue "$GITHUB_ISSUE" \
+          --arg scratch_name "$scratch_name" \
+          --rawfile scratch_content "$scratch_base64" \
           '{profile: $profile, idempotency_key: $key, source: "actions",
             session: {repo: $repo, title: $title, goal: $goal}}
           | if $channel == "" then . else .channel = $channel end
           | if $base == "" then . else .session.base = $base end
-          | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end')
+          | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end
+          | if $scratch_name == "" then . else .session.scratch = [{
+              name: $scratch_name,
+              content_base64: $scratch_content
+            }] end' > "$request_file"
         # Workload federation and runs.create are API-only operations in Loom's
         # command registry, so automation uses their canonical REST endpoints.
         curl --fail-with-body --silent --show-error \
           -X POST \
           -H "Authorization: Bearer $loom_token" \
           -H 'Content-Type: application/json' \
-          -d "$request" \
+          --data-binary @"$request_file" \
           "$LOOM_URL/api/runs/create"
