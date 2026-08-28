@@ -49,8 +49,8 @@ def _is_gcp_vm() -> bool:
     return False
 
 
-def _get_gcp_metadata(path: str) -> str | None:
-    """Read GCP instance metadata path and return stripped text."""
+def _get_gcp_metadata(path: str, *, raise_on_error: bool = False) -> str:
+    """Read a GCP instance metadata path."""
     try:
         req = urllib.request.Request(
             f"{_GCP_METADATA_ROOT}/{path}",
@@ -58,9 +58,13 @@ def _get_gcp_metadata(path: str) -> str | None:
         )
         with urllib.request.urlopen(req, timeout=2) as resp:
             value = resp.read().decode().strip()
-            return value or None
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
-        return None
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError) as error:
+        if raise_on_error:
+            raise RuntimeError(f"Failed to read required GCP metadata path {path!r}") from error
+        return ""
+    if not value and raise_on_error:
+        raise ValueError(f"Required GCP metadata path {path!r} is blank")
+    return value
 
 
 def detect_gcp_zone() -> str | None:
@@ -122,7 +126,7 @@ def _probe_tpu_metadata() -> tuple[str, str, str, str, str]:
     if has_tpu_signal:
         if instance_name := _get_gcp_metadata("name"):
             tpu_name = _extract_tpu_name(instance_name)
-        tpu_worker_id = _get_gcp_metadata("attributes/agent-worker-number") or ""
+        tpu_worker_id = _get_gcp_metadata("attributes/agent-worker-number", raise_on_error=True)
         if worker_endpoints := _get_gcp_metadata("attributes/worker-network-endpoints"):
             tpu_worker_hostnames = _extract_tpu_worker_hostnames(worker_endpoints)
         if tpu_env_raw := _get_gcp_metadata("attributes/tpu-env"):
@@ -269,7 +273,7 @@ def _build_worker_attributes(
     if tpu_name:
         attributes[WellKnownAttribute.TPU_NAME] = job_pb2.AttributeValue(string_value=tpu_name)
         attributes[WellKnownAttribute.TPU_WORKER_ID] = job_pb2.AttributeValue(
-            int_value=resolve_tpu_worker_index(tpu_worker_id=tpu_worker_id, tpu_name=tpu_name)
+            int_value=int(tpu_worker_id) if tpu_worker_id else 0
         )
 
     # TPU topology attributes derived from variant
@@ -333,30 +337,6 @@ def construct_worker_id(slice_id: str, worker_index: int) -> str:
     return f"{slice_id}-worker-{worker_index}"
 
 
-def resolve_tpu_worker_index(*, tpu_worker_id: str, tpu_name: str = "", tpu_type: str = "") -> int:
-    """Resolve a host's within-slice TPU worker index from its probed metadata.
-
-    Every host in a TPU slice reports its index through the ``agent-worker-number``
-    GCP metadata attribute. When that value is blank on a TPU host, defaulting the
-    index to ``0`` makes the host collide with the real worker-0: both register
-    under the same ``{slice}-worker-0`` id, so the slice silently drops to N-1
-    distinct workers and gang scheduling never reaches the required count (#8743).
-    Fail loudly instead so the worker crashes, restarts, and re-probes.
-
-    Non-TPU hosts (no ``tpu_name`` and no ``tpu_type``) legitimately have no slice
-    index and resolve to ``0``.
-    """
-    if tpu_worker_id:
-        return int(tpu_worker_id)
-    if tpu_name or tpu_type:
-        raise ValueError(
-            f"TPU host (tpu_name={tpu_name!r}, tpu_type={tpu_type!r}) reported a blank "
-            "agent-worker-number; refusing to default to worker index 0, which would "
-            "collide with worker-0 and drop this host from the slice (#8743)."
-        )
-    return 0
-
-
 IRIS_WORKER_ID_ENV = "IRIS_WORKER_ID"
 
 
@@ -374,9 +354,7 @@ def infer_worker_id(hardware: HardwareProbe) -> str | None:
     if env_worker_id:
         return env_worker_id
     if hardware.tpu_name:
-        worker_index = resolve_tpu_worker_index(
-            tpu_worker_id=hardware.tpu_worker_id, tpu_name=hardware.tpu_name, tpu_type=hardware.tpu_type
-        )
+        worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
         return construct_worker_id(hardware.tpu_name, worker_index)
     if hardware.gce_instance_name:
         return construct_worker_id(hardware.gce_instance_name, 0)

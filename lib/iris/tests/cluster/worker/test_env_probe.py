@@ -3,6 +3,7 @@
 
 """Tests for worker environment probing."""
 
+import io
 import sys
 
 import iris.cluster.worker.env_probe as env_probe
@@ -18,7 +19,6 @@ from iris.cluster.worker.env_probe import (
     check_worker_health,
     construct_worker_id,
     probe_hardware,
-    resolve_tpu_worker_index,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
 
@@ -86,7 +86,7 @@ def test_hardware_probe_resolves_tpu_metadata(monkeypatch):
         "attributes/tpu-env": "CHIPS_PER_HOST_BOUNDS: '2,2,1'\nOTHER: 'x'",
         "scheduling/preemptible": "FALSE",
     }
-    monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda key: metadata_values.get(key))
+    monkeypatch.setattr(env_probe, "_get_gcp_metadata", lambda key, **_: metadata_values.get(key))
 
     metadata = build_worker_metadata(probe_hardware())
 
@@ -97,6 +97,25 @@ def test_hardware_probe_resolves_tpu_metadata(monkeypatch):
     assert metadata.tpu_chips_per_host_bounds == "2,2,1"
     assert metadata.device.HasField("tpu")
     assert metadata.device.tpu.variant == "v5litepod-16"
+
+
+def test_hardware_probe_tpu_with_blank_worker_index_raises(monkeypatch):
+    monkeypatch.setattr(env_probe, "_is_gcp_vm", lambda: True)
+    monkeypatch.setattr(env_probe, "probe_outbound_ip", lambda: "10.0.0.1")
+    metadata_values = {
+        "attributes/accelerator-type": "v4-2048",
+        "name": "test-slice-w-3",
+        "attributes/agent-worker-number": "",
+    }
+
+    def open_metadata(request, timeout):
+        path = request.full_url.split("/instance/", maxsplit=1)[1]
+        return io.BytesIO(metadata_values[path].encode())
+
+    monkeypatch.setattr(env_probe.urllib.request, "urlopen", open_metadata)
+
+    with pytest.raises(ValueError):
+        probe_hardware()
 
 
 def test_hardware_probe_ignores_tpu_env_vars_without_metadata(monkeypatch):
@@ -327,37 +346,6 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
     worker = Worker(config, container_runtime=None)
 
     assert worker._worker_id == "my-explicit-id"
-
-
-def test_resolve_tpu_worker_index_blank_on_tpu_raises():
-    """A TPU host with a blank agent-worker-number must not collapse to index 0."""
-    with pytest.raises(ValueError, match="blank"):
-        resolve_tpu_worker_index(tpu_worker_id="", tpu_name="some-tpu-slice")
-    with pytest.raises(ValueError, match="blank"):
-        resolve_tpu_worker_index(tpu_worker_id="", tpu_type="v4-2048")
-
-
-def test_resolve_tpu_worker_index_non_tpu_defaults_to_zero():
-    """Off a TPU slice there is no worker index, so a blank value resolves to 0."""
-    assert resolve_tpu_worker_index(tpu_worker_id="") == 0
-    assert resolve_tpu_worker_index(tpu_worker_id="3", tpu_name="some-tpu-slice") == 3
-
-
-def test_worker_id_blank_tpu_worker_index_raises(tmp_path, monkeypatch):
-    """A TPU host that probes blank TPU metadata must fail rather than register as
-    worker-0, which would collide with the real worker-0 and drop the slice to N-1
-    distinct workers (#8743)."""
-    hardware = _make_hardware(tpu_worker_id="", tpu_name="some-tpu-slice", tpu_type="v4-2048")
-    monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)
-
-    config = WorkerConfig(
-        cache_dir=tmp_path / "cache",
-        slice_id="marin-tpu_v4_2048-us-central2-b-xxxx",
-        worker_id=None,
-        default_task_image="mock-image",
-    )
-    with pytest.raises(ValueError, match="blank"):
-        Worker(config, container_runtime=None)
 
 
 # --- Network metrics ---

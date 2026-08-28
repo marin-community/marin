@@ -22,7 +22,6 @@ from iris.cluster.worker.env_probe import (
     construct_worker_id,
     infer_worker_id,
     probe_hardware,
-    resolve_tpu_worker_index,
 )
 from iris.rpc import controller_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -134,9 +133,7 @@ def run(config_path: Path, stop: threading.Event) -> None:
     endpoint = _worker_telemetry_endpoint(config)
     worker = config.worker_id
     if not worker and config.slice_id:
-        worker_index = resolve_tpu_worker_index(
-            tpu_worker_id=hardware.tpu_worker_id, tpu_name=hardware.tpu_name, tpu_type=hardware.tpu_type
-        )
+        worker_index = int(hardware.tpu_worker_id) if hardware.tpu_worker_id else 0
         worker = construct_worker_id(config.slice_id, worker_index)
     if not worker:
         worker = infer_worker_id(hardware)
