@@ -15,10 +15,11 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use buffa::{Message, MessageView};
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
@@ -27,20 +28,26 @@ use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
     storage_policy_for, PolicyRegistry,
 };
-use crate::proto::finelog::stats::ColumnType;
+use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
 use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
-use crate::store::catalog::{Catalog, RegisteredNamespace};
-use crate::store::ipc::decode_one_record_batch;
-use crate::store::namespace::Namespace;
-use crate::store::namespace_name::validate_namespace_name;
-use crate::store::policy::StoragePolicy;
-use crate::store::schema::{
-    merge_managed_schema, merge_schemas, resolve_key_column, stamp_cluster_column, stored_form,
-    validate_and_align_batch, validate_and_align_forwarded_batch, validate_index_policies,
-    AlignedBatch, Column, Schema, MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+use crate::store::catalog::{
+    Catalog, RecoveredNativeSegment, RegisteredNamespace, TableSpecStatus,
 };
+use crate::store::ipc::decode_one_record_batch;
+use crate::store::namespace::{native_cache_path, relative_cache_path, Namespace};
+use crate::store::namespace_name::validate_namespace_name;
+use crate::store::native_catalog::{CatalogSnapshot, NativeCatalog};
+use crate::store::policy::StoragePolicy;
+use crate::store::remote::build_remote_store;
+use crate::store::schema::{
+    merge_managed_schema, merge_schemas, resolve_key_column, schema_from_proto_view,
+    stamp_cluster_column, stored_form, validate_and_align_batch,
+    validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
+    MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
+};
+use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
@@ -49,6 +56,26 @@ pub const LOG_NAMESPACE_NAME: &str = "log";
 /// Its on-disk subdirectory.
 pub const LOG_NAMESPACE_DIR: &str = "log";
 const STORE_LOCK_FILENAME: &str = ".finelog-store.lock";
+
+fn writer_epoch() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    nanos ^ u64::from(std::process::id())
+}
+
+fn recovered_segment_cache_path(
+    namespace_dir: &Path,
+    namespace: &str,
+    object_key: &str,
+    table_spec_version: u64,
+) -> Result<PathBuf, StatsError> {
+    if table_spec_version > 0 {
+        return native_cache_path(namespace_dir, namespace, object_key);
+    }
+    relative_cache_path(namespace_dir, object_key)
+}
 
 /// Bounded budget for stopping + joining a namespace's background tasks during a
 /// live lifecycle transition (re-register replacement, drop). Runs inside the
@@ -62,6 +89,13 @@ pub struct ForwardedWrite {
     pub rows_written: i64,
     pub persisted_targets: Vec<(String, i64)>,
     pub ignored_columns: Vec<String>,
+}
+
+pub struct VersionedRegistration {
+    pub schema: Schema,
+    pub policy: StoragePolicy,
+    pub table_spec_status: TableSpecStatus,
+    pub object_native: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -152,6 +186,8 @@ pub struct Store {
     remote_log_dir: String,
     mode: ServeMode,
     catalog: Arc<Catalog>,
+    native_catalog: Option<NativeCatalog>,
+    writer_epoch: u64,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
     /// Concurrent first registrations must not build and displace separate engines.
@@ -261,6 +297,11 @@ impl Store {
             .transpose()?;
         let catalog_open_started = Instant::now();
         let catalog = Arc::new(Catalog::open(data_dir.as_deref())?);
+        let native_catalog = if data_dir.is_some() {
+            build_remote_store(&remote_log_dir)?.map(NativeCatalog::new)
+        } else {
+            None
+        };
         let catalog_open_ms = catalog_open_started.elapsed().as_millis() as u64;
         // Rebuild-from-disk catalog adoption. On a fresh boot over a log_dir an
         // earlier server populated, the sqlite sidecar is empty, so the disk
@@ -279,6 +320,8 @@ impl Store {
             remote_log_dir,
             mode,
             catalog,
+            native_catalog,
+            writer_epoch: writer_epoch(),
             engines: Mutex::new(HashMap::new()),
             namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -346,6 +389,144 @@ impl Store {
         for engine in &engines {
             engine.spawn_maintenance(true);
         }
+    }
+
+    /// Rebuild namespaces, TableSpecs, segment pointers, and sequence fences
+    /// from remote HEAD/catalog snapshots before the server accepts traffic.
+    pub async fn recover_native_namespaces(&self) -> Result<usize, StatsError> {
+        let Some(native_catalog) = &self.native_catalog else {
+            return Ok(0);
+        };
+        let remote = build_remote_store(&self.remote_log_dir)?.ok_or_else(|| {
+            StatsError::Internal("native catalog configured without a remote store".to_string())
+        })?;
+        let mut recovered_count = 0;
+        for namespace in remote.list_native_namespaces().await? {
+            validate_namespace_name(&namespace, self.data_dir.as_deref())?;
+            let Some(snapshot) = native_catalog.load(&namespace).await? else {
+                continue;
+            };
+            let remote_generation = snapshot.catalog.catalog_generation.unwrap_or(0);
+            if self
+                .catalog
+                .table_spec_status(&namespace)?
+                .catalog_generation
+                == remote_generation
+            {
+                continue;
+            }
+            let schema_spec =
+                snapshot
+                    .catalog
+                    .retained_table_specs
+                    .iter()
+                    .find(|spec| spec.version == snapshot.catalog.active_table_spec_version)
+                    .or_else(|| {
+                        snapshot.catalog.retained_table_specs.iter().find(|spec| {
+                            spec.version == snapshot.catalog.desired_table_spec_version
+                        })
+                    })
+                    .or_else(|| snapshot.catalog.retained_table_specs.last())
+                    .ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "native catalog for {namespace:?} has no retained TableSpec"
+                        ))
+                    })?;
+            let schema_proto = schema_spec.logical_schema.as_option().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "native catalog TableSpec for {namespace:?} has no logical schema"
+                ))
+            })?;
+            let schema_bytes = schema_proto.encode_to_vec();
+            let schema_view = SchemaView::decode_view(&schema_bytes).map_err(|error| {
+                StatsError::Internal(format!(
+                    "decode recovered logical schema for {namespace:?}: {error}"
+                ))
+            })?;
+            let schema = stored_form(schema_from_proto_view(&schema_view)?);
+            let policy = schema_spec
+                .operating_policy
+                .as_option()
+                .and_then(|operating| operating.local_cache.as_option())
+                .map(StoragePolicy::from_proto_owned)
+                .unwrap_or_default();
+            let namespace_dir = self.namespace_dir(&namespace)?.ok_or_else(|| {
+                StatsError::Internal("native recovery requires a disk-backed store".to_string())
+            })?;
+            let mut recovered = HashMap::<String, RecoveredNativeSegment>::new();
+            for version in &snapshot.catalog.version_segments {
+                for segment in version
+                    .live_segments
+                    .iter()
+                    .chain(version.retired_segments.iter())
+                {
+                    let source = segment.source.as_option().ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "native catalog segment for {namespace:?} has no source"
+                        ))
+                    })?;
+                    let object_key = source.uri.as_deref().ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "native catalog segment for {namespace:?} has an empty source URI"
+                        ))
+                    })?;
+                    let table_spec_version = segment
+                        .schema_revision
+                        .unwrap_or(version.table_spec_version.unwrap_or(0));
+                    let cache_path = recovered_segment_cache_path(
+                        &namespace_dir,
+                        &namespace,
+                        object_key,
+                        table_spec_version,
+                    )?;
+                    let path = cache_path.to_string_lossy().into_owned();
+                    recovered
+                        .entry(path.clone())
+                        .or_insert_with(|| RecoveredNativeSegment {
+                            row: crate::store::types::SegmentRow {
+                                namespace: namespace.clone(),
+                                path,
+                                level: segment.level.unwrap_or(0),
+                                min_seq: segment.min_seq.unwrap_or(0),
+                                max_seq: segment.max_seq.unwrap_or(0),
+                                row_count: segment.row_count.unwrap_or(0),
+                                byte_size: i64::try_from(source.byte_size.unwrap_or(0))
+                                    .unwrap_or(i64::MAX),
+                                created_at_ms: segment.created_at_ms.unwrap_or(0),
+                                min_key_value: segment.min_key_value.clone(),
+                                max_key_value: segment.max_key_value.clone(),
+                                partition: segment
+                                    .partition_json
+                                    .as_deref()
+                                    .and_then(|value| serde_json::from_str(value).ok()),
+                                location: crate::store::types::SegmentLocation::Remote,
+                            },
+                            table_spec_version,
+                            source: source.clone(),
+                            migration_backfill: segment
+                                .migration_backfill
+                                .unwrap_or_else(|| object_key.contains("/backfill/")),
+                            migration_source_id: segment.migration_source_id.clone(),
+                            migration_source_rows: segment.migration_source_rows,
+                        });
+                }
+            }
+            let recovered: Vec<_> = recovered.into_values().collect();
+            self.catalog.restore_native_snapshot(
+                &namespace,
+                schema.clone(),
+                policy.clone(),
+                &snapshot.catalog,
+                &recovered,
+            )?;
+            let prior = self.engines.lock().unwrap().remove(&namespace);
+            if let Some(prior) = prior {
+                prior.shutdown(NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT).await;
+            }
+            self.build_engine(&namespace, schema, policy, false)?;
+            recovered_count += 1;
+        }
+        Ok(recovered_count)
     }
 
     fn rehydrate_from_catalog(&self) -> Result<(), StatsError> {
@@ -418,6 +599,7 @@ impl Store {
             Arc::clone(&self.physical_layout_migration_slot),
             &self.remote_log_dir,
             policy,
+            self.writer_epoch,
         )?;
         if spawn_maint && self.mode == ServeMode::Live {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
@@ -512,7 +694,8 @@ impl Store {
         schema: Schema,
         policy: StoragePolicy,
     ) -> Result<Schema, StatsError> {
-        self.register_table_with(name, schema, policy, SchemaRegistration::Additive)
+        self.register_table_with(name, schema, policy, SchemaRegistration::Additive, None)
+            .map(|(schema, _)| schema)
     }
 
     /// Register a server-owned schema whose derived layout is authoritative.
@@ -526,7 +709,60 @@ impl Store {
         schema: Schema,
         policy: StoragePolicy,
     ) -> Result<Schema, StatsError> {
-        self.register_table_with(name, schema, policy, SchemaRegistration::Managed)
+        self.register_table_with(name, schema, policy, SchemaRegistration::Managed, None)
+            .map(|(schema, _)| schema)
+    }
+
+    pub fn register_versioned_table(
+        &self,
+        name: &str,
+        validated: ValidatedTableSpec,
+    ) -> Result<VersionedRegistration, StatsError> {
+        if validated.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE
+            && self.remote_log_dir.trim().is_empty()
+        {
+            return Err(StatsError::SchemaValidation(
+                "object-native table specifications require a configured remote_log_dir"
+                    .to_string(),
+            ));
+        }
+        let schema = validated.schema.clone();
+        let policy = validated.cache_policy.clone();
+        let (schema, table_spec_status) = self.register_table_with(
+            name,
+            schema,
+            policy.clone(),
+            SchemaRegistration::Additive,
+            Some(&validated),
+        )?;
+        let policy = self.get_policy(name)?;
+        Ok(VersionedRegistration {
+            schema,
+            policy,
+            table_spec_status: table_spec_status.expect("versioned registration returns status"),
+            object_native: validated.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE,
+        })
+    }
+
+    /// Publish the current local metadata snapshot through the remote HEAD CAS.
+    pub async fn publish_native_catalog(
+        &self,
+        namespace: &str,
+    ) -> Result<CatalogSnapshot, StatsError> {
+        let native = self.native_catalog.as_ref().ok_or_else(|| {
+            StatsError::SchemaValidation(
+                "object-native table specifications require a configured remote_log_dir"
+                    .to_string(),
+            )
+        })?;
+        let namespace_dir = self.namespace_dir(namespace)?.ok_or_else(|| {
+            StatsError::SchemaValidation(
+                "object-native catalogs require a disk-backed store".to_string(),
+            )
+        })?;
+        native
+            .publish_local(&self.catalog, namespace, &namespace_dir, self.writer_epoch)
+            .await
     }
 
     fn register_table_with(
@@ -535,7 +771,8 @@ impl Store {
         schema: Schema,
         policy: StoragePolicy,
         registration: SchemaRegistration,
-    ) -> Result<Schema, StatsError> {
+        table_spec: Option<&ValidatedTableSpec>,
+    ) -> Result<(Schema, Option<TableSpecStatus>), StatsError> {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
@@ -550,6 +787,36 @@ impl Store {
             )
         };
         let _registration_guard = registration_lock.lock().unwrap();
+        if let Some(table_spec) = table_spec {
+            self.catalog.validate_table_spec_registration(
+                name,
+                table_spec.spec.version.unwrap_or(0),
+                &table_spec.hash,
+            )?;
+            let declared_schema = stored_form(table_spec.schema.clone());
+            let prospective_schema = match self.catalog.get_live(name) {
+                Some(existing) => match registration {
+                    SchemaRegistration::Additive => merge_schemas(&existing.schema, &stored),
+                    SchemaRegistration::Managed => merge_managed_schema(&existing.schema, &stored),
+                }?,
+                None => stored.clone(),
+            };
+            if prospective_schema != declared_schema {
+                return Err(StatsError::SchemaValidation(format!(
+                    "table_spec.logical_schema must describe the complete effective schema for namespace {name:?}"
+                )));
+            }
+            let prospective_policy = if self.catalog.contains(name) && policy.is_empty() {
+                self.catalog.get_policy(name)?
+            } else {
+                policy.clone()
+            };
+            if prospective_policy != table_spec.cache_policy {
+                return Err(StatsError::SchemaValidation(format!(
+                    "table_spec.operating_policy.local_cache must describe the effective storage policy for namespace {name:?}"
+                )));
+            }
+        }
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -593,7 +860,19 @@ impl Store {
                 engine.update_policy(effective_policy);
             }
         }
-        Ok(effective_schema)
+        let table_spec_status = table_spec
+            .map(|table_spec| {
+                let has_rows = self.catalog.aggregate_namespace_stats(name)?.row_count > 0;
+                self.catalog
+                    .register_table_spec(name, &table_spec.spec, &table_spec.hash, has_rows)
+            })
+            .transpose()?;
+        if let Some(status) = &table_spec_status {
+            if let Some(engine) = self.engines.lock().unwrap().get(name) {
+                engine.update_table_spec(status);
+            }
+        }
+        Ok((effective_schema, table_spec_status))
     }
 
     /// Append a routed batch and return its row count and durability target.
@@ -824,6 +1103,15 @@ impl Store {
         Ok(out)
     }
 
+    /// Restore missing mirrored cache files before a server-directed query.
+    pub async fn ensure_native_query_cache(&self) -> Result<(), StatsError> {
+        let engines: Vec<_> = self.engines.lock().unwrap().values().cloned().collect();
+        for engine in engines {
+            engine.ensure_native_query_cache().await?;
+        }
+        Ok(())
+    }
+
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
     /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
     /// describe the same segment set, so a reader can tell a `seq` it simply has not
@@ -865,7 +1153,11 @@ impl Store {
         namespace: &str,
         cursor: i64,
     ) -> Result<(), StatsError> {
-        self.catalog.set_forward_cursor(target, namespace, cursor)
+        if self.catalog.set_forward_cursor(target, namespace, cursor)? {
+            self.require_engine(namespace)?
+                .mark_native_publish_pending();
+        }
+        Ok(())
     }
 
     /// Return `(name, schema, stats, policy)` for every live namespace in
@@ -890,6 +1182,38 @@ impl Store {
     /// Return the effective policy now in force for `name`.
     pub fn get_policy(&self, name: &str) -> Result<StoragePolicy, StatsError> {
         self.catalog.get_policy(name)
+    }
+
+    pub fn table_spec_status(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
+        self.catalog.require_live(name)?;
+        self.catalog.table_spec_status(name)
+    }
+
+    pub async fn rollback_table_version(
+        &self,
+        name: &str,
+        retained_version: u64,
+    ) -> Result<TableSpecStatus, StatsError> {
+        self.catalog.require_live(name)?;
+        let _visibility_guard = self.query_visibility.write().await;
+        let status = self.catalog.rollback_table_spec(name, retained_version)?;
+        self.apply_table_spec_status(name, &status)?;
+        if let Err(error) = self.publish_native_catalog(name).await {
+            self.require_engine(name)?.mark_native_publish_pending();
+            return Err(error);
+        }
+        Ok(status)
+    }
+
+    fn apply_table_spec_status(
+        &self,
+        name: &str,
+        status: &TableSpecStatus,
+    ) -> Result<(), StatsError> {
+        let engine = self.require_engine(name)?;
+        engine.activate_query_version(status.active_version())?;
+        engine.update_table_spec(status);
+        Ok(())
     }
 
     /// Run one full maintenance cycle for `name`:
@@ -1035,10 +1359,21 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use arrow::array::{Int64Array, StringArray};
+    use buffa::{Message, MessageField, MessageView};
+
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
-    use crate::store::schema::{with_implicit_cluster, with_implicit_seq, CoveringProjection};
-
+    use crate::proto::finelog::stats::{
+        partition_field, OperatingPolicy, PartitionField, PartitionSpec, RemoteRetentionPolicy,
+        SourceLayout, TableSpec, TableSpecView,
+    };
+    use crate::store::schema::{
+        schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
+        CoveringProjection,
+    };
     fn worker_schema() -> Schema {
         Schema::new(
             vec![
@@ -1058,6 +1393,837 @@ mod tests {
             ServeMode::Live,
         )
         .unwrap()
+    }
+
+    fn object_native_spec(version: u64) -> ValidatedTableSpec {
+        object_native_spec_with_query_time(version, 0)
+    }
+
+    fn object_native_spec_with_query_time(
+        version: u64,
+        max_query_time_ms: u64,
+    ) -> ValidatedTableSpec {
+        let schema = worker_schema();
+        let spec = TableSpec {
+            version: Some(version),
+            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                remote_retention: MessageField::some(RemoteRetentionPolicy {
+                    retain_forever: Some(true),
+                    ..Default::default()
+                }),
+                max_query_time_ms: (max_query_time_ms > 0).then_some(max_query_time_ms),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+    }
+
+    fn partitioned_object_native_spec(version: u64) -> ValidatedTableSpec {
+        let schema = worker_schema();
+        let spec = TableSpec {
+            version: Some(version),
+            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
+            source_layout: MessageField::some(SourceLayout {
+                partition: MessageField::some(PartitionSpec {
+                    spec_id: Some(1),
+                    fields: vec![PartitionField {
+                        source_column: Some("worker_id".to_string()),
+                        name: Some("worker_id".to_string()),
+                        transform: Some(partition_field::Transform::Identity(Box::default())),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                remote_retention: MessageField::some(RemoteRetentionPolicy {
+                    retain_forever: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+    }
+
+    fn sorted_object_native_spec(version: u64) -> ValidatedTableSpec {
+        let schema = worker_schema().with_sort_columns(["mem_bytes"]);
+        let spec = TableSpec {
+            version: Some(version),
+            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
+            source_layout: MessageField::some(SourceLayout {
+                sort_columns: vec!["mem_bytes".to_string()],
+                ..Default::default()
+            }),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_NATIVE.into()),
+                remote_retention: MessageField::some(RemoteRetentionPolicy {
+                    retain_forever: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn versioned_registration_publishes_and_recovers_remote_head() {
+        let data_dir = crate::test_support::unique_dir("versioned_registration_data");
+        let remote_dir = crate::test_support::unique_dir("versioned_registration_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+
+        let registration = store
+            .register_versioned_table("iris.worker", object_native_spec(1))
+            .unwrap();
+        assert!(registration.object_native);
+        assert_eq!(registration.table_spec_status.active_version(), 1);
+        let first = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert_eq!(first.catalog.active_table_spec_version, Some(1));
+        assert_eq!(first.catalog.retained_table_specs.len(), 1);
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w-1", "w-2"])),
+                Arc::new(Int64Array::from(vec![128, 256])),
+                Arc::new(Int64Array::from(vec![1, 2])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].contains("/_native/namespaces/iris.worker/objects/v1/l0/"));
+        let after_flush = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert_eq!(after_flush.catalog.catalog_generation, Some(2));
+        let version = after_flush
+            .catalog
+            .version_segments
+            .iter()
+            .find(|segments| segments.table_spec_version == Some(1))
+            .unwrap();
+        assert_eq!(version.live_segments.len(), 1);
+        assert_eq!(version.live_segments[0].row_count, Some(2));
+        assert!(version.live_segments[0]
+            .source
+            .as_option()
+            .unwrap()
+            .uri
+            .as_deref()
+            .unwrap()
+            .starts_with("objects/v1/l0/"));
+
+        // An identical registration and publication is a retry, not a new
+        // generation. Loading from a fresh RemoteStore recovers the same HEAD.
+        store
+            .register_versioned_table("iris.worker", object_native_spec(1))
+            .unwrap();
+        let retry = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert_eq!(retry.catalog, after_flush.catalog);
+        let recovered = NativeCatalog::new(
+            build_remote_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        )
+        .load("iris.worker")
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(recovered.catalog, after_flush.catalog);
+
+        store
+            .set_forward_cursor("hub", "iris.worker", last_seq)
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let with_cursor = NativeCatalog::new(
+            build_remote_store(remote_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        )
+        .load("iris.worker")
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(with_cursor.catalog.forward_cursors.len(), 1);
+        assert_eq!(
+            with_cursor.catalog.forward_cursors[0].cursor,
+            Some(last_seq)
+        );
+
+        std::fs::remove_file(&paths[0]).unwrap();
+        store.ensure_native_query_cache().await.unwrap();
+        assert!(Path::new(&paths[0]).exists());
+
+        // Simulate a crash after SQLite accepted the next version but before
+        // its HEAD CAS. Remote HEAD remains the canonical committed state.
+        let unpublished = store
+            .register_versioned_table("iris.worker", object_native_spec(2))
+            .unwrap();
+        assert_eq!(unpublished.table_spec_status.desired_version(), 2);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        std::fs::remove_file(&paths[0]).unwrap();
+        let reopened = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        assert_eq!(
+            reopened
+                .table_spec_status("iris.worker")
+                .unwrap()
+                .desired_version(),
+            2
+        );
+        assert_eq!(reopened.recover_native_namespaces().await.unwrap(), 1);
+        let recovered_status = reopened.table_spec_status("iris.worker").unwrap();
+        assert_eq!(recovered_status.active_version(), 1);
+        assert_eq!(recovered_status.desired_version(), 0);
+        assert!(reopened
+            .query_snapshot("iris.worker")
+            .unwrap()
+            .paths
+            .is_empty());
+        reopened
+            .require_engine("iris.worker")
+            .unwrap()
+            .boot_reconcile()
+            .await
+            .unwrap();
+        let reopened_paths = reopened.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(reopened_paths, paths);
+        reopened.shutdown(Duration::from_secs(1)).await;
+        drop(reopened);
+
+        // A crash can leave the mirrored file present while the process-local
+        // deque is empty. Recovery must adopt that cache file even when remote
+        // HEAD and SQLite already name the same generation.
+        let cached_reopen = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        cached_reopen
+            .require_engine("iris.worker")
+            .unwrap()
+            .activate_query_version(0)
+            .unwrap();
+        assert!(cached_reopen
+            .query_snapshot("iris.worker")
+            .unwrap()
+            .paths
+            .is_empty());
+        assert_eq!(cached_reopen.recover_native_namespaces().await.unwrap(), 0);
+        cached_reopen.ensure_native_query_cache().await.unwrap();
+        assert_eq!(
+            cached_reopen.query_snapshot("iris.worker").unwrap().paths,
+            paths
+        );
+        cached_reopen.shutdown(Duration::from_secs(1)).await;
+        drop(cached_reopen);
+
+        let empty_data_dir = crate::test_support::unique_dir("versioned_empty_recovery_data");
+        let recovered_store = Store::new(
+            Some(empty_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        assert_eq!(
+            recovered_store.recover_native_namespaces().await.unwrap(),
+            1
+        );
+        assert_eq!(
+            recovered_store
+                .table_spec_status("iris.worker")
+                .unwrap()
+                .active_version(),
+            1
+        );
+        assert!(recovered_store
+            .query_snapshot("iris.worker")
+            .unwrap()
+            .paths
+            .is_empty());
+        recovered_store.ensure_native_query_cache().await.unwrap();
+        assert_eq!(
+            recovered_store
+                .query_snapshot("iris.worker")
+                .unwrap()
+                .paths
+                .len(),
+            1
+        );
+        let recovery_batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w-3"])),
+                Arc::new(Int64Array::from(vec![512])),
+                Arc::new(Int64Array::from(vec![3])),
+            ],
+        )
+        .unwrap();
+        let recovery_ipc = crate::store::ipc::encode_ipc(&batch_schema, &[recovery_batch]).unwrap();
+        let (_, recovery_seq) = recovered_store
+            .write_rows("iris.worker", &recovery_ipc, None)
+            .unwrap();
+        assert_eq!(recovery_seq, 3);
+        recovered_store
+            .await_persisted("iris.worker", recovery_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        recovered_store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(empty_data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn next_version_with_the_same_layout_preserves_existing_rows() {
+        let data_dir = crate::test_support::unique_dir("same_layout_upgrade_data");
+        let remote_dir = crate::test_support::unique_dir("same_layout_upgrade_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_versioned_table("iris.worker", object_native_spec_with_query_time(1, 100))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        for (worker, mem_bytes) in [("existing-a", 128), ("existing-b", 256)] {
+            let batch = RecordBatch::try_new(
+                batch_schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(vec![worker])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                ],
+            )
+            .unwrap();
+            let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+            let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+            store
+                .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+                .await
+                .unwrap();
+        }
+
+        let registration = store
+            .register_versioned_table("iris.worker", object_native_spec_with_query_time(2, 100))
+            .unwrap();
+        assert_eq!(registration.table_spec_status.active_version(), 1);
+        assert_eq!(registration.table_spec_status.desired_version(), 2);
+        let transition = store.publish_native_catalog("iris.worker").await.unwrap();
+        let active = transition
+            .catalog
+            .version_segments
+            .iter()
+            .find(|version| version.table_spec_version == Some(1))
+            .unwrap();
+        assert_eq!(active.live_segments.len(), 2);
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+
+        let status = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(status.active_version(), 2);
+        let snapshot = store.query_snapshot("iris.worker").unwrap();
+        assert_eq!(snapshot.paths.len(), 2);
+
+        // Observation permits compaction, but its output must remain marked as
+        // backfill so a rollback can discard it in favor of version 1.
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let compacted = store
+            .catalog
+            .native_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .filter(|segment| segment.table_spec_version == 2)
+            .collect::<Vec<_>>();
+        assert_eq!(compacted.len(), 1);
+        assert!(compacted[0].migration_backfill);
+        let compacted_snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let compacted_active = compacted_snapshot
+            .catalog
+            .version_segments
+            .iter()
+            .find(|version| version.table_spec_version == Some(2))
+            .unwrap();
+        assert_eq!(compacted_active.live_segments.len(), 1);
+        assert_eq!(
+            compacted_active.live_segments[0].migration_backfill,
+            Some(true)
+        );
+        assert_eq!(compacted_active.live_segments[0].row_count, Some(2));
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let retired = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(
+            retired.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
+        );
+        assert!(store
+            .catalog
+            .native_segments("iris.worker")
+            .unwrap()
+            .iter()
+            .all(|segment| segment.table_spec_version == 2));
+        assert!(store
+            .catalog
+            .native_segments("iris.worker")
+            .unwrap()
+            .iter()
+            .all(|segment| !segment.migration_backfill));
+        let retired_catalog = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert!(retired_catalog
+            .catalog
+            .version_segments
+            .iter()
+            .all(|version| version.table_spec_version == Some(2)));
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn legacy_table_migrates_automatically_and_rolls_back_without_duplicate_rows() {
+        let data_dir = crate::test_support::unique_dir("table_spec_migration_data");
+        let remote_dir = crate::test_support::unique_dir("table_spec_migration_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let legacy_batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let legacy_ipc = crate::store::ipc::encode_ipc(&batch_schema, &[legacy_batch]).unwrap();
+        let (_, legacy_seq) = store.write_rows("iris.worker", &legacy_ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", legacy_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(legacy_paths.len(), 1);
+        assert!(!legacy_paths[0].contains("/_native/"));
+
+        let registration = store
+            .register_versioned_table("iris.worker", object_native_spec_with_query_time(1, 1))
+            .unwrap();
+        assert_eq!(registration.table_spec_status.active_version(), 0);
+        assert_eq!(registration.table_spec_status.desired_version(), 1);
+        store.publish_native_catalog("iris.worker").await.unwrap();
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let activated = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(activated.active_version(), 1);
+        assert_eq!(activated.desired_version(), 0);
+        assert_eq!(
+            activated.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        let active_paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(active_paths.len(), 1);
+        assert!(active_paths[0].contains("/_native/namespaces/iris.worker/objects/v1/backfill/"));
+
+        let current_batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["current"])),
+                Arc::new(Int64Array::from(vec![256])),
+                Arc::new(Int64Array::from(vec![2])),
+            ],
+        )
+        .unwrap();
+        let current_ipc = crate::store::ipc::encode_ipc(&batch_schema, &[current_batch]).unwrap();
+        let (_, current_seq) = store.write_rows("iris.worker", &current_ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", current_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        let rolled_back = store
+            .rollback_table_version("iris.worker", 0)
+            .await
+            .unwrap();
+        assert_eq!(rolled_back.active_version(), 0);
+        let rollback_paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(rollback_paths.len(), 2);
+        assert!(rollback_paths.iter().any(|path| path == &legacy_paths[0]));
+        assert!(rollback_paths
+            .iter()
+            .any(|path| path.contains("/_native/namespaces/iris.worker/objects/v1/l0/")));
+
+        let snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let rollback_version = snapshot
+            .catalog
+            .version_segments
+            .iter()
+            .find(|segments| segments.table_spec_version == Some(0))
+            .unwrap();
+        assert_eq!(
+            rollback_version
+                .live_segments
+                .iter()
+                .map(|segment| segment.row_count.unwrap_or(0))
+                .sum::<i64>(),
+            1
+        );
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let cleaned_records = store.catalog.native_segments("iris.worker").unwrap();
+        assert_eq!(cleaned_records.len(), 1);
+        assert_eq!(cleaned_records[0].table_spec_version, 0);
+        assert!(!cleaned_records[0].migration_backfill);
+        let cleaned_paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(cleaned_paths.len(), 2);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_native_transition_never_deletes_the_legacy_archive() {
+        let data_dir = crate::test_support::unique_dir("native_archive_data");
+        let remote_dir = crate::test_support::unique_dir("native_archive_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        store.maintain_namespace("iris.worker", true).await.unwrap();
+
+        let archive_dir = remote_dir.join("iris.worker");
+        let archived = std::fs::read_dir(&archive_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "parquet")
+            })
+            .unwrap();
+        let retained_orphan = archive_dir.join("pre-native-archive.parquet");
+        std::fs::copy(&archived, &retained_orphan).unwrap();
+
+        store
+            .register_versioned_table("iris.worker", object_native_spec(1))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+        store
+            .require_engine("iris.worker")
+            .unwrap()
+            .sync_step()
+            .await
+            .unwrap();
+
+        assert!(retained_orphan.exists());
+        store.shutdown(Duration::from_secs(1)).await;
+        assert!(retained_orphan.exists());
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_native_l0_applies_declared_sort_order() {
+        let data_dir = crate::test_support::unique_dir("sorted_native_data");
+        let remote_dir = crate::test_support::unique_dir("sorted_native_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_versioned_table("iris.worker", sorted_object_native_spec(1))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema().with_sort_columns(["mem_bytes"]));
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w3", "w1", "w2"])),
+                Arc::new(Int64Array::from(vec![30, 10, 20])),
+                Arc::new(Int64Array::from(vec![3, 1, 2])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(paths.len(), 1);
+        let batches =
+            crate::store::compaction::executor::read_segment_projected(Path::new(&paths[0]), None)
+                .unwrap();
+        let mem_bytes = batches
+            .iter()
+            .flat_map(|batch| {
+                let values = batch
+                    .column_by_name("mem_bytes")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                (0..values.len())
+                    .map(|index| values.value(index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(mem_bytes, vec![10, 20, 30]);
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_native_compaction_replaces_inputs_in_one_catalog_generation() {
+        let data_dir = crate::test_support::unique_dir("native_compaction_data");
+        let remote_dir = crate::test_support::unique_dir("native_compaction_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_versioned_table("iris.worker", object_native_spec(1))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        for (worker, mem_bytes) in [("w1", 10), ("w2", 20)] {
+            let batch = RecordBatch::try_new(
+                batch_schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(vec![worker])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                    Arc::new(Int64Array::from(vec![mem_bytes])),
+                ],
+            )
+            .unwrap();
+            let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+            let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+            store
+                .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 2);
+        let before = store.publish_native_catalog("iris.worker").await.unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].contains("/objects/v1/compact/"));
+        let after = store.publish_native_catalog("iris.worker").await.unwrap();
+        assert_eq!(
+            after.catalog.catalog_generation,
+            before
+                .catalog
+                .catalog_generation
+                .map(|generation| generation + 1)
+        );
+        let version = after
+            .catalog
+            .version_segments
+            .iter()
+            .find(|version| version.table_spec_version == Some(1))
+            .unwrap();
+        assert_eq!(version.live_segments.len(), 1);
+        assert_eq!(version.live_segments[0].row_count, Some(2));
+        assert_eq!(version.live_segments[0].level, Some(1));
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn migration_rewrites_one_source_into_partitioned_objects() {
+        let data_dir = crate::test_support::unique_dir("partitioned_migration_data");
+        let remote_dir = crate::test_support::unique_dir("partitioned_migration_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["w2", "w1", "w2"])),
+                Arc::new(Int64Array::from(vec![30, 20, 10])),
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        store
+            .register_versioned_table("iris.worker", partitioned_object_native_spec(1))
+            .unwrap();
+        store.publish_native_catalog("iris.worker").await.unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+
+        let status = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(status.active_version(), 1);
+        let snapshot = store.publish_native_catalog("iris.worker").await.unwrap();
+        let version = snapshot
+            .catalog
+            .version_segments
+            .iter()
+            .find(|version| version.table_spec_version == Some(1))
+            .unwrap();
+        assert_eq!(version.live_segments.len(), 2);
+        assert_eq!(
+            version
+                .live_segments
+                .iter()
+                .map(|segment| segment.row_count.unwrap_or(0))
+                .sum::<i64>(),
+            3
+        );
+        let migration_source_ids = version
+            .live_segments
+            .iter()
+            .map(|segment| segment.migration_source_id.as_deref().unwrap_or(""))
+            .collect::<HashSet<_>>();
+        assert_eq!(migration_source_ids.len(), 1);
+        assert!(!migration_source_ids.contains(""));
+        assert!(version
+            .live_segments
+            .iter()
+            .all(|segment| segment.migration_source_rows == Some(3)));
+
+        let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(paths.len(), 2);
+        let w2_path = paths
+            .iter()
+            .find(|path| path.contains("worker_id=w2"))
+            .unwrap();
+        let w2_rows =
+            crate::store::compaction::executor::read_segment_projected(Path::new(w2_path), None)
+                .unwrap()
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>();
+        assert_eq!(w2_rows, 2);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
     }
 
     #[test]

@@ -21,29 +21,38 @@
 //! freshly allocated seq under the lock, and never writes parquet.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::array::{Array, Int64Array, RecordBatch};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{Array, Int64Array, RecordBatch, StringArray};
+use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef};
+use bytes::Bytes;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use sha2::{Digest, Sha256};
 use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
-use crate::partition_policy::{segment_path, SegmentPartition};
+use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
-use crate::proto::finelog::stats::ColumnType;
+use crate::proto::finelog::stats::{
+    partition_field, ColumnType, L0Mode, MigrationPhase, ObjectRef, SourceLayout,
+};
 use crate::query::index_cache::IndexCache;
-use crate::store::catalog::Catalog;
+use crate::store::catalog::{Catalog, NativeSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
     PlannedSwap,
 };
+use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
+use crate::store::native_catalog::NativeCatalog;
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
@@ -55,7 +64,8 @@ use crate::store::schema::{
 use crate::store::segment::write_segment_to_dir;
 use crate::store::segment::{
     discover_files, discover_segments, read_segment_footer, segment_layout_is_current,
-    stage_rewritten_segment, write_segment_to_dir_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
+    stage_rewritten_segment, write_segment_to_dir_with_max_row_group_rows,
+    write_segment_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
 use crate::store::segment_index::{
     covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
@@ -63,7 +73,8 @@ use crate::store::segment_index::{
     SegmentIndexConfig, SegmentIndexWrite,
 };
 use crate::store::types::{
-    basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
+    basename, seg_filename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation,
+    SegmentRow,
 };
 
 /// Best-effort removal of a segment's derived index files, co-located with every
@@ -178,6 +189,10 @@ const PHYSICAL_LAYOUT_MIGRATION_CONCURRENCY: usize = 2;
 const PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES: i64 = 32 * 1024 * 1024;
 const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Source objects copied per maintenance tick while a TableSpec transition is active.
+const TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK: usize = 4;
+const NULL_PARTITION_VALUE: &str = "__HIVE_DEFAULT_PARTITION__";
+
 /// Process-wide permit for the layout rewrite, so only one namespace re-encodes
 /// at a time.
 ///
@@ -200,6 +215,108 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn full_hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(crate) fn native_cache_path(
+    namespace_dir: &Path,
+    namespace: &str,
+    object_key: &str,
+) -> Result<PathBuf, StatsError> {
+    let root = namespace_dir.parent().ok_or_else(|| {
+        StatsError::Internal(format!(
+            "namespace directory {} has no cache root",
+            namespace_dir.display()
+        ))
+    })?;
+    relative_cache_path(
+        &root.join("_native").join("namespaces").join(namespace),
+        object_key,
+    )
+}
+
+pub(crate) fn relative_cache_path(root: &Path, object_key: &str) -> Result<PathBuf, StatsError> {
+    let mut path = root.to_path_buf();
+    for part in object_key.split('/').filter(|part| !part.is_empty()) {
+        if matches!(part, "." | "..") || part.contains('\\') {
+            return Err(StatsError::Internal(format!(
+                "object key {object_key:?} is not a safe relative path"
+            )));
+        }
+        path.push(part);
+    }
+    Ok(path)
+}
+
+fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<(), StatsError> {
+    if path.exists() {
+        let existing = std::fs::read(path).map_err(|error| {
+            StatsError::Internal(format!("read native cache {}: {error}", path.display()))
+        })?;
+        if Sha256::digest(&existing).as_slice() == Sha256::digest(bytes).as_slice() {
+            return Ok(());
+        }
+    }
+    let parent = path.parent().ok_or_else(|| {
+        StatsError::Internal(format!("native cache {} has no parent", path.display()))
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        StatsError::Internal(format!(
+            "create native cache parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let staging = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        cache_write_nonce()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staging)
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "create native cache staging {}: {error}",
+                staging.display()
+            ))
+        })?;
+    file.write_all(bytes).map_err(|error| {
+        StatsError::Internal(format!(
+            "write native cache staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    file.sync_all().map_err(|error| {
+        StatsError::Internal(format!(
+            "fsync native cache staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    std::fs::rename(&staging, path).map_err(|error| {
+        StatsError::Internal(format!(
+            "publish native cache {} -> {}: {error}",
+            staging.display(),
+            path.display()
+        ))
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "fsync native cache parent {}: {error}",
+                parent.display()
+            ))
+        })
+}
+
+fn cache_write_nonce() -> u64 {
+    use std::sync::atomic::AtomicU64;
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Insertion-lock-guarded mutable state.
 struct NsInner {
     buffers: RamBuffers,
@@ -209,6 +326,293 @@ struct NsInner {
     /// insertion lock so a concurrent `RegisterTable` re-register (which calls
     /// `update_policy`) and a maintenance-tick read never tear.
     storage_policy: StoragePolicy,
+}
+
+#[derive(Debug, Clone)]
+struct TableRuntimePolicy {
+    l0_mode: L0Mode,
+    table_spec_version: u64,
+    max_buffer_bytes: i64,
+    max_flush_age: Duration,
+    max_query_time_ms: u64,
+    target_object_bytes: i64,
+    source_layout: Option<SourceLayout>,
+}
+
+impl Default for TableRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            l0_mode: L0Mode::L0_MODE_LEGACY_LOCAL,
+            table_spec_version: 0,
+            max_buffer_bytes: SEGMENT_TARGET_BYTES,
+            max_flush_age: DEFAULT_FLUSH_INTERVAL,
+            max_query_time_ms: crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS,
+            target_object_bytes: crate::store::table_spec::DEFAULT_TARGET_OBJECT_BYTES as i64,
+            source_layout: None,
+        }
+    }
+}
+
+impl TableRuntimePolicy {
+    fn from_status(status: &TableSpecStatus) -> Self {
+        let Some(spec) = status.desired.as_ref().or(status.active.as_ref()) else {
+            return Self::default();
+        };
+        let Some(operating) = spec.operating_policy.as_option() else {
+            return Self::default();
+        };
+        let l0_mode = operating
+            .l0_mode
+            .and_then(|mode| mode.as_known())
+            .filter(|mode| *mode != L0Mode::L0_MODE_UNSPECIFIED)
+            .unwrap_or(L0Mode::L0_MODE_LEGACY_LOCAL);
+        Self {
+            l0_mode,
+            table_spec_version: spec.version.unwrap_or(0),
+            max_buffer_bytes: i64::try_from(
+                operating
+                    .max_buffer_bytes
+                    .unwrap_or(SEGMENT_TARGET_BYTES as u64),
+            )
+            .unwrap_or(i64::MAX),
+            max_flush_age: Duration::from_millis(
+                operating
+                    .max_flush_age_ms
+                    .unwrap_or(DEFAULT_FLUSH_INTERVAL.as_millis() as u64),
+            ),
+            max_query_time_ms: operating
+                .max_query_time_ms
+                .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS),
+            target_object_bytes: spec
+                .source_layout
+                .as_option()
+                .and_then(|layout| layout.target_object_bytes)
+                .and_then(|bytes| i64::try_from(bytes).ok())
+                .unwrap_or(crate::store::table_spec::DEFAULT_TARGET_OBJECT_BYTES as i64),
+            source_layout: spec.source_layout.as_option().cloned(),
+        }
+    }
+
+    fn object_native(&self) -> bool {
+        self.l0_mode == L0Mode::L0_MODE_OBJECT_NATIVE
+    }
+}
+
+fn native_segment_is_query_visible(status: &TableSpecStatus, record: &NativeSegmentRecord) -> bool {
+    record.table_spec_version == status.active_version()
+        || (status.desired_version() == record.table_spec_version && !record.migration_backfill)
+        || (status.migration.as_ref().is_some_and(|migration| {
+            migration.from_version == Some(status.active_version())
+                && migration.to_version == Some(record.table_spec_version)
+                && !record.migration_backfill
+        }))
+}
+
+fn sorted_object_batch(
+    batch: &RecordBatch,
+    source_layout: Option<&SourceLayout>,
+) -> Result<RecordBatch, StatsError> {
+    let Some(layout) = source_layout else {
+        return Ok(batch.clone());
+    };
+    let mut names = layout.sort_columns.clone();
+    if !names.iter().any(|name| name == "seq") {
+        names.push("seq".to_string());
+    }
+    if names.is_empty() {
+        return Ok(batch.clone());
+    }
+    let columns = names
+        .iter()
+        .map(|name| {
+            let column = batch.column_by_name(name).ok_or_else(|| {
+                StatsError::SchemaValidation(format!(
+                    "object source layout sort column {name:?} is missing"
+                ))
+            })?;
+            Ok(SortColumn {
+                values: column.clone(),
+                options: Some(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+            })
+        })
+        .collect::<Result<Vec<_>, StatsError>>()?;
+    let indices = lexsort_to_indices(&columns, None)
+        .map_err(|error| StatsError::Internal(format!("sort object-native batch: {error}")))?;
+    let arrays = batch
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &indices, None))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StatsError::Internal(format!("apply object-native sort: {error}")))?;
+    RecordBatch::try_new(batch.schema(), arrays)
+        .map_err(|error| StatsError::Internal(format!("build sorted object batch: {error}")))
+}
+
+fn partition_object_batch(
+    batch: &RecordBatch,
+    source_layout: Option<&SourceLayout>,
+) -> Result<Vec<(Option<SegmentPartition>, RecordBatch)>, StatsError> {
+    let Some(partition) = source_layout.and_then(|layout| layout.partition.as_option()) else {
+        return Ok(vec![(None, batch.clone())]);
+    };
+    if partition.fields.is_empty() {
+        return Ok(vec![(None, batch.clone())]);
+    }
+    let spec_id = u32::try_from(partition.spec_id.unwrap_or(0)).map_err(|_| {
+        StatsError::SchemaValidation("partition spec_id exceeds the supported range".to_string())
+    })?;
+    let rendered_columns = partition
+        .fields
+        .iter()
+        .map(|field| {
+            let source = field.source_column.as_deref().unwrap_or("");
+            let column = batch.column_by_name(source).ok_or_else(|| {
+                StatsError::SchemaValidation(format!(
+                    "partition source column {source:?} is missing"
+                ))
+            })?;
+            let rendered = cast(column, &DataType::Utf8).map_err(|error| {
+                StatsError::SchemaValidation(format!(
+                    "partition source column {source:?} cannot be rendered: {error}"
+                ))
+            })?;
+            Ok(rendered)
+        })
+        .collect::<Result<Vec<_>, StatsError>>()?;
+    let mut indices: BTreeMap<SegmentPartition, Vec<u32>> = BTreeMap::new();
+    for row in 0..batch.num_rows() {
+        let mut values = BTreeMap::new();
+        for (field, rendered) in partition.fields.iter().zip(&rendered_columns) {
+            let values_array = rendered
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Arrow UTF-8 cast returns StringArray");
+            let value = match field.transform.as_ref() {
+                Some(partition_field::Transform::Identity(_)) if values_array.is_null(row) => {
+                    NULL_PARTITION_VALUE.to_string()
+                }
+                Some(partition_field::Transform::Identity(_)) => {
+                    values_array.value(row).to_string()
+                }
+                Some(partition_field::Transform::Bucket(_)) if values_array.is_null(row) => {
+                    NULL_PARTITION_VALUE.to_string()
+                }
+                Some(partition_field::Transform::Bucket(bucket)) => {
+                    let buckets = bucket.buckets.unwrap_or(0);
+                    if buckets == 0 {
+                        return Err(StatsError::SchemaValidation(format!(
+                            "partition field {:?} bucket count must be positive",
+                            field.name.as_deref().unwrap_or("")
+                        )));
+                    }
+                    let digest = Sha256::digest(values_array.value(row).as_bytes());
+                    let hash = u32::from_be_bytes(
+                        digest[..4]
+                            .try_into()
+                            .expect("SHA-256 prefix is four bytes"),
+                    );
+                    (hash % buckets).to_string()
+                }
+                None => {
+                    return Err(StatsError::SchemaValidation(format!(
+                        "partition field {:?} has no transform",
+                        field.name.as_deref().unwrap_or("")
+                    )))
+                }
+            };
+            values.insert(field.name.as_deref().unwrap_or("").to_string(), value);
+        }
+        indices
+            .entry(SegmentPartition { spec_id, values })
+            .or_default()
+            .push(row as u32);
+    }
+    indices
+        .into_iter()
+        .map(|(partition, indices)| {
+            select_rows(batch, indices).map(|batch| (Some(partition), batch))
+        })
+        .collect()
+}
+
+fn batch_seq_bounds(batch: &RecordBatch) -> Result<(i64, i64), StatsError> {
+    let seq = batch
+        .column_by_name("seq")
+        .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+        .ok_or_else(|| StatsError::Internal("object-native batch has no Int64 seq".to_string()))?;
+    let min = (0..seq.len())
+        .filter(|index| !seq.is_null(*index))
+        .map(|index| seq.value(index))
+        .min()
+        .ok_or_else(|| {
+            StatsError::Internal("object-native batch has no sequence values".to_string())
+        })?;
+    let max = (0..seq.len())
+        .filter(|index| !seq.is_null(*index))
+        .map(|index| seq.value(index))
+        .max()
+        .expect("non-empty sequence iterator");
+    Ok((min, max))
+}
+
+fn decode_migration_source(
+    bytes: Bytes,
+    target_schema: &SchemaRef,
+) -> Result<RecordBatch, StatsError> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
+        .map_err(|error| StatsError::Internal(format!("open migration Parquet: {error}")))?;
+    let reader = builder.build().map_err(|error| {
+        StatsError::Internal(format!("build migration Parquet reader: {error}"))
+    })?;
+    let batches = reader
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StatsError::Internal(format!("decode migration Parquet: {error}")))?;
+    if batches.is_empty() {
+        return Err(StatsError::SchemaValidation(
+            "migration source Parquet contains no record batches".to_string(),
+        ));
+    }
+    let batches = batches
+        .iter()
+        .map(|batch| project_to_schema(batch, target_schema))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            StatsError::SchemaValidation(format!("align migration source schema: {error}"))
+        })?;
+    concat_batches(target_schema, &batches)
+        .map_err(|error| StatsError::Internal(format!("merge migration Parquet batches: {error}")))
+}
+
+fn object_partition_directory(partition: Option<&SegmentPartition>) -> String {
+    let Some(partition) = partition else {
+        return "unpartitioned".to_string();
+    };
+    let fields = partition
+        .values
+        .iter()
+        .map(|(name, value)| {
+            let name = object_partition_component(name);
+            let value = object_partition_component(value);
+            format!("{name}={value}")
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("spec-{}/{fields}", partition.spec_id)
+}
+
+fn object_partition_component(value: &str) -> String {
+    const MAX_COMPONENT_LENGTH: usize = 96;
+    let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+    if encoded.len() <= MAX_COMPONENT_LENGTH {
+        return encoded;
+    }
+    format!(
+        "sha256-{}",
+        full_hex(&Sha256::digest(value.as_bytes()).into())
+    )
 }
 
 /// A single namespace's write engine, disk-backed or in-memory.
@@ -226,6 +630,7 @@ pub struct Namespace {
     /// the planner reads `level_targets`/`max_segments_per_level`.
     compaction_config: CompactionConfig,
     inner: Mutex<NsInner>,
+    table_runtime: Mutex<TableRuntimePolicy>,
     /// Serializes the whole `flush_once` body (seal → write → catalog → commit →
     /// publish). Without it two concurrent flushers race: the second `seal()`
     /// would overwrite the first's
@@ -233,6 +638,7 @@ pub struct Namespace {
     /// high-water seq before the older segment is durable. Distinct from `inner`
     /// (the short insertion lock) so appends are never blocked by a flush write.
     flush_lock: Mutex<()>,
+    object_flush_lock: tokio::sync::Mutex<()>,
     /// Serializes the maintenance cycle (compaction drain + sync + evict)
     /// against direct `maintain` callers. The flush path uses `flush_lock`
     /// instead so flushes and compactions stay concurrent. A
@@ -248,6 +654,12 @@ pub struct Namespace {
     /// Configured remote store (`None` disables sync). The maintenance task's
     /// `sync_step` uploads L>=1 LOCAL segments here; eviction flips BOTH->REMOTE.
     remote: Option<RemoteStore>,
+    native_catalog: Option<NativeCatalog>,
+    writer_epoch: u64,
+    /// Set when SQLite committed a catalog generation whose HEAD publication
+    /// must be retried. Crash recovery uses remote HEAD as canonical; this
+    /// latch covers publication failures while the same process stays alive.
+    native_publish_pending: AtomicBool,
     persisted_seq: watch::Sender<i64>,
     /// Nudged by every append (and a durability await): "there may be data to
     /// flush". Drives the flush task's normal wake.
@@ -408,6 +820,7 @@ impl Namespace {
         physical_layout_migration_slot: Arc<Mutex<()>>,
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
+        writer_epoch: u64,
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
@@ -464,6 +877,8 @@ impl Namespace {
             None
         };
         let remote_store_ms = remote_store_started.elapsed().as_millis() as u64;
+        let table_runtime = TableRuntimePolicy::from_status(&catalog.table_spec_status(name)?);
+        let native_catalog = remote.clone().map(NativeCatalog::new);
 
         let (tx, _rx) = watch::channel(init_persisted);
         let ns = Arc::new(Namespace {
@@ -481,10 +896,15 @@ impl Namespace {
                 local_segments: adopted.clone(),
                 storage_policy,
             }),
+            table_runtime: Mutex::new(table_runtime),
             flush_lock: Mutex::new(()),
+            object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
             query_visibility,
             remote,
+            native_catalog,
+            writer_epoch,
+            native_publish_pending: AtomicBool::new(false),
             persisted_seq: tx,
             flush_notify: Arc::new(Notify::new()),
             force_flush: Arc::new(Notify::new()),
@@ -537,6 +957,7 @@ impl Namespace {
         let (Some(remote), Some(dir)) = (&self.remote, &self.data_dir) else {
             return Ok(());
         };
+        self.restore_native_cache(remote).await?;
         reconcile_remote_segments(
             &self.catalog,
             remote,
@@ -558,10 +979,796 @@ impl Namespace {
         Ok(())
     }
 
+    pub(crate) async fn restore_native_cache(
+        &self,
+        remote: &RemoteStore,
+    ) -> Result<(), StatsError> {
+        let status = self.catalog.table_spec_status(&self.name)?;
+        let rows: std::collections::HashMap<_, _> = self
+            .catalog
+            .list_segments(&self.name)?
+            .into_iter()
+            .map(|row| (row.path.clone(), row))
+            .collect();
+        for record in self.catalog.native_segments(&self.name)? {
+            if !native_segment_is_query_visible(&status, &record) {
+                continue;
+            }
+            let path = PathBuf::from(&record.path);
+            let row = rows.get(&record.path).ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "native segment {:?} has no local catalog row",
+                    record.path
+                ))
+            })?;
+            let already_tracked = self
+                .inner
+                .lock()
+                .unwrap()
+                .local_segments
+                .iter()
+                .any(|existing| existing.path == record.path);
+            if path.exists() && already_tracked && row.location == SegmentLocation::Both {
+                continue;
+            }
+            let source_key = record.source.uri.as_deref().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "native segment {:?} has an empty source URI",
+                    record.path
+                ))
+            })?;
+            let expected_size = record.source.byte_size.unwrap_or(0);
+            let local_size_matches = path
+                .metadata()
+                .ok()
+                .is_some_and(|metadata| expected_size == 0 || metadata.len() == expected_size);
+            let mut metadata = local_size_matches
+                .then(|| read_segment_footer(&path, Some(&self.key_column)))
+                .flatten();
+            if metadata.is_none() {
+                let object = remote
+                    .get_native(&self.name, source_key)
+                    .await?
+                    .ok_or_else(|| {
+                        StatsError::Internal(format!(
+                            "native segment source {source_key:?} is missing for {:?}",
+                            self.name
+                        ))
+                    })?;
+                if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice())
+                {
+                    return Err(StatsError::Internal(format!(
+                        "native segment source {source_key:?} failed SHA-256 validation"
+                    )));
+                }
+                let bytes = object.bytes.to_vec();
+                let cache_path = path.clone();
+                tokio::task::spawn_blocking(move || write_cache_file(&cache_path, &bytes))
+                    .await
+                    .map_err(|error| {
+                        StatsError::Internal(format!("native cache restore task panicked: {error}"))
+                    })??;
+                metadata = read_segment_footer(&path, Some(&self.key_column));
+            }
+            let metadata = metadata.ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "restored native cache {} has an unreadable Parquet footer",
+                    path.display()
+                ))
+            })?;
+            let segment = LocalSegment {
+                path: record.path.clone(),
+                size_bytes: row.byte_size,
+                level: metadata.level,
+                min_seq: metadata.min_seq,
+                max_seq: metadata.max_seq,
+                row_count: metadata.row_count,
+                created_at_ms: row.created_at_ms,
+                min_key_value: metadata.min_key_value,
+                max_key_value: metadata.max_key_value,
+                partition: metadata.partition,
+                location: SegmentLocation::Both,
+            };
+            let mut inner = self.inner.lock().unwrap();
+            if !inner
+                .local_segments
+                .iter()
+                .any(|existing| existing.path == segment.path)
+            {
+                inner.local_segments.push_back(segment);
+                inner
+                    .local_segments
+                    .make_contiguous()
+                    .sort_by_key(|segment| segment.min_seq);
+                debug_assert_unique_paths(&inner.local_segments);
+            }
+            drop(inner);
+            self.catalog
+                .set_location(&self.name, &record.path, SegmentLocation::Both)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_native_query_cache(&self) -> Result<(), StatsError> {
+        let Some(remote) = &self.remote else {
+            return Ok(());
+        };
+        self.restore_native_cache(remote).await
+    }
+
     /// Swap in a new retention policy (re-register). Picked up next eviction
     /// tick.
     pub fn update_policy(&self, policy: StoragePolicy) {
         self.inner.lock().unwrap().storage_policy = policy;
+    }
+
+    pub fn update_table_spec(&self, status: &TableSpecStatus) {
+        *self.table_runtime.lock().unwrap() = TableRuntimePolicy::from_status(status);
+    }
+
+    pub(crate) fn mark_native_publish_pending(&self) {
+        self.native_publish_pending.store(true, Ordering::SeqCst);
+    }
+
+    async fn publish_pending_native_state(&self) -> Result<(), StatsError> {
+        if !self.native_publish_pending.swap(false, Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Err(error) = self.publish_native_state().await {
+            self.native_publish_pending.store(true, Ordering::SeqCst);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn runtime_policy(&self) -> TableRuntimePolicy {
+        self.table_runtime.lock().unwrap().clone()
+    }
+
+    async fn publish_native_state(&self) -> Result<(), StatsError> {
+        let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "versioned namespace {:?} has no native catalog",
+                self.name
+            ))
+        })?;
+        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "versioned namespace {:?} has no local cache root",
+                self.name
+            ))
+        })?;
+        native_catalog
+            .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
+            .await?;
+        Ok(())
+    }
+
+    async fn migration_source_bytes(
+        &self,
+        namespace_dir: &Path,
+        row: &SegmentRow,
+        native: Option<&NativeSegmentRecord>,
+    ) -> Result<Bytes, StatsError> {
+        if Path::new(&row.path).exists() {
+            return tokio::fs::read(&row.path)
+                .await
+                .map(Bytes::from)
+                .map_err(|error| {
+                    StatsError::Internal(format!("read migration source {}: {error}", row.path))
+                });
+        }
+        let remote = self.remote.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "migration source {} has no local or remote copy",
+                row.path
+            ))
+        })?;
+        if let Some(record) = native {
+            let key = record.source.uri.as_deref().ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "native migration source {:?} has an empty URI",
+                    row.path
+                ))
+            })?;
+            let object = remote.get_native(&self.name, key).await?.ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "native migration source {key:?} is missing for {:?}",
+                    self.name
+                ))
+            })?;
+            if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice()) {
+                return Err(StatsError::Internal(format!(
+                    "native migration source {key:?} failed SHA-256 validation"
+                )));
+            }
+            return Ok(object.bytes);
+        }
+        let key = segment_relative_key(namespace_dir, &row.path).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "legacy migration source {} is outside {}",
+                row.path,
+                namespace_dir.display()
+            ))
+        })?;
+        remote
+            .get(&self.name, &key)
+            .await?
+            .map(|object| object.bytes)
+            .ok_or_else(|| {
+                StatsError::Internal(format!(
+                    "legacy migration source {key:?} is missing for {:?}",
+                    self.name
+                ))
+            })
+    }
+
+    pub(crate) fn activate_query_version(&self, version: u64) -> Result<(), StatsError> {
+        let status = self.catalog.table_spec_status(&self.name)?;
+        let rollback_alias = status.migration.as_ref().and_then(|migration| {
+            (status.active_version() == version && migration.from_version == Some(version))
+                .then_some(migration.to_version.unwrap_or(0))
+        });
+        let native: HashMap<_, _> = self
+            .catalog
+            .native_segments(&self.name)?
+            .into_iter()
+            .map(|record| (record.path.clone(), record))
+            .collect();
+        let mut segments = VecDeque::new();
+        for row in self.catalog.list_segments(&self.name)? {
+            let visible = match native.get(&row.path) {
+                Some(record) => {
+                    record.table_spec_version == version
+                        || (rollback_alias == Some(record.table_spec_version)
+                            && !record.migration_backfill)
+                }
+                None => version == 0,
+            };
+            if !visible || !Path::new(&row.path).exists() {
+                continue;
+            }
+            segments.push_back(LocalSegment {
+                path: row.path,
+                size_bytes: row.byte_size,
+                level: row.level,
+                min_seq: row.min_seq,
+                max_seq: row.max_seq,
+                row_count: row.row_count,
+                created_at_ms: row.created_at_ms,
+                min_key_value: row.min_key_value.and_then(|value| value.parse().ok()),
+                max_key_value: row.max_key_value.and_then(|value| value.parse().ok()),
+                partition: row.partition,
+                location: row.location,
+            });
+        }
+        segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.min_seq);
+        debug_assert_unique_paths(&segments);
+        self.inner.lock().unwrap().local_segments = segments;
+        Ok(())
+    }
+
+    async fn activate_verified_table_spec(&self) -> Result<TableSpecStatus, StatsError> {
+        let _visibility_guard = self.query_visibility.write().await;
+        let status = self.catalog.activate_desired_table_spec(&self.name)?;
+        let publication = self.publish_native_state().await;
+        self.activate_query_version(status.active_version())?;
+        self.update_table_spec(&status);
+        publication?;
+        tracing::info!(
+            namespace = %self.name,
+            table_spec_version = status.active_version(),
+            catalog_generation = status.catalog_generation,
+            "activated migrated table specification"
+        );
+        Ok(status)
+    }
+
+    fn remove_retired_cache_paths(&self, paths: Vec<String>) {
+        for path in paths {
+            remove_index_artifacts(&path);
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(namespace = %self.name, %path, %error, "remove retired table-version cache failed");
+                }
+            }
+        }
+    }
+
+    /// Advance an automatic TableSpec transition. Returns true while ordinary
+    /// compaction and eviction must stay frozen to preserve the migration source.
+    async fn advance_table_spec_migration(&self) -> Result<bool, StatsError> {
+        let status = self.catalog.table_spec_status(&self.name)?;
+        let Some(migration) = status.migration.clone() else {
+            return Ok(false);
+        };
+        match status.phase {
+            MigrationPhase::MIGRATION_PHASE_RETIRED => {
+                let (cleaned, retired_paths) =
+                    self.catalog.cleanup_rolled_back_migration(&self.name)?;
+                if cleaned.catalog_generation != status.catalog_generation {
+                    self.mark_native_publish_pending();
+                    self.remove_retired_cache_paths(retired_paths);
+                    self.publish_pending_native_state().await?;
+                    return Ok(false);
+                }
+                self.publish_pending_native_state().await?;
+                return Ok(false);
+            }
+            MigrationPhase::MIGRATION_PHASE_UNSPECIFIED => return Ok(false),
+            MigrationPhase::MIGRATION_PHASE_OBSERVING => {
+                // Heal a process failure after the local activation commit but
+                // before HEAD publication or the in-memory view swap.
+                self.publish_native_state().await?;
+                self.activate_query_version(status.active_version())?;
+                self.update_table_spec(&status);
+                let (retired, retired_paths) = self.catalog.retire_observed_migration(
+                    &self.name,
+                    self.runtime_policy().max_query_time_ms,
+                )?;
+                if retired.catalog_generation != status.catalog_generation {
+                    self.mark_native_publish_pending();
+                    self.remove_retired_cache_paths(retired_paths);
+                    self.publish_pending_native_state().await?;
+                    return Ok(false);
+                }
+                // The old version remains remotely referenced for rollback.
+                // Compaction keeps backfill and post-cutover writes in separate
+                // provenance groups, while cache eviction can rehydrate either
+                // version from its canonical object.
+                return Ok(false);
+            }
+            MigrationPhase::MIGRATION_PHASE_VERIFY => {
+                self.activate_verified_table_spec().await?;
+                return Ok(true);
+            }
+            MigrationPhase::MIGRATION_PHASE_ACTIVATED => {
+                return Err(StatsError::Internal(format!(
+                    "namespace {:?} persisted unsupported transient ACTIVATED phase",
+                    self.name
+                )));
+            }
+            MigrationPhase::MIGRATION_PHASE_DUAL_WRITE
+            | MigrationPhase::MIGRATION_PHASE_BACKFILL => {}
+        }
+
+        let _migration_guard = self.object_flush_lock.lock().await;
+        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "migration for {:?} requires a disk-backed cache",
+                self.name
+            ))
+        })?;
+        let remote = self.remote.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "migration for {:?} requires an object store",
+                self.name
+            ))
+        })?;
+        let from_version = migration.from_version.unwrap_or(0);
+        let to_version = migration.to_version.unwrap_or(0);
+        let fence_seq = migration.fence_seq.unwrap_or(-1);
+        let native_records: HashMap<_, _> = self
+            .catalog
+            .native_segments(&self.name)?
+            .into_iter()
+            .map(|record| (record.path.clone(), record))
+            .collect();
+        let rows = self.catalog.list_segments(&self.name)?;
+        let mut covered: HashSet<_> = native_records
+            .values()
+            .filter(|record| record.table_spec_version == to_version && record.migration_backfill)
+            .filter_map(|record| record.migration_source_id.clone())
+            .collect();
+        let mut pending: Vec<_> = rows
+            .iter()
+            .filter(|row| row.max_seq <= fence_seq)
+            .filter(|row| match native_records.get(&row.path) {
+                None => from_version == 0,
+                Some(record) => record.table_spec_version == from_version,
+            })
+            .cloned()
+            .collect();
+        pending.sort_by_key(|row| row.min_seq);
+        let target_layout = status
+            .desired
+            .as_ref()
+            .and_then(|spec| spec.source_layout.as_option())
+            .cloned();
+        let max_row_group_rows = target_layout
+            .as_ref()
+            .and_then(|layout| layout.max_row_group_rows)
+            .map(|rows| rows as usize)
+            .unwrap_or(self.max_row_group_rows);
+        let mut processed = 0;
+        for row in &pending {
+            if processed >= TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK {
+                break;
+            }
+            let bytes = self
+                .migration_source_bytes(namespace_dir, row, native_records.get(&row.path))
+                .await?;
+            let source_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+            let source_identity = native_records
+                .get(&row.path)
+                .and_then(|record| record.source.uri.as_deref())
+                .unwrap_or(&row.path);
+            let mut source_id_digest = Sha256::new();
+            source_id_digest.update(source_identity.as_bytes());
+            source_id_digest.update(source_sha256);
+            source_id_digest.update(row.min_seq.to_be_bytes());
+            source_id_digest.update(row.max_seq.to_be_bytes());
+            source_id_digest.update(row.row_count.to_be_bytes());
+            let migration_source_id = full_hex(&source_id_digest.finalize().into());
+            if covered.contains(&migration_source_id) {
+                continue;
+            }
+            let bytes_for_rewrite = bytes.clone();
+            let layout_for_rewrite = target_layout.clone();
+            let arrow_schema = Arc::clone(&self.arrow_schema);
+            let rewritten = tokio::task::spawn_blocking(move || {
+                let decoded = decode_migration_source(bytes_for_rewrite, &arrow_schema)?;
+                let sorted = sorted_object_batch(&decoded, layout_for_rewrite.as_ref())?;
+                partition_object_batch(&sorted, layout_for_rewrite.as_ref())?
+                    .into_iter()
+                    .map(|(partition, batch)| {
+                        let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
+                        let parquet =
+                            write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
+                        Ok((partition, batch, parquet, min_seq, max_seq))
+                    })
+                    .collect::<Result<Vec<_>, StatsError>>()
+            })
+            .await
+            .map_err(|error| {
+                StatsError::Internal(format!("migration rewrite task panicked: {error}"))
+            })??;
+            let rewritten_rows = rewritten
+                .iter()
+                .map(|(_, batch, _, _, _)| batch.num_rows() as i64)
+                .sum::<i64>();
+            if rewritten_rows != row.row_count {
+                return Err(StatsError::Internal(format!(
+                    "migration source {} rewrote {} rows as {rewritten_rows}",
+                    row.path, row.row_count
+                )));
+            }
+            let mut migrated = Vec::with_capacity(rewritten.len());
+            let mut sources = Vec::with_capacity(rewritten.len());
+            for (partition, batch, parquet, min_seq, max_seq) in rewritten {
+                let sha256: [u8; 32] = Sha256::digest(&parquet).into();
+                let hash = full_hex(&sha256);
+                let partition_directory = object_partition_directory(partition.as_ref());
+                let object_key = format!(
+                    "objects/v{to_version}/backfill/{migration_source_id}/{partition_directory}/{hash}/{}",
+                    seg_filename(row.level, min_seq)
+                );
+                let remote_version = remote
+                    .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                    .await?;
+                let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+                let cache_path_for_write = cache_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    write_cache_file(&cache_path_for_write, &parquet)
+                })
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("migration cache task panicked: {error}"))
+                })??;
+                let (min_key_value, max_key_value) = self.key_bounds(&batch);
+                let byte_size = i64::try_from(
+                    std::fs::metadata(&cache_path)
+                        .map_err(|error| {
+                            StatsError::Internal(format!(
+                                "stat migration cache {}: {error}",
+                                cache_path.display()
+                            ))
+                        })?
+                        .len(),
+                )
+                .unwrap_or(i64::MAX);
+                migrated.push(SegmentRow {
+                    namespace: row.namespace.clone(),
+                    path: cache_path.to_string_lossy().into_owned(),
+                    level: row.level,
+                    min_seq,
+                    max_seq,
+                    row_count: batch.num_rows() as i64,
+                    byte_size,
+                    created_at_ms: row.created_at_ms,
+                    min_key_value: min_key_value.map(|value| value.to_string()),
+                    max_key_value: max_key_value.map(|value| value.to_string()),
+                    partition,
+                    location: SegmentLocation::Both,
+                });
+                sources.push(ObjectRef {
+                    uri: Some(object_key),
+                    provider_version: remote_version.provider_version,
+                    etag: remote_version.e_tag,
+                    byte_size: u64::try_from(byte_size).ok(),
+                    sha256: Some(sha256.to_vec()),
+                    ..Default::default()
+                });
+            }
+            let committed_generation = self.catalog.commit_migration_segments(
+                &migrated,
+                to_version,
+                &sources,
+                &migration_source_id,
+                row.row_count,
+            )?;
+            if let Err(error) = self.publish_native_state().await {
+                self.catalog.rollback_native_segments(
+                    &self.name,
+                    &migrated
+                        .iter()
+                        .map(|segment| segment.path.clone())
+                        .collect::<Vec<_>>(),
+                    committed_generation,
+                )?;
+                return Err(error);
+            }
+            covered.insert(migration_source_id);
+            processed += 1;
+        }
+
+        let status = self.catalog.table_spec_status(&self.name)?;
+        let progress = status.migration.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!("migration for {:?} disappeared", self.name))
+        })?;
+        if progress.rows_completed != progress.rows_total {
+            return Ok(true);
+        }
+        let verified = self.catalog.update_migration_phase(
+            &self.name,
+            MigrationPhase::MIGRATION_PHASE_BACKFILL,
+            MigrationPhase::MIGRATION_PHASE_VERIFY,
+        )?;
+        self.publish_native_state().await?;
+        debug_assert_eq!(verified.phase, MigrationPhase::MIGRATION_PHASE_VERIFY);
+        self.activate_verified_table_spec().await?;
+        Ok(true)
+    }
+
+    /// Compact one same-partition group through immutable object replacement.
+    async fn native_compaction_step(&self) -> Result<bool, StatsError> {
+        let status = self.catalog.table_spec_status(&self.name)?;
+        let active_version = status.active_version();
+        if active_version == 0 {
+            return Ok(false);
+        }
+        let policy = self.runtime_policy();
+        let native_records: HashMap<_, _> = self
+            .catalog
+            .native_segments(&self.name)?
+            .into_iter()
+            .filter(|record| record.table_spec_version == active_version)
+            .map(|record| (record.path.clone(), record))
+            .collect();
+        let mut groups = BTreeMap::<(Option<SegmentPartition>, bool), Vec<SegmentRow>>::new();
+        for row in self.catalog.list_segments(&self.name)? {
+            if let Some(record) = native_records.get(&row.path) {
+                groups
+                    .entry((row.partition.clone(), record.migration_backfill))
+                    .or_default()
+                    .push(row);
+            }
+        }
+        let compressed_budget = policy
+            .target_object_bytes
+            .min(
+                self.compaction_config
+                    .max_merge_arrow_bytes
+                    .saturating_div(32),
+            )
+            .max(1);
+        let mut selected = None;
+        for ((_, migration_backfill), rows) in &mut groups {
+            rows.sort_by_key(|row| row.min_seq);
+            for start in 0..rows.len() {
+                let mut bytes = 0_i64;
+                let mut inputs = Vec::new();
+                for row in rows.iter().skip(start) {
+                    let next = bytes.saturating_add(row.byte_size.max(0));
+                    if next > compressed_budget
+                        || inputs.len() >= self.compaction_config.max_segments_per_level
+                    {
+                        break;
+                    }
+                    bytes = next;
+                    inputs.push(row.clone());
+                }
+                if inputs.len() >= 2 {
+                    selected = Some((inputs, *migration_backfill));
+                    break;
+                }
+            }
+            if selected.is_some() {
+                break;
+            }
+        }
+        let Some((inputs, migration_backfill)) = selected else {
+            return Ok(false);
+        };
+        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
+            StatsError::Internal("object-native compaction requires a cache root".to_string())
+        })?;
+        let remote = self.remote.as_ref().ok_or_else(|| {
+            StatsError::Internal("object-native compaction requires an object store".to_string())
+        })?;
+        let mut input_bytes = Vec::with_capacity(inputs.len());
+        let mut input_records = Vec::with_capacity(inputs.len());
+        for row in &inputs {
+            let record = native_records.get(&row.path).ok_or_else(|| {
+                StatsError::Internal(format!("native compaction lost input {}", row.path))
+            })?;
+            input_bytes.push(
+                self.migration_source_bytes(namespace_dir, row, Some(record))
+                    .await?,
+            );
+            input_records.push(record.clone());
+        }
+        let source_layout = policy.source_layout.clone();
+        let arrow_schema = Arc::clone(&self.arrow_schema);
+        let max_row_group_rows = source_layout
+            .as_ref()
+            .and_then(|layout| layout.max_row_group_rows)
+            .map(|rows| rows as usize)
+            .unwrap_or(self.max_row_group_rows);
+        let rewritten = tokio::task::spawn_blocking(move || {
+            let decoded = input_bytes
+                .into_iter()
+                .map(|bytes| decode_migration_source(bytes, &arrow_schema))
+                .collect::<Result<Vec<_>, _>>()?;
+            let merged = concat_batches(&arrow_schema, &decoded).map_err(|error| {
+                StatsError::Internal(format!("merge native compaction batches: {error}"))
+            })?;
+            let sorted = sorted_object_batch(&merged, source_layout.as_ref())?;
+            partition_object_batch(&sorted, source_layout.as_ref())?
+                .into_iter()
+                .map(|(partition, batch)| {
+                    let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
+                    let parquet =
+                        write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
+                    Ok((partition, batch, parquet, min_seq, max_seq))
+                })
+                .collect::<Result<Vec<_>, StatsError>>()
+        })
+        .await
+        .map_err(|error| {
+            StatsError::Internal(format!("native compaction task panicked: {error}"))
+        })??;
+        let input_rows = inputs.iter().map(|row| row.row_count).sum::<i64>();
+        let output_rows = rewritten
+            .iter()
+            .map(|(_, batch, _, _, _)| batch.num_rows() as i64)
+            .sum::<i64>();
+        if input_rows != output_rows {
+            return Err(StatsError::Internal(format!(
+                "native compaction rewrote {input_rows} rows as {output_rows}"
+            )));
+        }
+        let output_level = inputs
+            .iter()
+            .map(|row| row.level)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut output_segments = Vec::with_capacity(rewritten.len());
+        let mut output_rows = Vec::with_capacity(rewritten.len());
+        let mut output_sources = Vec::with_capacity(rewritten.len());
+        for (partition, batch, parquet, min_seq, max_seq) in rewritten {
+            let sha256: [u8; 32] = Sha256::digest(&parquet).into();
+            let hash = full_hex(&sha256);
+            let partition_directory = object_partition_directory(partition.as_ref());
+            let object_key = format!(
+                "objects/v{active_version}/compact/{partition_directory}/{hash}/{}",
+                seg_filename(output_level, min_seq)
+            );
+            let remote_version = remote
+                .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                .await?;
+            let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+            let cache_path_for_write = cache_path.clone();
+            tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("native compaction cache task panicked: {error}"))
+                })??;
+            let byte_size = i64::try_from(
+                std::fs::metadata(&cache_path)
+                    .map_err(|error| {
+                        StatsError::Internal(format!(
+                            "stat native compaction cache {}: {error}",
+                            cache_path.display()
+                        ))
+                    })?
+                    .len(),
+            )
+            .unwrap_or(i64::MAX);
+            let (min_key_value, max_key_value) = self.key_bounds(&batch);
+            let segment = LocalSegment {
+                path: cache_path.to_string_lossy().into_owned(),
+                size_bytes: byte_size,
+                level: output_level,
+                min_seq,
+                max_seq,
+                row_count: batch.num_rows() as i64,
+                created_at_ms: now_ms(),
+                min_key_value,
+                max_key_value,
+                partition,
+                location: SegmentLocation::Both,
+            };
+            output_rows.push(segment_to_row(&self.name, &segment));
+            output_sources.push(ObjectRef {
+                uri: Some(object_key),
+                provider_version: remote_version.provider_version,
+                etag: remote_version.e_tag,
+                byte_size: u64::try_from(byte_size).ok(),
+                sha256: Some(sha256.to_vec()),
+                ..Default::default()
+            });
+            output_segments.push(segment);
+        }
+        let removed_paths = inputs
+            .iter()
+            .map(|row| row.path.clone())
+            .collect::<Vec<_>>();
+        let added_paths = output_segments
+            .iter()
+            .map(|segment| segment.path.clone())
+            .collect::<Vec<_>>();
+        let generation = self.catalog.replace_native_segments(
+            &self.name,
+            &removed_paths,
+            &output_rows,
+            active_version,
+            &output_sources,
+            migration_backfill,
+        )?;
+        if let Err(error) = self.publish_native_state().await {
+            self.catalog.rollback_native_replacement(
+                &self.name,
+                &inputs,
+                &input_records,
+                &added_paths,
+                generation,
+            )?;
+            return Err(error);
+        }
+        let _visibility_guard = self.query_visibility.write().await;
+        let removed: HashSet<_> = removed_paths.iter().collect();
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .local_segments
+            .retain(|segment| !removed.contains(&segment.path));
+        inner.local_segments.extend(output_segments);
+        inner
+            .local_segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.min_seq);
+        debug_assert_unique_paths(&inner.local_segments);
+        drop(inner);
+        for path in &removed_paths {
+            remove_index_artifacts(path);
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(%path, %error, "remove compacted native cache input failed");
+                }
+            }
+        }
+        tracing::info!(
+            namespace = %self.name,
+            inputs = removed_paths.len(),
+            outputs = added_paths.len(),
+            rows = input_rows,
+            catalog_generation = generation,
+            "object-native compaction committed"
+        );
+        Ok(true)
     }
 
     pub fn name(&self) -> &str {
@@ -637,7 +1844,7 @@ impl Namespace {
             return;
         }
         self.flush_notify.notify_one();
-        if buffered_bytes >= SEGMENT_TARGET_BYTES {
+        if buffered_bytes >= self.runtime_policy().max_buffer_bytes {
             self.force_flush.notify_one();
         }
     }
@@ -807,6 +2014,12 @@ impl Namespace {
     /// when there was nothing to flush. On parquet-write failure the in-flight
     /// buffer is restored and `persisted_seq` is NOT advanced.
     pub fn flush_once(&self) -> Result<(), StatsError> {
+        if self.runtime_policy().object_native() {
+            return Err(StatsError::Internal(format!(
+                "object-native namespace {:?} requires flush_once_async",
+                self.name
+            )));
+        }
         let Some(dir) = self.data_dir.clone() else {
             return Ok(());
         };
@@ -837,6 +2050,172 @@ impl Namespace {
                 Err(e)
             }
         }
+    }
+
+    pub async fn flush_once_async(self: &Arc<Self>) -> Result<(), StatsError> {
+        if !self.runtime_policy().object_native() {
+            let namespace = Arc::clone(self);
+            return tokio::task::spawn_blocking(move || namespace.flush_once())
+                .await
+                .map_err(|error| StatsError::Internal(format!("flush task panicked: {error}")))?;
+        }
+        let Some(dir) = self.data_dir.clone() else {
+            return Ok(());
+        };
+        let _flush_guard = self.object_flush_lock.lock().await;
+        let policy = self.runtime_policy();
+        let sealed = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.buffers.seal()
+        };
+        let Some(sealed) = sealed else {
+            return Ok(());
+        };
+
+        match self
+            .write_sealed_object_native(&dir, &sealed, &policy)
+            .await
+        {
+            Ok(()) => {
+                self.persisted_seq.send_replace(sealed.max_seq);
+                Ok(())
+            }
+            Err(error) => {
+                self.inner.lock().unwrap().buffers.restore_flush();
+                tracing::warn!(namespace = %self.name, %error, "object-native flush failed; restored RAM buffer");
+                Err(error)
+            }
+        }
+    }
+
+    async fn write_sealed_object_native(
+        &self,
+        namespace_dir: &Path,
+        sealed: &SealedBuffer,
+        policy: &TableRuntimePolicy,
+    ) -> Result<(), StatsError> {
+        let remote = self.remote.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "object-native namespace {:?} has no remote store",
+                self.name
+            ))
+        })?;
+        let native_catalog = self.native_catalog.as_ref().ok_or_else(|| {
+            StatsError::Internal(format!(
+                "object-native namespace {:?} has no native catalog",
+                self.name
+            ))
+        })?;
+        let batch = sealed.batch.clone();
+        let source_layout = policy.source_layout.clone();
+        let max_row_group_rows = source_layout
+            .as_ref()
+            .and_then(|layout| layout.max_row_group_rows)
+            .map(|rows| rows as usize)
+            .unwrap_or(self.max_row_group_rows);
+        let encoded = tokio::task::spawn_blocking(move || {
+            let sorted = sorted_object_batch(&batch, source_layout.as_ref())?;
+            partition_object_batch(&sorted, source_layout.as_ref())?
+                .into_iter()
+                .map(|(partition, batch)| {
+                    let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
+                    let parquet =
+                        write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
+                    Ok((partition, batch, parquet, min_seq, max_seq))
+                })
+                .collect::<Result<Vec<_>, StatsError>>()
+        })
+        .await
+        .map_err(|error| {
+            StatsError::Internal(format!("object-native parquet task panicked: {error}"))
+        })??;
+        let mut segments = Vec::with_capacity(encoded.len());
+        let mut rows = Vec::with_capacity(encoded.len());
+        let mut sources = Vec::with_capacity(encoded.len());
+        for (partition, batch, parquet, min_seq, max_seq) in encoded {
+            let sha256: [u8; 32] = Sha256::digest(&parquet).into();
+            let hash = full_hex(&sha256);
+            let partition_directory = object_partition_directory(partition.as_ref());
+            let object_key = format!(
+                "objects/v{}/l0/{partition_directory}/{hash}/{}",
+                policy.table_spec_version,
+                seg_filename(0, min_seq)
+            );
+            let remote_version = remote
+                .put_native_immutable(&self.name, &object_key, Bytes::from(parquet.clone()))
+                .await?;
+            let cache_path = native_cache_path(namespace_dir, &self.name, &object_key)?;
+            let cache_path_for_write = cache_path.clone();
+            tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("native cache task panicked: {error}"))
+                })??;
+
+            let (min_key, max_key) = self.key_bounds(&batch);
+            let segment = LocalSegment {
+                path: cache_path.to_string_lossy().into_owned(),
+                size_bytes: i64::try_from(
+                    std::fs::metadata(&cache_path)
+                        .map_err(|error| {
+                            StatsError::Internal(format!(
+                                "stat native cache {}: {error}",
+                                cache_path.display()
+                            ))
+                        })?
+                        .len(),
+                )
+                .unwrap_or(i64::MAX),
+                level: 0,
+                min_seq,
+                max_seq,
+                row_count: batch.num_rows() as i64,
+                created_at_ms: now_ms(),
+                min_key_value: min_key,
+                max_key_value: max_key,
+                partition,
+                location: SegmentLocation::Both,
+            };
+            rows.push(segment_to_row(&self.name, &segment));
+            sources.push(ObjectRef {
+                uri: Some(object_key),
+                provider_version: remote_version.provider_version,
+                etag: remote_version.e_tag,
+                byte_size: u64::try_from(segment.size_bytes).ok(),
+                sha256: Some(sha256.to_vec()),
+                ..Default::default()
+            });
+            segments.push(segment);
+        }
+        let committed_generation = self.catalog.commit_native_segments(
+            &rows,
+            policy.table_spec_version,
+            &sources,
+            false,
+        )?;
+        if let Err(error) = native_catalog
+            .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
+            .await
+        {
+            self.catalog.rollback_native_segments(
+                &self.name,
+                &segments
+                    .iter()
+                    .map(|segment| segment.path.clone())
+                    .collect::<Vec<_>>(),
+                committed_generation,
+            )?;
+            return Err(error);
+        }
+        let mut inner = self.inner.lock().unwrap();
+        inner.local_segments.extend(segments);
+        inner
+            .local_segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.min_seq);
+        debug_assert_unique_paths(&inner.local_segments);
+        inner.buffers.commit_flush();
+        Ok(())
     }
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
@@ -1513,6 +2892,18 @@ impl Namespace {
         let Some(remote) = &self.remote else {
             return Ok(());
         };
+        // A TableSpec migration temporarily keeps legacy segments and
+        // object-native cache entries in the same SQLite `segments` table.
+        // Legacy sync must continue making the former durable while backfill
+        // is incomplete, but native objects already live under the canonical
+        // `_native` prefix and must never be interpreted as legacy upload
+        // candidates or orphans.
+        let native_paths: HashSet<String> = self
+            .catalog
+            .native_segments(&self.name)?
+            .into_iter()
+            .map(|record| record.path)
+            .collect();
         let remote_keys: std::collections::HashSet<String> =
             match remote.list_keys(&self.name).await {
                 Ok(names) => names.into_iter().collect(),
@@ -1529,7 +2920,7 @@ impl Namespace {
             .expect("disk-backed namespace with remote store has a data directory");
         let mut all_durable = true;
         for row in &rows {
-            if row.location != SegmentLocation::Local {
+            if row.location != SegmentLocation::Local || native_paths.contains(&row.path) {
                 continue;
             }
             let Some(key) = segment_relative_key(namespace_dir, &row.path) else {
@@ -1556,6 +2947,14 @@ impl Namespace {
             return Ok(());
         }
 
+        // The legacy archive is outside the object-native catalog's MVCC
+        // lifetime. Once a desired object-native spec exists, retain archive
+        // objects for the explicit one-time archival rollout instead of
+        // deleting them as soon as their local migration source is replaced.
+        if self.runtime_policy().object_native() {
+            return Ok(());
+        }
+
         // Re-snapshot the L>=1 catalog rows (phase 1 may have added keys) and
         // delete only genuine orphans. min_level=1 is equivalent to scanning all
         // levels here because remote files are exclusively L>=1 (L0 is never
@@ -1564,6 +2963,7 @@ impl Namespace {
             .catalog
             .list_segments_min_level(&self.name, 1)?
             .iter()
+            .filter(|row| !native_paths.contains(&row.path))
             .filter_map(|row| segment_relative_key(namespace_dir, &row.path))
             .collect();
         for key in remote_keys.difference(&catalog_keys) {
@@ -1639,6 +3039,93 @@ impl Namespace {
             self.evict_segment(&row.path);
         }
         Ok(())
+    }
+
+    fn native_cache_eviction_step(&self) -> Result<(), StatsError> {
+        let policy = self.inner.lock().unwrap().storage_policy.clone();
+        let max_segments = policy
+            .max_segments
+            .map(|value| value as usize)
+            .unwrap_or(self.compaction_config.max_segments_per_namespace);
+        let max_bytes = policy
+            .max_bytes
+            .unwrap_or(self.compaction_config.max_bytes_per_namespace);
+        let native_paths: HashSet<_> = self
+            .catalog
+            .native_segments(&self.name)?
+            .into_iter()
+            .map(|record| record.path)
+            .collect();
+        loop {
+            let candidate = {
+                let inner = self.inner.lock().unwrap();
+                let count = inner.local_segments.len();
+                let bytes: i64 = inner
+                    .local_segments
+                    .iter()
+                    .map(|segment| segment.size_bytes)
+                    .sum();
+                if count <= max_segments && bytes <= max_bytes {
+                    None
+                } else {
+                    inner
+                        .local_segments
+                        .iter()
+                        .filter(|segment| {
+                            segment.location == SegmentLocation::Both
+                                && native_paths.contains(&segment.path)
+                        })
+                        .min_by_key(|segment| segment.min_seq)
+                        .map(|segment| segment.path.clone())
+                }
+            };
+            let Some(path) = candidate else {
+                break;
+            };
+            self.evict_native_cache_segment(&path);
+        }
+
+        let Some(max_age_seconds) = policy.max_age_seconds else {
+            return Ok(());
+        };
+        let cutoff_ms = now_ms().saturating_sub(max_age_seconds.saturating_mul(1000));
+        loop {
+            let candidate = self
+                .inner
+                .lock()
+                .unwrap()
+                .local_segments
+                .iter()
+                .filter(|segment| {
+                    segment.location == SegmentLocation::Both
+                        && segment.created_at_ms < cutoff_ms
+                        && native_paths.contains(&segment.path)
+                })
+                .min_by_key(|segment| segment.created_at_ms)
+                .map(|segment| segment.path.clone());
+            let Some(path) = candidate else {
+                break;
+            };
+            self.evict_native_cache_segment(&path);
+        }
+        Ok(())
+    }
+
+    fn evict_native_cache_segment(&self, path: &str) {
+        let _write_guard = self.query_visibility.blocking_write();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.local_segments.retain(|segment| segment.path != path);
+        }
+        let _ = self
+            .catalog
+            .set_location(&self.name, path, SegmentLocation::Remote);
+        if let Err(error) = std::fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(namespace = %self.name, path, %error, "failed to evict native cache file");
+            }
+        }
+        remove_index_artifacts(path);
     }
 
     /// Drop `path` from the deque and unlink the local file.
@@ -1841,6 +3328,14 @@ impl Namespace {
         cleaned
     }
 
+    fn maintain_index_artifacts(&self) -> usize {
+        if segment_indexes_enabled_for(&self.name) {
+            self.backfill_missing_index_bundles(INDEX_BUNDLES_PER_TICK)
+        } else {
+            self.cleanup_disabled_index_bundles(INDEX_BUNDLES_PER_TICK)
+        }
+    }
+
     fn layout_is_current(&self, path: &str) -> bool {
         if self.current_layouts.lock().unwrap().contains(path) {
             return true;
@@ -1939,11 +3434,43 @@ impl Namespace {
             return Ok(());
         }
         let _maint_guard = self.maint_lock.lock().await;
+        self.flush_once_async().await?;
+        if self.advance_table_spec_migration().await? {
+            return Ok(());
+        }
+        if self.runtime_policy().object_native() {
+            self.publish_pending_native_state().await?;
+            self.native_compaction_step().await?;
+            let namespace = Arc::clone(self);
+            tokio::task::spawn_blocking(move || namespace.native_cache_eviction_step())
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("native cache eviction task panicked: {error}"))
+                })??;
+            if let Some(native_catalog) = &self.native_catalog {
+                let removed = native_catalog
+                    .gc_obsolete_catalogs(
+                        &self.name,
+                        now_ms(),
+                        self.runtime_policy().max_query_time_ms,
+                    )
+                    .await?;
+                if removed > 0 {
+                    tracing::info!(namespace = %self.name, removed, "removed obsolete native catalogs");
+                }
+            }
+            let namespace = Arc::clone(self);
+            tokio::task::spawn_blocking(move || namespace.maintain_index_artifacts())
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("maintenance native index task panicked: {error}"))
+                })?;
+            return Ok(());
+        }
 
-        // Flush + compact (blocking parquet + commit_swap under blocking_write).
+        // Compact (blocking parquet + commit_swap under blocking_write).
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || -> Result<(), StatsError> {
-            ns.flush_once()?;
             let migration_pending = ns.advance_physical_layout_migration()?;
             // An optional forced L0->L1 merge, then the planner-drain loop runs so
             // a forced compaction that leaves >= 32 L1 segments still promotes
@@ -1977,6 +3504,15 @@ impl Namespace {
 
         // Sync (async object_store).
         self.sync_step().await?;
+        if let Some(native_catalog) = &self.native_catalog {
+            let max_query_time_ms = self.runtime_policy().max_query_time_ms;
+            let removed = native_catalog
+                .gc_obsolete_catalogs(&self.name, now_ms(), max_query_time_ms)
+                .await?;
+            if removed > 0 {
+                tracing::info!(namespace = %self.name, removed, "removed obsolete native catalogs");
+            }
+        }
 
         // Relocate evicted objects after local outputs are durable. Each copy is
         // server-side and crash-safe; the time budget prevents a cold archive
@@ -1993,15 +3529,11 @@ impl Namespace {
         // an active policy backfill missing bundles; namespaces whose managed
         // policy disables indexes remove stale bundles left by older binaries.
         let ns = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            if segment_indexes_enabled_for(&ns.name) {
-                ns.backfill_missing_index_bundles(INDEX_BUNDLES_PER_TICK)
-            } else {
-                ns.cleanup_disabled_index_bundles(INDEX_BUNDLES_PER_TICK)
-            }
-        })
-        .await
-        .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
+        tokio::task::spawn_blocking(move || ns.maintain_index_artifacts())
+            .await
+            .map_err(|e| {
+                StatsError::Internal(format!("maintenance backfill task panicked: {e}"))
+            })?;
 
         // Re-encode segments still on an older physical layout (blocking parquet
         // read + write). Also lowest-priority and bounded: the terminal level is
@@ -2247,11 +3779,11 @@ impl Namespace {
     /// preserved — an acked write was on a sealed segment) and, for a
     /// remote-configured namespace, a final bounded `sync_step` so the bucket
     /// matches the catalog at shutdown.
-    pub async fn shutdown(&self, timeout: Duration) {
+    pub async fn shutdown(self: &Arc<Self>, timeout: Duration) {
         self.stop_and_join(timeout).await;
         // Final drain so no acked-but-still-RAM rows are lost (best-effort;
         // failures are already logged inside flush_once).
-        let _ = self.flush_once();
+        let _ = self.flush_once_async().await;
         // Final reconcile so the bucket matches the catalog at shutdown.
         // Best-effort + bounded by the same per-namespace `timeout`; if it
         // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
@@ -2366,11 +3898,33 @@ fn adopt_local_segments(
 
     discard_staging_files(dir, namespace);
 
+    let status = catalog
+        .table_spec_status(namespace)
+        .unwrap_or(TableSpecStatus {
+            active: None,
+            desired: None,
+            phase: MigrationPhase::MIGRATION_PHASE_UNSPECIFIED,
+            catalog_generation: 0,
+            migration: None,
+        });
+    let native_records: HashMap<_, _> = catalog
+        .native_segments(namespace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|record| (record.path.clone(), record))
+        .collect();
+
     let discover_started = Instant::now();
-    let local_files: std::collections::HashMap<String, PathBuf> = discover_segments(dir)
+    let mut local_files: std::collections::HashMap<String, PathBuf> = discover_segments(dir)
         .into_iter()
         .map(|p| (p.to_string_lossy().into_owned(), p))
         .collect();
+    for record in native_records.values() {
+        let path = PathBuf::from(&record.path);
+        if path.exists() {
+            local_files.insert(record.path.clone(), path);
+        }
+    }
     let discover_ms = discover_started.elapsed().as_millis() as u64;
 
     // Pass 1: catalog rows.
@@ -2416,6 +3970,13 @@ fn adopt_local_segments(
         } else {
             row.location
         };
+        let query_visible = match native_records.get(&row.path) {
+            Some(record) => native_segment_is_query_visible(&status, record),
+            None => status.active_version() == 0,
+        };
+        if !query_visible {
+            continue;
+        }
         let size = std::fs::metadata(local_path)
             .map(|m| m.len() as i64)
             .unwrap_or(0);
@@ -2437,6 +3998,9 @@ fn adopt_local_segments(
     // Pass 2: local files with no catalog row -> fresh LOCAL segments.
     for (path_str, path) in &local_files {
         if seen.contains(path_str) {
+            continue;
+        }
+        if status.active_version() > 0 {
             continue;
         }
         let Some(meta) = read_segment_footer(path, key_column) else {
@@ -2515,27 +4079,25 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
             // Stop latch checked before parking so a stop signalled while we
             // were mid-flush (and thus missed the Notify wake) still exits.
             if ns.stopped.load(Ordering::SeqCst) {
-                let _ = ns.flush_once();
+                let _ = ns.flush_once_async().await;
                 return;
             }
             let notified = ns.flush_notify.notified();
             let stopped = ns.stop.notified();
+            let flush_age = ns.runtime_policy().max_flush_age;
             tokio::select! {
                 _ = notified => {}
-                _ = tokio::time::sleep(DEFAULT_FLUSH_INTERVAL) => {}
+                _ = tokio::time::sleep(flush_age) => {}
                 _ = stopped => {
-                    let _ = ns.flush_once();
+                    let _ = ns.flush_once_async().await;
                     return;
                 }
             }
             if ns.stopped.load(Ordering::SeqCst) {
-                let _ = ns.flush_once();
+                let _ = ns.flush_once_async().await;
                 return;
             }
-            // Run the (blocking) parquet encode off the reactor.
-            let ns2 = Arc::clone(&ns);
-            let res = tokio::task::spawn_blocking(move || ns2.flush_once()).await;
-            if let Ok(Err(e)) = res {
+            if let Err(e) = ns.flush_once_async().await {
                 tracing::warn!(namespace = %ns.name, error = %e, "flush task: flush_once failed");
             }
             // Flush-rate cooldown: coalesce the appends that arrive during the
@@ -2546,7 +4108,7 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
                 _ = tokio::time::sleep(MIN_FLUSH_INTERVAL) => {}
                 _ = ns.force_flush.notified() => {}
                 _ = ns.stop.notified() => {
-                    let _ = ns.flush_once();
+                    let _ = ns.flush_once_async().await;
                     return;
                 }
             }
@@ -2716,6 +4278,7 @@ mod tests {
             Arc::new(Mutex::new(())),
             "",
             StoragePolicy::default(),
+            1,
         )
         .unwrap()
     }
@@ -2740,6 +4303,7 @@ mod tests {
             Arc::new(Mutex::new(())),
             remote_log_dir,
             policy,
+            1,
         )
         .unwrap()
     }

@@ -88,6 +88,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::store::catalog::Catalog;
+use crate::store::namespace_name::validate_namespace_name;
 use crate::store::remote::RemoteStore;
 use crate::store::schema::{
     arrow_to_column_type, resolve_key_column, Column, Schema, IMPLICIT_KEY_COLUMN,
@@ -369,9 +370,10 @@ pub async fn adopt_remote_segments(
 // adopt_store_from_disk + ensure_catalog_adopted (the boot orchestrator).
 // ---------------------------------------------------------------------------
 
-/// Enumerate namespace subdirectories of `data_dir`: immediate directories
-/// whose name is not a dotfile and not the sidecar. The `log` dir is included
-/// (the privileged namespace is adopted like any other, then
+/// Enumerate valid namespace subdirectories of `data_dir`. Internal roots such
+/// as `_native` and migration scratch directories are excluded by the same
+/// validator used at registration. The `log` dir is included (the privileged
+/// namespace is adopted like any other, then
 /// `ensure_log_namespace_registered` re-establishes its canonical schema).
 fn enumerate_namespace_dirs(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, StatsError> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
@@ -385,7 +387,7 @@ fn enumerate_namespace_dirs(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, S
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if name.starts_with('.') {
+        if validate_namespace_name(name, None).is_err() {
             continue;
         }
         out.push((name.to_string(), path));
@@ -825,6 +827,33 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(n, _)| n == "iris.worker"));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    #[test]
+    fn catalog_adoption_never_treats_native_cache_as_a_namespace() {
+        let data_dir = tempdir("native_cache_reserved");
+        let worker_dir = data_dir.join("iris.worker");
+        std::fs::create_dir_all(&worker_dir).unwrap();
+        write_segment_to_dir(&worker_dir, 0, 1, &worker_batch(1, vec![10])).unwrap();
+        let native_cache =
+            data_dir.join("_native/namespaces/iris.worker/objects/v1/backfill/source");
+        std::fs::create_dir_all(&native_cache).unwrap();
+        write_segment_to_dir(&native_cache, 0, 2, &worker_batch(2, vec![20])).unwrap();
+
+        let catalog = Catalog::open(Some(&data_dir)).unwrap();
+        ensure_catalog_adopted(Some(&data_dir), &catalog).unwrap();
+        let namespaces = catalog
+            .list_all()
+            .unwrap()
+            .into_iter()
+            .map(|(namespace, _)| namespace)
+            .collect::<Vec<_>>();
+        assert!(namespaces
+            .iter()
+            .any(|namespace| namespace == "iris.worker"));
+        assert!(!namespaces.iter().any(|namespace| namespace == "_native"));
 
         std::fs::remove_dir_all(&data_dir).ok();
     }

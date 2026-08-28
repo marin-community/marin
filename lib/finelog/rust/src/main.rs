@@ -150,6 +150,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
+    let recovered_native_namespaces = store
+        .recover_native_namespaces()
+        .await
+        .map_err(|e| format!("failed to recover native catalogs: {e}"))?;
+    if recovered_native_namespaces > 0 {
+        tracing::info!(
+            namespaces = recovered_native_namespaces,
+            "recovered object-native namespaces before serving"
+        );
+    }
     if args.telemetry_migration_mode == TelemetryMigrationMode::DualWrite {
         let store_dir = store_dir
             .as_deref()

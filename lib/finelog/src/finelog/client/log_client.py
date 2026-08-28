@@ -26,6 +26,12 @@ from connectrpc.interceptor import Interceptor
 from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
+from finelog.client.object_query_client import (
+    CatalogPin,
+    ObjectQueryClient,
+    QueryMode,
+    query_catalog_versions,
+)
 from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -49,6 +55,7 @@ from finelog.schema import (
     schema_to_arrow,
     schema_to_proto,
 )
+from finelog.table_spec import TableSpec, TableStatus, table_status_from_proto
 from finelog.types import is_retryable_error
 
 
@@ -603,14 +610,32 @@ class LogClient:
             self._invalidate(_format_exc_summary(exc))
             raise
 
-    def query(self, sql: str, *, max_rows: int = 100_000) -> pa.Table:
-        """Run Postgres-flavored SQL against any registered namespace.
+    def query(
+        self,
+        sql: str,
+        *,
+        max_rows: int = 100_000,
+        mode: QueryMode | str = QueryMode.SERVER,
+        object_store_root: str | None = None,
+        namespaces: Iterable[str] = (),
+    ) -> pa.Table:
+        """Run SQL through the server or directly over a pinned object catalog.
 
         Unlike :meth:`Table.query`, this does not require a local Table
-        handle; the server resolves namespaces from the FROM clause. Raises
+        handle. Client mode requires ``object_store_root`` and the exact
+        ``namespaces`` referenced by the SQL. Raises
         :class:`QueryResultTooLargeError` if the row count exceeds
         ``max_rows``.
         """
+        query_mode = QueryMode(mode)
+        if query_mode is QueryMode.CLIENT:
+            if object_store_root is None:
+                raise ValueError("client query mode requires object_store_root")
+            return self.object_query_client(object_store_root).query(
+                sql,
+                namespaces=namespaces,
+                max_rows=max_rows,
+            )
         result = self._stats_query(sql)
         if result.num_rows > max_rows:
             raise QueryResultTooLargeError(
@@ -618,6 +643,50 @@ class LogClient:
                 f"(add a LIMIT or pass a higher max_rows)"
             )
         return result
+
+    def object_query_client(self, object_store_root: str) -> ObjectQueryClient:
+        """Create a direct query client with best-effort Finelog reporting."""
+        return ObjectQueryClient(
+            object_store_root,
+            report_start=self._report_direct_query_start,
+            report_finish=self._report_direct_query_finish,
+        )
+
+    def _report_direct_query_start(
+        self,
+        query_id: str,
+        sql: str,
+        pins: tuple[CatalogPin, ...],
+    ) -> None:
+        self._stats_rpc(
+            lambda client: client.report_query_start(
+                stats_pb2.ReportQueryStartRequest(
+                    query_id=query_id,
+                    sql=sql,
+                    catalogs=query_catalog_versions(pins),
+                )
+            )
+        )
+
+    def _report_direct_query_finish(
+        self,
+        query_id: str,
+        elapsed_ms: int,
+        row_count: int,
+        succeeded: bool,
+        error_code: str,
+    ) -> None:
+        self._stats_rpc(
+            lambda client: client.report_query_finish(
+                stats_pb2.ReportQueryFinishRequest(
+                    query_id=query_id,
+                    elapsed_ms=elapsed_ms,
+                    row_count=row_count,
+                    succeeded=succeeded,
+                    error_code=error_code,
+                )
+            )
+        )
 
     def list_namespaces(self) -> list[NamespaceInfo]:
         """Return every queryable namespace with its schema and storage statistics."""
@@ -643,6 +712,22 @@ class LogClient:
         )
         return schema_from_proto(response.schema)
 
+    def get_table_status(self, namespace: str) -> TableStatus:
+        """Return the active and desired table-spec versions."""
+        response = self._stats_rpc(
+            lambda client: client.get_table_status(stats_pb2.GetTableStatusRequest(namespace=namespace))
+        )
+        return table_status_from_proto(response)
+
+    def rollback_table_version(self, namespace: str, retained_version: int) -> TableStatus:
+        """Move a table's active pointer to a retained version."""
+        self._stats_rpc(
+            lambda client: client.rollback_table_version(
+                stats_pb2.RollbackTableVersionRequest(namespace=namespace, retained_version=retained_version)
+            )
+        )
+        return self.get_table_status(namespace)
+
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
         table = self._tables.get(LOG_NAMESPACE)
@@ -656,6 +741,7 @@ class LogClient:
         schema: type | Schema,
         *,
         storage_policy: StoragePolicy = StoragePolicy(),
+        table_spec: TableSpec | None = None,
     ) -> Table:
         """Return a Table handle for ``namespace``, registering it lazily.
 
@@ -671,6 +757,10 @@ class LogClient:
         empty policy inherits the server defaults. A non-empty policy
         on a re-register replaces the namespace's current policy
         (last-write-wins).
+
+        ``table_spec`` opts the namespace into versioned layout management.
+        The server accepts only the current version or ``current + 1``; a new
+        version that changes source layout is migrated in the background.
         """
         if namespace == LOG_NAMESPACE:
             raise InvalidNamespaceError("use write_batch/query for the privileged 'log' namespace")
@@ -692,12 +782,18 @@ class LogClient:
                 schema=requested,
                 flusher=self._stats_flush,
                 querier=self._stats_query,
-                registrar=lambda: self._register_table(namespace, requested, storage_policy),
+                registrar=lambda: self._register_table(namespace, requested, storage_policy, table_spec),
             )
             self._tables[namespace] = table
             return table
 
-    def _register_table(self, namespace: str, requested: Schema, storage_policy: StoragePolicy) -> Schema:
+    def _register_table(
+        self,
+        namespace: str,
+        requested: Schema,
+        storage_policy: StoragePolicy,
+        table_spec: TableSpec | None,
+    ) -> Schema:
         """Run the ``register_table`` RPC and return the effective schema.
 
         Called from a Table's flush thread. Raises the underlying transport
@@ -706,13 +802,14 @@ class LogClient:
         """
         client = self._get_stats_client()
         try:
-            response = client.register_table(
-                stats_pb2.RegisterTableRequest(
-                    namespace=namespace,
-                    schema=schema_to_proto(requested),
-                    storage_policy=storage_policy.to_proto(),
-                )
+            request = stats_pb2.RegisterTableRequest(
+                namespace=namespace,
+                schema=schema_to_proto(requested),
+                storage_policy=storage_policy.to_proto(),
             )
+            if table_spec is not None:
+                request.table_spec.CopyFrom(table_spec.to_proto(requested, storage_policy))
+            response = client.register_table(request)
         except ConnectError as exc:
             if is_retryable_error(exc):
                 self._invalidate(_format_exc_summary(exc))

@@ -35,6 +35,18 @@ class StatsService(Protocol):
     async def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def report_query_start(self, request: finelog__stats__pb2.ReportQueryStartRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportQueryResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def report_query_finish(self, request: finelog__stats__pb2.ReportQueryFinishRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportQueryResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_table_status(self, request: finelog__stats__pb2.GetTableStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def rollback_table_version(self, request: finelog__stats__pb2.RollbackTableVersionRequest, ctx: RequestContext) -> finelog__stats__pb2.RollbackTableVersionResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
     def __init__(self, service: StatsService | AsyncGenerator[StatsService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -100,6 +112,46 @@ class StatsServiceASGIApplication(ConnectASGIApplication[StatsService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_table_schema,
+                ),
+                "/finelog.stats.StatsService/ReportQueryStart": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ReportQueryStart",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportQueryStartRequest,
+                        output=finelog__stats__pb2.ReportQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.report_query_start,
+                ),
+                "/finelog.stats.StatsService/ReportQueryFinish": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ReportQueryFinish",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportQueryFinishRequest,
+                        output=finelog__stats__pb2.ReportQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.report_query_finish,
+                ),
+                "/finelog.stats.StatsService/GetTableStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetTableStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableStatusRequest,
+                        output=finelog__stats__pb2.GetTableStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_table_status,
+                ),
+                "/finelog.stats.StatsService/RollbackTableVersion": Endpoint.unary(
+                    method=MethodInfo(
+                        name="RollbackTableVersion",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.RollbackTableVersionRequest,
+                        output=finelog__stats__pb2.RollbackTableVersionResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.rollback_table_version,
                 ),
             },
             interceptors=interceptors,
@@ -234,6 +286,86 @@ class StatsServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def report_query_start(
+        self,
+        request: finelog__stats__pb2.ReportQueryStartRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportQueryResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportQueryStart",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportQueryStartRequest,
+                output=finelog__stats__pb2.ReportQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def report_query_finish(
+        self,
+        request: finelog__stats__pb2.ReportQueryFinishRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportQueryResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportQueryFinish",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportQueryFinishRequest,
+                output=finelog__stats__pb2.ReportQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_table_status(
+        self,
+        request: finelog__stats__pb2.GetTableStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableStatusRequest,
+                output=finelog__stats__pb2.GetTableStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def rollback_table_version(
+        self,
+        request: finelog__stats__pb2.RollbackTableVersionRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.RollbackTableVersionResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RollbackTableVersion",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.RollbackTableVersionRequest,
+                output=finelog__stats__pb2.RollbackTableVersionResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class StatsServiceSync(Protocol):
     def register_table(self, request: finelog__stats__pb2.RegisterTableRequest, ctx: RequestContext) -> finelog__stats__pb2.RegisterTableResponse:
@@ -247,6 +379,14 @@ class StatsServiceSync(Protocol):
     def list_namespaces(self, request: finelog__stats__pb2.ListNamespacesRequest, ctx: RequestContext) -> finelog__stats__pb2.ListNamespacesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_table_schema(self, request: finelog__stats__pb2.GetTableSchemaRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableSchemaResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def report_query_start(self, request: finelog__stats__pb2.ReportQueryStartRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportQueryResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def report_query_finish(self, request: finelog__stats__pb2.ReportQueryFinishRequest, ctx: RequestContext) -> finelog__stats__pb2.ReportQueryResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_table_status(self, request: finelog__stats__pb2.GetTableStatusRequest, ctx: RequestContext) -> finelog__stats__pb2.GetTableStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def rollback_table_version(self, request: finelog__stats__pb2.RollbackTableVersionRequest, ctx: RequestContext) -> finelog__stats__pb2.RollbackTableVersionResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -313,6 +453,46 @@ class StatsServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_table_schema,
+                ),
+                "/finelog.stats.StatsService/ReportQueryStart": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ReportQueryStart",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportQueryStartRequest,
+                        output=finelog__stats__pb2.ReportQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.report_query_start,
+                ),
+                "/finelog.stats.StatsService/ReportQueryFinish": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ReportQueryFinish",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.ReportQueryFinishRequest,
+                        output=finelog__stats__pb2.ReportQueryResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.report_query_finish,
+                ),
+                "/finelog.stats.StatsService/GetTableStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetTableStatus",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.GetTableStatusRequest,
+                        output=finelog__stats__pb2.GetTableStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_table_status,
+                ),
+                "/finelog.stats.StatsService/RollbackTableVersion": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="RollbackTableVersion",
+                        service_name="finelog.stats.StatsService",
+                        input=finelog__stats__pb2.RollbackTableVersionRequest,
+                        output=finelog__stats__pb2.RollbackTableVersionResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.rollback_table_version,
                 ),
             },
             interceptors=interceptors,
@@ -441,6 +621,86 @@ class StatsServiceClientSync(ConnectClientSync):
                 service_name="finelog.stats.StatsService",
                 input=finelog__stats__pb2.GetTableSchemaRequest,
                 output=finelog__stats__pb2.GetTableSchemaResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def report_query_start(
+        self,
+        request: finelog__stats__pb2.ReportQueryStartRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportQueryResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportQueryStart",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportQueryStartRequest,
+                output=finelog__stats__pb2.ReportQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def report_query_finish(
+        self,
+        request: finelog__stats__pb2.ReportQueryFinishRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.ReportQueryResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportQueryFinish",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.ReportQueryFinishRequest,
+                output=finelog__stats__pb2.ReportQueryResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_table_status(
+        self,
+        request: finelog__stats__pb2.GetTableStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.GetTableStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTableStatus",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.GetTableStatusRequest,
+                output=finelog__stats__pb2.GetTableStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def rollback_table_version(
+        self,
+        request: finelog__stats__pb2.RollbackTableVersionRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> finelog__stats__pb2.RollbackTableVersionResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RollbackTableVersion",
+                service_name="finelog.stats.StatsService",
+                input=finelog__stats__pb2.RollbackTableVersionRequest,
+                output=finelog__stats__pb2.RollbackTableVersionResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

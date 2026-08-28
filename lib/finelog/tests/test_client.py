@@ -14,7 +14,20 @@ import pytest
 import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePolicy, schema_from_dataclass
+from finelog.client import (
+    BucketTransform,
+    FlushResult,
+    L0Mode,
+    LogClient,
+    OperatingPolicy,
+    PartitionField,
+    PartitionSpec,
+    RemoteLogHandler,
+    SourceLayout,
+    StoragePolicy,
+    TableSpec,
+    schema_from_dataclass,
+)
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
@@ -99,9 +112,12 @@ class _FakeStatsServiceClient:
         self.address = address
         self.registered: dict[str, stats_pb2.Schema] = {}
         self.registered_policies: dict[str, stats_pb2.StoragePolicy] = {}
+        self.registered_specs: dict[str, stats_pb2.TableSpec] = {}
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
         self.queries: list[str] = []
+        self.query_starts: list[stats_pb2.ReportQueryStartRequest] = []
+        self.query_finishes: list[stats_pb2.ReportQueryFinishRequest] = []
         self.errors: list[Exception] = []
         self.query_handler = None
         self.namespaces: list[stats_pb2.NamespaceInfo] = []
@@ -109,6 +125,8 @@ class _FakeStatsServiceClient:
     def register_table(self, request):
         self.registered[request.namespace] = request.schema
         self.registered_policies[request.namespace] = request.storage_policy
+        if request.HasField("table_spec"):
+            self.registered_specs[request.namespace] = request.table_spec
         return stats_pb2.RegisterTableResponse(
             effective_schema=request.schema,
             effective_policy=request.storage_policy,
@@ -146,6 +164,28 @@ class _FakeStatsServiceClient:
             if info.namespace == request.namespace:
                 return stats_pb2.GetTableSchemaResponse(schema=info.schema)
         raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} is not registered")
+
+    def get_table_status(self, request):
+        spec = self.registered_specs.get(request.namespace)
+        if spec is None:
+            raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} has no table spec")
+        return stats_pb2.GetTableStatusResponse(active_table_spec=spec, catalog_generation=7)
+
+    def rollback_table_version(self, request):
+        spec = self.registered_specs[request.namespace]
+        spec.version = request.retained_version
+        return stats_pb2.RollbackTableVersionResponse(
+            catalog_generation=8,
+            active_table_spec_version=request.retained_version,
+        )
+
+    def report_query_start(self, request):
+        self.query_starts.append(request)
+        return stats_pb2.ReportQueryResponse()
+
+    def report_query_finish(self, request):
+        self.query_finishes.append(request)
+        return stats_pb2.ReportQueryResponse()
 
     def close(self):
         pass
@@ -486,6 +526,79 @@ def test_get_table_forwards_storage_policy(tracked_clients):
         assert policy.max_segments == 0  # unset → proto3 zero
     finally:
         client.close()
+
+
+def test_get_table_registers_complete_versioned_object_native_spec(tracked_clients):
+    schema = Schema(
+        columns=(
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, trigram_index=True),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64),
+        ),
+        key_column="timestamp_ms",
+        sort_columns=("worker_id", "timestamp_ms"),
+        max_row_group_rows=32_768,
+    )
+    table_spec = TableSpec(
+        version=3,
+        source_layout=SourceLayout(
+            partition=PartitionSpec(
+                spec_id=2,
+                fields=(PartitionField("worker_id", "worker_bucket", BucketTransform(16)),),
+            ),
+            target_object_bytes=128 * 1024 * 1024,
+        ),
+        artifact_revision=4,
+        operating_policy=OperatingPolicy(
+            l0_mode=L0Mode.OBJECT_NATIVE,
+            max_buffer_bytes=64 * 1024 * 1024,
+            max_flush_age_ms=5_000,
+            max_query_time_ms=600_000,
+        ),
+    )
+    policy = StoragePolicy(max_bytes=1024)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", schema, storage_policy=policy, table_spec=table_spec)
+        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        registered = tracked_clients[0].registered_specs["iris.worker"]
+        assert registered.version == 3
+        assert registered.logical_schema == schema_to_proto(schema)
+        assert registered.source_layout.partition.fields[0].bucket.buckets == 16
+        assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
+        assert registered.artifact_policy.revision == 4
+        assert registered.artifact_policy.indexes[0].column == "worker_id"
+        assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_NATIVE
+        assert registered.operating_policy.local_cache.max_bytes == 1024
+        assert registered.operating_policy.remote_retention.retain_forever
+    finally:
+        client.close()
+
+
+def test_table_status_and_rollback_use_versioned_contract(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=2))
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        status = client.get_table_status("iris.worker")
+        assert status.active_version == 2
+        assert status.desired_version is None
+        assert status.catalog_generation == 7
+
+        rolled_back = client.rollback_table_version("iris.worker", 1)
+        assert rolled_back.active_version == 1
+    finally:
+        client.close()
+
+
+def test_table_spec_requires_positive_versions_and_buckets():
+    with pytest.raises(ValueError, match="version"):
+        TableSpec(version=0)
+    with pytest.raises(ValueError, match="bucket"):
+        BucketTransform(0)
 
 
 def test_get_table_default_policy_is_empty(tracked_clients):

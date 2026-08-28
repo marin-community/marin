@@ -33,6 +33,14 @@ impl StoragePolicy {
         }
     }
 
+    pub fn from_proto_owned(policy: &ProtoStoragePolicy) -> StoragePolicy {
+        StoragePolicy {
+            max_segments: nonzero_i32(policy.max_segments.unwrap_or(0)),
+            max_bytes: nonzero_i64(policy.max_bytes.unwrap_or(0)),
+            max_age_seconds: nonzero_i64(policy.max_age_seconds.unwrap_or(0)),
+        }
+    }
+
     /// Encode for the wire. `None` round-trips as proto3's zero.
     pub fn to_proto_owned(&self) -> ProtoStoragePolicy {
         ProtoStoragePolicy {

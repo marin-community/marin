@@ -80,6 +80,9 @@ impl EmbeddedServer {
                 )
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
+            store.recover_native_namespaces().await.map_err(|e| {
+                PyRuntimeError::new_err(format!("failed to recover native catalogs: {e}"))
+            })?;
             store.bootstrap_maintenance();
             // No policy → the private allow-localhost default (loopback only); a
             // JSON layer list configures a global finelog's cidr+jwt stack.

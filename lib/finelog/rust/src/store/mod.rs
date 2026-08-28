@@ -15,6 +15,7 @@ pub mod ipc;
 pub mod log_read;
 pub mod namespace;
 pub mod namespace_name;
+pub mod native_catalog;
 pub mod policy;
 pub mod ram_buffer;
 pub mod reconcile;
@@ -23,6 +24,7 @@ pub mod schema;
 pub mod segment;
 pub mod segment_index;
 pub(crate) mod string_column;
+pub mod table_spec;
 pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.

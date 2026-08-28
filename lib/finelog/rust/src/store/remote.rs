@@ -13,12 +13,16 @@
 //! object_store 0.13 moved `put`/`get`/`head`/`delete` onto the `ObjectStoreExt`
 //! blanket trait, which must be in scope.
 
+use std::io::Write;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::StreamExt;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as OsPath;
-use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
+use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
 
@@ -28,6 +32,20 @@ use crate::errors::StatsError;
 pub struct RemoteStore {
     store: Arc<dyn ObjectStore>,
     prefix: String,
+    local_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteObject {
+    pub bytes: bytes::Bytes,
+    pub version: RemoteVersion,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteVersion {
+    pub e_tag: Option<String>,
+    pub provider_version: Option<String>,
+    pub content_sha256: [u8; 32],
 }
 
 const GCS_SCHEME: &str = "gs://";
@@ -69,6 +87,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
         return Ok(Some(RemoteStore {
             store: Arc::new(store),
             prefix: prefix.trim_matches('/').to_string(),
+            local_root: None,
         }));
     }
     if let Some(rest) = dir.strip_prefix(S3_SCHEME) {
@@ -83,6 +102,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
         return Ok(Some(RemoteStore {
             store: Arc::new(store),
             prefix: prefix.trim_matches('/').to_string(),
+            local_root: None,
         }));
     }
     // Local filesystem remote (tests). Root the store at the remote dir so
@@ -94,6 +114,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
     Ok(Some(RemoteStore {
         store: Arc::new(store),
         prefix: String::new(),
+        local_root: Some(PathBuf::from(dir)),
     }))
 }
 
@@ -119,6 +140,269 @@ impl RemoteStore {
     fn namespace_prefix(&self, namespace: &str) -> OsPath {
         let parts: Vec<&str> = self.prefix_parts().chain([namespace]).collect();
         OsPath::from_iter(parts)
+    }
+
+    fn native_path(&self, namespace: &str, relative_key: &str) -> OsPath {
+        let parts: Vec<&str> = self
+            .prefix_parts()
+            .chain(["_native", "namespaces", namespace])
+            .chain(relative_key.split('/').filter(|part| !part.is_empty()))
+            .collect();
+        OsPath::from_iter(parts)
+    }
+
+    fn native_prefix(&self, namespace: &str, relative_prefix: &str) -> OsPath {
+        let parts: Vec<&str> = self
+            .prefix_parts()
+            .chain(["_native", "namespaces", namespace])
+            .chain(relative_prefix.split('/').filter(|part| !part.is_empty()))
+            .collect();
+        OsPath::from_iter(parts)
+    }
+
+    pub async fn list_native_namespaces(&self) -> Result<Vec<String>, StatsError> {
+        let root = OsPath::from_iter(self.prefix_parts().chain(["_native", "namespaces"]));
+        let mut stream = self.store.list(Some(&root));
+        let mut namespaces = std::collections::BTreeSet::new();
+        while let Some(result) = stream.next().await {
+            let meta = result.map_err(|error| {
+                StatsError::Internal(format!("list native namespaces {root}: {error}"))
+            })?;
+            let Some(mut parts) = meta.location.prefix_match(&root) else {
+                continue;
+            };
+            if let Some(namespace) = parts.next() {
+                namespaces.insert(namespace.as_ref().to_string());
+            }
+        }
+        Ok(namespaces.into_iter().collect())
+    }
+
+    pub async fn get_native(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+    ) -> Result<Option<RemoteObject>, StatsError> {
+        let path = self.native_path(namespace, relative_key);
+        let result = match self.store.get(&path).await {
+            Ok(result) => result,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => {
+                return Err(StatsError::Internal(format!(
+                    "read native object {path}: {error}"
+                )))
+            }
+        };
+        let e_tag = result.meta.e_tag.clone();
+        let provider_version = result.meta.version.clone();
+        let bytes = result.bytes().await.map_err(|error| {
+            StatsError::Internal(format!("read native object body {path}: {error}"))
+        })?;
+        Ok(Some(RemoteObject {
+            version: RemoteVersion {
+                e_tag,
+                provider_version,
+                content_sha256: Sha256::digest(&bytes).into(),
+            },
+            bytes,
+        }))
+    }
+
+    /// Read one object from the legacy namespace prefix.
+    pub async fn get(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+    ) -> Result<Option<RemoteObject>, StatsError> {
+        let path = self.object_path(namespace, relative_key);
+        let result = match self.store.get(&path).await {
+            Ok(result) => result,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => {
+                return Err(StatsError::Internal(format!(
+                    "read remote object {path}: {error}"
+                )))
+            }
+        };
+        let e_tag = result.meta.e_tag.clone();
+        let provider_version = result.meta.version.clone();
+        let bytes = result.bytes().await.map_err(|error| {
+            StatsError::Internal(format!("read remote object body {path}: {error}"))
+        })?;
+        Ok(Some(RemoteObject {
+            version: RemoteVersion {
+                e_tag,
+                provider_version,
+                content_sha256: Sha256::digest(&bytes).into(),
+            },
+            bytes,
+        }))
+    }
+
+    /// Create an immutable object, accepting an identical retry.
+    pub async fn put_native_immutable(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+        bytes: bytes::Bytes,
+    ) -> Result<RemoteVersion, StatsError> {
+        let path = self.native_path(namespace, relative_key);
+        let content_sha256 = Sha256::digest(&bytes).into();
+        let result = self
+            .store
+            .put_opts(
+                &path,
+                bytes.clone().into(),
+                PutOptions {
+                    mode: PutMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await;
+        match result {
+            Ok(result) => Ok(RemoteVersion {
+                e_tag: result.e_tag,
+                provider_version: result.version,
+                content_sha256,
+            }),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                let existing =
+                    self.get_native(namespace, relative_key)
+                        .await?
+                        .ok_or_else(|| {
+                            StatsError::Internal(format!(
+                                "native object {path} disappeared after create conflict"
+                            ))
+                        })?;
+                if existing.bytes == bytes {
+                    Ok(existing.version)
+                } else {
+                    Err(StatsError::SchemaConflict(format!(
+                        "immutable native object {path} already exists with different contents"
+                    )))
+                }
+            }
+            Err(error) => Err(StatsError::Internal(format!(
+                "create native object {path}: {error}"
+            ))),
+        }
+    }
+
+    /// Atomically create or replace a mutable native pointer.
+    pub async fn compare_and_swap_native(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+        expected: Option<&RemoteVersion>,
+        bytes: bytes::Bytes,
+    ) -> Result<RemoteVersion, StatsError> {
+        if let Some(local_root) = &self.local_root {
+            let path = local_native_path(local_root, namespace, relative_key);
+            let expected_hash = expected.map(|version| version.content_sha256);
+            return tokio::task::spawn_blocking(move || {
+                local_compare_and_swap(&path, expected_hash, &bytes)
+            })
+            .await
+            .map_err(|error| StatsError::Internal(format!("local native CAS task: {error}")))?;
+        }
+
+        let path = self.native_path(namespace, relative_key);
+        let mode = match expected {
+            None => PutMode::Create,
+            Some(version) => PutMode::Update(UpdateVersion {
+                e_tag: version.e_tag.clone(),
+                version: version.provider_version.clone(),
+            }),
+        };
+        let content_sha256 = Sha256::digest(&bytes).into();
+        match self
+            .store
+            .put_opts(
+                &path,
+                bytes.into(),
+                PutOptions {
+                    mode,
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(result) => Ok(RemoteVersion {
+                e_tag: result.e_tag,
+                provider_version: result.version,
+                content_sha256,
+            }),
+            Err(object_store::Error::AlreadyExists { .. })
+            | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
+                format!("native pointer {path} changed concurrently"),
+            )),
+            Err(error) => Err(StatsError::Internal(format!(
+                "update native pointer {path}: {error}"
+            ))),
+        }
+    }
+
+    pub async fn list_native_keys(
+        &self,
+        namespace: &str,
+        relative_prefix: &str,
+    ) -> Result<Vec<String>, StatsError> {
+        let prefix = self.native_prefix(namespace, relative_prefix);
+        let namespace_prefix = self.native_prefix(namespace, "");
+        let mut stream = self.store.list(Some(&prefix));
+        let mut keys = Vec::new();
+        while let Some(result) = stream.next().await {
+            let meta = result.map_err(|error| {
+                StatsError::Internal(format!("list native objects {prefix}: {error}"))
+            })?;
+            let Some(parts) = meta.location.prefix_match(&namespace_prefix) else {
+                continue;
+            };
+            keys.push(
+                parts
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+        }
+        Ok(keys)
+    }
+
+    pub async fn list_native_objects(
+        &self,
+        namespace: &str,
+        relative_prefix: &str,
+    ) -> Result<Vec<(String, ObjectMeta)>, StatsError> {
+        let prefix = self.native_prefix(namespace, relative_prefix);
+        let namespace_prefix = self.native_prefix(namespace, "");
+        let mut stream = self.store.list(Some(&prefix));
+        let mut objects = Vec::new();
+        while let Some(result) = stream.next().await {
+            let meta = result.map_err(|error| {
+                StatsError::Internal(format!("list native objects {prefix}: {error}"))
+            })?;
+            let Some(parts) = meta.location.prefix_match(&namespace_prefix) else {
+                continue;
+            };
+            let key = parts
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>()
+                .join("/");
+            objects.push((key, meta));
+        }
+        Ok(objects)
+    }
+
+    pub async fn delete_native(
+        &self,
+        namespace: &str,
+        relative_key: &str,
+    ) -> Result<(), StatsError> {
+        let path = self.native_path(namespace, relative_key);
+        self.store
+            .delete(&path)
+            .await
+            .map_err(|error| StatsError::Internal(format!("delete native object {path}: {error}")))
     }
 
     /// Upload `local_path` to `{namespace}/{relative_key}`. Returns `true` on
@@ -258,6 +542,121 @@ impl RemoteStore {
             key_column,
         )
     }
+}
+
+fn local_native_path(root: &Path, namespace: &str, relative_key: &str) -> PathBuf {
+    let mut path = root.join("_native").join("namespaces").join(namespace);
+    for part in relative_key.split('/').filter(|part| !part.is_empty()) {
+        path.push(part);
+    }
+    path
+}
+
+fn local_compare_and_swap(
+    path: &Path,
+    expected_hash: Option<[u8; 32]>,
+    bytes: &[u8],
+) -> Result<RemoteVersion, StatsError> {
+    let parent = path.parent().ok_or_else(|| {
+        StatsError::Internal(format!("native pointer {} has no parent", path.display()))
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        StatsError::Internal(format!(
+            "create native pointer parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let lock_path = path.with_extension("lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "open native pointer lock {}: {error}",
+                lock_path.display()
+            ))
+        })?;
+    // SAFETY: lock owns this file descriptor until the function returns.
+    let lock_result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    if lock_result != 0 {
+        return Err(StatsError::Internal(format!(
+            "lock native pointer {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let current = match std::fs::read(path) {
+        Ok(current) => Some(current),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(StatsError::Internal(format!(
+                "read native pointer {}: {error}",
+                path.display()
+            )))
+        }
+    };
+    let current_hash = current.as_deref().map(|value| Sha256::digest(value).into());
+    if current_hash != expected_hash {
+        return Err(StatsError::SchemaConflict(format!(
+            "native pointer {} changed concurrently",
+            path.display()
+        )));
+    }
+
+    let suffix = format!("tmp-{}-{}", std::process::id(), monotonic_nonce());
+    let staging = path.with_extension(suffix);
+    let mut staging_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staging)
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "create native pointer staging {}: {error}",
+                staging.display()
+            ))
+        })?;
+    staging_file.write_all(bytes).map_err(|error| {
+        StatsError::Internal(format!(
+            "write native pointer staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    staging_file.sync_all().map_err(|error| {
+        StatsError::Internal(format!(
+            "fsync native pointer staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    std::fs::rename(&staging, path).map_err(|error| {
+        StatsError::Internal(format!(
+            "publish native pointer {} -> {}: {error}",
+            staging.display(),
+            path.display()
+        ))
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "fsync native pointer parent {}: {error}",
+                parent.display()
+            ))
+        })?;
+    Ok(RemoteVersion {
+        e_tag: None,
+        provider_version: None,
+        content_sha256: Sha256::digest(bytes).into(),
+    })
+}
+
+fn monotonic_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(test)]

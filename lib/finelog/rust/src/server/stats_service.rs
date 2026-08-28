@@ -15,10 +15,13 @@ use datafusion::error::DataFusionError;
 use crate::errors::StatsError;
 use crate::policies::{managed_storage_policy_for, registration_namespace_for};
 use crate::proto::finelog::stats::{
-    DropTableResponse, GetTableSchemaResponse, ListNamespacesResponse, NamespaceInfo,
-    OwnedDropTableRequestView, OwnedGetTableSchemaRequestView, OwnedListNamespacesRequestView,
-    OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
-    RegisterTableResponse, StatsService, WriteRowsResponse,
+    DropTableResponse, GetTableSchemaResponse, GetTableStatusResponse, ListNamespacesResponse,
+    NamespaceInfo, OwnedDropTableRequestView, OwnedGetTableSchemaRequestView,
+    OwnedGetTableStatusRequestView, OwnedListNamespacesRequestView, OwnedQueryRequestView,
+    OwnedRegisterTableRequestView, OwnedReportQueryFinishRequestView,
+    OwnedReportQueryStartRequestView, OwnedRollbackTableVersionRequestView,
+    OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, ReportQueryResponse,
+    RollbackTableVersionResponse, StatsService, WriteRowsResponse,
 };
 use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
@@ -30,6 +33,7 @@ use crate::store::schema::{
     ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
 };
 use crate::store::store::ForwardedWrite;
+use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::Store;
 use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};
 
@@ -141,34 +145,92 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("schema required"))?;
         let schema: Schema = schema_from_proto_view(schema_view)?;
         let requested_policy = StoragePolicy::from_proto_view(request.storage_policy.as_option());
+        let validated_table_spec = request
+            .table_spec
+            .as_option()
+            .map(|view| ValidatedTableSpec::from_view(view, &schema, &requested_policy))
+            .transpose()?;
         let forwarded_telemetry = is_forwarded_telemetry(&ctx, &namespace);
 
         let store = Arc::clone(&self.store);
         let requested_namespace = namespace.clone();
-        let (effective, effective_policy, ignored_columns) = run_blocking(move || {
+        let (
+            registered_namespace,
+            effective,
+            effective_policy,
+            ignored_columns,
+            table_spec_status,
+            object_native,
+        ) = run_blocking(move || {
             let ns = registration_namespace_for(&requested_namespace)?;
             let policy = managed_storage_policy_for(&ns)?.unwrap_or(requested_policy);
             if forwarded_telemetry {
+                if validated_table_spec.is_some() {
+                    return Err(StatsError::SchemaValidation(
+                        "forwarded telemetry registration cannot change table_spec".to_string(),
+                    ));
+                }
                 match store.get_table_schema(&ns) {
                     Ok(effective) => {
                         let ignored = ignored_forwarded_schema_columns(&schema, &effective)?;
                         let effective_policy = store.get_policy(&ns)?;
-                        return Ok((effective, effective_policy, ignored));
+                        let table_spec_status = store.table_spec_status(&ns)?;
+                        return Ok((
+                            ns,
+                            effective,
+                            effective_policy,
+                            ignored,
+                            table_spec_status,
+                            false,
+                        ));
                     }
                     Err(StatsError::NamespaceNotFound(_)) => {}
                     Err(error) => return Err(error),
                 }
             }
+            if let Some(validated) = validated_table_spec {
+                if validated.cache_policy != policy {
+                    return Err(StatsError::SchemaValidation(
+                        "table_spec local_cache does not match the server-managed storage policy"
+                            .to_string(),
+                    ));
+                }
+                let registration = store.register_versioned_table(&ns, validated)?;
+                return Ok((
+                    ns,
+                    registration.schema,
+                    registration.policy,
+                    Vec::new(),
+                    registration.table_spec_status,
+                    registration.object_native,
+                ));
+            }
             let effective = store.register_table(&ns, schema, policy)?;
             let effective_policy = store.get_policy(&ns)?;
-            Ok((effective, effective_policy, Vec::new()))
+            let table_spec_status = store.table_spec_status(&ns)?;
+            Ok((
+                ns,
+                effective,
+                effective_policy,
+                Vec::new(),
+                table_spec_status,
+                false,
+            ))
         })
         .await?;
         self.report_ignored_forwarded_telemetry_columns(ignored_columns);
+        if object_native {
+            self.store
+                .publish_native_catalog(&registered_namespace)
+                .await?;
+        }
 
         connectrpc::Response::ok(RegisterTableResponse {
             effective_schema: MessageField::some(schema_to_proto_owned(&effective)),
             effective_policy: MessageField::some(effective_policy.to_proto_owned()),
+            active_table_spec_version: Some(table_spec_status.active_version()),
+            desired_table_spec_version: Some(table_spec_status.desired_version()),
+            transition_phase: Some(table_spec_status.phase.into()),
             ..Default::default()
         })
     }
@@ -238,6 +300,9 @@ impl StatsService for StatsServiceImpl {
         // guard must outlive run_query_over (not just query_providers) to keep a
         // concurrent drop_table / compaction from unlinking a file mid-scan.
         let _read_guard = self.store.query_visibility().read().await;
+        // Cache paths mirror immutable object keys. Rehydrate missing visible
+        // objects while eviction is fenced, then snapshot exact local paths.
+        self.store.ensure_native_query_cache().await?;
 
         // Snapshot every live namespace (schema + sealed-segment paths) under
         // the engine locks on the blocking pool.
@@ -352,6 +417,113 @@ impl StatsService for StatsServiceImpl {
         let schema = run_blocking(move || store.get_table_schema(&namespace)).await?;
         connectrpc::Response::ok(GetTableSchemaResponse {
             schema: MessageField::some(schema_to_proto_owned(&schema)),
+            ..Default::default()
+        })
+    }
+
+    async fn report_query_start(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedReportQueryStartRequestView,
+    ) -> ServiceResult<ReportQueryResponse> {
+        let query_id = request.query_id.unwrap_or("").to_string();
+        if query_id.is_empty() {
+            return Err(ConnectError::invalid_argument("query_id required"));
+        }
+        let catalogs = request
+            .catalogs
+            .iter()
+            .map(|catalog| {
+                (
+                    catalog.namespace.unwrap_or("").to_string(),
+                    catalog.catalog_generation.unwrap_or(0),
+                    catalog.table_spec_version.unwrap_or(0),
+                )
+            })
+            .collect::<Vec<_>>();
+        if catalogs
+            .iter()
+            .any(|(namespace, _, _)| namespace.is_empty())
+        {
+            return Err(ConnectError::invalid_argument(
+                "reported query catalog namespace required",
+            ));
+        }
+        tracing::info!(
+            query_id,
+            sql = %truncate_sql_for_log(request.sql.unwrap_or("")),
+            catalogs = ?catalogs,
+            "direct query started"
+        );
+        connectrpc::Response::ok(ReportQueryResponse::default())
+    }
+
+    async fn report_query_finish(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedReportQueryFinishRequestView,
+    ) -> ServiceResult<ReportQueryResponse> {
+        let query_id = request.query_id.unwrap_or("").to_string();
+        if query_id.is_empty() {
+            return Err(ConnectError::invalid_argument("query_id required"));
+        }
+        tracing::info!(
+            query_id,
+            reported_elapsed_ms = request.elapsed_ms.unwrap_or(0),
+            row_count = request.row_count.unwrap_or(0),
+            succeeded = request.succeeded.unwrap_or(false),
+            error_code = request.error_code.unwrap_or(""),
+            "direct query finished"
+        );
+        connectrpc::Response::ok(ReportQueryResponse::default())
+    }
+
+    async fn get_table_status(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedGetTableStatusRequestView,
+    ) -> ServiceResult<GetTableStatusResponse> {
+        let namespace = request
+            .namespace
+            .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
+            .to_string();
+        let store = Arc::clone(&self.store);
+        let status = run_blocking(move || store.table_spec_status(&namespace)).await?;
+        connectrpc::Response::ok(GetTableStatusResponse {
+            active_table_spec: status
+                .active
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            desired_table_spec: status
+                .desired
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            migration: status
+                .migration
+                .map(MessageField::some)
+                .unwrap_or_else(MessageField::none),
+            catalog_generation: Some(status.catalog_generation),
+            ..Default::default()
+        })
+    }
+
+    async fn rollback_table_version(
+        &self,
+        _ctx: RequestContext,
+        request: OwnedRollbackTableVersionRequestView,
+    ) -> ServiceResult<RollbackTableVersionResponse> {
+        let namespace = request
+            .namespace
+            .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
+            .to_string();
+        let retained_version = request.retained_version.unwrap_or(0);
+        let status = self
+            .store
+            .rollback_table_version(&namespace, retained_version)
+            .await?;
+        connectrpc::Response::ok(RollbackTableVersionResponse {
+            catalog_generation: Some(status.catalog_generation),
+            active_table_spec_version: Some(status.active_version()),
             ..Default::default()
         })
     }
