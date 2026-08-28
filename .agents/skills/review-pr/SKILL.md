@@ -73,11 +73,34 @@ Follow these steps precisely:
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use Opus subagents throughout — for both bugs/logic and CLAUDE.md violations.
+5. Launch one limited-attention opus agent per changed, human-authored file to
+   review maintainability. Split a large diff into cohesive hunks. Give each
+   agent only its file path, its diff or hunk, and a small amount of local
+   context. Do not give it the PR description, related files, or review
+   summaries, and do not let it open more context.
 
-6. Filter out any issues not validated in step 5. The remainder is the high-signal review list.
+   Prefer shallow, concrete code that can be copied, deleted, and recombined
+   locally. Treat small duplication as useful when it keeps variants independent.
+   Flag abstractions that force unrelated variants through shared layers or
+   coordinated edits.
 
-7. Emit a stats event for this review (best-effort — never retry, never
+   Ask the agent to privately simulate reasonable future changes near the edited
+   code. Use the exercise to find hidden assumptions, distant coupling, or
+   unneeded abstraction and indirection that constrain future work. The final
+   finding must identify the structural obstacle and explain how it reduces
+   flexibility. Omit the hypothetical edit from the review. Do not flag
+   unfamiliar code, personal taste, or broad requests to simplify.
+
+   Validate each finding with a parallel opus agent that receives the PR
+   description and broader code context. Keep it only when the validator
+   confirms the obstacle by trying a plausible future change and the PR
+   introduces it. Omit the simulated change from the final review.
+
+6. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use Opus subagents throughout — for both bugs/logic and CLAUDE.md violations.
+
+7. Filter out any issues not validated in steps 5 and 6. The remainder is the high-signal review list.
+
+8. Emit a stats event for this review (best-effort — never retry, never
    surface failures to the user). This step runs unconditionally, *before*
    any of the early-stop branches below, so we capture no-finding runs and
    non-`--comment` runs in the dashboard. Run from the repo root:
@@ -100,15 +123,15 @@ Follow these steps precisely:
    EOF
    ```
 
-   - `<category>` is one of: `bug`, `claude-md-adherence`.
+   - `<category>` is one of: `bug`, `claude-md-adherence`, `maintainability`.
    - One `findings` row per validated issue. Pass `"findings": []` if there
      were none — the empty row in the `invocations` table is the
      "tool ran with no signal" datapoint we want. `finding_count` is derived
      from the `findings` array length by `log_stats.py`.
 
-8. Output a summary of the review findings to the terminal:
+9. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.
-   - If no issues were found, state: "No issues found. Checked for bugs and CLAUDE.md compliance."
+   - If no issues were found, state: "No issues found. Checked for bugs, CLAUDE.md compliance, and barriers to future edits."
    - Separately, report any PR-description problems from step 3.
 
    If `--comment` argument was NOT provided, stop here. Do not post any GitHub comments.
@@ -122,11 +145,11 @@ Follow these steps precisely:
    If `--comment` argument IS provided and NO code issues were found, post the
    no-issues summary comment using `gh pr comment` and stop.
 
-   If `--comment` argument IS provided and code issues were found, continue to step 9.
+   If `--comment` argument IS provided and code issues were found, continue to step 10.
 
-9. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
+10. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
 
-10. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
+11. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
     - Provide a brief description of the issue
     - For small, self-contained fixes, include a committable suggestion block
     - For larger fixes (6+ lines, structural changes, or changes spanning multiple locations), describe the issue and suggested fix without a suggestion block
@@ -134,7 +157,7 @@ Follow these steps precisely:
 
     **IMPORTANT: Only post ONE comment per unique issue. Do not post duplicate comments.**
 
-Use this list when evaluating issues in Steps 4 and 5 (these are false positives, do NOT flag):
+Use this list when evaluating issues in Steps 4 and 6 (these are false positives, do NOT flag):
 
 - Pre-existing issues
 - Something that appears to be a bug but is actually correct
@@ -155,7 +178,7 @@ Notes:
 
 ## Code review
 
-No issues found. Checked for bugs and CLAUDE.md compliance.
+No issues found. Checked for bugs, CLAUDE.md compliance, and barriers to future edits.
 
 ---
 
