@@ -80,6 +80,7 @@ config:
         - marin-community/marin
         - marin-community/tpu-inference
         - marin-community/vllm
+        - marin-community/xla
       allowedTools: []
       mcpAccess:
         mode: all

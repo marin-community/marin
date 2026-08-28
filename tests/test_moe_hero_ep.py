@@ -6,9 +6,12 @@ import os
 import subprocess
 import sys
 import textwrap
+import tomllib
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import unquote
 
 import equinox as eqx
 import jax
@@ -17,6 +20,7 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
@@ -27,6 +31,8 @@ from marin.testing.moe import ragged_ep
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+
+GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
@@ -214,7 +220,7 @@ def _runtime_env_config(
             watch_mode=watch_mode,
         ),
         model=SimpleNamespace(moe_implementation=moe_implementation),
-        resources=object(),
+        resources=ResourceConfig.with_gpu(train.RAGGED_ACCELERATOR, count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
@@ -300,6 +306,41 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_ragged_transport_is_rejected_where_no_patched_wheel_exists():
+    """An H100 launch must fail before allocation rather than sync a stock runtime."""
+    with pytest.raises(ValueError, match=train.RAGGED_ACCELERATOR):
+        train.require_ragged_capable_fleet(train.RAGGED_MOE_IMPLEMENTATION, ResourceConfig.with_gpu("H100", count=8))
+
+    train.require_ragged_capable_fleet("fixed_pooled_wave_all_to_all", ResourceConfig.with_gpu("H100", count=8))
+
+
+def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):
+    """jax reports the stock generation either way, so nothing else catches a stock runtime."""
+    monkeypatch.setattr("importlib.metadata.version", lambda name: jax.__version__)
+    with pytest.raises(RuntimeError, match=r"\+marin\."):
+        train.verify_ragged_pjrt()
+
+    monkeypatch.setattr("importlib.metadata.version", lambda name: f"{jax.__version__}+marin.abc123def456")
+    train.verify_ragged_pjrt()
+
+
+def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
+    """The patched wheel swaps in for the stock plugin, whose ABI follows the jax pin; a jax bump
+    without a fork rebuild would otherwise be caught only on a GB200, at the first collective."""
+    project = tomllib.loads(GPU_EXTRA_PYPROJECT.read_text())
+    gpu_extra = project["project"]["optional-dependencies"]["gpu"]
+    jax_pins = [requirement for requirement in gpu_extra if requirement.startswith("jax[cuda13]==")]
+    assert len(jax_pins) == 1
+    jax_version = jax_pins[0].removeprefix("jax[cuda13]==")
+
+    source = project["tool"]["uv"]["sources"]["jax-cuda13-pjrt"]
+    assert source["extra"] == "gpu"
+    assert source["marker"] == "platform_machine == 'aarch64'"
+    filename = unquote(source["url"].rsplit("/", 1)[-1])
+    assert filename.startswith(f"jax_cuda13_pjrt-{jax_version}+marin.")
+    assert filename.endswith("aarch64.whl")
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

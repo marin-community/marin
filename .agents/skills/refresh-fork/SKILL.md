@@ -199,6 +199,12 @@ the pin set here needs no change after that promotion.
   A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. Re-audit the
   wheel verifier and the fork's release gate for the extension name (`vllm._C_stable_libtorch`
   on CUDA 13) when the base moves across such a boundary.
+
+  The `xla` fork is deliberately NOT in `migration.toml`: its base must be the XLA commit the
+  workspace's pinned `jax[cuda13]` release names, so it moves only when that pin moves, and it is
+  pinned as a wheel URL in `lib/marin/pyproject.toml` rather than through the refresh machinery.
+  See "The XLA fork" in `docs/dev-guide/forking-policy.md` for the manual rebuild-and-re-pin
+  procedure.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point

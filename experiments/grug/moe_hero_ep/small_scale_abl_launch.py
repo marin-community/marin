@@ -47,7 +47,13 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    require_ragged_capable_fleet,
+    run_grug,
+)
 from experiments.marin_tokenizer import marin_tokenizer
 
 # The EP sweep (issue #8062) settings: 4096-token sequences at batch 1024, 2048 sliding window with
@@ -390,6 +396,7 @@ def build_small_run(
         disk=fleet.disk,
         replicas=fleet.nodes * dp_racks,
     )
+    require_ragged_capable_fleet(model.moe_implementation, train_resources)
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
 

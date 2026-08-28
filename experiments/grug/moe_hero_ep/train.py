@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import gc
+import importlib.metadata
 import itertools
 import logging
 import os
@@ -22,6 +23,7 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
+from fray.types import GpuConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -49,7 +51,6 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from packaging.version import Version
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -95,12 +96,8 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
-# First release defining both flags. Older jaxlibs abort at import on an unknown XLA_FLAGS entry,
-# with a message that names the flag but not why it was set, on every rank at once. The GPU extras
-# still pin 0.11.0, so an opt-in ragged run picks up a runtime that cannot honor the flags; fail
-# here instead, where the reason is legible. Bumping the pin is blocked on a jax 0.11.1 sharding
-# change that breaks grug attention (#8715); this guard goes away when that lands.
-RAGGED_MINIMUM_JAX_VERSION = "0.11.1"
+RAGGED_ACCELERATOR = "GB200"
+PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
@@ -179,12 +176,6 @@ def _apply_hero_ep_runtime_defaults(
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     if ragged:
-        if Version(jax.__version__) < Version(RAGGED_MINIMUM_JAX_VERSION):
-            raise RuntimeError(
-                f"{RAGGED_MOE_IMPLEMENTATION} needs jax>={RAGGED_MINIMUM_JAX_VERSION} for "
-                f"{', '.join(RAGGED_REQUIRED_XLA_FLAGS)}, got {jax.__version__}. Run it on the "
-                "pinned jax/XLA build."
-            )
         # Unlike the defaults above, these are not overridable. Selecting the host-launched
         # one-shot kernel needs both flags cleared together plus a splits-per-peer count this
         # branch no longer carries, so honoring a partial override would run a configuration
@@ -193,6 +184,46 @@ def _apply_hero_ep_runtime_defaults(
         xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_REQUIRED_XLA_FLAG_NAMES]
         xla_flags.extend(RAGGED_REQUIRED_XLA_FLAGS)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+def require_ragged_capable_fleet(moe_implementation: MoeImplementation | None, resources: ResourceConfig) -> None:
+    """Reject a ragged launch on a fleet that cannot run it, before the fleet is allocated.
+
+    The transport needs GB200 for its SM100 expert MLP and for Marin's patched PJRT build, which
+    is published for aarch64 alone (lib/marin/pyproject.toml). Any other fleet would sync the
+    stock plugin and fail ``verify_ragged_pjrt`` only after allocation.
+    """
+    if moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+        return
+    device = resources.device
+    if not isinstance(device, GpuConfig) or device.variant != RAGGED_ACCELERATOR:
+        raise ValueError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs {RAGGED_ACCELERATOR} for its SM100 expert MLP and "
+            f"the aarch64-only patched PJRT wheel, got {device}."
+        )
+
+
+def verify_ragged_pjrt() -> None:
+    """Raise unless this process runs Marin's patched GPU PJRT plugin.
+
+    The fork's ragged all-to-all delta lives in the plugin binary and nothing else observes it:
+    ``jax.__version__`` reports the stock generation, and the stock plugin runs the same flags
+    correctly at a materially lower throughput. Without this check the difference between the
+    patched and the stock runtime is a number on a dashboard rather than a failure. The patched
+    wheel installs through the gpu extra's aarch64 source in lib/marin/pyproject.toml.
+    """
+    try:
+        installed = importlib.metadata.version(PJRT_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError as missing:
+        raise RuntimeError(
+            f"{PJRT_DISTRIBUTION} is not installed, so this process has no GPU PJRT plugin at all."
+        ) from missing
+    expected_prefix = f"{jax.__version__}+marin."
+    if not installed.startswith(expected_prefix):
+        raise RuntimeError(
+            f"{RAGGED_MOE_IMPLEMENTATION} needs Marin's patched {PJRT_DISTRIBUTION} "
+            f"({expected_prefix}*), found {installed}."
+        )
 
 
 @dataclass(frozen=True)
@@ -814,6 +845,8 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+        verify_ragged_pjrt()
     if config.tensorstore_cache_bytes is not None:
         set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
 
@@ -1172,6 +1205,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
     )
+    require_ragged_capable_fleet(config.model.moe_implementation, config.resources)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
@@ -1190,5 +1224,6 @@ __all__ = [
     "GrugTrainerConfig",
     "MasterParamMode",
     "initial_state",
+    "require_ragged_capable_fleet",
     "run_grug",
 ]
