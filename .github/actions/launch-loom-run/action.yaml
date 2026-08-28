@@ -58,8 +58,8 @@ runs:
         fi
 
         request_file=$(mktemp "$RUNNER_TEMP/loom-run-request.XXXXXX.json")
-        scratch_base64=$(mktemp "$RUNNER_TEMP/loom-run-scratch.XXXXXX.base64")
-        trap 'rm -f -- "$request_file" "$scratch_base64"' EXIT
+        scratch_content_file=$(mktemp "$RUNNER_TEMP/loom-run-scratch.XXXXXX.base64")
+        trap 'rm -f -- "$request_file" "$scratch_content_file"' EXIT
 
         scratch_name=""
         if [[ -n "$SCRATCH_FILE" ]]; then
@@ -82,7 +82,7 @@ runs:
             exit 1
           fi
           scratch_name=$(basename -- "$scratch_path")
-          base64 --wrap=0 -- "$scratch_path" > "$scratch_base64"
+          base64 --wrap=0 -- "$scratch_path" > "$scratch_content_file"
         fi
 
         audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
@@ -107,7 +107,7 @@ runs:
           --arg base "$BASE" \
           --arg issue "$GITHUB_ISSUE" \
           --arg scratch_name "$scratch_name" \
-          --rawfile scratch_content "$scratch_base64" \
+          --rawfile scratch_content "$scratch_content_file" \
           '{profile: $profile, idempotency_key: $key, source: "actions",
             session: {repo: $repo, title: $title, goal: $goal}}
           | if $channel == "" then . else .channel = $channel end

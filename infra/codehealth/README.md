@@ -86,10 +86,10 @@ Scheduled publication belongs to the refinement job that consumes these rows;
 open, merged, and closed pull requests by GitHub activity time, retains full
 review bodies, thread state, changed-file metadata, commits, and GitHub-served
 diffs, and adds the matching Finelog automation telemetry and prior comment
-annotations. Changed-file metadata is paginated through GraphQL. Its
-REST-only SHA, URL, previous-filename, and per-file patch fields are null in
-the corpus. Endpoint counts, GraphQL thread membership, benchmark coverage,
-and every artifact hash must validate before the corpus is published.
+annotations. Changed-file metadata is paginated through GraphQL and contains
+the path, status, additions, deletions, and total changed lines. Endpoint
+counts, GraphQL thread membership, benchmark coverage, and every artifact hash
+must validate before the corpus is published.
 
 The workflow uploads the frozen archive to GitHub Actions for 90 days and
 attaches the identical archive to one plan-mode Loom session. It deletes the

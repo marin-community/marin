@@ -11,6 +11,7 @@ import subprocess
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from itertools import batched
+from types import MappingProxyType
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -26,6 +27,8 @@ MAX_REST_REQUESTS = 850
 HYDRATION_BATCH_SIZE = 20
 FINGERPRINT_BATCH_SIZE = 100
 REST_RETRY_RESERVE = 150
+REST_PAGE_SIZE = 100
+DIAGNOSTIC_EVENT_LIMIT = 10
 
 EventKind = Literal["inline_comment", "review", "issue_comment"]
 
@@ -66,17 +69,11 @@ class PullRequestRecord(CorpusModel):
 
 class ChangedFileRecord(CorpusModel):
     pr_number: int
-    sha: str | None
     filename: str
-    previous_filename: str | None
     status: str
     additions: int
     deletions: int
     changes: int
-    blob_url: str | None
-    raw_url: str | None
-    contents_url: str | None
-    patch: str | None
 
 
 class CommitRecord(CorpusModel):
@@ -182,6 +179,20 @@ class PullRequestFingerprint:
     reviews: int
     review_threads: int
     issue_comments: int
+
+
+@dataclass(frozen=True)
+class PullRequestScan:
+    """Relevant scan roots and the total candidate pull-request count."""
+
+    relevant: tuple[dict, ...]
+    candidate_count: int
+
+
+@dataclass(frozen=True)
+class ActorIdentity:
+    login: str
+    actor_type: str
 
 
 def _is_diff_too_large(response: str) -> bool:
@@ -400,13 +411,15 @@ query BatchHydrate($owner: String!, $name: String!, {variables}) {{
 """
 
 
-CONNECTION_FIELDS = {
-    "comments": ISSUE_COMMENT_FIELDS,
-    "reviews": REVIEW_FIELDS,
-    "reviewThreads": THREAD_FIELDS,
-    "commits": COMMIT_FIELDS,
-    "files": FILE_FIELDS,
-}
+CONNECTION_FIELDS = MappingProxyType(
+    {
+        "comments": ISSUE_COMMENT_FIELDS,
+        "reviews": REVIEW_FIELDS,
+        "reviewThreads": THREAD_FIELDS,
+        "commits": COMMIT_FIELDS,
+        "files": FILE_FIELDS,
+    }
+)
 
 
 def _connections_query(fields: list[str]) -> str:
@@ -545,8 +558,12 @@ def _rest_seed_prs(
 ) -> dict[int, dict[tuple[EventKind, int], dict]]:
     since = scope.start.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
     endpoints: dict[EventKind, str] = {
-        "inline_comment": f"repos/{repository}/pulls/comments?sort=updated&direction=asc&since={since}&per_page=100",
-        "issue_comment": f"repos/{repository}/issues/comments?sort=updated&direction=asc&since={since}&per_page=100",
+        "inline_comment": (
+            f"repos/{repository}/pulls/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
+        ),
+        "issue_comment": (
+            f"repos/{repository}/issues/comments?sort=updated&direction=asc&since={since}&per_page={REST_PAGE_SIZE}"
+        ),
     }
     seeds: dict[int, dict[tuple[EventKind, int], dict]] = {}
     for kind, endpoint in endpoints.items():
@@ -572,7 +589,7 @@ def _scan_pull_requests(
     scope: ReviewScope,
     limit: int | None,
     seed_prs: set[int],
-) -> tuple[list[dict], int]:
+) -> PullRequestScan:
     owner, name = _repo_parts(repository)
     after: str | None = None
     relevant: list[dict] = []
@@ -645,7 +662,7 @@ def _scan_pull_requests(
             continue
         relevant.append(pull)
         candidates += 1
-    return relevant, candidates
+    return PullRequestScan(relevant=tuple(relevant), candidate_count=candidates)
 
 
 @dataclass
@@ -768,9 +785,12 @@ def _fingerprint_nodes(client: GitHubClient, node_ids: list[str]) -> dict[str, P
     return fingerprints
 
 
-def _author(actor: dict | None) -> tuple[str, str]:
+def _actor_identity(actor: dict | None) -> ActorIdentity:
     actor = actor or {}
-    return str(actor.get("login") or "unknown"), str(actor.get("__typename") or "Unknown")
+    return ActorIdentity(
+        login=str(actor.get("login") or "unknown"),
+        actor_type=str(actor.get("__typename") or "Unknown"),
+    )
 
 
 def _event_record(
@@ -781,12 +801,12 @@ def _event_record(
     scope: ReviewScope,
     thread: dict | None = None,
 ) -> ReviewEventRecord:
-    author, author_type = _author(node.get("author"))
-    pr_author, _ = _author(pull.get("author"))
+    author = _actor_identity(node.get("author"))
+    pr_author = _actor_identity(pull.get("author"))
     body = str(node.get("body") or "")
     author_is_bot = is_bot(node.get("author"), scope.bot_logins)
     thread = thread or {}
-    resolved_by, _ = _author(thread.get("resolvedBy"))
+    resolved_by = _actor_identity(thread.get("resolvedBy"))
     review = node.get("pullRequestReview") or {}
     commit = node.get("commit") or {}
     original_commit = node.get("originalCommit") or {}
@@ -798,9 +818,9 @@ def _event_record(
         node_id=node.get("id"),
         repository=repository,
         pr_number=int(pull["number"]),
-        pr_author=pr_author,
-        author=author,
-        author_type=author_type,
+        pr_author=pr_author.login,
+        author=author.login,
+        author_type=author.actor_type,
         author_association=str(node.get("authorAssociation") or "UNKNOWN"),
         body=body,
         state=node.get("state"),
@@ -813,7 +833,7 @@ def _event_record(
         parent_comment_id=(node.get("replyTo") or {}).get("databaseId"),
         thread_is_resolved=thread.get("isResolved"),
         thread_is_outdated=thread.get("isOutdated"),
-        thread_resolved_by=None if resolved_by == "unknown" else resolved_by,
+        thread_resolved_by=None if resolved_by.login == "unknown" else resolved_by.login,
         path=node.get("path") or thread.get("path"),
         side=thread.get("diffSide"),
         line=node.get("line"),
@@ -851,7 +871,7 @@ def _commit_record(pr_number: int, node: dict) -> CommitRecord:
 def _pull_request_record(
     repository: str, pull: dict, commits: list[CommitRecord], review_comments: int
 ) -> PullRequestRecord:
-    author, author_type = _author(pull.get("author"))
+    author = _actor_identity(pull.get("author"))
     number = int(pull["number"])
     return PullRequestRecord(
         repository=repository,
@@ -862,8 +882,8 @@ def _pull_request_record(
         body=str(pull.get("body") or ""),
         state=pull["state"].lower(),
         draft=bool(pull["isDraft"]),
-        author=author,
-        author_type=author_type,
+        author=author.login,
+        author_type=author.actor_type,
         author_association=str(pull.get("authorAssociation") or "UNKNOWN"),
         created_at=pull["createdAt"],
         updated_at=pull["updatedAt"],
@@ -889,17 +909,11 @@ def _changed_file(pr_number: int, item: dict) -> ChangedFileRecord:
     deletions = int(item["deletions"])
     return ChangedFileRecord(
         pr_number=pr_number,
-        sha=None,
         filename=item["path"],
-        previous_filename=None,
         status=str(item["changeType"]).lower(),
         additions=additions,
         deletions=deletions,
         changes=additions + deletions,
-        blob_url=None,
-        raw_url=None,
-        contents_url=None,
-        patch=None,
     )
 
 
@@ -940,7 +954,7 @@ def _hydrate_graphql(
     for thread in thread_nodes:
         comments = _thread_comment_nodes(client, thread)
         thread_comments.extend((thread, comment) for comment in comments)
-        resolved_by, _ = _author(thread.get("resolvedBy"))
+        resolved_by = _actor_identity(thread.get("resolvedBy"))
         thread_records.append(
             ReviewThreadRecord(
                 pr_number=number,
@@ -948,7 +962,7 @@ def _hydrate_graphql(
                 comment_ids=tuple(int(comment["databaseId"]) for comment in comments),
                 is_resolved=bool(thread["isResolved"]),
                 is_outdated=bool(thread["isOutdated"]),
-                resolved_by=None if resolved_by == "unknown" else resolved_by,
+                resolved_by=None if resolved_by.login == "unknown" else resolved_by.login,
             )
         )
 
@@ -1042,17 +1056,19 @@ def collect_corpus(
     client = client or GitHubClient()
     scope = ReviewScope(start=start, end=end, bot_logins=frozenset(bot_logins))
     seeds = _rest_seed_prs(client, repository, scope)
-    relevant, candidate_count = _scan_pull_requests(
+    scan = _scan_pull_requests(
         client,
         repository,
         scope,
         limit,
         set(seeds),
     )
-    oversized = sorted(int(pull["number"]) for pull in relevant if int(pull["changedFiles"]) > MAX_GITHUB_CHANGED_FILES)
+    oversized = sorted(
+        int(pull["number"]) for pull in scan.relevant if int(pull["changedFiles"]) > MAX_GITHUB_CHANGED_FILES
+    )
     if oversized:
         raise RuntimeError(f"PR #{oversized[0]} exceeds GitHub's {MAX_GITHUB_CHANGED_FILES:,}-file API cap")
-    numbers = [int(pull["number"]) for pull in relevant]
+    numbers = [int(pull["number"]) for pull in scan.relevant]
     projected_rest = client.rest_requests + len(numbers) + REST_RETRY_RESERVE
     client.projected_rest_requests = projected_rest
     if projected_rest > MAX_REST_REQUESTS:
@@ -1079,7 +1095,10 @@ def collect_corpus(
         actual = {(event.kind, event.database_id): event for event in bundle.events}
         missing = sorted(set(expected) - set(actual))
         if missing:
-            raise RuntimeError(f"PR #{bundle.pull_request.number} is missing seeded review events: {missing[:10]}")
+            raise RuntimeError(
+                f"PR #{bundle.pull_request.number} is missing seeded review events: "
+                f"{missing[:DIAGNOSTIC_EVENT_LIMIT]}"
+            )
         changed = [
             key
             for key, seed in expected.items()
@@ -1087,10 +1106,11 @@ def collect_corpus(
         ]
         if changed:
             raise RuntimeError(
-                f"PR #{bundle.pull_request.number} changed between REST seeding and GraphQL hydration: {changed[:10]}"
+                f"PR #{bundle.pull_request.number} changed between REST seeding and GraphQL hydration: "
+                f"{changed[:DIAGNOSTIC_EVENT_LIMIT]}"
             )
     return CollectionResult(
         bundles=tuple(sorted(bundles, key=lambda bundle: bundle.pull_request.number)),
-        candidate_pull_requests=candidate_count,
+        candidate_pull_requests=scan.candidate_count,
         usage=client.usage(),
     )

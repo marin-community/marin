@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import click
 from pydantic import BaseModel, Field
@@ -43,9 +43,13 @@ SCHEMA_VERSION = 1
 DEFAULT_CATALOG_DIR = Path(__file__).parents[1] / "lint"
 DEFAULT_BENCHMARK = DEFAULT_CATALOG_DIR / "eval" / "corpus.jsonl"
 Lane = Literal["complexity", "interfaces", "robustness", "cruft", "prose", "meta"]
+LANES = get_args(Lane)
 Provenance = Literal["catalog-example", "human-review", "synthetic-hard-negative"]
 JsonRecord = BaseModel | dict[str, object]
 RULE_HEADING = re.compile(r"^### `(?P<code>ml-[a-z0-9-]+)`", re.MULTILINE)
+CASE_ALIAS_PATTERN = r"^case-[0-9]{3}$"
+SQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+MANIFEST_FILENAME = "manifest.json"
 
 
 class CorpusFile(CorpusModel):
@@ -69,14 +73,14 @@ class BenchmarkCase(CorpusModel):
 
 
 class BenchmarkPredictionCase(CorpusModel):
-    alias: str = Field(pattern=r"^case-[0-9]{3}$")
+    alias: str = Field(pattern=CASE_ALIAS_PATTERN)
     lane: Lane
     diff: str
     changed_lines: int = Field(ge=0)
 
 
 class BenchmarkLabel(CorpusModel):
-    alias: str = Field(pattern=r"^case-[0-9]{3}$")
+    alias: str = Field(pattern=CASE_ALIAS_PATTERN)
     source_id: str
     description: str
     expected_rules: tuple[str, ...]
@@ -176,10 +180,10 @@ def _catalog_sha(catalog_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def _catalog_rules(catalog_dir: Path) -> dict[str, str]:
+def catalog_rules(catalog_dir: Path) -> dict[str, str]:
     rules: dict[str, str] = {}
     for catalog_path in sorted(catalog_dir.glob("*.md")):
-        if catalog_path.stem not in {"complexity", "interfaces", "robustness", "cruft", "prose", "meta"}:
+        if catalog_path.stem not in LANES:
             continue
         for match in RULE_HEADING.finditer(catalog_path.read_text()):
             code = match.group("code")
@@ -207,7 +211,7 @@ def _load_benchmark(path: Path) -> tuple[BenchmarkCase, ...]:
 
 
 def _validate_benchmark_cases(cases: Sequence[BenchmarkCase], catalog_dir: Path) -> BenchmarkSummary:
-    rules = _catalog_rules(catalog_dir)
+    rules = catalog_rules(catalog_dir)
     for case in cases:
         if len(case.expected_rules) != len(set(case.expected_rules)):
             raise ValueError(f"benchmark case {case.id} contains duplicate expected rules")
@@ -358,9 +362,9 @@ def load_telemetry(
     events: Sequence[ReviewEventRecord],
 ) -> TelemetryRows:
     """Read bounded automation telemetry and matching prior annotations."""
-    start_sql = start.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    end_sql = end.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    annotation_start_sql = (start - dt.timedelta(days=30)).astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    start_sql = start.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
+    end_sql = end.astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
+    annotation_start_sql = (start - dt.timedelta(days=30)).astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
     event_kinds = {
         "inline_comment": "inline",
         "review": "review",
@@ -475,7 +479,7 @@ def write_corpus(
         snapshot_id = _snapshot_id(repository, _iso(start), _iso(end), files)
         limitations = (
             "GitHub does not expose deleted review events or prior versions of edited bodies.",
-            "GraphQL changed-file rows omit REST-only SHA, URL, previous-filename, and per-file patch fields.",
+            "GraphQL changed-file rows contain path, status, and line-count metadata.",
             "Each available GitHub-served pull-request diff is the frozen patch context; binary content may be absent.",
             "GitHub returns HTTP 406 too_large above its 300-file diff render limit; those records have "
             "diff_path null and GraphQL file metadata is their only changed-file context.",
@@ -508,7 +512,7 @@ def write_corpus(
             files=tuple(files),
             limitations=limitations,
         )
-        (root / "manifest.json").write_text(json.dumps(manifest.model_dump(mode="json"), indent=2) + "\n")
+        (root / MANIFEST_FILENAME).write_text(json.dumps(manifest.model_dump(mode="json"), indent=2) + "\n")
         os.replace(root, output)
     return manifest
 
@@ -516,7 +520,7 @@ def write_corpus(
 def validate_corpus(path: Path, *, require_complete: bool = True) -> CorpusManifest:
     """Validate corpus identity, completeness, and every declared file hash."""
     root = path.resolve()
-    manifest = CorpusManifest.model_validate_json((root / "manifest.json").read_text())
+    manifest = CorpusManifest.model_validate_json((root / MANIFEST_FILENAME).read_text())
     if manifest.schema_version != SCHEMA_VERSION:
         raise ValueError(f"unsupported corpus schema version: {manifest.schema_version}")
     if require_complete and not manifest.complete:
@@ -540,7 +544,7 @@ def validate_corpus(path: Path, *, require_complete: bool = True) -> CorpusManif
     actual_paths = sorted(
         candidate.relative_to(root).as_posix()
         for candidate in root.rglob("*")
-        if candidate.is_file() and candidate.name != "manifest.json"
+        if candidate.is_file() and candidate.name != MANIFEST_FILENAME
     )
     if actual_paths != declared_paths:
         raise ValueError("corpus contains undeclared files")

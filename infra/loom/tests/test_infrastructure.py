@@ -196,7 +196,7 @@ def test_loom_launch_action_bounds_scratch_attachments_before_upload() -> None:
     assert "scratch_bytes > 26214400" in launch_script
     assert 'base64 --wrap=0 -- "$scratch_path"' in launch_script
     assert ".session.scratch" in launch_script
-    assert '--rawfile scratch_content "$scratch_base64"' in launch_script
+    assert '--rawfile scratch_content "$scratch_content_file"' in launch_script
     assert '--data-binary @"$request_file"' in launch_script
     assert '-d "$request"' not in launch_script
 

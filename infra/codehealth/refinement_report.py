@@ -18,10 +18,11 @@ from pydantic import Field
 
 from .github_review_corpus import CorpusModel, ReviewEventRecord
 from .review_corpus import (
-    RULE_HEADING,
+    CASE_ALIAS_PATTERN,
     BenchmarkLabel,
     CorpusManifest,
     Lane,
+    catalog_rules,
     validate_corpus,
 )
 from .review_tables import parse_utc
@@ -67,7 +68,7 @@ class RefinementAnalysis(CorpusModel):
 
 
 class BenchmarkPrediction(CorpusModel):
-    alias: str = Field(pattern=r"^case-[0-9]{3}$")
+    alias: str = Field(pattern=CASE_ALIAS_PATTERN)
     predicted_rules: tuple[str, ...]
 
 
@@ -153,16 +154,6 @@ def _event_time(event: ReviewEventRecord) -> dt.datetime:
     if not timestamps:
         raise ValueError(f"review event has no activity timestamp: {event.event_id}")
     return max(timestamps)
-
-
-def _catalog_rules(catalog: Path) -> dict[str, str]:
-    rules: dict[str, str] = {}
-    for path in sorted(catalog.glob("*.md")):
-        if path.stem not in {"complexity", "interfaces", "robustness", "cruft", "prose", "meta"}:
-            continue
-        for match in RULE_HEADING.finditer(path.read_text()):
-            rules[match.group("code")] = path.stem
-    return rules
 
 
 def _predictions(path: Path) -> tuple[BenchmarkPrediction, ...]:
@@ -350,7 +341,7 @@ def load_report(
         if getattr(analysis, field) != actual:
             raise ValueError(f"refinement analysis {field} does not match the corpus")
 
-    rules = _catalog_rules(corpus / "catalog")
+    rules = catalog_rules(corpus / "catalog")
     proposal_codes = [proposal.code for proposal in analysis.proposals]
     if len(proposal_codes) != len(set(proposal_codes)):
         raise ValueError("refinement analysis contains duplicate proposal codes")
@@ -395,11 +386,11 @@ def load_report(
     )
 
 
-def _list(items: Iterable[str]) -> str:
+def _markdown_bullets(items: Iterable[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def _count(noun: str, value: int) -> str:
+def _inflected_count(noun: str, value: int) -> str:
     suffix = "" if value == 1 else "s"
     return f"{value} {noun}{suffix}"
 
@@ -417,15 +408,15 @@ def _proposal_section(evidence: ProposalEvidence) -> str:
         f"Allowed: {proposal.when_allowed}",
         "",
         (
-            f"Verified support: {_count('event', evidence.events_30_days)} across "
-            f"{_count('PR', evidence.pull_requests_30_days)} in 30 days; "
-            f"{_count('event', evidence.events_7_days)} across "
-            f"{_count('PR', evidence.pull_requests_7_days)} in 7 days."
+            f"Verified support: {_inflected_count('event', evidence.events_30_days)} across "
+            f"{_inflected_count('PR', evidence.pull_requests_30_days)} in 30 days; "
+            f"{_inflected_count('event', evidence.events_7_days)} across "
+            f"{_inflected_count('PR', evidence.pull_requests_7_days)} in 7 days."
         ),
         "",
         "Evidence:",
         "",
-        _list(
+        _markdown_bullets(
             f"[PR #{event.pr_number}]({event.source_url}) — {reference_relevance[event.event_id]}"
             for event in evidence.events
         ),
@@ -433,7 +424,7 @@ def _proposal_section(evidence: ProposalEvidence) -> str:
     if proposal.precedence:
         lines.extend(["", f"Precedence: {', '.join(f'`{code}`' for code in proposal.precedence)}."])
     if proposal.counterexamples:
-        lines.extend(["", "Counterexamples:", "", _list(proposal.counterexamples)])
+        lines.extend(["", "Counterexamples:", "", _markdown_bullets(proposal.counterexamples)])
     return "\n".join(lines)
 
 
@@ -518,7 +509,7 @@ def render_markdown(report: RefinementReport) -> str:
         else "No new rules met the three-pull-request evidence threshold."
     )
     gaps = (
-        _list(
+        _markdown_bullets(
             f"PR #{gap.pr_number}: {gap.human_events} human events map to "
             f"{', '.join(f'`{code}`' for code in gap.rules)}. {gap.finding}"
             for gap in report.analysis.existing_rule_gaps
@@ -549,7 +540,7 @@ def render_markdown(report: RefinementReport) -> str:
         _production_section(report),
         _benchmark_section(report.benchmark),
         _retirement_section(report.current_catalog),
-        f"## Limitations\n\n{_list((*manifest.limitations, *report.analysis.limitations))}",
+        f"## Limitations\n\n{_markdown_bullets((*manifest.limitations, *report.analysis.limitations))}",
     ]
     return "\n\n".join(sections) + "\n"
 
@@ -565,7 +556,7 @@ def render_slack(
     current = report.current_catalog
     proposal_codes = ", ".join(f"`{item.proposal.code}`" for item in report.proposals) or "none"
     retirement = (
-        f"no retirements; current catalog has {current.observed_days:.1f}/30 observed days"
+        f"no retirements; current catalog has {current.observed_days:.1f}/{RETIREMENT_DAYS} observed days"
         if current.observed_days < RETIREMENT_DAYS
         else f"{len(current.zero_finding_rules)} zero-finding retirement candidates"
     )

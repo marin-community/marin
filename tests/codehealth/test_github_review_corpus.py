@@ -301,7 +301,6 @@ def test_collect_corpus_discovers_edited_old_inline_comment_and_retains_full_con
     assert bundle.events[1].body == ""
     assert bundle.threads[0].is_resolved
     assert bundle.files[0].filename == "example.py"
-    assert bundle.files[0].patch is None
     assert bundle.diff.startswith("diff --git")
     assert result.candidate_pull_requests == 1
     assert result.usage.rest_requests == 3

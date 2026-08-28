@@ -253,7 +253,7 @@ def test_model_classifier_uses_tool_free_structured_request(monkeypatch) -> None
         def __enter__(self):
             return self
 
-        def __exit__(self, *args):
+        def __exit__(self, *_exception):
             return None
 
     monkeypatch.setattr(review, "OpenAI", FakeOpenAI)
@@ -274,7 +274,7 @@ def test_model_classifier_uses_tool_free_structured_request(monkeypatch) -> None
     assert set(call) == {"model", "input", "reasoning", "text_format"}
     assert call["model"] == "gpt-5.6-terra"
     assert call["reasoning"] == {"effort": "medium"}
-    assert "Diff context:" in call["input"]
+    assert "@@ -10 +10 @@\n-if ready:\n+if not ready:" in call["input"]
     assert result[0].catchable_strict
     assert result[0].catchable_generous
 

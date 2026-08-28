@@ -217,7 +217,7 @@ def _format_batch(items: list[CommentToClassify]) -> str:
     return "\n\n".join(blocks)
 
 
-# Per-batch wall-clock ceiling for one headless classification call.
+# Per-batch wall-clock ceiling for one model request.
 CLASSIFIER_TIMEOUT = 300
 
 
@@ -634,11 +634,7 @@ def resolve_classifications(
 
 
 def classification_for_outcome(classification: CommentClassification) -> CommentClassification:
-    """Return the classification used for persisted and counted outcomes.
-
-    Low-confidence classifications retain their descriptive fields, but do not
-    claim that automation could have caught the comment.
-    """
+    """Clear catchability claims below the reporting confidence threshold."""
     if classification.confidence >= MIN_CLASSIFICATION_CONFIDENCE:
         return classification
     return classification.model_copy(update={"catchable_strict": False, "catchable_generous": False})
