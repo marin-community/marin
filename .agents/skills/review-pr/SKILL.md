@@ -77,8 +77,7 @@ Follow these steps precisely:
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. Review maintainability with at most four limited-attention sub-agents so the
-   full review stays within the CI job's 15-minute and 200-turn limits. Rank
+5. Review maintainability with at most four limited-attention sub-agents. Rank
    changed, human-authored areas by design impact. Prefer public interfaces,
    invariants, state transitions, abstraction boundaries, policy, and prose that
    makes novel claims. Skip generated files, formatting, mechanical renames,
