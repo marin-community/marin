@@ -49,3 +49,12 @@ author: held
 - Interpretation: this is a worker-identity collision caused by missing TPU worker-index metadata, not an ordinary capacity wait. No training step has started.
 - Decision: keep the job unchanged while recovery authorization is pending. Six unrelated CPU tasks are bin-packed onto healthy hosts in the slice and must be drained before replacement.
 - Next action: drain the six CPU co-tenants, replace the degraded v4-2048 slice, then verify that all 256 workers share one TPU name before training starts.
+
+### 2026-08-27 - Manual worker recovery
+
+- Command: `gcloud compute tpus tpu-vm ssh marin-tpu-v4-reserved-2048-us-central2-b-20260827-2302-e37ba336 --worker=43 --zone=us-central2-b --project=hai-gcp-models --command="sudo docker restart iris-worker"`
+- Evidence: GCP metadata on `t1v-n-7eb9ad44-w-43` returned `agent-worker-number=43`; before restart, Iris recorded that host as slice `worker-0` with blank TPU metadata.
+- Result: after the restart, the host registered as slice `worker-43`. Iris reported 256 distinct worker IDs under TPU name `t1v-n-7eb9ad44`, and all 256 training tasks entered `RUNNING`.
+- Interpretation: the host cached a transiently empty worker-index probe at boot. Restarting the worker after metadata recovered healed the live slice. The fallback bug remains tracked in #8743.
+- Recovery record: https://echo.oa.dev/wiki/274
+- Next action: verify W&B initialization and the first training step.
