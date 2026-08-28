@@ -222,7 +222,7 @@ def _runtime_env_config(
             watch_mode=watch_mode,
         ),
         model=SimpleNamespace(moe_implementation=moe_implementation),
-        resources=ResourceConfig.with_gpu(train.RAGGED_ACCELERATOR, count=4),
+        resources=ResourceConfig.with_gpu("GB200", count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
@@ -308,14 +308,6 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
-
-
-def test_ragged_transport_is_rejected_where_no_patched_wheel_exists():
-    """An H100 launch must fail before allocation rather than sync a stock runtime."""
-    with pytest.raises(ValueError, match=train.RAGGED_ACCELERATOR):
-        train.require_ragged_capable_fleet(train.RAGGED_MOE_IMPLEMENTATION, ResourceConfig.with_gpu("H100", count=8))
-
-    train.require_ragged_capable_fleet("fixed_pooled_wave_all_to_all", ResourceConfig.with_gpu("H100", count=8))
 
 
 def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):

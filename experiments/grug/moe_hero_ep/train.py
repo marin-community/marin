@@ -23,7 +23,6 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
-from fray.types import GpuConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -101,7 +100,6 @@ RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 _RAGGED_REQUIRED_XLA_FLAG_NAMES = frozenset(flag.partition("=")[0] for flag in RAGGED_REQUIRED_XLA_FLAGS)
-RAGGED_ACCELERATOR = "GB200"
 PJRT_DISTRIBUTION = "jax-cuda13-pjrt"
 _FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
@@ -238,23 +236,6 @@ def _apply_hero_ep_runtime_defaults(
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
-def require_ragged_capable_fleet(moe_implementation: MoeImplementation | None, resources: ResourceConfig) -> None:
-    """Reject a ragged launch on a fleet that cannot run it, before the fleet is allocated.
-
-    The transport needs GB200 for its SM100 expert MLP and for Marin's patched PJRT build, which
-    is published for aarch64 alone (lib/marin/pyproject.toml). Any other fleet would sync the
-    stock plugin and fail ``verify_ragged_pjrt`` only after allocation.
-    """
-    if moe_implementation != RAGGED_MOE_IMPLEMENTATION:
-        return
-    device = resources.device
-    if not isinstance(device, GpuConfig) or device.variant != RAGGED_ACCELERATOR:
-        raise ValueError(
-            f"{RAGGED_MOE_IMPLEMENTATION} needs {RAGGED_ACCELERATOR} for its SM100 expert MLP and "
-            f"the aarch64-only patched PJRT wheel, got {device}."
-        )
-
-
 def verify_ragged_pjrt() -> None:
     """Raise unless this process runs Marin's patched GPU PJRT plugin.
 
@@ -262,7 +243,8 @@ def verify_ragged_pjrt() -> None:
     ``jax.__version__`` reports the stock generation, and the stock plugin runs the same flags
     correctly at a materially lower throughput. Without this check the difference between the
     patched and the stock runtime is a number on a dashboard rather than a failure. The patched
-    wheel installs through the gpu extra's aarch64 source in lib/marin/pyproject.toml.
+    wheel installs through the gpu extra's aarch64 source in lib/marin/pyproject.toml, so it is
+    GB200-only: any other fleet syncs the stock wheel and fails here at startup.
     """
     try:
         installed = importlib.metadata.version(PJRT_DISTRIBUTION)
@@ -274,7 +256,8 @@ def verify_ragged_pjrt() -> None:
     if not installed.startswith(expected_prefix):
         raise RuntimeError(
             f"{RAGGED_MOE_IMPLEMENTATION} needs Marin's patched {PJRT_DISTRIBUTION} "
-            f"({expected_prefix}*), found {installed}."
+            f"({expected_prefix}*), found {installed}. The patched wheel is aarch64-only and the "
+            "expert MLP is SM100-specialized; run the ragged transport on GB200."
         )
 
 
@@ -1262,7 +1245,6 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         moe_implementation=config.model.moe_implementation,
     )
-    require_ragged_capable_fleet(config.model.moe_implementation, config.resources)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
@@ -1281,6 +1263,5 @@ __all__ = [
     "GrugTrainerConfig",
     "MasterParamMode",
     "initial_state",
-    "require_ragged_capable_fleet",
     "run_grug",
 ]
