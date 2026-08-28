@@ -260,8 +260,7 @@ jobs:
           wandb-project: ${{ env.WANDB_PROJECT }}
           wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # The CoreWeave override adds kubectl and retains the shared reporting tools.
-          allowed-tools: 'Bash(kubectl:*),Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(date:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Bash(mktemp:*),Bash(rm:*),Write,Read,Edit'
+          extra-allowed-tools: 'Bash(kubectl:*),Bash(ls:*),Bash(wc:*),Bash(find:*),Bash(awk:*),Bash(sed:*),Bash(echo:*),Bash(tr:*),Bash(sort:*),Bash(uniq:*),Bash(curl:*),Edit'
 
       # Upload Claude's Slack message (if it was written) so the separate
       # notify-slack job can pick it up. We run Slack notify in a separate

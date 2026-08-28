@@ -35,10 +35,13 @@ inputs:
     default: ''
   allowed-tools:
     description: |
-      Override the --allowedTools list. Overrides must retain the reporting tools needed to create an issue and
-      slack_message.md. CoreWeave overrides must also include kubectl and their cluster-inspection tools.
+      Base --allowedTools list with the reporting tools needed to create an issue and slack_message.md.
     required: false
     default: 'Bash(gh:*),Bash(.venv/bin/iris:*),Bash(.venv/bin/python:*),Bash(cat:*),Bash(jq:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(date:*),Bash(mktemp:*),Bash(rm:*),Write,Read'
+  extra-allowed-tools:
+    description: 'Comma-separated lane-specific tools appended to allowed-tools.'
+    required: false
+    default: ''
   max-turns:
     description: Maximum agent turns.
     required: false
@@ -70,7 +73,7 @@ runs:
         claude_args: |
           --model claude-opus-4-8
           --max-turns ${{ inputs.max-turns }}
-          --allowedTools "${{ inputs.allowed-tools }}"
+          --allowedTools "${{ inputs.allowed-tools }}${{ inputs.extra-allowed-tools != '' && format(',{0}', inputs.extra-allowed-tools) || '' }}"
       env:
         CANARY_LANE: ${{ inputs.lane }}
         CANARY_JOB_ID: ${{ inputs.job-id }}
@@ -96,8 +99,4 @@ runs:
     - name: Require Slack summary
       if: always() && steps.claude.outputs.rate_limited != 'true'
       shell: bash
-      run: |
-        if [ ! -s slack_message.md ]; then
-          echo "::error::Canary triage finished without writing slack_message.md"
-          exit 1
-        fi
+      run: .venv/bin/python scripts/ci/validate_canary_triage_output.py slack_message.md
