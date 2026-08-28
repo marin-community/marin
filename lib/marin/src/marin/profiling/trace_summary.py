@@ -15,6 +15,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from functools import cache
 from itertools import pairwise
 from pathlib import Path
@@ -47,6 +48,19 @@ from marin.profiling.semantics import (
     estimate_flop_proxy,
     extract_shape_signature,
 )
+
+
+class BreakdownMode(StrEnum):
+    """How exclusive device time is attributed when building the time breakdown."""
+
+    EXCLUSIVE_PER_TRACK = "exclusive_per_track"
+    EXCLUSIVE_GLOBAL = "exclusive_global"
+
+
+DEFAULT_WARMUP_STEPS = 5
+DEFAULT_HOT_OP_LIMIT = 25
+DEFAULT_BREAKDOWN_MODE = BreakdownMode.EXCLUSIVE_PER_TRACK
+
 
 _COMM_PATTERNS = (
     "all-reduce",
@@ -216,7 +230,7 @@ class TraceSummaryContext:
     run_metadata: RunMetadata | None
     warmup_steps: int
     hot_op_limit: int
-    breakdown_mode: str
+    breakdown_mode: BreakdownMode
     extra_quality_warnings: Sequence[str] = ()
 
 
@@ -260,7 +274,7 @@ class _OpenTraceEvent:
 
 
 class _TraceSummaryBuilder:
-    def __init__(self, *, breakdown_mode: str) -> None:
+    def __init__(self, *, breakdown_mode: BreakdownMode) -> None:
         self.breakdown_mode = breakdown_mode
         self.num_complete_events = 0
         self.profile_start: float | None = None
@@ -350,7 +364,11 @@ class _TraceSummaryBuilder:
         ):
             self.step_events.append(event)
 
-        if self.breakdown_mode == "exclusive_global" and event.thread_name != "Steps" and _is_device_event(event):
+        if (
+            self.breakdown_mode == BreakdownMode.EXCLUSIVE_GLOBAL
+            and event.thread_name != "Steps"
+            and _is_device_event(event)
+        ):
             category = _event_category(event)
             if category in {"compute", "communication"}:
                 self.global_events.append(event)
@@ -400,13 +418,13 @@ def summarize_event_tracks(
         source_file_hints=[name for name, _ in builder.source_files.most_common(20)],
     )
     step_time = _summarize_step_times(builder.step_events, warmup_steps=context.warmup_steps)
-    if context.breakdown_mode == "exclusive_per_track":
+    if context.breakdown_mode == BreakdownMode.EXCLUSIVE_PER_TRACK:
         time_breakdown = make_time_breakdown(
             "exclusive_duration_per_track",
             builder.breakdown_totals,
             sum(builder.breakdown_totals.values()),
         )
-    elif context.breakdown_mode == "exclusive_global":
+    elif context.breakdown_mode == BreakdownMode.EXCLUSIVE_GLOBAL:
         time_breakdown = _summarize_breakdown_global(builder.global_events)
     else:
         raise ValueError(f"Unsupported breakdown mode: {context.breakdown_mode}")
