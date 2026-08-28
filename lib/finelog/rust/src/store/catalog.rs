@@ -25,8 +25,7 @@ use crate::proto::finelog::stats::{
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
 use crate::store::table_spec::{
-    canonical_json_bytes, migration_phase_for_state, requires_background_migration,
-    table_spec_from_json,
+    canonical_json_bytes, migration_phase_for_state, table_spec_from_json,
 };
 use crate::store::types::{NamespaceStats, SegmentRow};
 
@@ -73,6 +72,7 @@ pub struct RecoveredNativeSegment {
 type MigrationStatusRow = (String, i64, i64, String, i64, i64, i64, i64);
 
 impl TableSpecStatus {
+    /// Return the query-visible TableSpec version, or zero for a legacy table.
     pub fn active_version(&self) -> u64 {
         self.active
             .as_ref()
@@ -80,6 +80,7 @@ impl TableSpecStatus {
             .unwrap_or(0)
     }
 
+    /// Return the migration target version, or zero when no transition is active.
     pub fn desired_version(&self) -> u64 {
         self.desired
             .as_ref()
@@ -342,8 +343,8 @@ fn remove_segments_in(
 }
 
 impl Catalog {
-    /// Open the catalog. `data_dir = None` -> in-memory; otherwise the sidecar
-    /// lives at `{data_dir}/_finelog_catalog.sqlite`. Creates the three tables
+    /// Open the catalog. `data_dir = None` uses memory; otherwise the sidecar
+    /// lives at `{data_dir}/_finelog_catalog.sqlite`. Initializes its schema
     /// idempotently.
     pub fn open(data_dir: Option<&Path>) -> Result<Catalog, StatsError> {
         let conn = match data_dir {
@@ -837,7 +838,10 @@ impl Catalog {
             )));
         }
 
-        let migrate = requires_background_migration(has_rows);
+        // Every version owns a complete immutable policy. Existing rows must be
+        // reassigned through the resumable migration before the query pointer
+        // advances, even when the source layout is byte-compatible.
+        let migrate = has_rows;
         let next_generation = status.catalog_generation + 1;
         let active_version = status.active_version();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
@@ -2189,6 +2193,19 @@ impl Catalog {
             .execute(
                 "DELETE FROM segments WHERE namespace = ?1 AND path = ?2",
                 rusqlite::params![namespace, path],
+            )
+            .map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_migration_observation(&self, namespace: &str) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .execute(
+                "UPDATE table_migrations SET phase_updated_at_ms = 0 WHERE namespace = ?1",
+                [namespace],
             )
             .map_err(sqlite_err)?;
         Ok(())

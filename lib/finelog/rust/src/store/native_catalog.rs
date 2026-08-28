@@ -17,6 +17,7 @@ use crate::store::types::{basename, segment_relative_key, SegmentLocation};
 
 pub const NATIVE_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
+const CATALOGS_PREFIX: &str = "catalogs";
 
 #[derive(Debug, Clone)]
 pub struct CatalogSnapshot {
@@ -109,7 +110,7 @@ impl NativeCatalog {
         })?;
         let catalog_sha256: [u8; 32] = Sha256::digest(&catalog_bytes).into();
         let catalog_key = format!(
-            "catalogs/{generation:020}-{}.json",
+            "{CATALOGS_PREFIX}/{generation:020}-{}.json",
             short_hex(&catalog_sha256)
         );
         let catalog_version = self
@@ -153,7 +154,9 @@ impl NativeCatalog {
 
     #[cfg(test)]
     async fn catalog_keys(&self, namespace: &str) -> Result<Vec<String>, StatsError> {
-        self.remote.list_native_keys(namespace, "catalogs").await
+        self.remote
+            .list_native_keys(namespace, CATALOGS_PREFIX)
+            .await
     }
 
     /// Remove superseded catalog documents after the maximum query lifetime.
@@ -178,7 +181,7 @@ impl NativeCatalog {
         let current_generation = snapshot.head.catalog_generation.unwrap_or(0);
         let catalog_objects = self
             .remote
-            .list_native_objects(namespace, "catalogs")
+            .list_native_objects(namespace, CATALOGS_PREFIX)
             .await?;
         let mut removed = 0;
         for (key, meta) in &catalog_objects {
@@ -210,7 +213,11 @@ impl NativeCatalog {
             removed += 1;
         }
         let mut referenced = referenced_object_keys(&snapshot.catalog);
-        for key in self.remote.list_native_keys(namespace, "catalogs").await? {
+        for key in self
+            .remote
+            .list_native_keys(namespace, CATALOGS_PREFIX)
+            .await?
+        {
             if key == current {
                 continue;
             }
@@ -454,7 +461,8 @@ fn short_hex(bytes: &[u8; 32]) -> String {
 }
 
 fn catalog_generation_from_key(key: &str) -> Option<u64> {
-    key.strip_prefix("catalogs/")?
+    key.strip_prefix(CATALOGS_PREFIX)?
+        .strip_prefix('/')?
         .split_once('-')?
         .0
         .parse()
@@ -463,21 +471,8 @@ fn catalog_generation_from_key(key: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
     use crate::store::remote::build_remote_store;
-
-    fn tempdir(tag: &str) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!("finelog_native_catalog_{tag}_{nanos}"));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
 
     fn catalog(namespace: &str, generation: u64, active_version: u64) -> NamespaceCatalog {
         NamespaceCatalog {
@@ -492,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_head_cas_publishes_one_complete_generation() {
-        let remote_dir = tempdir("cas");
+        let remote_dir = crate::test_support::unique_dir("native_catalog_cas");
         let remote = build_remote_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
@@ -506,7 +501,6 @@ mod tests {
         assert_eq!(loaded.head.writer_epoch, Some(11));
         assert_eq!(loaded.catalog.catalog_generation, Some(1));
 
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let second = native
             .publish(
                 "iris.worker",
@@ -546,7 +540,7 @@ mod tests {
             .unwrap();
         let current_modified_ms = native
             .remote
-            .list_native_objects("iris.worker", "catalogs")
+            .list_native_objects("iris.worker", CATALOGS_PREFIX)
             .await
             .unwrap()
             .into_iter()
@@ -562,11 +556,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        let future = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
-            + 601_000;
+        let future = i64::MAX;
         assert_eq!(
             native
                 .gc_obsolete_catalogs("iris.worker", future, 600_000)
@@ -579,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn immutable_catalog_retries_require_identical_bytes() {
-        let remote_dir = tempdir("immutable");
+        let remote_dir = crate::test_support::unique_dir("native_catalog_immutable");
         let remote = build_remote_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
@@ -614,7 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn garbage_collection_removes_unreferenced_objects_after_query_grace() {
-        let remote_dir = tempdir("orphan_gc");
+        let remote_dir = crate::test_support::unique_dir("native_catalog_orphan_gc");
         let remote = build_remote_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
@@ -632,11 +622,7 @@ mod tests {
             .await
             .unwrap();
 
-        let future = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64
-            + 601_000;
+        let future = i64::MAX;
         assert_eq!(
             native
                 .gc_obsolete_catalogs("iris.worker", future, 600_000)

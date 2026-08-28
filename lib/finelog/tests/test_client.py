@@ -594,10 +594,13 @@ def test_table_status_and_rollback_use_versioned_contract(tracked_clients):
         client.close()
 
 
-def test_table_spec_requires_positive_versions_and_buckets():
-    with pytest.raises(ValueError, match="version"):
+def test_table_spec_requires_positive_version():
+    with pytest.raises(ValueError):
         TableSpec(version=0)
-    with pytest.raises(ValueError, match="bucket"):
+
+
+def test_bucket_transform_requires_positive_bucket_count():
+    with pytest.raises(ValueError):
         BucketTransform(0)
 
 

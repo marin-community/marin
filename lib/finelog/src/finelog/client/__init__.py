@@ -3,10 +3,10 @@
 
 """Finelog client APIs.
 
-:class:`LogClient` is the single user-facing entry point; it covers both the
-log surface (``write_batch`` / ``fetch_logs``) and the stats surface
-(``get_table`` / ``drop_table``). :class:`RemoteLogHandler` plugs Python's
-``logging`` into a :class:`LogClient`.
+:class:`LogClient` covers the log and stats RPC surfaces.
+:class:`ObjectQueryClient` executes direct object-store queries, and
+:class:`RemoteLogHandler` plugs Python's ``logging`` into a
+:class:`LogClient`.
 
 The error types live in :mod:`finelog.errors` and are re-exported here so
 callers can ``from finelog.client import SchemaConflictError`` etc.

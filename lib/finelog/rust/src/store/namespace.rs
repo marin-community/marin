@@ -22,7 +22,6 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -56,7 +55,7 @@ use crate::store::native_catalog::NativeCatalog;
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
-use crate::store::remote::{build_remote_store, RemoteStore};
+use crate::store::remote::{atomic_write_file, build_remote_store, RemoteStore};
 use crate::store::schema::{
     resolve_key_column, resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema,
 };
@@ -258,63 +257,7 @@ fn write_cache_file(path: &Path, bytes: &[u8]) -> Result<(), StatsError> {
             return Ok(());
         }
     }
-    let parent = path.parent().ok_or_else(|| {
-        StatsError::Internal(format!("native cache {} has no parent", path.display()))
-    })?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        StatsError::Internal(format!(
-            "create native cache parent {}: {error}",
-            parent.display()
-        ))
-    })?;
-    let staging = path.with_extension(format!(
-        "tmp-{}-{}",
-        std::process::id(),
-        cache_write_nonce()
-    ));
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&staging)
-        .map_err(|error| {
-            StatsError::Internal(format!(
-                "create native cache staging {}: {error}",
-                staging.display()
-            ))
-        })?;
-    file.write_all(bytes).map_err(|error| {
-        StatsError::Internal(format!(
-            "write native cache staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    file.sync_all().map_err(|error| {
-        StatsError::Internal(format!(
-            "fsync native cache staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    std::fs::rename(&staging, path).map_err(|error| {
-        StatsError::Internal(format!(
-            "publish native cache {} -> {}: {error}",
-            staging.display(),
-            path.display()
-        ))
-    })?;
-    std::fs::File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            StatsError::Internal(format!(
-                "fsync native cache parent {}: {error}",
-                parent.display()
-            ))
-        })
-}
-
-fn cache_write_nonce() -> u64 {
-    use std::sync::atomic::AtomicU64;
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
+    atomic_write_file(path, bytes)
 }
 
 /// Insertion-lock-guarded mutable state.
@@ -839,7 +782,7 @@ impl Namespace {
                 std::fs::create_dir_all(dir).map_err(|e| {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
-                let adopted = adopt_local_segments(dir, Some(&key_column), &catalog, name);
+                let adopted = adopt_local_segments(dir, Some(&key_column), &catalog, name)?;
                 // Seed next_seq past every segment the catalog knows about, not
                 // just on-disk footers. A segment evicted to remote has its local
                 // parquet unlinked, so a footer-only scan under-counts and would
@@ -1533,6 +1476,9 @@ impl Namespace {
     }
 
     /// Compact one same-partition group through immutable object replacement.
+    ///
+    /// Returns `true` when a group was replaced and `false` when no group is
+    /// currently eligible.
     async fn native_compaction_step(&self) -> Result<bool, StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let active_version = status.active_version();
@@ -2948,9 +2894,8 @@ impl Namespace {
         }
 
         // The legacy archive is outside the object-native catalog's MVCC
-        // lifetime. Once a desired object-native spec exists, retain archive
-        // objects for the explicit one-time archival rollout instead of
-        // deleting them as soon as their local migration source is replaced.
+        // lifetime. Object-native policy therefore retains archive objects
+        // when their local migration source is replaced.
         if self.runtime_policy().object_native() {
             return Ok(());
         }
@@ -3082,7 +3027,7 @@ impl Namespace {
             let Some(path) = candidate else {
                 break;
             };
-            self.evict_native_cache_segment(&path);
+            self.evict_native_cache_segment(&path)?;
         }
 
         let Some(max_age_seconds) = policy.max_age_seconds else {
@@ -3106,26 +3051,26 @@ impl Namespace {
             let Some(path) = candidate else {
                 break;
             };
-            self.evict_native_cache_segment(&path);
+            self.evict_native_cache_segment(&path)?;
         }
         Ok(())
     }
 
-    fn evict_native_cache_segment(&self, path: &str) {
+    fn evict_native_cache_segment(&self, path: &str) -> Result<(), StatsError> {
         let _write_guard = self.query_visibility.blocking_write();
+        self.catalog
+            .set_location(&self.name, path, SegmentLocation::Remote)?;
         {
             let mut inner = self.inner.lock().unwrap();
             inner.local_segments.retain(|segment| segment.path != path);
         }
-        let _ = self
-            .catalog
-            .set_location(&self.name, path, SegmentLocation::Remote);
         if let Err(error) = std::fs::remove_file(path) {
             if error.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(namespace = %self.name, path, %error, "failed to evict native cache file");
             }
         }
         remove_index_artifacts(path);
+        Ok(())
     }
 
     /// Drop `path` from the deque and unlink the local file.
@@ -3328,6 +3273,7 @@ impl Namespace {
         cleaned
     }
 
+    /// Maintain one bounded index batch and return the bundle count changed.
     fn maintain_index_artifacts(&self) -> usize {
         if segment_indexes_enabled_for(&self.name) {
             self.backfill_missing_index_bundles(INDEX_BUNDLES_PER_TICK)
@@ -3416,16 +3362,12 @@ impl Namespace {
 
     // ----- maintenance orchestration ------------------------------------
 
-    /// Run one full maintenance cycle: `flush -> compact -> sync -> evict ->
-    /// backfill indexes`, serialized against other maintenance callers via
-    /// `maint_lock`.
+    /// Run one maintenance cycle, serialized against other callers.
     ///
-    /// Supports an optional forced L0->L1 (the debug `force_compact_l0` flag).
-    /// The blocking compaction (read/merge/write +
-    /// `commit_swap`, which takes `blocking_write`) runs under `spawn_blocking`;
-    /// the async `sync_step` runs on the reactor; the blocking `eviction_step`
-    /// (which takes `blocking_write` per evict) runs under `spawn_blocking`. No-op
-    /// in memory mode.
+    /// Object-native tables publish pending catalogs, compact immutable objects,
+    /// evict cache entries, collect expired objects, and maintain indexes. Legacy
+    /// tables compact local segments, synchronize the archive, evict, and perform
+    /// physical-layout and index maintenance. No-op in memory mode.
     pub async fn run_maintenance(
         self: &Arc<Self>,
         force_compact_l0: bool,
@@ -3891,25 +3833,16 @@ fn adopt_local_segments(
     key_column: Option<&str>,
     catalog: &Catalog,
     namespace: &str,
-) -> VecDeque<LocalSegment> {
+) -> Result<VecDeque<LocalSegment>, StatsError> {
     let started = Instant::now();
     let mut segs: Vec<LocalSegment> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     discard_staging_files(dir, namespace);
 
-    let status = catalog
-        .table_spec_status(namespace)
-        .unwrap_or(TableSpecStatus {
-            active: None,
-            desired: None,
-            phase: MigrationPhase::MIGRATION_PHASE_UNSPECIFIED,
-            catalog_generation: 0,
-            migration: None,
-        });
+    let status = catalog.table_spec_status(namespace)?;
     let native_records: HashMap<_, _> = catalog
-        .native_segments(namespace)
-        .unwrap_or_default()
+        .native_segments(namespace)?
         .into_iter()
         .map(|record| (record.path.clone(), record))
         .collect();
@@ -3929,7 +3862,7 @@ fn adopt_local_segments(
 
     // Pass 1: catalog rows.
     let catalog_started = Instant::now();
-    let catalog_rows = catalog.list_segments(namespace).unwrap_or_default();
+    let catalog_rows = catalog.list_segments(namespace)?;
     let catalog_read_ms = catalog_started.elapsed().as_millis() as u64;
     let footer_reconcile_started = Instant::now();
     // Highest seq the catalog still ACCOUNTS FOR after reconciliation: a local
@@ -3952,11 +3885,11 @@ fn adopt_local_segments(
             match row.location {
                 SegmentLocation::Local => {
                     // No durable copy — drop the row.
-                    let _ = catalog.remove_segment(namespace, &row.path);
+                    catalog.remove_segment(namespace, &row.path)?;
                 }
                 SegmentLocation::Both => {
                     // Bucket copy is durable; collapse to REMOTE.
-                    let _ = catalog.set_location(namespace, &row.path, SegmentLocation::Remote);
+                    catalog.set_location(namespace, &row.path, SegmentLocation::Remote)?;
                 }
                 SegmentLocation::Remote => {}
             }
@@ -4062,7 +3995,7 @@ fn adopt_local_segments(
         total_ms = started.elapsed().as_millis() as u64,
         "finelog local segment adoption complete"
     );
-    deque
+    Ok(deque)
 }
 
 /// Spawn the per-namespace flush task.
@@ -4898,7 +4831,8 @@ mod tests {
         // yet run. It sits above the cataloged high-water seq (4) — adopt it.
         let l0_new = write_seg(&ns_dir, 0, 5, 2);
 
-        let deque = adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task");
+        let deque =
+            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task").unwrap();
         let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
 
         assert!(has(&l1), "the merge output is adopted");
@@ -4935,7 +4869,8 @@ mod tests {
         // row. It must be recovered, not skipped as covered.
         let orphan = write_seg(&ns_dir, 0, 1, 2);
 
-        let deque = adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task");
+        let deque =
+            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task").unwrap();
         let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
         assert!(
             has(&orphan),

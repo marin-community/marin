@@ -295,8 +295,8 @@ message RegisterTableRequest {
   // preserved — so an older client that doesn't know about policies
   // can't wipe a tighter policy set by a newer client.
   StoragePolicy storage_policy = 3;
-  // New clients send the complete immutable specification. Fields 1-3 remain
-  // populated during the mixed-version deployment window.
+  // Complete immutable specification. Fields 1-3 remain the legacy
+  // registration contract and are ignored when this field is present.
   TableSpec table_spec = 4;
 }
 

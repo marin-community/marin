@@ -393,6 +393,8 @@ impl Store {
 
     /// Rebuild namespaces, TableSpecs, segment pointers, and sequence fences
     /// from remote HEAD/catalog snapshots before the server accepts traffic.
+    ///
+    /// Returns the number of namespaces whose remote generation was recovered.
     pub async fn recover_native_namespaces(&self) -> Result<usize, StatsError> {
         let Some(native_catalog) = &self.native_catalog else {
             return Ok(0);
@@ -744,7 +746,9 @@ impl Store {
         })
     }
 
-    /// Publish the current local metadata snapshot through the remote HEAD CAS.
+    /// Make one complete local metadata snapshot visible to direct readers.
+    ///
+    /// Returns the selected remote snapshot after publication.
     pub async fn publish_native_catalog(
         &self,
         namespace: &str,
@@ -1800,7 +1804,10 @@ mod tests {
         );
         assert_eq!(compacted_active.live_segments[0].row_count, Some(2));
 
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        store
+            .catalog
+            .expire_migration_observation("iris.worker")
+            .unwrap();
         store
             .maintain_namespace("iris.worker", false)
             .await
@@ -1935,7 +1942,10 @@ mod tests {
             1
         );
 
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        store
+            .catalog
+            .expire_migration_observation("iris.worker")
+            .unwrap();
         store
             .maintain_namespace("iris.worker", false)
             .await

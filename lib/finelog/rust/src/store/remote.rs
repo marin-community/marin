@@ -50,6 +50,8 @@ pub struct RemoteVersion {
 
 const GCS_SCHEME: &str = "gs://";
 const S3_SCHEME: &str = "s3://";
+const NATIVE_ROOT_COMPONENT: &str = "_native";
+const NATIVE_NAMESPACES_COMPONENT: &str = "namespaces";
 
 /// Whether `remote_log_dir` names an object store rather than a local directory.
 pub fn is_object_store(remote_log_dir: &str) -> bool {
@@ -145,7 +147,11 @@ impl RemoteStore {
     fn native_path(&self, namespace: &str, relative_key: &str) -> OsPath {
         let parts: Vec<&str> = self
             .prefix_parts()
-            .chain(["_native", "namespaces", namespace])
+            .chain([
+                NATIVE_ROOT_COMPONENT,
+                NATIVE_NAMESPACES_COMPONENT,
+                namespace,
+            ])
             .chain(relative_key.split('/').filter(|part| !part.is_empty()))
             .collect();
         OsPath::from_iter(parts)
@@ -154,14 +160,21 @@ impl RemoteStore {
     fn native_prefix(&self, namespace: &str, relative_prefix: &str) -> OsPath {
         let parts: Vec<&str> = self
             .prefix_parts()
-            .chain(["_native", "namespaces", namespace])
+            .chain([
+                NATIVE_ROOT_COMPONENT,
+                NATIVE_NAMESPACES_COMPONENT,
+                namespace,
+            ])
             .chain(relative_prefix.split('/').filter(|part| !part.is_empty()))
             .collect();
         OsPath::from_iter(parts)
     }
 
     pub async fn list_native_namespaces(&self) -> Result<Vec<String>, StatsError> {
-        let root = OsPath::from_iter(self.prefix_parts().chain(["_native", "namespaces"]));
+        let root = OsPath::from_iter(
+            self.prefix_parts()
+                .chain([NATIVE_ROOT_COMPONENT, NATIVE_NAMESPACES_COMPONENT]),
+        );
         let mut stream = self.store.list(Some(&root));
         let mut namespaces = std::collections::BTreeSet::new();
         while let Some(result) = stream.next().await {
@@ -183,29 +196,8 @@ impl RemoteStore {
         namespace: &str,
         relative_key: &str,
     ) -> Result<Option<RemoteObject>, StatsError> {
-        let path = self.native_path(namespace, relative_key);
-        let result = match self.store.get(&path).await {
-            Ok(result) => result,
-            Err(object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(error) => {
-                return Err(StatsError::Internal(format!(
-                    "read native object {path}: {error}"
-                )))
-            }
-        };
-        let e_tag = result.meta.e_tag.clone();
-        let provider_version = result.meta.version.clone();
-        let bytes = result.bytes().await.map_err(|error| {
-            StatsError::Internal(format!("read native object body {path}: {error}"))
-        })?;
-        Ok(Some(RemoteObject {
-            version: RemoteVersion {
-                e_tag,
-                provider_version,
-                content_sha256: Sha256::digest(&bytes).into(),
-            },
-            bytes,
-        }))
+        self.get_path(self.native_path(namespace, relative_key), "native object")
+            .await
     }
 
     /// Read one object from the legacy namespace prefix.
@@ -214,20 +206,28 @@ impl RemoteStore {
         namespace: &str,
         relative_key: &str,
     ) -> Result<Option<RemoteObject>, StatsError> {
-        let path = self.object_path(namespace, relative_key);
+        self.get_path(self.object_path(namespace, relative_key), "remote object")
+            .await
+    }
+
+    async fn get_path(
+        &self,
+        path: OsPath,
+        description: &str,
+    ) -> Result<Option<RemoteObject>, StatsError> {
         let result = match self.store.get(&path).await {
             Ok(result) => result,
             Err(object_store::Error::NotFound { .. }) => return Ok(None),
             Err(error) => {
                 return Err(StatsError::Internal(format!(
-                    "read remote object {path}: {error}"
+                    "read {description} {path}: {error}"
                 )))
             }
         };
         let e_tag = result.meta.e_tag.clone();
         let provider_version = result.meta.version.clone();
         let bytes = result.bytes().await.map_err(|error| {
-            StatsError::Internal(format!("read remote object body {path}: {error}"))
+            StatsError::Internal(format!("read {description} body {path}: {error}"))
         })?;
         Ok(Some(RemoteObject {
             version: RemoteVersion {
@@ -347,25 +347,12 @@ impl RemoteStore {
         namespace: &str,
         relative_prefix: &str,
     ) -> Result<Vec<String>, StatsError> {
-        let prefix = self.native_prefix(namespace, relative_prefix);
-        let namespace_prefix = self.native_prefix(namespace, "");
-        let mut stream = self.store.list(Some(&prefix));
-        let mut keys = Vec::new();
-        while let Some(result) = stream.next().await {
-            let meta = result.map_err(|error| {
-                StatsError::Internal(format!("list native objects {prefix}: {error}"))
-            })?;
-            let Some(parts) = meta.location.prefix_match(&namespace_prefix) else {
-                continue;
-            };
-            keys.push(
-                parts
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>()
-                    .join("/"),
-            );
-        }
-        Ok(keys)
+        Ok(self
+            .list_native_objects(namespace, relative_prefix)
+            .await?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect())
     }
 
     pub async fn list_native_objects(
@@ -545,11 +532,64 @@ impl RemoteStore {
 }
 
 fn local_native_path(root: &Path, namespace: &str, relative_key: &str) -> PathBuf {
-    let mut path = root.join("_native").join("namespaces").join(namespace);
+    let mut path = root
+        .join(NATIVE_ROOT_COMPONENT)
+        .join(NATIVE_NAMESPACES_COMPONENT)
+        .join(namespace);
     for part in relative_key.split('/').filter(|part| !part.is_empty()) {
         path.push(part);
     }
     path
+}
+
+pub(super) fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), StatsError> {
+    let parent = path.parent().ok_or_else(|| {
+        StatsError::Internal(format!("local object {} has no parent", path.display()))
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        StatsError::Internal(format!(
+            "create local object parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let staging = path.with_extension(format!("tmp-{}-{}", std::process::id(), monotonic_nonce()));
+    let mut staging_file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&staging)
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "create local object staging {}: {error}",
+                staging.display()
+            ))
+        })?;
+    staging_file.write_all(bytes).map_err(|error| {
+        StatsError::Internal(format!(
+            "write local object staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    staging_file.sync_all().map_err(|error| {
+        StatsError::Internal(format!(
+            "fsync local object staging {}: {error}",
+            staging.display()
+        ))
+    })?;
+    std::fs::rename(&staging, path).map_err(|error| {
+        StatsError::Internal(format!(
+            "publish local object {} -> {}: {error}",
+            staging.display(),
+            path.display()
+        ))
+    })?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| {
+            StatsError::Internal(format!(
+                "fsync local object parent {}: {error}",
+                parent.display()
+            ))
+        })
 }
 
 fn local_compare_and_swap(
@@ -607,45 +647,7 @@ fn local_compare_and_swap(
         )));
     }
 
-    let suffix = format!("tmp-{}-{}", std::process::id(), monotonic_nonce());
-    let staging = path.with_extension(suffix);
-    let mut staging_file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&staging)
-        .map_err(|error| {
-            StatsError::Internal(format!(
-                "create native pointer staging {}: {error}",
-                staging.display()
-            ))
-        })?;
-    staging_file.write_all(bytes).map_err(|error| {
-        StatsError::Internal(format!(
-            "write native pointer staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    staging_file.sync_all().map_err(|error| {
-        StatsError::Internal(format!(
-            "fsync native pointer staging {}: {error}",
-            staging.display()
-        ))
-    })?;
-    std::fs::rename(&staging, path).map_err(|error| {
-        StatsError::Internal(format!(
-            "publish native pointer {} -> {}: {error}",
-            staging.display(),
-            path.display()
-        ))
-    })?;
-    std::fs::File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            StatsError::Internal(format!(
-                "fsync native pointer parent {}: {error}",
-                parent.display()
-            ))
-        })?;
+    atomic_write_file(path, bytes)?;
     Ok(RemoteVersion {
         e_tag: None,
         provider_version: None,

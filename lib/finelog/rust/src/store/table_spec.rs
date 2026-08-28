@@ -74,17 +74,6 @@ pub fn table_spec_from_json(json: &str) -> Result<ProtoTableSpec, StatsError> {
         .map_err(|error| StatsError::Internal(format!("decode table specification: {error}")))
 }
 
-pub fn requires_background_migration(has_rows: bool) -> bool {
-    // A new version owns a complete immutable policy. Even when its source
-    // layout is byte-compatible with the prior version, an artifact or schema
-    // policy change must not advance the query pointer while existing objects
-    // remain assigned only to the old version. The first format deliberately
-    // takes the conservative path and checkpoints every existing source through
-    // the same resumable migration; later formats may add a proven zero-copy
-    // alias transition.
-    has_rows
-}
-
 fn normalize_source_layout(spec: &mut ProtoTableSpec, schema: &Schema) -> Result<(), StatsError> {
     let layout = spec.source_layout.get_or_insert_default();
     if layout.sort_columns.is_empty() {

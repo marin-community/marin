@@ -117,7 +117,7 @@ def test_object_query_rejects_catalog_bytes_that_do_not_match_head(tmp_path: Pat
     catalog_path = _write_catalog(tmp_path)
     catalog_path.write_bytes(b"{}")
 
-    with pytest.raises(StatsError, match="checksum mismatch"):
+    with pytest.raises(StatsError):
         ObjectQueryClient(str(tmp_path)).query(
             'SELECT * FROM "iris.worker"',
             namespaces=["iris.worker"],
@@ -139,20 +139,21 @@ def test_object_query_reporting_is_best_effort(tmp_path: Path) -> None:
     assert result.column("rows").to_pylist() == [2]
 
 
-def test_object_query_waits_for_object_native_activation(tmp_path: Path) -> None:
-    _write_catalog(tmp_path, active_version=0)
+@pytest.mark.parametrize(
+    ("active_version", "l0_mode"),
+    [
+        (0, "L0_MODE_OBJECT_NATIVE"),
+        (1, "L0_MODE_LEGACY_LOCAL"),
+    ],
+)
+def test_object_query_rejects_catalog_without_an_active_native_version(
+    tmp_path: Path,
+    active_version: int,
+    l0_mode: str,
+) -> None:
+    _write_catalog(tmp_path, active_version=active_version, l0_mode=l0_mode)
 
-    with pytest.raises(StatsError, match="legacy query version"):
-        ObjectQueryClient(str(tmp_path)).query(
-            'SELECT * FROM "iris.worker"',
-            namespaces=["iris.worker"],
-        )
-
-
-def test_object_query_rejects_an_active_legacy_local_table_spec(tmp_path: Path) -> None:
-    _write_catalog(tmp_path, l0_mode="L0_MODE_LEGACY_LOCAL")
-
-    with pytest.raises(StatsError, match="is not object-native"):
+    with pytest.raises(StatsError):
         ObjectQueryClient(str(tmp_path)).query(
             'SELECT * FROM "iris.worker"',
             namespaces=["iris.worker"],

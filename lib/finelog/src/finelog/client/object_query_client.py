@@ -15,8 +15,9 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 
 import duckdb
-import fsspec
 import pyarrow as pa
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
@@ -45,7 +46,7 @@ QueryFinishReporter = Callable[[str, int, int, bool, str], None]
 
 
 class ObjectQueryClient:
-    """Read HEAD/catalog directly and run SQL against its exact object list."""
+    """Execute client-side SQL over active object-native Finelog tables."""
 
     def __init__(
         self,
@@ -54,11 +55,10 @@ class ObjectQueryClient:
         report_start: QueryStartReporter | None = None,
         report_finish: QueryFinishReporter | None = None,
     ) -> None:
-        root = object_store_root.rstrip("/")
-        if not root:
+        if not object_store_root:
             raise ValueError("object_store_root must not be empty")
-        self._root = root
-        self._filesystem, self._filesystem_root = fsspec.url_to_fs(root)
+        self._root = StoragePath(object_store_root)
+        self._filesystem, _ = url_to_fs(str(self._root))
         self._report_start = report_start
         self._report_finish = report_finish
 
@@ -69,7 +69,7 @@ class ObjectQueryClient:
         namespaces: Iterable[str],
         max_rows: int = 100_000,
     ) -> pa.Table:
-        """Pin the named catalogs, query their active versions, and report telemetry."""
+        """Return the SQL result from catalog snapshots pinned before execution."""
         names = tuple(dict.fromkeys(namespaces))
         if not names:
             raise ValueError("client-directed queries require at least one namespace")
@@ -104,10 +104,10 @@ class ObjectQueryClient:
         if not namespace or "/" in namespace or namespace in {".", ".."}:
             raise ValueError(f"invalid namespace {namespace!r}")
         native_root = self._native_namespace_root(namespace)
-        head = self._read_json(f"{native_root}/HEAD.json", "HEAD")
+        head = self._read_json(native_root / "HEAD.json", "HEAD")
         catalog_ref = _mapping(head.get("catalog"), "HEAD.catalog")
         catalog_key = _relative_object_key(catalog_ref.get("uri"), "HEAD.catalog.uri")
-        catalog_path = f"{native_root}/{catalog_key}"
+        catalog_path = native_root / catalog_key
         catalog_bytes = self._read_bytes(catalog_path)
         expected_sha = _base64_bytes(catalog_ref.get("sha256"), "HEAD.catalog.sha256")
         if hashlib.sha256(catalog_bytes).digest() != expected_sha:
@@ -208,31 +208,23 @@ class ObjectQueryClient:
         columns = _empty_columns(pin.logical_schema)
         connection.execute(f'CREATE VIEW "{escaped_namespace}" AS SELECT {columns} WHERE FALSE')
 
-    def _native_namespace_root(self, namespace: str) -> str:
-        root = self._filesystem_root.rstrip("/")
-        return f"{root}/_native/namespaces/{namespace}"
+    def _native_namespace_root(self, namespace: str) -> StoragePath:
+        return self._root / "_native" / "namespaces" / namespace
 
-    def _object_uri(self, native_root: str, relative_key: str) -> str:
-        filesystem_path = f"{native_root}/{relative_key}"
-        protocol = self._filesystem.protocol
-        if isinstance(protocol, tuple):
-            protocol = protocol[0]
-        if protocol in {None, "", "file", "local"}:
-            return filesystem_path
-        return f"{protocol}://{filesystem_path}"
+    def _object_uri(self, native_root: StoragePath, relative_key: str) -> str:
+        return str(native_root / relative_key)
 
-    def _read_bytes(self, path: str) -> bytes:
+    def _read_bytes(self, path: StoragePath) -> bytes:
         try:
-            with self._filesystem.open(path, "rb") as file:
-                return file.read()
+            return path.read_bytes()
         except OSError as error:
-            raise StatsError(f"read object catalog {path!r}: {error}") from error
+            raise StatsError(f"read object catalog {str(path)!r}: {error}") from error
 
-    def _read_json(self, path: str, kind: str) -> dict[str, object]:
+    def _read_json(self, path: StoragePath, kind: str) -> dict[str, object]:
         try:
             return _mapping(json.loads(self._read_bytes(path)), kind)
         except (TypeError, json.JSONDecodeError) as error:
-            raise StatsError(f"invalid {kind} JSON at {path!r}: {error}") from error
+            raise StatsError(f"invalid {kind} JSON at {str(path)!r}: {error}") from error
 
     def _best_effort_start(self, query_id: str, sql: str, pins: tuple[CatalogPin, ...]) -> None:
         if self._report_start is None:
@@ -339,7 +331,7 @@ def _empty_columns(logical_schema: dict[str, object]) -> str:
 
 
 def query_catalog_versions(pins: tuple[CatalogPin, ...]) -> list[stats_pb2.QueryCatalogVersion]:
-    """Encode pinned versions for ReportQueryStart."""
+    """Return RPC catalog-version records for pinned snapshots."""
     return [
         stats_pb2.QueryCatalogVersion(
             namespace=pin.namespace,
