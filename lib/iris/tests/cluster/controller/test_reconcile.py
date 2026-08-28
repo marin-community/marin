@@ -660,7 +660,7 @@ def test_dispatch_reconcile_plans_empty_short_circuits(state):
 
 
 def test_reconcile_rpc_forwards_observations(state):
-    """The public backend converts a worker observation into committable task effects."""
+    """A worker observation becomes committable effects at the controller fold."""
     worker_id = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     [task] = submit_job(state, "reconcile-observation", make_job_request("reconcile-observation"))
     assign_task(state, task, worker_id)

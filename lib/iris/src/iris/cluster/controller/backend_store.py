@@ -10,11 +10,9 @@ reconciliation, resolve a worker's address, and reap dead workers.
 
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
-
-from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
@@ -25,13 +23,9 @@ from iris.cluster.controller.ops.worker import fail as fail_workers
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
-from iris.cluster.controller.reconcile.loader import TransitionReader
-from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.scheduling.scheduler import WorkerSnapshot, worker_snapshot_from_row
-from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
-    AttemptUid,
     JobName,
     WorkerId,
     WorkerStatus,
@@ -57,7 +51,7 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
     return None
 
 
-class BackendWorkerStore(TransitionReader, Protocol):
+class BackendWorkerStore(Protocol):
     """The worker-state operations a worker-daemon backend depends on."""
 
     def worker_ids(self) -> set[WorkerId]:
@@ -111,24 +105,6 @@ class DbBackendWorkerStore:
     db: ControllerDB
     health: WorkerHealthTracker
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
-
-    def transition_snapshot(
-        self,
-        *,
-        now: Timestamp,
-        seed_worker_ids: Iterable[WorkerId] = (),
-        observation_uids: Iterable[AttemptUid] = (),
-        seed_task_ids: Iterable[JobName] = (),
-        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-    ) -> TransitionSnapshot:
-        return load_transition_snapshot(
-            self.db,
-            now=now,
-            seed_worker_ids=seed_worker_ids,
-            observation_uids=observation_uids,
-            seed_task_ids=seed_task_ids,
-            extra_attempt_keys=extra_attempt_keys,
-        )
 
     def worker_ids(self) -> set[WorkerId]:
         with self.db.control_read_snapshot() as snap:

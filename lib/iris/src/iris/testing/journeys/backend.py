@@ -38,7 +38,6 @@ class ScriptedObservation:
     error: str = ""
     exit_code: int | None = None
     attempt_id: int | None = None
-    attempt_uid: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +166,7 @@ class ScriptedTaskBackend:
     ) -> ObservedTaskUpdate:
         self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.descriptor.backend_id))
         return ObservedTaskUpdate(
-            attempt_uid=AttemptUid(observation.attempt_uid or attempt_uid),
+            attempt_uid=AttemptUid(attempt_uid),
             task_id=JobName.from_wire(task_id),
             attempt_id=attempt_id,
             new_state=observation.state,

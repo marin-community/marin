@@ -155,8 +155,8 @@ Backends return neutral `ReconcileObservation` values, never controller effects.
 After backend I/O, `reconcile/coordinator.py` reloads current state, fences exact
 Attempt UIDs, applies lifecycle policy, and folds worker liveness. Worker-daemon
 backends still construct the shared `WorkerHealthTracker` and reach the DB through
-`DbBackendWorkerStore`; moving those remaining lifecycle dependencies is later
-work. There is no ping loop: reconcile RPC outcomes are the liveness signal.
+`DbBackendWorkerStore`. There is no ping loop: reconcile RPC outcomes are the
+liveness signal.
 Kubernetes backends have no Iris workers and no controller transition reader.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
