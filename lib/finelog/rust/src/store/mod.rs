@@ -6,21 +6,19 @@
 //! RPC handlers sit on.
 
 pub mod adopt;
-pub mod cache;
 pub mod catalog;
 pub mod compaction;
 pub mod exact;
 pub mod group_extrema;
 pub mod index_bundle;
 pub mod ipc;
-pub mod legacy_archive;
 pub mod log_read;
 pub mod namespace;
 pub mod namespace_name;
 pub mod object_store;
+pub mod object_table;
 pub mod policy;
 pub mod ram_buffer;
-pub mod reconcile;
 pub mod schema;
 pub mod segment;
 pub mod segment_index;

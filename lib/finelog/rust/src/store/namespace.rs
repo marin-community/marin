@@ -39,12 +39,9 @@ use crate::errors::StatsError;
 use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::{
-    partition_field, ColumnType, L0Mode, MigrationPhase, ObjectRef, SourceLayout,
-    TableMigrationStatus,
+    partition_field, ColumnType, L0Mode, MigrationPhase, SourceLayout, TableMigrationStatus,
 };
 use crate::query::index_cache::IndexCache;
-use crate::store::cache::{object_cache_path, write_cache_file};
-use crate::store::catalog::objects::{ObjectCatalog, PublishedCatalog};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
@@ -54,11 +51,10 @@ use crate::store::compaction::executor::{
 use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
-use crate::store::legacy_archive::LegacyArchive;
-use crate::store::object_store::{build_object_storage, ObjectId, ObjectStorage, ObjectStore};
+use crate::store::object_store::{ObjectId, ObjectPrefix};
+use crate::store::object_table::{object_segment_is_query_visible, ObjectTable};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
-use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::schema::{
     resolve_key_column, resolve_sort_columns, schema_to_arrow, AlignedBatch, Schema,
 };
@@ -75,8 +71,7 @@ use crate::store::segment_index::{
     SegmentIndexConfig, SegmentIndexWrite,
 };
 use crate::store::types::{
-    basename, seg_filename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation,
-    SegmentRow,
+    basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
 
 /// Best-effort removal of a segment's derived index files, co-located with every
@@ -304,16 +299,6 @@ impl TableRuntimePolicy {
     }
 }
 
-fn object_segment_is_query_visible(status: &TableSpecStatus, record: &ObjectSegmentRecord) -> bool {
-    record.table_spec_version == status.active_version()
-        || (status.desired_version() == record.table_spec_version && !record.migration_backfill)
-        || (status.migration.as_ref().is_some_and(|migration| {
-            migration.from_version == Some(status.active_version())
-                && migration.to_version == Some(record.table_spec_version)
-                && !record.migration_backfill
-        }))
-}
-
 fn sorted_object_batch(
     batch: &RecordBatch,
     source_layout: Option<&SourceLayout>,
@@ -524,35 +509,6 @@ fn encode_migration_segments(
         .collect()
 }
 
-fn object_partition_directory(partition: Option<&SegmentPartition>) -> String {
-    let Some(partition) = partition else {
-        return "unpartitioned".to_string();
-    };
-    let fields = partition
-        .values
-        .iter()
-        .map(|(name, value)| {
-            let name = object_partition_component(name);
-            let value = object_partition_component(value);
-            format!("{name}={value}")
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    format!("spec-{}/{fields}", partition.spec_id)
-}
-
-fn object_partition_component(value: &str) -> String {
-    const MAX_COMPONENT_LENGTH: usize = 96;
-    let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
-    if encoded.len() <= MAX_COMPONENT_LENGTH {
-        return encoded;
-    }
-    format!(
-        "sha256-{}",
-        full_hex(&Sha256::digest(value.as_bytes()).into())
-    )
-}
-
 /// A single namespace's write engine, disk-backed or in-memory.
 pub struct Namespace {
     name: String,
@@ -589,16 +545,8 @@ pub struct Namespace {
     /// pre-swap paths drains before any rename/unlink. Query/FetchLogs handlers
     /// hold the READ side across `collect()`.
     query_visibility: Arc<RwLock<()>>,
-    /// Canonical immutable object persistence used by catalogs and table data.
-    object_storage: Option<ObjectStorage>,
-    /// Transitional pre-catalog archive used only while legacy tables migrate.
-    legacy_archive: Option<LegacyArchive>,
-    object_catalog: Option<Arc<dyn PublishedCatalog>>,
-    writer_epoch: u64,
-    /// Set when SQLite committed a catalog generation whose HEAD publication
-    /// must be retried. Crash recovery uses remote HEAD as canonical; this
-    /// latch covers publication failures while the same process stays alive.
-    object_publish_pending: AtomicBool,
+    /// Object persistence controller. `None` for memory-only stores.
+    object_table: Option<ObjectTable>,
     last_object_gc: Mutex<Option<Instant>>,
     persisted_seq: watch::Sender<i64>,
     /// Nudged by every append (and a durability await): "there may be data to
@@ -742,12 +690,9 @@ impl Namespace {
     ///
     /// `query_visibility` is the one process-wide lock (cloned into each
     /// namespace) the maintenance task takes the WRITE side of before any
-    /// rename/unlink. `remote_log_dir` configures the offload target (empty
-    /// disables sync). `storage_policy` is the per-namespace retention override.
-    /// The per-namespace maintenance task and the boot remote reconcile are NOT
-    /// started here — the caller calls [`spawn_maintenance`] once the store is
-    /// fully built, and the task runs [`boot_reconcile`] in the background as its
-    /// first step (or the caller reconciles synchronously for the runtime path).
+    /// rename/unlink. Storage implementations are built by `Store` and injected
+    /// here. `storage_policy` is the per-namespace retention override. The caller
+    /// starts the per-namespace maintenance task once the store is fully built.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         name: &str,
@@ -758,9 +703,8 @@ impl Namespace {
         index_cache: Arc<IndexCache>,
         index_backfill_slot: Arc<Mutex<()>>,
         physical_layout_migration_slot: Arc<Mutex<()>>,
-        remote_log_dir: &str,
+        object_table: Option<ObjectTable>,
         storage_policy: StoragePolicy,
-        writer_epoch: u64,
     ) -> Result<Arc<Namespace>, StatsError> {
         let startup_started = Instant::now();
         let arrow_schema = schema_to_arrow(&schema);
@@ -808,20 +752,7 @@ impl Namespace {
         };
         let local_recovery_ms = local_recovery_started.elapsed().as_millis() as u64;
 
-        // The ObjectStorage is rooted at the remote dir and composes the
-        // namespace prefix internally, so we only need the dir to be configured.
-        let remote_store_started = Instant::now();
-        let object_storage = if data_dir.is_some() {
-            build_object_storage(remote_log_dir)?
-        } else {
-            None
-        };
-        let remote_store_ms = remote_store_started.elapsed().as_millis() as u64;
         let table_runtime = TableRuntimePolicy::from_status(&catalog.table_spec_status(name)?);
-        let legacy_archive = object_storage.clone().map(LegacyArchive::new);
-        let object_catalog = object_storage
-            .clone()
-            .map(|storage| Arc::new(ObjectCatalog::new(storage)) as Arc<dyn PublishedCatalog>);
 
         let (tx, _rx) = watch::channel(init_persisted);
         let ns = Arc::new(Namespace {
@@ -844,11 +775,7 @@ impl Namespace {
             object_flush_lock: tokio::sync::Mutex::new(()),
             maint_lock: tokio::sync::Mutex::new(()),
             query_visibility,
-            object_storage,
-            legacy_archive,
-            object_catalog,
-            writer_epoch,
-            object_publish_pending: AtomicBool::new(false),
+            object_table,
             last_object_gc: Mutex::new(None),
             persisted_seq: tx,
             flush_notify: Arc::new(Notify::new()),
@@ -882,7 +809,6 @@ impl Namespace {
             segments = adopted.len(),
             next_seq,
             local_recovery_ms,
-            remote_store_ms,
             catalog_refresh_ms,
             total_ms = startup_started.elapsed().as_millis() as u64,
             "finelog namespace startup complete"
@@ -892,159 +818,31 @@ impl Namespace {
 
     /// Whether this namespace has a remote offload target configured.
     pub fn has_remote(&self) -> bool {
-        self.object_storage.is_some()
+        self.object_table.is_some()
     }
 
-    /// Run the boot-time remote reconcile (adopt unknown remote parquet as
-    /// REMOTE, redundancy-drop covered segments). No-op without a remote dir or
-    /// in memory mode. Called once after construction, before serving.
-    pub async fn boot_reconcile(&self) -> Result<(), StatsError> {
-        let (Some(object_storage), Some(archive), Some(dir)) =
-            (&self.object_storage, &self.legacy_archive, &self.data_dir)
-        else {
+    pub(crate) async fn materialize_query_segments(&self) -> Result<(), StatsError> {
+        let Some(object_table) = &self.object_table else {
             return Ok(());
         };
-        self.restore_object_cache(object_storage).await?;
-        reconcile_remote_segments(
-            &self.catalog,
-            archive,
-            &self.name,
-            dir,
-            Some(&self.key_column),
-        )
-        .await?;
-        // Reconcile may have adopted REMOTE-only segments the catalog did not
-        // know at open() time (cold boot from a wiped catalog). Reseed next_seq
-        // past them so freshly allocated seqs never collide with offloaded data.
-        let target =
-            crate::store::adopt::recover_next_seq(&self.catalog.list_segments(&self.name)?);
-        self.inner
-            .lock()
-            .unwrap()
-            .buffers
-            .ensure_next_seq_at_least(target);
-        Ok(())
-    }
-
-    pub(crate) async fn restore_object_cache(
-        &self,
-        remote: &ObjectStorage,
-    ) -> Result<(), StatsError> {
-        let status = self.catalog.table_spec_status(&self.name)?;
-        let rows: std::collections::HashMap<_, _> = self
-            .catalog
-            .list_segments(&self.name)?
-            .into_iter()
-            .map(|row| (row.path.clone(), row))
-            .collect();
-        for record in self.catalog.object_segments(&self.name)? {
-            if !object_segment_is_query_visible(&status, &record) {
-                continue;
-            }
-            let path = PathBuf::from(&record.path);
-            let row = rows.get(&record.path).ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object segment {:?} has no local catalog row",
-                    record.path
-                ))
-            })?;
-            let already_tracked = self
-                .inner
-                .lock()
-                .unwrap()
-                .local_segments
-                .iter()
-                .any(|existing| existing.path == record.path);
-            if path.exists() && already_tracked && row.location == SegmentLocation::Both {
-                continue;
-            }
-            let source_object_id = record.source.object_id.as_deref().ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object segment {:?} has an empty source object ID",
-                    record.path
-                ))
-            })?;
-            let source_id = ObjectId::parse(source_object_id)?;
-            let source_key = source_id.table_relative(&self.name).ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object segment {:?} references another table",
-                    record.path
-                ))
-            })?;
-            let expected_size = record.source.byte_size.unwrap_or(0);
-            let local_size_matches = path
-                .metadata()
-                .ok()
-                .is_some_and(|metadata| expected_size == 0 || metadata.len() == expected_size);
-            let mut metadata = local_size_matches
-                .then(|| read_segment_footer(&path, Some(&self.key_column)))
-                .flatten();
-            if metadata.is_none() {
-                let object = remote.read(&source_id).await?.ok_or_else(|| {
-                    StatsError::Internal(format!(
-                        "object segment source {source_key:?} is missing for {:?}",
-                        self.name
-                    ))
-                })?;
-                if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice())
-                {
-                    return Err(StatsError::Internal(format!(
-                        "object segment source {source_key:?} failed SHA-256 validation"
-                    )));
-                }
-                let bytes = object.bytes.to_vec();
-                let cache_path = path.clone();
-                tokio::task::spawn_blocking(move || write_cache_file(&cache_path, &bytes))
-                    .await
-                    .map_err(|error| {
-                        StatsError::Internal(format!("object cache restore task panicked: {error}"))
-                    })??;
-                metadata = read_segment_footer(&path, Some(&self.key_column));
-            }
-            let metadata = metadata.ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "restored object cache {} has an unreadable Parquet footer",
-                    path.display()
-                ))
-            })?;
-            let segment = LocalSegment {
-                path: record.path.clone(),
-                size_bytes: row.byte_size,
-                level: metadata.level,
-                min_seq: metadata.min_seq,
-                max_seq: metadata.max_seq,
-                row_count: metadata.row_count,
-                created_at_ms: row.created_at_ms,
-                min_key_value: metadata.min_key_value,
-                max_key_value: metadata.max_key_value,
-                partition: metadata.partition,
-                location: SegmentLocation::Both,
-            };
-            let mut inner = self.inner.lock().unwrap();
-            if !inner
+        let segments = object_table.local_query_segments(&self.key_column).await?;
+        let mut inner = self.inner.lock().unwrap();
+        for segment in segments {
+            if inner
                 .local_segments
                 .iter()
                 .any(|existing| existing.path == segment.path)
             {
-                inner.local_segments.push_back(segment);
-                inner
-                    .local_segments
-                    .make_contiguous()
-                    .sort_by_key(|segment| segment.min_seq);
-                debug_assert_unique_paths(&inner.local_segments);
+                continue;
             }
-            drop(inner);
-            self.catalog
-                .set_location(&self.name, &record.path, SegmentLocation::Both)?;
+            inner.local_segments.push_back(segment);
         }
+        inner
+            .local_segments
+            .make_contiguous()
+            .sort_by_key(|segment| segment.min_seq);
+        debug_assert_unique_paths(&inner.local_segments);
         Ok(())
-    }
-
-    pub(crate) async fn ensure_query_cache(&self) -> Result<(), StatsError> {
-        let Some(remote) = &self.object_storage else {
-            return Ok(());
-        };
-        self.restore_object_cache(remote).await
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction
@@ -1058,18 +856,18 @@ impl Namespace {
     }
 
     pub(crate) fn mark_object_publish_pending(&self) {
-        self.object_publish_pending.store(true, Ordering::SeqCst);
+        self.object_table
+            .as_ref()
+            .expect("object-backed namespace has an object table")
+            .mark_publish_pending();
     }
 
     async fn publish_pending_object_catalog(&self) -> Result<(), StatsError> {
-        if !self.object_publish_pending.swap(false, Ordering::SeqCst) {
-            return Ok(());
-        }
-        if let Err(error) = self.publish_object_catalog_state().await {
-            self.object_publish_pending.store(true, Ordering::SeqCst);
-            return Err(error);
-        }
-        Ok(())
+        self.object_table
+            .as_ref()
+            .expect("object-backed namespace has an object table")
+            .publish_pending()
+            .await
     }
 
     fn runtime_policy(&self) -> TableRuntimePolicy {
@@ -1077,86 +875,28 @@ impl Namespace {
     }
 
     async fn publish_object_catalog_state(&self) -> Result<(), StatsError> {
-        let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
+        let object_table = self.object_table.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "versioned namespace {:?} has no object catalog",
+                "versioned namespace {:?} has no object table",
                 self.name
             ))
         })?;
-        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "versioned namespace {:?} has no local cache root",
-                self.name
-            ))
-        })?;
-        object_catalog
-            .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
-            .await?;
-        Ok(())
+        object_table.publish().await
     }
 
     async fn migration_source_bytes(
         &self,
-        namespace_dir: &Path,
+        _namespace_dir: &Path,
         row: &SegmentRow,
         object_record: Option<&ObjectSegmentRecord>,
     ) -> Result<Bytes, StatsError> {
-        if Path::new(&row.path).exists() {
-            return tokio::fs::read(&row.path)
-                .await
-                .map(Bytes::from)
-                .map_err(|error| {
-                    StatsError::Internal(format!("read migration source {}: {error}", row.path))
-                });
-        }
-        let object_storage = self.object_storage.as_ref().ok_or_else(|| {
+        let object_table = self.object_table.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
                 "migration source {} has no local or remote copy",
                 row.path
             ))
         })?;
-        if let Some(record) = object_record {
-            let object_id = record.source.object_id.as_deref().ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object migration source {:?} has an empty object ID",
-                    row.path
-                ))
-            })?;
-            let object_id = ObjectId::parse(object_id)?;
-            let object = object_storage.read(&object_id).await?.ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object migration source {:?} is missing for {:?}",
-                    object_id.as_str(),
-                    self.name
-                ))
-            })?;
-            if record.source.sha256.as_deref() != Some(object.version.content_sha256.as_slice()) {
-                return Err(StatsError::Internal(format!(
-                    "object migration source {:?} failed SHA-256 validation",
-                    object_id.as_str()
-                )));
-            }
-            return Ok(object.bytes);
-        }
-        let key = segment_relative_key(namespace_dir, &row.path).ok_or_else(|| {
-            StatsError::Internal(format!(
-                "legacy migration source {} is outside {}",
-                row.path,
-                namespace_dir.display()
-            ))
-        })?;
-        self.legacy_archive
-            .as_ref()
-            .expect("object storage and legacy archive are configured together")
-            .read(&self.name, &key)
-            .await?
-            .map(|object| object.bytes)
-            .ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "legacy migration source {key:?} is missing for {:?}",
-                    self.name
-                ))
-            })
+        object_table.source_bytes(row, object_record).await
     }
 
     pub(crate) fn activate_query_version(&self, version: u64) -> Result<(), StatsError> {
@@ -1222,17 +962,6 @@ impl Namespace {
         Ok(status)
     }
 
-    fn remove_retired_cache_paths(&self, paths: Vec<String>) {
-        for path in paths {
-            remove_index_artifacts(&path);
-            if let Err(error) = std::fs::remove_file(&path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(namespace = %self.name, %path, %error, "remove retired table-version cache failed");
-                }
-            }
-        }
-    }
-
     /// Advance an automatic TableSpec transition. Returns true while ordinary
     /// compaction and eviction must stay frozen to preserve the migration source.
     async fn advance_table_spec_migration(&self) -> Result<bool, StatsError> {
@@ -1252,11 +981,9 @@ impl Namespace {
                 self.publish_object_catalog_state().await?;
                 self.activate_query_version(status.active_version())?;
                 self.update_table_spec(&status);
-                let (retired, retired_paths) =
-                    self.catalog.retire_observed_migration(&self.name)?;
+                let retired = self.catalog.retire_observed_migration(&self.name)?;
                 if retired.catalog_generation != status.catalog_generation {
                     self.mark_object_publish_pending();
-                    self.remove_retired_cache_paths(retired_paths);
                     self.publish_pending_object_catalog().await?;
                     return Ok(false);
                 }
@@ -1296,9 +1023,9 @@ impl Namespace {
                 self.name
             ))
         })?;
-        let remote = self.object_storage.as_ref().ok_or_else(|| {
+        let object_table = self.object_table.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "migration for {:?} requires an object store",
+                "migration for {:?} requires an object table",
                 self.name
             ))
         })?;
@@ -1395,60 +1122,23 @@ impl Namespace {
                 max_seq,
             } in rewritten
             {
-                let sha256: [u8; 32] = Sha256::digest(&parquet).into();
-                let hash = full_hex(&sha256);
-                let partition_directory = object_partition_directory(partition.as_ref());
-                let object_key = format!(
-                    "objects/v{to_version}/backfill/{migration_source_id}/{partition_directory}/{hash}/{}",
-                    seg_filename(row.level, min_seq)
-                );
-                let object_id = ObjectId::table(&self.name, &object_key)?;
-                let remote_version = remote
-                    .write(&object_id, Bytes::from(parquet.clone()))
-                    .await?;
-                let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
-                let cache_path_for_write = cache_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    write_cache_file(&cache_path_for_write, &parquet)
-                })
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("migration cache task panicked: {error}"))
-                })??;
+                let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
                 let (min_key_value, max_key_value) = self.key_bounds(&batch);
-                let byte_size = i64::try_from(
-                    std::fs::metadata(&cache_path)
-                        .map_err(|error| {
-                            StatsError::Internal(format!(
-                                "stat migration cache {}: {error}",
-                                cache_path.display()
-                            ))
-                        })?
-                        .len(),
-                )
-                .unwrap_or(i64::MAX);
                 migrated.push(SegmentRow {
                     namespace: row.namespace.clone(),
-                    path: cache_path.to_string_lossy().into_owned(),
+                    path: stored.path.to_string_lossy().into_owned(),
                     level: row.level,
                     min_seq,
                     max_seq,
                     row_count: batch.num_rows() as i64,
-                    byte_size,
+                    byte_size: stored.byte_size,
                     created_at_ms: row.created_at_ms,
                     min_key_value: min_key_value.map(|value| value.to_string()),
                     max_key_value: max_key_value.map(|value| value.to_string()),
                     partition,
                     location: SegmentLocation::Both,
                 });
-                sources.push(ObjectRef {
-                    object_id: Some(object_id.as_str().to_string()),
-                    provider_version: remote_version.provider_version,
-                    etag: remote_version.e_tag,
-                    byte_size: u64::try_from(byte_size).ok(),
-                    sha256: Some(sha256.to_vec()),
-                    ..Default::default()
-                });
+                sources.push(stored.source);
             }
             let committed_generation = self.catalog.commit_migration_segments(
                 &migrated,
@@ -1554,10 +1244,10 @@ impl Namespace {
             return Ok(false);
         };
         let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
-            StatsError::Internal("object-backed compaction requires a cache root".to_string())
+            StatsError::Internal("object-backed compaction requires local table state".to_string())
         })?;
-        let remote = self.object_storage.as_ref().ok_or_else(|| {
-            StatsError::Internal("object-backed compaction requires an object store".to_string())
+        let object_table = self.object_table.as_ref().ok_or_else(|| {
+            StatsError::Internal("object-backed compaction requires an object table".to_string())
         })?;
         let mut input_bytes = Vec::with_capacity(inputs.len());
         let mut input_records = Vec::with_capacity(inputs.len());
@@ -1621,39 +1311,11 @@ impl Namespace {
         let mut output_rows = Vec::with_capacity(rewritten.len());
         let mut output_sources = Vec::with_capacity(rewritten.len());
         for (partition, batch, parquet, min_seq, max_seq) in rewritten {
-            let sha256: [u8; 32] = Sha256::digest(&parquet).into();
-            let hash = full_hex(&sha256);
-            let partition_directory = object_partition_directory(partition.as_ref());
-            let object_key = format!(
-                "objects/v{active_version}/compact/{partition_directory}/{hash}/{}",
-                seg_filename(output_level, min_seq)
-            );
-            let object_id = ObjectId::table(&self.name, &object_key)?;
-            let remote_version = remote
-                .write(&object_id, Bytes::from(parquet.clone()))
-                .await?;
-            let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
-            let cache_path_for_write = cache_path.clone();
-            tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("object compaction cache task panicked: {error}"))
-                })??;
-            let byte_size = i64::try_from(
-                std::fs::metadata(&cache_path)
-                    .map_err(|error| {
-                        StatsError::Internal(format!(
-                            "stat object compaction cache {}: {error}",
-                            cache_path.display()
-                        ))
-                    })?
-                    .len(),
-            )
-            .unwrap_or(i64::MAX);
+            let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
             let (min_key_value, max_key_value) = self.key_bounds(&batch);
             let segment = LocalSegment {
-                path: cache_path.to_string_lossy().into_owned(),
-                size_bytes: byte_size,
+                path: stored.path.to_string_lossy().into_owned(),
+                size_bytes: stored.byte_size,
                 level: output_level,
                 min_seq,
                 max_seq,
@@ -1665,14 +1327,7 @@ impl Namespace {
                 location: SegmentLocation::Both,
             };
             output_rows.push(segment_to_row(&self.name, &segment));
-            output_sources.push(ObjectRef {
-                object_id: Some(object_id.as_str().to_string()),
-                provider_version: remote_version.provider_version,
-                etag: remote_version.e_tag,
-                byte_size: u64::try_from(byte_size).ok(),
-                sha256: Some(sha256.to_vec()),
-                ..Default::default()
-            });
+            output_sources.push(stored.source);
             output_segments.push(segment);
         }
         let removed_paths = inputs
@@ -1716,11 +1371,6 @@ impl Namespace {
         drop(inner);
         for path in &removed_paths {
             remove_index_artifacts(path);
-            if let Err(error) = std::fs::remove_file(path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(%path, %error, "remove compacted object cache input failed");
-                }
-            }
         }
         tracing::info!(
             namespace = %self.name,
@@ -2049,19 +1699,13 @@ impl Namespace {
 
     async fn write_sealed_object(
         &self,
-        namespace_dir: &Path,
+        _namespace_dir: &Path,
         sealed: &SealedBuffer,
         policy: &TableRuntimePolicy,
     ) -> Result<(), StatsError> {
-        let remote = self.object_storage.as_ref().ok_or_else(|| {
+        let object_table = self.object_table.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
-                "object-backed namespace {:?} has no remote store",
-                self.name
-            ))
-        })?;
-        let object_catalog = self.object_catalog.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!(
-                "object-backed namespace {:?} has no object catalog",
+                "object-backed namespace {:?} has no object table",
                 self.name
             ))
         })?;
@@ -2092,40 +1736,12 @@ impl Namespace {
         let mut rows = Vec::with_capacity(encoded.len());
         let mut sources = Vec::with_capacity(encoded.len());
         for (partition, batch, parquet, min_seq, max_seq) in encoded {
-            let sha256: [u8; 32] = Sha256::digest(&parquet).into();
-            let hash = full_hex(&sha256);
-            let partition_directory = object_partition_directory(partition.as_ref());
-            let object_key = format!(
-                "objects/v{}/l0/{partition_directory}/{hash}/{}",
-                policy.table_spec_version,
-                seg_filename(0, min_seq)
-            );
-            let object_id = ObjectId::table(&self.name, &object_key)?;
-            let remote_version = remote
-                .write(&object_id, Bytes::from(parquet.clone()))
-                .await?;
-            let cache_path = object_cache_path(namespace_dir, &self.name, &object_key)?;
-            let cache_path_for_write = cache_path.clone();
-            tokio::task::spawn_blocking(move || write_cache_file(&cache_path_for_write, &parquet))
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("object cache task panicked: {error}"))
-                })??;
+            let stored = object_table.write_parquet(Bytes::from(parquet)).await?;
 
             let (min_key, max_key) = self.key_bounds(&batch);
             let segment = LocalSegment {
-                path: cache_path.to_string_lossy().into_owned(),
-                size_bytes: i64::try_from(
-                    std::fs::metadata(&cache_path)
-                        .map_err(|error| {
-                            StatsError::Internal(format!(
-                                "stat object cache {}: {error}",
-                                cache_path.display()
-                            ))
-                        })?
-                        .len(),
-                )
-                .unwrap_or(i64::MAX),
+                path: stored.path.to_string_lossy().into_owned(),
+                size_bytes: stored.byte_size,
                 level: 0,
                 min_seq,
                 max_seq,
@@ -2137,14 +1753,7 @@ impl Namespace {
                 location: SegmentLocation::Both,
             };
             rows.push(segment_to_row(&self.name, &segment));
-            sources.push(ObjectRef {
-                object_id: Some(object_id.as_str().to_string()),
-                provider_version: remote_version.provider_version,
-                etag: remote_version.e_tag,
-                byte_size: u64::try_from(segment.size_bytes).ok(),
-                sha256: Some(sha256.to_vec()),
-                ..Default::default()
-            });
+            sources.push(stored.source);
             segments.push(segment);
         }
         let committed_generation = self.catalog.commit_object_segments(
@@ -2153,10 +1762,7 @@ impl Namespace {
             &sources,
             false,
         )?;
-        if let Err(error) = object_catalog
-            .publish_local(&self.catalog, &self.name, namespace_dir, self.writer_epoch)
-            .await
-        {
+        if let Err(error) = object_table.publish().await {
             self.catalog.rollback_object_segments(
                 &self.name,
                 &segments
@@ -2447,10 +2053,12 @@ impl Namespace {
 
     /// Relocate one archived segment to its current physical path.
     async fn remote_layout_migration_step(&self) -> Result<bool, StatsError> {
-        let (Some(dir), Some(remote)) = (self.data_dir.as_deref(), self.legacy_archive.as_ref())
+        let (Some(dir), Some(object_table)) =
+            (self.data_dir.as_deref(), self.object_table.as_ref())
         else {
             return Ok(false);
         };
+        let remote = object_table.legacy_store();
 
         let candidate = self
             .remote_layout_migration_candidates()?
@@ -2472,9 +2080,15 @@ impl Namespace {
             ))
         })?;
 
-        remote
-            .copy(&self.name, &source_key, &destination_key)
-            .await?;
+        let source_id = ObjectId::table(&self.name, &source_key)?;
+        let destination_id = ObjectId::table(&self.name, &destination_key)?;
+        let source = remote.read(&source_id).await?.ok_or_else(|| {
+            StatsError::Internal(format!(
+                "legacy object {:?} disappeared during layout migration",
+                source_id.as_str()
+            ))
+        })?;
+        remote.write(&destination_id, source.bytes).await?;
 
         let mut moved = row.clone();
         moved.path = destination_path;
@@ -2483,7 +2097,9 @@ impl Namespace {
             self.catalog
                 .replace_segments(&self.name, std::slice::from_ref(&row.path), &[moved])?;
         }
-        remote.delete(&self.name, &source_key).await;
+        if let Err(error) = remote.delete(&source_id).await {
+            tracing::warn!(namespace = %self.name, key = %source_key, %error, "legacy object delete failed");
+        }
         tracing::info!(
             namespace = %self.name,
             from = %source_key,
@@ -2850,9 +2466,10 @@ impl Namespace {
     ///
     /// No-op without a remote dir / in memory mode.
     pub async fn sync_step(&self) -> Result<(), StatsError> {
-        let Some(remote) = &self.legacy_archive else {
+        let Some(object_table) = &self.object_table else {
             return Ok(());
         };
+        let remote = object_table.legacy_store();
         // A TableSpec migration temporarily keeps legacy segments and
         // object-backed cache entries in the same SQLite `segments` table.
         // Legacy sync must continue making the former durable while backfill
@@ -2866,8 +2483,11 @@ impl Namespace {
             .map(|record| record.path)
             .collect();
         let remote_keys: std::collections::HashSet<String> =
-            match remote.list_keys(&self.name).await {
-                Ok(names) => names.into_iter().collect(),
+            match remote.list(&ObjectPrefix::table(&self.name, "")?).await {
+                Ok(objects) => objects
+                    .into_iter()
+                    .filter_map(|object| object.id.table_relative(&self.name).map(str::to_string))
+                    .collect(),
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, error = %e, "remote sync list failed");
                     return Ok(());
@@ -2894,14 +2514,23 @@ impl Namespace {
                 self.mark_uploaded(&row.path)?;
                 continue;
             }
-            if remote
-                .upload(&self.name, &key, std::path::Path::new(&row.path))
+            let bytes = match tokio::fs::read(&row.path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path = %row.path, %error, "legacy upload read failed");
+                    all_durable = false;
+                    continue;
+                }
+            };
+            if let Err(error) = remote
+                .write(&ObjectId::table(&self.name, &key)?, Bytes::from(bytes))
                 .await
             {
-                self.mark_uploaded(&row.path)?;
-            } else {
+                tracing::warn!(namespace = %self.name, key = %key, %error, "legacy upload failed");
                 all_durable = false;
+                continue;
             }
+            self.mark_uploaded(&row.path)?;
         }
 
         if !all_durable {
@@ -2927,7 +2556,10 @@ impl Namespace {
             .filter_map(|row| segment_relative_key(namespace_dir, &row.path))
             .collect();
         for key in remote_keys.difference(&catalog_keys) {
-            remote.delete(&self.name, key).await;
+            if let Err(error) = remote.delete(&ObjectId::table(&self.name, key)?).await {
+                tracing::warn!(namespace = %self.name, key = %key, %error, "legacy object delete failed");
+                continue;
+            }
             tracing::info!(namespace = %self.name, segment = %key, "deleted orphan remote segment");
         }
         Ok(())
@@ -2998,93 +2630,6 @@ impl Namespace {
         {
             self.evict_segment(&row.path);
         }
-        Ok(())
-    }
-
-    fn object_cache_eviction_step(&self) -> Result<(), StatsError> {
-        let policy = self.inner.lock().unwrap().storage_policy.clone();
-        let max_segments = policy
-            .max_segments
-            .map(|value| value as usize)
-            .unwrap_or(self.compaction_config.max_segments_per_namespace);
-        let max_bytes = policy
-            .max_bytes
-            .unwrap_or(self.compaction_config.max_bytes_per_namespace);
-        let object_paths: HashSet<_> = self
-            .catalog
-            .object_segments(&self.name)?
-            .into_iter()
-            .map(|record| record.path)
-            .collect();
-        loop {
-            let candidate = {
-                let inner = self.inner.lock().unwrap();
-                let count = inner.local_segments.len();
-                let bytes: i64 = inner
-                    .local_segments
-                    .iter()
-                    .map(|segment| segment.size_bytes)
-                    .sum();
-                if count <= max_segments && bytes <= max_bytes {
-                    None
-                } else {
-                    inner
-                        .local_segments
-                        .iter()
-                        .filter(|segment| {
-                            segment.location == SegmentLocation::Both
-                                && object_paths.contains(&segment.path)
-                        })
-                        .min_by_key(|segment| segment.min_seq)
-                        .map(|segment| segment.path.clone())
-                }
-            };
-            let Some(path) = candidate else {
-                break;
-            };
-            self.evict_object_cache_segment(&path)?;
-        }
-
-        let Some(max_age_seconds) = policy.max_age_seconds else {
-            return Ok(());
-        };
-        let cutoff_ms = now_ms().saturating_sub(max_age_seconds.saturating_mul(1000));
-        loop {
-            let candidate = self
-                .inner
-                .lock()
-                .unwrap()
-                .local_segments
-                .iter()
-                .filter(|segment| {
-                    segment.location == SegmentLocation::Both
-                        && segment.created_at_ms < cutoff_ms
-                        && object_paths.contains(&segment.path)
-                })
-                .min_by_key(|segment| segment.created_at_ms)
-                .map(|segment| segment.path.clone());
-            let Some(path) = candidate else {
-                break;
-            };
-            self.evict_object_cache_segment(&path)?;
-        }
-        Ok(())
-    }
-
-    fn evict_object_cache_segment(&self, path: &str) -> Result<(), StatsError> {
-        let _write_guard = self.query_visibility.blocking_write();
-        self.catalog
-            .set_location(&self.name, path, SegmentLocation::Remote)?;
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.local_segments.retain(|segment| segment.path != path);
-        }
-        if let Err(error) = std::fs::remove_file(path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(namespace = %self.name, path, %error, "failed to evict object cache file");
-            }
-        }
-        remove_index_artifacts(path);
         Ok(())
     }
 
@@ -3386,19 +2931,13 @@ impl Namespace {
             }
             due
         };
-        let Some(catalog) = self.object_catalog.as_ref().filter(|_| should_run) else {
+        let Some(object_table) = self.object_table.as_ref().filter(|_| should_run) else {
             return Ok(());
         };
         let catalog_retention_ms = self.runtime_policy().max_query_time_ms;
         let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
-        let removed = catalog
-            .gc_obsolete_catalogs(
-                &self.name,
-                now_ms(),
-                catalog_retention_ms,
-                orphan_grace_ms,
-                self.writer_epoch,
-            )
+        let removed = object_table
+            .gc_published(now_ms(), catalog_retention_ms, orphan_grace_ms)
             .await?;
         if removed > 0 {
             tracing::info!(namespace = %self.name, removed, "removed obsolete table objects");
@@ -3409,7 +2948,7 @@ impl Namespace {
     /// Run one maintenance cycle, serialized against other callers.
     ///
     /// Object-backed tables publish pending catalogs, compact immutable objects,
-    /// evict cache entries, collect expired objects, and maintain indexes. Legacy
+    /// invoke object-store GC, collect expired objects, and maintain indexes. Legacy
     /// tables compact local segments, synchronize the archive, evict, and perform
     /// physical-layout and index maintenance. No-op in memory mode.
     pub async fn run_maintenance(
@@ -3427,12 +2966,11 @@ impl Namespace {
         if self.runtime_policy().object_backed() {
             self.publish_pending_object_catalog().await?;
             self.object_compaction_step().await?;
-            let namespace = Arc::clone(self);
-            tokio::task::spawn_blocking(move || namespace.object_cache_eviction_step())
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("object cache eviction task panicked: {error}"))
-                })??;
+            self.object_table
+                .as_ref()
+                .expect("object-backed namespace has an object table")
+                .gc()
+                .await?;
             self.gc_published_catalog().await?;
             let namespace = Arc::clone(self);
             tokio::task::spawn_blocking(move || namespace.maintain_index_artifacts())
@@ -3670,19 +3208,11 @@ impl Namespace {
     /// Spawn the per-namespace maintenance task.
     /// No-op in memory mode. Called once by the store after construction.
     ///
-    /// When `reconcile_first` is set, the task runs the boot remote reconcile
-    /// (adopt unknown remote parquet, redundancy-drop covered segments) as its
-    /// FIRST step, in the background, before the periodic loop — so a large
-    /// first-time reconcile never blocks the listener bind / `/health`. The boot
-    /// path (rehydrated namespaces, already backed by local segments → next_seq
-    /// recovered locally) passes `true`. The runtime-register path reconciles
-    /// synchronously beforehand (cold-boot next_seq safety) and passes `false` so
-    /// the task does not reconcile twice.
-    pub fn spawn_maintenance(self: &Arc<Self>, reconcile_first: bool) {
+    pub fn spawn_maintenance(self: &Arc<Self>) {
         if self.data_dir.is_none() {
             return;
         }
-        let handle = spawn_maintenance_task(Arc::clone(self), reconcile_first);
+        let handle = spawn_maintenance_task(Arc::clone(self));
         self.task_handles.lock().unwrap().push(handle);
     }
 
@@ -3752,10 +3282,8 @@ impl Namespace {
         if let Err(error) = self.flush_once_async().await {
             tracing::warn!(namespace = %self.name, %error, "shutdown: final flush failed");
         }
-        // Final reconcile so the bucket matches the catalog at shutdown.
-        // Best-effort + bounded by the same per-namespace `timeout`; if it
-        // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
-        // (early return) without a remote dir.
+        // Legacy tables get one final bounded archive sync. Object-backed tables
+        // already publish through their write path, so this is a no-op for them.
         if self.has_remote() {
             match tokio::time::timeout(timeout, self.sync_step()).await {
                 Ok(Ok(())) => {}
@@ -4083,17 +3611,6 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// Run remote reconciliation before periodic maintenance when requested.
-///
-/// When `reconcile_first` is set, the task FIRST runs the boot remote reconcile
-/// (adopt unknown remote parquet, redundancy-drop covered segments), then enters
-/// the periodic loop. Running it here — on the spawned task rather than before
-/// the listener binds — keeps the reconcile's object_store footer reads off the
-/// startup / `/health` path, while still sequencing it before the first
-/// maintenance tick so the tick can never race adoption. A stop signalled during
-/// the reconcile is honoured (the latch is checked before it runs, and the
-/// in-flight reconcile future is cancelled when the task is aborted on shutdown).
-///
 /// Every `check_interval` the loop runs one `run_maintenance` cycle (compaction
 /// drain, then sync, then evict). A physical-layout backlog shortens only the
 /// next delay to 100 ms, so the streaming rebuild continues without a 30 s gap
@@ -4101,16 +3618,8 @@ fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
 /// task exits immediately WITHOUT a final maintenance cycle; the final
 /// drain-to-disk and reconcile on shutdown are handled by
 /// [`Namespace::shutdown`].
-fn spawn_maintenance_task(
-    ns: Arc<Namespace>,
-    reconcile_first: bool,
-) -> tokio::task::JoinHandle<()> {
+fn spawn_maintenance_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if reconcile_first && ns.has_remote() && !ns.stopped.load(Ordering::SeqCst) {
-            if let Err(e) = ns.boot_reconcile().await {
-                tracing::warn!(namespace = %ns.name, error = %e, "boot reconcile failed");
-            }
-        }
         let interval = ns.compaction_config.check_interval;
         let mut migration_pending = ns.physical_layout_migration_is_pending();
         loop {
@@ -4234,6 +3743,16 @@ mod tests {
         data_dir: Option<PathBuf>,
         catalog: Arc<Catalog>,
     ) -> Arc<Namespace> {
+        open_ns_with_policy(name, schema, data_dir, catalog, StoragePolicy::default())
+    }
+
+    fn open_ns_with_policy(
+        name: &str,
+        schema: Schema,
+        data_dir: Option<PathBuf>,
+        catalog: Arc<Catalog>,
+        policy: StoragePolicy,
+    ) -> Arc<Namespace> {
         Namespace::open(
             name,
             schema,
@@ -4243,9 +3762,8 @@ mod tests {
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
-            "",
-            StoragePolicy::default(),
-            1,
+            None,
+            policy,
         )
         .unwrap()
     }
@@ -4259,6 +3777,37 @@ mod tests {
         remote_log_dir: &str,
         policy: StoragePolicy,
     ) -> Arc<Namespace> {
+        let provider = crate::store::object_store::build_remote_object_store(remote_log_dir)
+            .unwrap()
+            .unwrap();
+        let cache_root = data_dir
+            .as_ref()
+            .and_then(|path| path.parent())
+            .unwrap()
+            .to_path_buf();
+        let object_store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(
+                Arc::new(provider.clone()),
+                cache_root.clone(),
+            )
+            .unwrap(),
+        ) as Arc<dyn crate::store::object_store::ObjectStore>;
+        let legacy_object_store = Arc::new(crate::store::object_store::LegacyObjectStore::new(
+            &provider,
+        ));
+        let object_catalog = Arc::new(crate::store::catalog::object_catalog::ObjectCatalog::new(
+            object_store.clone(),
+        ))
+            as Arc<dyn crate::store::catalog::published::PublishedCatalog>;
+        let object_table = Some(ObjectTable::new(
+            name.to_string(),
+            data_dir.clone().unwrap(),
+            Arc::clone(&catalog),
+            object_store,
+            legacy_object_store,
+            object_catalog,
+            1,
+        ));
         Namespace::open(
             name,
             schema,
@@ -4268,9 +3817,8 @@ mod tests {
             crate::query::index_cache::test_index_cache(),
             Arc::new(Mutex::new(())),
             Arc::new(Mutex::new(())),
-            remote_log_dir,
+            object_table,
             policy,
-            1,
         )
         .unwrap()
     }
@@ -4676,48 +4224,6 @@ mod tests {
             .exists());
         assert!(!legacy_remote_path.exists());
 
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn boot_reconcile_removes_missing_remote_catalog_pointer() {
-        let dir = tempdir();
-        let remote_dir = dir.join("remote");
-        let ns_dir = dir.join("levanter.metrics");
-        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
-        let ns = open_ns_remote(
-            "levanter.metrics",
-            stored_form(levanter_metrics_schema()),
-            Some(ns_dir.clone()),
-            catalog,
-            remote_dir.to_str().unwrap(),
-            StoragePolicy::default(),
-        );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
-        ns.flush_once().unwrap();
-        ns.run_maintenance(true).await.unwrap();
-
-        let segment = ns
-            .catalog
-            .list_segments("levanter.metrics")
-            .unwrap()
-            .remove(0);
-        let evict_ns = Arc::clone(&ns);
-        let evict_path = segment.path.clone();
-        tokio::task::spawn_blocking(move || evict_ns.evict_segment(&evict_path))
-            .await
-            .unwrap();
-        let remote_key = segment_relative_key(&ns_dir, &segment.path).unwrap();
-        std::fs::remove_file(remote_dir.join("levanter.metrics").join(remote_key)).unwrap();
-
-        ns.boot_reconcile().await.unwrap();
-
-        assert!(ns
-            .catalog
-            .list_segments("levanter.metrics")
-            .unwrap()
-            .is_empty());
-        ns.shutdown(Duration::from_secs(10)).await;
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -5523,12 +5029,11 @@ mod tests {
         let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
         // cap = 1, NO remote: nothing is BOTH, so nothing is evictable — two L1
         // segments must survive (eviction must never destroy LOCAL-only data).
-        let ns = open_ns_remote(
+        let ns = open_ns_with_policy(
             "iris.worker",
             worker_schema(),
             Some(ns_dir.clone()),
             catalog,
-            "",
             StoragePolicy {
                 max_segments: Some(1),
                 ..Default::default()
@@ -5584,113 +5089,6 @@ mod tests {
         assert_eq!(ns.stats().segment_count, 0, "aged-out segment dropped");
         // Remote archive preserved.
         assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn boot_reconcile_adopts_remote_as_remote_rows() {
-        let dir = tempdir();
-        let remote = dir.join("remote");
-        let ns_dir = dir.join("iris.worker");
-        // First process: write, compact, upload (BOTH).
-        {
-            let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
-            let ns = open_ns_remote(
-                "iris.worker",
-                worker_schema(),
-                Some(ns_dir.clone()),
-                catalog,
-                remote.to_str().unwrap(),
-                StoragePolicy::default(),
-            );
-            write_one(&ns).await;
-            ns.run_maintenance(true).await.unwrap();
-            assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
-        }
-        // Wipe local catalog + parquet, keep the remote bucket.
-        std::fs::remove_file(dir.join(crate::store::catalog::CATALOG_DB_FILENAME)).ok();
-        std::fs::remove_dir_all(&ns_dir).ok();
-
-        // Second process: fresh catalog, boot reconcile adopts the remote file.
-        let catalog2 = Arc::new(Catalog::open(Some(&dir)).unwrap());
-        let ns2 = open_ns_remote(
-            "iris.worker",
-            worker_schema(),
-            Some(ns_dir),
-            catalog2,
-            remote.to_str().unwrap(),
-            StoragePolicy::default(),
-        );
-        ns2.boot_reconcile().await.unwrap();
-        let segs = ns2.catalog.list_segments("iris.worker").unwrap();
-        assert_eq!(segs.len(), 1, "remote file adopted as a catalog row");
-        assert_eq!(segs[0].location, SegmentLocation::Remote);
-        assert_eq!(segs[0].level, 1);
-        // Remote file is NOT deleted by adoption.
-        assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn spawn_maintenance_reconciles_remote_in_background() {
-        // The boot path defers remote reconcile onto the maintenance task
-        // (reconcile_first=true) so it never blocks startup. Prove the task
-        // actually performs the adoption: set up a remote-only segment (catalog +
-        // local parquet wiped), `spawn_maintenance(true)` WITHOUT an explicit
-        // boot_reconcile await, and assert the background task adopts it.
-        let dir = tempdir();
-        let remote = dir.join("remote");
-        let ns_dir = dir.join("iris.worker");
-        {
-            let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
-            let ns = open_ns_remote(
-                "iris.worker",
-                worker_schema(),
-                Some(ns_dir.clone()),
-                catalog,
-                remote.to_str().unwrap(),
-                StoragePolicy::default(),
-            );
-            write_one(&ns).await;
-            ns.run_maintenance(true).await.unwrap();
-            assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
-        }
-        std::fs::remove_file(dir.join(crate::store::catalog::CATALOG_DB_FILENAME)).ok();
-        std::fs::remove_dir_all(&ns_dir).ok();
-
-        let catalog2 = Arc::new(Catalog::open(Some(&dir)).unwrap());
-        let ns2 = open_ns_remote(
-            "iris.worker",
-            worker_schema(),
-            Some(ns_dir),
-            catalog2,
-            remote.to_str().unwrap(),
-            StoragePolicy::default(),
-        );
-        // No explicit boot_reconcile: the background maintenance task must run it.
-        assert!(
-            ns2.catalog.list_segments("iris.worker").unwrap().is_empty(),
-            "fresh catalog starts with no segment rows",
-        );
-        ns2.spawn_maintenance(true);
-        // Poll (bounded) for the background reconcile to adopt the remote row.
-        // The first periodic tick is check_interval (30s) away, so only the
-        // reconcile can mutate the catalog within this window.
-        let mut segs = Vec::new();
-        for _ in 0..200 {
-            segs = ns2.catalog.list_segments("iris.worker").unwrap();
-            if !segs.is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert_eq!(
-            segs.len(),
-            1,
-            "background reconcile adopted the remote segment"
-        );
-        assert_eq!(segs[0].location, SegmentLocation::Remote);
-        ns2.shutdown(Duration::from_secs(2)).await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

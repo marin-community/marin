@@ -1,80 +1,28 @@
-//! Published table catalogs selected by one conditional HEAD update.
+//! Object-store implementation of the published-catalog interface.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use buffa::MessageField;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{
-    CatalogHead, CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, TableVersionSegments,
-};
-use crate::store::catalog::Catalog;
-use crate::store::object_store::{
-    ObjectId, ObjectMetadata, ObjectPrefix, ObjectStorage, ObjectStore, ObjectVersion,
-};
-use crate::store::types::{basename, segment_relative_key, SegmentLocation};
+use crate::proto::finelog::stats::{CatalogHead, NamespaceCatalog, ObjectRef};
+use crate::store::catalog::published::{CatalogSnapshot, PublishedCatalog};
+use crate::store::object_store::{ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore};
 
 pub const OBJECT_CATALOG_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const CATALOGS_PREFIX: &str = "catalogs";
-
-#[derive(Debug, Clone)]
-pub struct CatalogSnapshot {
-    pub head: CatalogHead,
-    pub catalog: NamespaceCatalog,
-    head_version: ObjectVersion,
-}
 
 #[derive(Clone)]
 pub struct ObjectCatalog {
     storage: Arc<dyn ObjectStore>,
 }
 
-/// Published-catalog boundary used by store orchestration and namespace tasks.
-///
-/// Keeping publication behind this interface prevents the transactional SQLite
-/// catalog from depending on object-store paths or a concrete provider.
-#[async_trait]
-pub trait PublishedCatalog: Send + Sync {
-    async fn load(&self, table: &str) -> Result<Option<CatalogSnapshot>, StatsError>;
-    async fn claim_writer(
-        &self,
-        table: &str,
-        writer_epoch: u64,
-        snapshot: &CatalogSnapshot,
-    ) -> Result<CatalogSnapshot, StatsError>;
-    async fn publish_local(
-        &self,
-        catalog: &Catalog,
-        table: &str,
-        table_dir: &Path,
-        writer_epoch: u64,
-    ) -> Result<CatalogSnapshot, StatsError>;
-    async fn delete_head(&self, table: &str) -> Result<(), StatsError>;
-    /// Delete expired catalog documents and unreferenced data objects.
-    ///
-    /// Returns the combined number of catalog documents and data objects
-    /// deleted during this pass.
-    async fn gc_obsolete_catalogs(
-        &self,
-        table: &str,
-        now_ms: i64,
-        catalog_retention_ms: u64,
-        orphan_grace_ms: u64,
-        writer_epoch: u64,
-    ) -> Result<usize, StatsError>;
-}
-
 impl ObjectCatalog {
-    pub fn new(storage: ObjectStorage) -> Self {
-        Self {
-            storage: Arc::new(storage),
-        }
+    pub fn new(storage: Arc<dyn ObjectStore>) -> Self {
+        Self { storage }
     }
 
     pub async fn load(&self, namespace: &str) -> Result<Option<CatalogSnapshot>, StatsError> {
@@ -375,15 +323,13 @@ impl ObjectCatalog {
             .collect()
     }
 
-    /// Publish the recoverable SQLite view unless HEAD already selects it.
-    pub async fn publish_local(
+    /// Publish a complete catalog value unless HEAD already selects it.
+    pub async fn publish_selected(
         &self,
-        catalog: &Catalog,
         namespace: &str,
-        namespace_dir: &Path,
+        contents: NamespaceCatalog,
         writer_epoch: u64,
     ) -> Result<CatalogSnapshot, StatsError> {
-        let contents = build_namespace_catalog(catalog, namespace, namespace_dir)?;
         let remote = self.load(namespace).await?;
         if let Some(remote) = &remote {
             let remote_generation = remote.head.catalog_generation.unwrap_or(0);
@@ -422,14 +368,13 @@ impl PublishedCatalog for ObjectCatalog {
         ObjectCatalog::claim_writer(self, table, writer_epoch, snapshot).await
     }
 
-    async fn publish_local(
+    async fn publish(
         &self,
-        catalog: &Catalog,
         table: &str,
-        table_dir: &Path,
+        catalog: NamespaceCatalog,
         writer_epoch: u64,
     ) -> Result<CatalogSnapshot, StatsError> {
-        ObjectCatalog::publish_local(self, catalog, table, table_dir, writer_epoch).await
+        ObjectCatalog::publish_selected(self, table, catalog, writer_epoch).await
     }
 
     async fn delete_head(&self, table: &str) -> Result<(), StatsError> {
@@ -481,153 +426,6 @@ fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashS
         .collect()
 }
 
-pub fn build_namespace_catalog(
-    catalog: &Catalog,
-    namespace: &str,
-    namespace_dir: &Path,
-) -> Result<NamespaceCatalog, StatsError> {
-    let status = catalog.table_spec_status(namespace)?;
-    if status.catalog_generation == 0 {
-        return Err(StatsError::SchemaValidation(format!(
-            "namespace {namespace:?} has no versioned table specification"
-        )));
-    }
-    let object_segments: HashMap<_, _> = catalog
-        .object_segments(namespace)?
-        .into_iter()
-        .map(|record| (record.path.clone(), record))
-        .collect();
-    let mut by_version: BTreeMap<u64, Vec<CatalogSegment>> = BTreeMap::new();
-    for row in catalog.list_segments(namespace)? {
-        let (version, source) = match object_segments.get(&row.path) {
-            Some(record) => (record.table_spec_version, record.source.clone()),
-            None if row.location != SegmentLocation::Local => {
-                let Some(relative_key) = segment_relative_key(namespace_dir, &row.path) else {
-                    continue;
-                };
-                (
-                    0,
-                    ObjectRef {
-                        object_id: Some(relative_key),
-                        byte_size: u64::try_from(row.byte_size).ok(),
-                        ..Default::default()
-                    },
-                )
-            }
-            None => continue,
-        };
-        let segment = CatalogSegment {
-            segment_id: Some(basename(&row.path)),
-            source: MessageField::some(source),
-            level: Some(row.level),
-            min_seq: Some(row.min_seq),
-            max_seq: Some(row.max_seq),
-            row_count: Some(row.row_count),
-            created_at_ms: Some(row.created_at_ms),
-            min_key_value: row.min_key_value,
-            max_key_value: row.max_key_value,
-            partition_json: row
-                .partition
-                .as_ref()
-                .and_then(|partition| serde_json::to_string(partition).ok()),
-            table_spec_version: Some(version),
-            migration_source_id: object_segments
-                .get(&row.path)
-                .and_then(|record| record.migration_source_id.clone()),
-            migration_source_rows: object_segments
-                .get(&row.path)
-                .and_then(|record| record.migration_source_rows),
-            migration_backfill: object_segments
-                .get(&row.path)
-                .map(|record| record.migration_backfill),
-            ..Default::default()
-        };
-        by_version.entry(version).or_default().push(segment.clone());
-        let rollback_write_version = if status.desired_version() > 0 {
-            Some(status.active_version())
-        } else if status.phase == MigrationPhase::MIGRATION_PHASE_OBSERVING
-            || (status.phase == MigrationPhase::MIGRATION_PHASE_RETIRED
-                && status.migration.as_ref().is_some_and(|migration| {
-                    migration.from_version == Some(status.active_version())
-                }))
-        {
-            status
-                .migration
-                .as_ref()
-                .and_then(|migration| migration.from_version)
-        } else {
-            None
-        };
-        if let Some(rollback_write_version) = rollback_write_version {
-            if rollback_write_version != version
-                && object_segments
-                    .get(&row.path)
-                    .is_some_and(|record| !record.migration_backfill)
-            {
-                by_version
-                    .entry(rollback_write_version)
-                    .or_default()
-                    .push(segment);
-            }
-        }
-    }
-    by_version.entry(status.active_version()).or_default();
-    if status.desired_version() > 0 {
-        by_version.entry(status.desired_version()).or_default();
-    }
-    let stats = catalog.aggregate_namespace_stats(namespace)?;
-    let active_segments = by_version
-        .get(&status.active_version())
-        .cloned()
-        .unwrap_or_default();
-    let direct_query_high_water = active_segments
-        .iter()
-        .filter(|segment| segment.level.unwrap_or(0) == 0)
-        .filter_map(|segment| segment.min_seq)
-        .min()
-        .map(|first_unstable_seq| first_unstable_seq.saturating_sub(1))
-        .unwrap_or(stats.max_seq);
-    let direct_query_segments = active_segments
-        .into_iter()
-        .filter(|segment| {
-            segment.level.unwrap_or(0) >= 1
-                && segment.max_seq.unwrap_or(i64::MAX) <= direct_query_high_water
-        })
-        .collect();
-    let version_segments: Vec<TableVersionSegments> = by_version
-        .into_iter()
-        .map(|(version, live_segments)| TableVersionSegments {
-            table_spec_version: Some(version),
-            live_segments,
-            ..Default::default()
-        })
-        .collect();
-    let desired_version = status.desired_version();
-    let max_query_time_ms = status
-        .active
-        .as_ref()
-        .or(status.desired.as_ref())
-        .and_then(|spec| spec.operating_policy.as_option())
-        .and_then(|policy| policy.max_query_time_ms)
-        .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
-    Ok(NamespaceCatalog {
-        format_version: Some(OBJECT_CATALOG_FORMAT_VERSION),
-        namespace: Some(namespace.to_string()),
-        catalog_generation: Some(status.catalog_generation),
-        active_table_spec_version: Some(status.active_version()),
-        desired_table_spec_version: Some(desired_version),
-        retained_table_specs: catalog.retained_table_specs(namespace)?,
-        persisted_high_water: Some(stats.max_seq),
-        version_segments,
-        migration: status.migration.into(),
-        max_query_time_ms: Some(max_query_time_ms),
-        forward_cursors: catalog.forward_cursors(namespace)?,
-        direct_query_segments,
-        direct_query_high_water: Some(direct_query_high_water),
-        ..Default::default()
-    })
-}
-
 fn validate_head(namespace: &str, head: &CatalogHead) -> Result<(), StatsError> {
     if head.format_version.unwrap_or(0) != OBJECT_CATALOG_FORMAT_VERSION
         || head.namespace.as_deref() != Some(namespace)
@@ -676,7 +474,7 @@ fn catalog_generation_from_key(key: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::object_store::build_object_storage;
+    use crate::store::object_store::build_remote_object_store;
 
     fn catalog(namespace: &str, generation: u64, active_version: u64) -> NamespaceCatalog {
         NamespaceCatalog {
@@ -692,10 +490,10 @@ mod tests {
     #[tokio::test]
     async fn local_head_cas_publishes_one_complete_generation() {
         let remote_dir = crate::test_support::unique_dir("object_catalog_cas");
-        let remote = build_object_storage(remote_dir.to_str().unwrap())
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let object = ObjectCatalog::new(remote.clone());
+        let object = ObjectCatalog::new(Arc::new(remote.clone()));
 
         let first = object
             .publish("iris.worker", 11, catalog("iris.worker", 1, 1), None)
@@ -779,10 +577,10 @@ mod tests {
     #[tokio::test]
     async fn immutable_catalog_retries_require_identical_bytes() {
         let remote_dir = crate::test_support::unique_dir("object_catalog_immutable");
-        let remote = build_object_storage(remote_dir.to_str().unwrap())
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let object = ObjectCatalog::new(remote.clone());
+        let object = ObjectCatalog::new(Arc::new(remote.clone()));
         let published = object
             .publish("iris.worker", 1, catalog("iris.worker", 1, 1), None)
             .await
@@ -808,10 +606,10 @@ mod tests {
     #[tokio::test]
     async fn garbage_collection_removes_unreferenced_objects_after_query_grace() {
         let remote_dir = crate::test_support::unique_dir("object_catalog_orphan_gc");
-        let remote = build_object_storage(remote_dir.to_str().unwrap())
+        let remote = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let object = ObjectCatalog::new(remote.clone());
+        let object = ObjectCatalog::new(Arc::new(remote.clone()));
         object
             .publish("iris.worker", 1, catalog("iris.worker", 1, 1), None)
             .await

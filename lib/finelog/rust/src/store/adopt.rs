@@ -26,16 +26,6 @@
 //! boot. (Adoption runs before the reactor's request path, so the readiness
 //! mitigation is the sentinel, not reactor offload.)
 //!
-//! ## Remote adoption
-//!
-//! REMOTE (GCS) segment adoption — the wiped-local-PV-but-bucket-survives
-//! recovery — is performed by the per-namespace engine's `boot_reconcile`, run
-//! in the background by the maintenance task (spawned by `bootstrap_maintenance`)
-//! so its footer reads never block startup. It reuses the SAME
-//! `reconcile_remote_segments` as [`adopt_remote_segments`] here. The disk scan
-//! therefore only does the LOCAL pass; the engine's boot reconcile handles the
-//! bucket once the engine exists, avoiding a double pass.
-//!
 //! ## Schema-recovery lossiness (documented)
 //!
 //! The sidecar stored `schema_json` per namespace; rebuild-from-disk can only
@@ -88,7 +78,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::store::catalog::Catalog;
-use crate::store::legacy_archive::LegacyArchive;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::schema::{
     arrow_to_column_type, resolve_key_column, Column, Schema, IMPLICIT_KEY_COLUMN,
@@ -333,40 +322,6 @@ pub fn recover_schema_from_segments(ns_dir: &Path) -> Option<Schema> {
 }
 
 // ---------------------------------------------------------------------------
-// Remote (GCS) segment adoption.
-// ---------------------------------------------------------------------------
-
-/// Adopt remote-only segments for one namespace as REMOTE catalog rows and prune
-/// redundancy, reusing the boot-reconcile machinery.
-///
-/// This is the wiped-catalog recovery path: when the local PV is lost but the
-/// bucket survives, the remote `seg_L*_*.parquet` files are the only durable
-/// record of L>=1 segments. `reconcile_remote_segments` footer-fetches each
-/// unknown remote parquet, inserts a REMOTE row (not queried), and drops any
-/// segment fully covered by a strictly-higher level. No-op when `remote` is
-/// `None`.
-pub async fn adopt_remote_segments(
-    catalog: &Catalog,
-    remote: Option<&LegacyArchive>,
-    namespace: &str,
-    local_dir: &Path,
-    schema: &Schema,
-) -> Result<(), StatsError> {
-    let Some(remote) = remote else {
-        return Ok(());
-    };
-    let key_column = resolve_key_column(schema).ok();
-    crate::store::reconcile::reconcile_remote_segments(
-        catalog,
-        remote,
-        namespace,
-        local_dir,
-        key_column.as_deref(),
-    )
-    .await
-}
-
-// ---------------------------------------------------------------------------
 // adopt_store_from_disk + ensure_catalog_adopted (the boot orchestrator).
 // ---------------------------------------------------------------------------
 
@@ -433,9 +388,7 @@ fn assert_namespaced_layout(data_dir: &Path) -> Result<(), StatsError> {
 /// reactor's request path, so it is synchronous.
 ///
 /// Does NOT touch the live registry — the caller's `rehydrate_from_catalog`
-/// reads these persisted rows back and builds the engines. The remote pass is
-/// the engine's `boot_reconcile`, run in the background by the maintenance task,
-/// not here.
+/// reads these persisted rows back and builds the engines.
 pub fn adopt_store_from_disk(data_dir: &Path, catalog: &Catalog) -> Result<(), StatsError> {
     assert_namespaced_layout(data_dir)?;
     for (namespace, ns_dir) in enumerate_namespace_dirs(data_dir)? {
@@ -971,82 +924,5 @@ mod tests {
     fn in_memory_mode_is_noop() {
         let catalog = Catalog::open(None).unwrap();
         ensure_catalog_adopted(None, &catalog).unwrap();
-    }
-
-    // ----- adopt::remote -------------------------------------------------
-
-    #[tokio::test]
-    async fn adopt_remote_noop_without_remote() {
-        let data_dir = tempdir("remote_noop");
-        let ns_dir = data_dir.join("iris.worker");
-        std::fs::create_dir_all(&ns_dir).unwrap();
-        let catalog = Catalog::open(Some(&data_dir)).unwrap();
-        adopt_remote_segments(
-            &catalog,
-            None,
-            "iris.worker",
-            &ns_dir,
-            &worker_store_schema(),
-        )
-        .await
-        .unwrap();
-        // No segments adopted.
-        assert_eq!(
-            catalog
-                .aggregate_namespace_stats("iris.worker")
-                .unwrap()
-                .segment_count,
-            0
-        );
-        std::fs::remove_dir_all(&data_dir).ok();
-    }
-
-    #[tokio::test]
-    async fn adopt_remote_adopts_remote_only_segments_as_remote() {
-        use crate::store::object_store::build_object_storage;
-
-        let data_dir = tempdir("remote_adopt");
-        let ns_dir = data_dir.join("iris.worker");
-        std::fs::create_dir_all(&ns_dir).unwrap();
-        let remote_dir = tempdir("remote_bucket");
-        let remote = build_object_storage(remote_dir.to_str().unwrap())
-            .unwrap()
-            .unwrap();
-        let archive = LegacyArchive::new(remote);
-
-        // Seed a remote-only L1 segment by writing a real parquet then uploading.
-        let staging = tempdir("staging");
-        let (l1_path, _) =
-            write_segment_to_dir(&staging, 1, 1, &worker_batch(1, vec![10, 20])).unwrap();
-        assert!(
-            archive
-                .upload(
-                    "iris.worker",
-                    l1_path.file_name().unwrap().to_str().unwrap(),
-                    &l1_path,
-                )
-                .await
-        );
-
-        let catalog = Catalog::open(Some(&data_dir)).unwrap();
-        adopt_remote_segments(
-            &catalog,
-            Some(&archive),
-            "iris.worker",
-            &ns_dir,
-            &worker_store_schema(),
-        )
-        .await
-        .unwrap();
-
-        let rows = catalog.list_segments("iris.worker").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].location, SegmentLocation::Remote);
-        assert_eq!(rows[0].level, 1);
-        assert_eq!(rows[0].row_count, 2);
-
-        std::fs::remove_dir_all(&data_dir).ok();
-        std::fs::remove_dir_all(&remote_dir).ok();
-        std::fs::remove_dir_all(&staging).ok();
     }
 }

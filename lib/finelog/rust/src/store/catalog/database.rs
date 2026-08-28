@@ -61,7 +61,7 @@ pub struct ObjectSegmentRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct RecoveredObjectSegment {
+pub struct PublishedObjectSegment {
     pub row: SegmentRow,
     pub table_spec_version: u64,
     pub source: ObjectRef,
@@ -398,18 +398,18 @@ impl Catalog {
     }
 
     /// Rebuild the complete local projection from a verified remote catalog.
-    pub fn restore_object_snapshot(
+    pub fn replace_with_published_snapshot(
         &self,
         namespace: &str,
         schema: Schema,
         policy: StoragePolicy,
         snapshot: &NamespaceCatalog,
-        segments: &[RecoveredObjectSegment],
+        segments: &[PublishedObjectSegment],
     ) -> Result<(), StatsError> {
         let remote_generation = snapshot.catalog_generation.unwrap_or(0);
         if remote_generation == 0 {
             return Err(StatsError::Internal(format!(
-                "object recovery catalog for {namespace:?} has no generation"
+                "published object catalog for {namespace:?} has no generation"
             )));
         }
         let mut inner = self.inner.lock().unwrap();
@@ -486,9 +486,9 @@ impl Catalog {
                 ],
             )
             .map_err(sqlite_err)?;
-        for recovered in segments {
-            upsert_segment_in(&transaction, &recovered.row)?;
-            if recovered
+        for segment in segments {
+            upsert_segment_in(&transaction, &segment.row)?;
+            if segment
                 .source
                 .object_id
                 .as_deref()
@@ -496,8 +496,8 @@ impl Catalog {
             {
                 continue;
             }
-            let source_json = serde_json::to_string(&recovered.source).map_err(|error| {
-                StatsError::Internal(format!("serialize recovered object source: {error}"))
+            let source_json = serde_json::to_string(&segment.source).map_err(|error| {
+                StatsError::Internal(format!("serialize published object source: {error}"))
             })?;
             transaction
                 .execute(
@@ -507,12 +507,12 @@ impl Catalog {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     rusqlite::params![
                         namespace,
-                        recovered.row.path,
-                        recovered.table_spec_version as i64,
+                        segment.row.path,
+                        segment.table_spec_version as i64,
                         source_json,
-                        recovered.migration_backfill,
-                        recovered.migration_source_id,
-                        recovered.migration_source_rows,
+                        segment.migration_backfill,
+                        segment.migration_source_id,
+                        segment.migration_source_rows,
                     ],
                 )
                 .map_err(sqlite_err)?;
@@ -531,7 +531,7 @@ impl Catalog {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     rusqlite::params![
                         namespace,
-                        migration.migration_id.as_deref().unwrap_or("recovered"),
+                        migration.migration_id.as_deref().unwrap_or("published"),
                         migration.from_version.unwrap_or(0) as i64,
                         migration.to_version.unwrap_or(0) as i64,
                         migration_phase_str(phase),
@@ -832,10 +832,7 @@ impl Catalog {
     /// Backfill-only target objects become unreachable; writes accepted during
     /// the migration are reassigned to the source version so abort never drops
     /// rows. Published snapshots retain remote bytes until catalog GC.
-    pub fn abort_table_migration(
-        &self,
-        namespace: &str,
-    ) -> Result<(TableSpecStatus, Vec<String>), StatsError> {
+    pub fn abort_table_migration(&self, namespace: &str) -> Result<TableSpecStatus, StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let status = table_spec_status_in(&inner.conn, namespace)?;
         let migration = status.migration.as_ref().ok_or_else(|| {
@@ -919,10 +916,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok((
-            table_spec_status_in(&inner.conn, namespace)?,
-            backfill_paths,
-        ))
+        table_spec_status_in(&inner.conn, namespace)
     }
 
     pub fn update_migration_phase(
@@ -964,11 +958,11 @@ impl Catalog {
     pub fn retire_observed_migration(
         &self,
         namespace: &str,
-    ) -> Result<(TableSpecStatus, Vec<String>), StatsError> {
+    ) -> Result<TableSpecStatus, StatsError> {
         let mut inner = self.inner.lock().unwrap();
         let status = table_spec_status_in(&inner.conn, namespace)?;
         if status.phase != MigrationPhase::MIGRATION_PHASE_OBSERVING {
-            return Ok((status, Vec::new()));
+            return Ok(status);
         }
         let observation_deadline_ms: i64 = inner
             .conn
@@ -979,7 +973,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         if now_ms() < observation_deadline_ms {
-            return Ok((status, Vec::new()));
+            return Ok(status);
         }
         let migration = status.migration.as_ref().ok_or_else(|| {
             StatsError::Internal(format!(
@@ -1051,7 +1045,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
-        Ok((table_spec_status_in(&inner.conn, namespace)?, retired_paths))
+        table_spec_status_in(&inner.conn, namespace)
     }
 
     pub fn retained_table_specs(&self, namespace: &str) -> Result<Vec<ProtoTableSpec>, StatsError> {
@@ -2192,10 +2186,9 @@ mod tests {
             .as_ref()
             .and_then(|migration| migration.observation_deadline_ms)
             .is_some_and(|deadline| deadline > now_ms()));
-        let (aborted, discarded_paths) = catalog.abort_table_migration("a").unwrap();
+        let aborted = catalog.abort_table_migration("a").unwrap();
         assert_eq!(aborted.active_version(), 1);
         assert!(aborted.migration.is_none());
-        assert!(discarded_paths.is_empty());
         assert!(aborted.catalog_generation > activated.catalog_generation);
     }
 

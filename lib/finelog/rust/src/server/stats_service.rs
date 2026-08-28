@@ -302,9 +302,9 @@ impl StatsService for StatsServiceImpl {
         // guard must outlive run_query_over (not just query_providers) to keep a
         // concurrent drop_table / compaction from unlinking a file mid-scan.
         let _read_guard = self.store.query_visibility().read().await;
-        // Cache paths mirror immutable object keys. Rehydrate missing visible
-        // objects while eviction is fenced, then snapshot exact local paths.
-        self.store.ensure_query_cache().await?;
+        // Materialize visible objects as local files while deletion is fenced,
+        // then snapshot the exact paths DataFusion will open.
+        self.store.materialize_query_objects().await?;
 
         // Snapshot every live namespace (schema + sealed-segment paths) under
         // the engine locks on the blocking pool.
