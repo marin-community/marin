@@ -83,3 +83,9 @@ def test_scaling_ladder_searches_cluster_and_data_local_temp_roots(monkeypatch):
         "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
         "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
     ]
+
+
+def test_gb200_rungs_run_the_hero_transport():
+    rung = build_ladder_run(run_id="test-d6144", size="d6144", num_steps=1, version="dev")
+    config = rung.build_config(StepContext.for_fingerprint(rung.runtime_args, rung.deps))
+    assert config.model.moe_implementation == "ragged_all_to_all"

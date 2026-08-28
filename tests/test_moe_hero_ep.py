@@ -70,7 +70,7 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         1.15,
         1.15,
         3,
-        "fixed_pooled_wave_all_to_all",
+        "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
         1024,
