@@ -20,15 +20,18 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from click.testing import CliRunner
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint, save_checkpoint
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.checkpointing import LEGACY_STATE_KEY
+from experiments.grug.moe_hero_ep import convert_master_checkpoint, grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
@@ -78,9 +81,9 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         4,
         10,
         1_000_000_000,
+        jnp.float32,
         jnp.bfloat16,
-        jnp.bfloat16,
-        train.MasterParamMode.FP32_PINNED_HOST,
+        train.MasterParamMode.DISABLED,
     )
 
 
@@ -341,6 +344,86 @@ def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
     filename = unquote(source["url"].rsplit("/", 1)[-1])
     assert filename.startswith(f"jax_cuda13_pjrt-{jax_version}+marin.")
     assert filename.endswith("aarch64.whl")
+
+
+def test_a_checkpoint_layout_mismatch_is_refused_in_both_directions(tmp_path):
+    """Reading a master-bearing checkpoint with a master-less exemplar silently returns the bf16
+    copy, and synthesizing a master from stored weights is unsupported; both must fail loudly."""
+    master_less = str(tmp_path / "step-1")
+    save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
+    train.refuse_master_layout_mismatch(master_less, train.MasterParamMode.DISABLED)
+    with pytest.raises(ValueError, match="Synthesizing a master"):
+        train.refuse_master_layout_mismatch(master_less, train.MasterParamMode.FP32_PINNED_HOST)
+
+    master_bearing = str(tmp_path / "step-2")
+    save_checkpoint(
+        {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
+    )
+    train.refuse_master_layout_mismatch(master_bearing, train.MasterParamMode.FP32_PINNED_HOST)
+    with pytest.raises(ValueError, match="convert_master_checkpoint"):
+        train.refuse_master_layout_mismatch(master_bearing, train.MasterParamMode.DISABLED)
+
+
+def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
+    """Old runs saved `{"train_state": state}`, and those are the checkpoints most likely to hold
+    a master; missing the prefix would let exactly them restore silently from the bf16 copy."""
+    checkpoint = str(tmp_path / "step-1")
+    save_checkpoint(
+        {LEGACY_STATE_KEY: {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}},
+        step=1,
+        checkpoint_path=checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="convert_master_checkpoint"):
+        train.refuse_master_layout_mismatch(checkpoint, train.MasterParamMode.DISABLED)
+
+
+def test_the_converter_promotes_the_master_into_a_master_less_restore(tmp_path, monkeypatch):
+    """Convert once offline; the converted checkpoint restores exactly, fp32, into a master-less run.
+
+    Reading the source with a master-less exemplar instead succeeds and returns bf16 weights, so a
+    test that only checked the restore did not raise would pass against the bug this guards.
+    """
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    def build(mp, key, master_param_mode):
+        with set_mesh(mesh):
+            return train.initial_state(
+                cfg,
+                optimizer=optax.sgd(0.1),
+                mp=mp,
+                key=jax.random.key(key),
+                ema_beta=None,
+                master_param_mode=master_param_mode,
+            )
+
+    written = build(
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
+    )
+    source = str(tmp_path / "step-1")
+    save_checkpoint(written, step=1, checkpoint_path=source)
+    converted = str(tmp_path / "step-1-fp32params")
+
+    result = CliRunner().invoke(convert_master_checkpoint.main, [source, "--output", converted])
+    assert result.exit_code == 0, result.output
+
+    with pytest.raises(ValueError, match="convert_master_checkpoint"):
+        train.refuse_master_layout_mismatch(source, train.MasterParamMode.DISABLED)
+    train.refuse_master_layout_mismatch(converted, train.MasterParamMode.DISABLED)
+
+    template = build(
+        jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DISABLED
+    )
+    with set_mesh(mesh):
+        restored = load_checkpoint(template, converted)
+
+    assert restored.master_params is None
+    got = jax.tree.leaves(restored.params)
+    assert all(leaf.dtype == jnp.float32 for leaf in got)
+    for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
+        np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

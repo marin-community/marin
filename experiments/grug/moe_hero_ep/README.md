@@ -22,6 +22,10 @@ data-parallel rack uses one 64-device expert mesh.
   PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
   reaches the stock plugin fails at startup.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
+- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
+  is refused rather than silently restored from its bf16 compute copy: convert it once with
+  `convert_master_checkpoint.py`, which promotes the stored fp32 master into the params offline.
+  The reverse (synthesizing a master) is refused too.
 - Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
   command buffers. The ragged transport fixes collective overlap at 1 and turns the latency-hiding
   scheduler off, for memory rather than scheduling.
@@ -53,6 +57,9 @@ The throughput gap is inside the run-to-run spread (standard deviation over the 
 0.11 for ragged and 0.59 for pooled-wave, and three earlier ragged runs ranged 22.34–22.58), so
 this buys the drop rate and the headroom at parity rather than a speedup. At d768 over 10.8k steps
 ragged also finished ahead on train loss (1.939 vs 1.956) and eval bpb (0.975 vs 1.033).
+
+Dropping the pinned-host fp32 master is worth about 0.4 MFU on the ragged path, measured on a
+paired hero. Pooled-wave needed the master to fit at all.
 
 ### Earlier pooled-wave gates
 

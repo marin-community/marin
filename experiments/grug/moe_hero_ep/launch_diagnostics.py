@@ -72,7 +72,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
-    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -357,7 +357,7 @@ def build_diagnostic_run(
 @click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
-    default=MasterParamMode.FP32_PINNED_HOST.value,
+    default=MasterParamMode.DISABLED.value,
     show_default=True,
     help=("Whether to keep fp32 weights in host pinned memory. Disabling the master keeps them on device."),
 )

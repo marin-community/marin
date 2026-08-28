@@ -37,10 +37,7 @@ HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
 HERO_NODE_DISK = "1t"
 HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
-# Weight storage that goes with each master-parameter mode. The pooled-wave hero needs the
-# pinned-host master to fit at all. The ragged transport does fit with fp32 weights on device,
-# and a paired hero measurement put the master about 2 percent behind on that path -- it buys
-# memory relief that transport is not short of, and charges a host round trip per step for it.
+# An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
 HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
     MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
     MasterParamMode.DISABLED: "params=float32,compute=bfloat16,output=bfloat16",
@@ -67,7 +64,7 @@ def hero_grug_trainer_config(
     training_data_mode: TrainingDataMode,
     watch_mode: WatchMode,
     save_checkpoints: bool,
-    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
@@ -75,7 +72,7 @@ def hero_grug_trainer_config(
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        # Keep the MuonH state on pinned host memory so the pooled buffers have sufficient HBM.
+        # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
         offload_opt_state=True,
         master_param_mode=master_param_mode,
         training_data_mode=training_data_mode,
@@ -99,7 +96,7 @@ def hero_trainer_config(
     checkpointer: CheckpointerConfig,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
-    master_param_mode: MasterParamMode = MasterParamMode.FP32_PINNED_HOST,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ) -> TrainerConfig:
     """Set the Levanter options that affect the compiled hero step."""
     return TrainerConfig(

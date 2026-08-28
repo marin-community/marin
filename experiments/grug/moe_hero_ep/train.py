@@ -33,6 +33,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -52,7 +53,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -138,6 +139,34 @@ def restore_template_from(state):
     jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
     gc.collect()
     return template
+
+
+def refuse_master_layout_mismatch(candidate: str, run_mode: MasterParamMode) -> None:
+    """Raise unless checkpoint ``candidate`` was written in the run's master-parameter mode.
+
+    Restore reads only the leaves the exemplar names and takes each dtype from storage, checking
+    neither against the checkpoint, so reading a master-bearing checkpoint with a master-less
+    exemplar succeeds silently and trains the run from the bf16 compute copy. A missing manifest
+    raises ``FileNotFoundError``, which restore treats like any other unreadable candidate.
+    """
+    manifest = read_manifest(candidate)
+    if manifest is None:
+        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
+    markers = ("master_params", f"{LEGACY_STATE_KEY}/master_params")
+    has_master = any(
+        path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers
+    )
+    if has_master and run_mode == MasterParamMode.DISABLED:
+        raise ValueError(
+            f"checkpoint {candidate} stores an fp32 pinned-host master, but this run keeps fp32 "
+            "weights on device. Loading it here would silently train from the bf16 compute copy. "
+            "Convert it once with experiments/grug/moe_hero_ep/convert_master_checkpoint.py."
+        )
+    if not has_master and run_mode != MasterParamMode.DISABLED:
+        raise ValueError(
+            f"checkpoint {candidate} stores no master parameters, but this run trains with {run_mode}. "
+            "Synthesizing a master from stored weights is not a conversion this supports."
+        )
 
 
 def _apply_hero_ep_runtime_defaults(
@@ -926,6 +955,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
+            validate_candidate=lambda candidate: refuse_master_layout_mismatch(
+                candidate, config.trainer.master_param_mode
+            ),
         )
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)

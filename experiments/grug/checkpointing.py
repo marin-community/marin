@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 StateT = TypeVar("StateT")
 RESTORE_COMPLETE_BARRIER = "grug_checkpoint_restore_complete"
+# Older grug runs saved {"train_state": state}, so their leaves carry this prefix.
+LEGACY_STATE_KEY = "train_state"
 # The barrier runs one clock, started by the first rank to arrive, so this bounds the spread
 # between arrivals rather than the length of a restore. A gang whose object-store caches are only
 # partly warm spreads widest, since re-reading a checkpoint is an order of magnitude faster than
@@ -109,8 +111,15 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
+    validate_candidate: Callable[[str], None] | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
+    """Restore the newest loadable checkpoint under the search paths, else return ``state``.
+
+    ``validate_candidate`` runs before each candidate is read. Raising ``FileNotFoundError`` skips
+    to the next-older candidate; any other exception aborts the restore, for a caller that must
+    refuse a checkpoint outright rather than quietly fall past it.
+    """
     if not checkpoint_search_paths:
         if load_checkpoint_setting:
             raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
@@ -127,6 +136,8 @@ def restore_grug_state_from_checkpoint(
 
     for candidate in candidates:
         try:
+            if validate_candidate is not None:
+                validate_candidate(candidate)
             loaded = _load_candidate_state(
                 state=state,
                 candidate=candidate,
@@ -214,13 +225,12 @@ def _load_candidate_state(
             allow_partial=allow_partial,
         )
     except FileNotFoundError:
-        # Backward compatibility: older grug runs saved {"train_state": state}.
         wrapped = load_fn(
-            {"train_state": state},
+            {LEGACY_STATE_KEY: state},
             candidate,
             axis_mapping=None,
             mesh=mesh,
             allow_partial=allow_partial,
         )
         logger.info("Loaded legacy wrapped grug checkpoint format from %s", candidate)
-        return wrapped["train_state"]  # type: ignore[index]
+        return wrapped[LEGACY_STATE_KEY]  # type: ignore[index]
