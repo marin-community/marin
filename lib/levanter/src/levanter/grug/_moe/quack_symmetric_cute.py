@@ -90,8 +90,8 @@ def quack_symmetric_gemm(
 ) -> jax.Array:
     """Batched symmetric GEMM: ``X[L, M, K] -> X @ X^T [L, M, M]`` (full symmetric, bit-exact).
 
-    ``X`` must be device-local (no cross-device sharding on any axis) — call inside a shard_map.
-    Quack rotates the batch-first operands to its batch-last kernel layout at trace time.
+    ``X`` must be device-local (no cross-device sharding on any axis) and use batch-first
+    ``[L, M, K]`` order. Call this function inside a shard map.
     """
     L, M, K = X.shape
     arch_family, default_mma_tiler = _symmetric_gemm_config(gpu_compute_capability())
