@@ -294,7 +294,6 @@ class MockController:
         self.request_worker_eviction = Mock()
         self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
-        self.last_scheduling_context = None
         self.backend = Mock()
         self.backend.descriptor = worker_backend_descriptor()
         # A bare Mock would auto-create a truthy .autoscaler; the backend

@@ -257,7 +257,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
-    controller_mock.last_scheduling_context = None
     controller_mock.backend = Mock()
     controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,

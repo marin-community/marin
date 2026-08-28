@@ -42,6 +42,10 @@ from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranke
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
 from levanter.testing.helpers import skip_if_no_torch
 
+# The parity tolerances below assume float32 matmuls. TPU defaults to lower-precision
+# passes for float32 inputs, which pushes the XLA-vs-reference gap past `1e-5`.
+jax.config.update("jax_default_matmul_precision", "float32")
+
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4
 MAMBA3_ATTENTIONISH_PARITY_ATOL = 1e-4
