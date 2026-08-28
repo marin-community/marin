@@ -19,8 +19,11 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import (
+    _interleave_gate_up,
+    _interleave_halves,
     _prepare_moe_dispatch,
     _prepare_moe_dispatch_indices_with_assignment_ids,
+    _swiglu_gate_up_backward,
     CapacityOverflow,
 )
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
@@ -402,6 +405,70 @@ def test_prepare_moe_dispatch_indices_match_materialized_dispatch():
     flat_dispatch_positions = np.asarray(dispatch_positions).reshape(-1)
     np.testing.assert_array_equal(
         flat_dispatch_positions[np.asarray(sorted_assignment_ids)], expected_sorted_positions
+    )
+
+
+def _interleave_w13(dtype, *, experts: int = 2, hidden: int = 3, moe_dim: int = 4) -> jax.Array:
+    values = jnp.arange(experts * hidden * 2 * moe_dim, dtype=jnp.float32)
+    return values.reshape(experts, hidden, 2 * moe_dim).astype(dtype)
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16, jnp.float32])
+def test_interleave_places_gate_and_up_in_alternating_columns(dtype):
+    moe_dim = 4
+    w13 = _interleave_w13(dtype, moe_dim=moe_dim)
+
+    interleaved = _interleave_gate_up(w13, moe_dim)
+
+    assert interleaved.shape == w13.shape
+    assert interleaved.dtype == w13.dtype
+    np.testing.assert_array_equal(np.asarray(interleaved[..., 0::2]), np.asarray(w13[..., :moe_dim]))
+    np.testing.assert_array_equal(np.asarray(interleaved[..., 1::2]), np.asarray(w13[..., moe_dim:]))
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_a_mismatched_moe_dim_is_rejected_rather_than_broadcast(dtype):
+    # The packed path broadcasts the two halves against each other, so a wrong `moe_dim` would
+    # return a wrong-width array instead of failing the way the stack path does.
+    with pytest.raises(ValueError, match="w13 output last dimension"):
+        _interleave_gate_up(_interleave_w13(dtype, moe_dim=4), 3)
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float16])
+def test_the_interleave_transpose_de_interleaves_the_cotangent(dtype):
+    # `bitcast_convert_type` has no AD rule, so the pack carries a hand-written VJP. Its
+    # correctness is what keeps `dw13` pointing at the right half of the fused weight.
+    gate = _interleave_w13(dtype, moe_dim=4)[..., :4]
+    up = -gate
+    # The cotangent carries the interleaved layout, one value per output element.
+    cotangent = _interleave_w13(dtype, moe_dim=4)
+
+    _, vjp = jax.vjp(_interleave_halves, gate, up)
+    gate_ct, up_ct = vjp(cotangent)
+
+    np.testing.assert_array_equal(np.asarray(gate_ct), np.asarray(cotangent[..., 0::2]))
+    np.testing.assert_array_equal(np.asarray(up_ct), np.asarray(cotangent[..., 1::2]))
+
+
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_swiglu_backward_matches_autodiff_of_the_forward(dtype):
+    tokens, moe_dim = 5, 4
+    gu = jnp.linspace(-2.0, 2.0, tokens * 2 * moe_dim, dtype=jnp.float32).reshape(tokens, 2 * moe_dim).astype(dtype)
+    dh = jnp.linspace(1.0, -1.0, tokens * moe_dim, dtype=jnp.float32).reshape(tokens, moe_dim).astype(dtype)
+
+    def swiglu(x):
+        gate, up = x[:, 0::2], x[:, 1::2]
+        return jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+
+    expected = jax.vjp(swiglu, gu)[1](dh.astype(jnp.float32))[0]
+
+    actual = _swiglu_gate_up_backward(gu, dh)
+
+    assert actual.dtype == gu.dtype
+    # The reference runs in float32, so the gap is the storage dtype's rounding: one bfloat16
+    # unit in the last place at these magnitudes is about 1e-3.
+    np.testing.assert_allclose(
+        np.asarray(actual, dtype=np.float32), np.asarray(expected, dtype=np.float32), rtol=1e-2, atol=1e-3
     )
 
 
