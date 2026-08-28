@@ -108,7 +108,7 @@ def test_hardware_probe_tpu_with_blank_worker_index_raises(monkeypatch):
         "attributes/agent-worker-number": "",
     }
 
-    def open_metadata(request, timeout):
+    def open_metadata(request, **_kwargs):
         path = request.full_url.split("/instance/", maxsplit=1)[1]
         return io.BytesIO(metadata_values[path].encode())
 
