@@ -71,6 +71,8 @@ BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
 GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
 COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
+DECIMAL_GB_BYTES = 1_000_000_000
+MISSING_ARTIFACT_PREVIEW_LIMIT = 10
 
 
 class BenchmarkTarget(StrEnum):
@@ -205,14 +207,15 @@ def _resolve_sources(
     if total_shards < pool_workers:
         raise ValueError(
             f"--pool-workers {pool_workers} exceeds the {total_shards} parquet shards available across "
-            f"{len(selected_names)} selected sources ({total_bytes / 1e9:.1f} GB). compute_minhash_attrs and "
+            f"{len(selected_names)} selected sources ({total_bytes / DECIMAL_GB_BYTES:.1f} GB). "
+            "compute_minhash_attrs and "
             "tokenize_attributes_step schedule one task per shard and do not split files, so excess workers "
             "would sit idle. Lower --pool-workers, raise --source-fraction, or add sources."
         )
     logger.info(
         "zephyr_benchmark: %d sources, %.1f GB, %d parquet shards (%.1fx --pool-workers %d)",
         len(selected_names),
-        total_bytes / 1e9,
+        total_bytes / DECIMAL_GB_BYTES,
         total_shards,
         total_shards / pool_workers,
         pool_workers,
@@ -257,8 +260,12 @@ def _benchmark_steps(
     )
     missing = [name for name, step in input_steps.minhash.items() if not step_is_built(step)]
     if missing:
-        shown = ", ".join(missing[:10])
-        remainder = f" and {len(missing) - 10} more" if len(missing) > 10 else ""
+        shown = ", ".join(missing[:MISSING_ARTIFACT_PREVIEW_LIMIT])
+        remainder = (
+            f" and {len(missing) - MISSING_ARTIFACT_PREVIEW_LIMIT} more"
+            if len(missing) > MISSING_ARTIFACT_PREVIEW_LIMIT
+            else ""
+        )
         raise RuntimeError(
             f"shuffle input run {shuffle_input_run_tag!r} is missing MinHash artifacts for {shown}{remainder}; "
             "run the same source selection with --target map first"

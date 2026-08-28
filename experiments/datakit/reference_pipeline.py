@@ -255,8 +255,9 @@ class PoolConfig:
     """The Zephyr worker fleet for the reference pipeline.
 
     ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
-    ``map_task`` and ``reduce_task`` set the resources admitted for one task;
-    ``None`` uses the whole worker. ``coordinator`` sizes the shared coordinator.
+    ``map_task`` sets the resources admitted for one map task; ``None`` uses the
+    whole worker. ``reduce_task`` sets the reduce task resources; ``None`` reuses
+    the resolved map task shape. ``coordinator`` sizes the shared coordinator.
     Subprocess-compatible stages share this pool. Inline stages create a
     dedicated pool with the worker settings.
     """
@@ -583,17 +584,10 @@ def pool_zephyr_context(
     *,
     max_concurrent_pipelines: int | None = None,
 ) -> ZephyrContext:
-    """Build the shared pool every subprocess-compatible stage in this DAG must enter.
+    """Build the shared pool for subprocess-compatible stages in this DAG.
 
-    A caller that walks the DAG :func:`zephyr_datakit_steps` builds must enter this as a
-    context manager and thread the result through as ``zephyr_context``, or each per-source
-    tokenize/minhash step silently falls back to its own dedicated pool capped at that one
-    source's shard count instead of sharing ``scale.pool``.
-
-    ``max_concurrent_pipelines`` defaults to the pool's own default
-    (``MAX_CONCURRENT_PIPELINES``) when unset. Zephyr sizes the coordinator actor's
-    call budget from the worker and pipeline limits so pipeline waits cannot starve
-    worker polling and heartbeat calls.
+    Enter the returned context around any runner that executes steps built with
+    it. ``max_concurrent_pipelines=None`` uses Zephyr's default pipeline limit.
     """
     kwargs: dict[str, int] = {}
     if max_concurrent_pipelines is not None:
@@ -616,12 +610,8 @@ def zephyr_datakit_steps(
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages.
 
-    ``output_path_prefix``, when set, routes every step's output under it
-    instead of ``marin_prefix()``. It must be applied here rather than by a
-    caller patching the returned StepSpecs afterward: ``fuzzy_dedup.fn`` reads
-    each minhash step's ``output_path`` through a closure over ``minhash_steps``,
-    so a step rerouted after construction leaves that closure -- and therefore
-    fuzzy_dedup's reads -- pointed at the unrerouted default path.
+    ``output_path_prefix``, when set, routes every generated step and its
+    dependency reads under that prefix instead of ``marin_prefix()``.
     """
     source_names = sorted(sources)
     exact_dedup = StepSpec(

@@ -45,7 +45,7 @@ class _FakeObjectStore:
 
 def _patch_store(monkeypatch: pytest.MonkeyPatch, files: dict[str, int]) -> None:
     store = _FakeObjectStore(files)
-    monkeypatch.setattr(zephyr_benchmark, "url_to_fs", lambda url: (store, _ROOT_KEY))
+    monkeypatch.setattr(zephyr_benchmark, "url_to_fs", lambda _url: (store, _ROOT_KEY))
 
 
 def test_source_shard_stats_groups_parquet_by_source(monkeypatch):
@@ -188,7 +188,7 @@ def _patch_benchmark_graph(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_shuffle_target_reads_completed_map_run_and_writes_fresh_output(monkeypatch):
     _patch_benchmark_graph(monkeypatch)
-    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda step: True)
+    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: True)
     requested_paths: list[str] = []
     monkeypatch.setattr(
         reference_pipeline,
@@ -218,7 +218,7 @@ def test_shuffle_target_reads_completed_map_run_and_writes_fresh_output(monkeypa
 
 def test_shuffle_target_requires_every_map_artifact(monkeypatch):
     _patch_benchmark_graph(monkeypatch)
-    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda step: False)
+    monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: False)
 
     with pytest.raises(RuntimeError, match="run the same source selection with --target map first"):
         _benchmark_steps(
