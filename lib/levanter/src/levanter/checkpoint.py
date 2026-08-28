@@ -988,7 +988,10 @@ def load_checkpoint_or_initialize(
         is_checkpointed: a FilterSpec that specifies which parameters are checkpointed
         donate_args: a FilterSpec that specifies which arguments to donate to init_fn if we need to initialize
         donate_kwargs: a FilterSpec that specifies which kwargs to donate to init_fn if we need to initialize
-        do_load: if True, always load the checkpoint. If False, always initialize. If None, load if the checkpoint exists, otherwise initialize
+        do_load: if True, always load a checkpoint. If False, always initialize. If None, load when
+            checkpoints exist and initialize from scratch only when none do. Candidates are tried
+            newest first, falling back past one that cannot be read; when candidates exist and none
+            load, this raises rather than initializing over them.
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
 
     Returns:
