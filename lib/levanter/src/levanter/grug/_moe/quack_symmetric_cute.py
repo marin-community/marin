@@ -72,9 +72,7 @@ def _build_launcher(*, arch_family, a_dtype, mma_tiler_mnk, cluster_mnk, mac, ma
         gemm = gemm_type(_ACC, a_dtype, mma_tiler_mnk, cluster_mnk, use_clc_persistence=False)
         # aux = D.mT (transposed view of the single output): the kernel writes each lower tile to D
         # and its mirror to D.mT, so D is fully symmetric. alpha/beta must be set (D = a*acc + b*C).
-        epi_args = GemmSymmetricMixin.EpilogueArguments(
-            _transpose_mn(mD), act_fn=None, alpha=Float32(1.0), beta=Float32(1.0)
-        )
+        epi_args = GemmSymmetricMixin.EpilogueArguments(_transpose_mn(mD), alpha=Float32(1.0), beta=Float32(1.0))
         scheduler_args = make_scheduler_args(mac, max_swizzle, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, None, stream)
 
