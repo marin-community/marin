@@ -1016,7 +1016,7 @@ def segmented_flash_attention_backward_launcher(
         head_dim_v,
         tile_m,
         num_threads=postprocess_threads,
-        use_padded_offsets=False,
+        use_padded_offsets=True,
     )
     dq_postprocess = FlashAttentionBackwardPostprocess(
         cute_dtype,
@@ -1417,7 +1417,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
         head_dim_v,
         tile_m,
         num_threads=128,
-        use_padded_offsets=False,
+        use_padded_offsets=True,
     )
 
     @cute.jit
