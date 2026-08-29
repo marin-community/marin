@@ -10,11 +10,11 @@
 //!   parquet file is renamed into place AND the catalog row is committed
 //!   (durability-before-ack).
 //! - `await_persisted(target)` subscribes to the watch and waits, bounded by a
-//!   caller-supplied timeout, nudging the flush task via a `Notify`.
-//! - The flush task seals one L0 per wake but then holds off for
-//!   `MIN_FLUSH_INTERVAL`, so the appends in that window coalesce into a single
-//!   L0 instead of one tiny segment per nudge; a full buffer
-//!   (`SEGMENT_TARGET_BYTES`) bypasses the cooldown via `force_flush`.
+//!   caller-supplied timeout, after registering flush demand with the scheduler.
+//! - Flush cadence belongs to
+//!   [`MaintenanceScheduler`](crate::maintenance::scheduler::MaintenanceScheduler).
+//!   A namespace records demand; the scheduler seals at most one L0 per
+//!   `MIN_FLUSH_INTERVAL` unless the buffer already holds a whole segment.
 //!
 //! `MemoryNamespace` (no `data_dir`) treats every append as immediately
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
@@ -42,6 +42,10 @@ use crate::indices::{
     legacy_artifact_paths, local_sidecar_artifacts, needs_rebuild as segment_index_needs_rebuild,
     remove_if_exists, IndexBuildRequest, IndexRegistry, SegmentArtifacts, SegmentIndexConfig,
 };
+use crate::maintenance::scheduler::FlushDemand;
+use crate::maintenance::{
+    MaintenanceLimits, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, REWRITE_LAYOUT_BUDGET,
+};
 use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::{
@@ -68,13 +72,14 @@ use crate::store::segment::{
     stage_rewritten_segment, write_segment_to_dir_with_max_row_group_rows,
     write_segment_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
+use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
 use crate::store::table::{
     local_artifacts, object_segment_is_query_visible, MaintenanceLease, TableController,
     WrittenObject,
 };
 use crate::store::table_state::{
     ArtifactReferences, CommitError, LocalArtifacts, SegmentDescriptor, SourceBinding,
-    TableRevision,
+    TableRevision, TableSnapshot,
 };
 use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
@@ -252,12 +257,6 @@ pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
 /// the per-append nudge drives flushes; this is the ceiling for a quiet namespace.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Minimum spacing between consecutive L0 flushes. Every append nudges the flush
-/// task, so without this floor a steadily-written namespace seals a fresh tiny L0
-/// on each wake (many per second). Holding off coalesces all appends in the
-/// window into ONE L0, capping L0 creation at one segment per interval.
-pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -270,19 +269,6 @@ pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// of minutes instead of hours while queries safely use partial coverage.
 pub const INDEX_BUNDLES_PER_TICK: usize = 4;
 
-/// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
-///
-/// Budgeted by time rather than by count because segment sizes span three orders
-/// of magnitude — on the marin hub a small L1 re-encodes in milliseconds where a
-/// 290 MiB terminal segment takes about 11 s — so a fixed count leaves the tick's
-/// duration unpredictable and can starve compaction, sync, and eviction queued
-/// behind it. A single over-budget segment can still overrun, because a rewrite
-/// already in flight is never abandoned.
-///
-/// The work is a storage and footer-size win rather than a correctness fix, so it
-/// stays a minority of the 30 s tick.
-const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
-
 /// Per-maintenance budget for converging legacy physical placement.
 ///
 /// Each rewrite already in flight may overrun this budget. The bound controls
@@ -291,16 +277,12 @@ const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
 const PHYSICAL_LAYOUT_MIGRATION_BUDGET: Duration = Duration::from_secs(3);
 const PHYSICAL_LAYOUT_MIGRATION_CONCURRENCY: usize = 2;
 const PHYSICAL_LAYOUT_MIGRATION_WORKER_COMPRESSED_BYTES: i64 = 32 * 1024 * 1024;
-const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Source objects copied per maintenance tick while a TableSpec transition is active.
 const TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK: usize = 4;
 const NULL_PARTITION_VALUE: &str = "__HIVE_DEFAULT_PARTITION__";
 /// Table-relative directory compaction stages its outputs in before upload.
 const COMPACTION_STAGING_DIR: &str = "_compaction";
-
-const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const OBJECT_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Process-wide permit for the layout rewrite, so only one namespace re-encodes
 /// at a time.
@@ -660,14 +642,18 @@ pub struct Namespace {
     controller: Arc<TableController>,
     last_object_gc: Mutex<Option<Instant>>,
     persisted_seq: watch::Sender<i64>,
-    /// Nudged by every append (and a durability await): "there may be data to
-    /// flush". Drives the flush task's normal wake.
-    flush_notify: Arc<Notify>,
-    /// Nudged only when a buffer crosses `SEGMENT_TARGET_BYTES`: "flush now,
-    /// don't wait out the rate cooldown". Lets a write burst bypass
-    /// `MIN_FLUSH_INTERVAL` so RAM and L0 size stay bounded, while normal
-    /// per-append nudges (which spam `flush_notify`) keep coalescing.
-    force_flush: Arc<Notify>,
+    /// Latched by every append (and a durability await): "there may be data to
+    /// flush". The scheduler reads and clears it.
+    flush_requested: AtomicBool,
+    /// Latched only when a buffer crosses the definition's maximum buffer size:
+    /// "flush now, don't wait out the coalescing window". Lets a write burst
+    /// bypass `MIN_FLUSH_INTERVAL` so RAM and L0 size stay bounded, while
+    /// ordinary per-append demand keeps coalescing.
+    flush_forced: AtomicBool,
+    /// The scheduler's wake signal, shared by every table in the store. Latching
+    /// flush demand signals it so flush latency does not wait out the poll
+    /// interval.
+    maintenance_wake: Arc<Notify>,
     stop: Arc<Notify>,
     /// Latched stop flag the background tasks check at the TOP of each loop
     /// iteration, in addition to selecting on the `stop` Notify. `Notify`
@@ -677,11 +663,12 @@ pub struct Namespace {
     /// race: once set, the next loop iteration sees it and returns even if it
     /// missed the Notify wake. Set by `stop_and_join` / `request_stop`.
     stopped: AtomicBool,
-    /// JoinHandles for the spawned per-namespace background tasks (flush +
-    /// maintenance). Retained so `Store::shutdown` can cooperatively
-    /// cancel (via the `stop` Notify) and JOIN them within a bounded timeout
-    /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
-    /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
+    /// JoinHandles for the maintenance work the scheduler dispatched against
+    /// this namespace. Retained so a re-register replacement, a drop, or
+    /// `Store::shutdown` can cooperatively cancel (via the `stop` Notify) and
+    /// JOIN that work within a bounded timeout instead of busy-waiting. Pushed
+    /// to by [`spawn_tracked`](Namespace::spawn_tracked); drained by
+    /// [`stop_and_join`](Namespace::stop_and_join).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Segments the index backfill has already rebuilt without reaching
     /// coverage. See [`IndexBackfillSkips`].
@@ -695,12 +682,9 @@ pub struct Namespace {
     /// changes because this pass changed it.
     current_layouts: Mutex<HashSet<String>>,
     indices: Arc<IndexRegistry>,
-    /// Shared by every namespace in this store so historical projection builds
-    /// cannot saturate the process with concurrent scans and compression.
-    index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
-    /// Shared by every namespace in this store so only one two-worker physical
-    /// migration wave runs at a time.
-    physical_layout_migration_slot: Arc<Mutex<()>>,
+    /// Process-wide maintenance concurrency limits, shared by every namespace in
+    /// this store.
+    limits: Arc<MaintenanceLimits>,
 }
 
 /// Segments the index backfill cannot bring up to date, and the indexed set
@@ -782,8 +766,14 @@ fn current_layout_destination(
     (Path::new(path) != destination).then_some(destination)
 }
 
-/// A namespace's sealed local segments as one consistent observation: the files a
-/// scan may read, their known key bounds, and the lowest `seq` any of them holds.
+/// A namespace's readable segments as one consistent observation: the files a
+/// scan may open, their known key bounds and partitions, and the lowest `seq`
+/// any of them holds.
+///
+/// An object-backed table plans this from its pinned `TableSnapshot`, so
+/// `sources` names the immutable object behind every path and the paths exist
+/// only after the scan localizes the ones it selected. A legacy table plans it
+/// from files already on disk and carries no `sources`.
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (i64, i64)>,
@@ -792,6 +782,9 @@ pub struct SegmentSnapshot {
     /// What each snapshotted segment advertises, so a scan opens artifacts by
     /// reference instead of probing for files beside the Parquet.
     pub artifacts: SegmentArtifacts,
+    /// The immutable objects each path resolves to, for the segments the scan
+    /// selects. Empty for a legacy table.
+    pub sources: SegmentObjectMap,
 }
 
 impl Namespace {
@@ -815,8 +808,8 @@ impl Namespace {
         catalog: Arc<Catalog>,
         query_visibility: Arc<RwLock<()>>,
         indices: Arc<IndexRegistry>,
-        index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
-        physical_layout_migration_slot: Arc<Mutex<()>>,
+        limits: Arc<MaintenanceLimits>,
+        maintenance_wake: Arc<Notify>,
         controller: Arc<TableController>,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
@@ -920,17 +913,27 @@ impl Namespace {
             controller,
             last_object_gc: Mutex::new(None),
             persisted_seq: tx,
-            flush_notify: Arc::new(Notify::new()),
-            force_flush: Arc::new(Notify::new()),
+            flush_requested: AtomicBool::new(false),
+            flush_forced: AtomicBool::new(false),
+            maintenance_wake,
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
             index_backfill_skips: Mutex::new(IndexBackfillSkips::default()),
             current_layouts: Mutex::new(HashSet::new()),
             indices,
-            index_backfill_slot,
-            physical_layout_migration_slot,
+            limits,
         });
+
+        // An object-backed table publishes its locally durable state so readers
+        // have something to pin, then rebuilds its in-memory segment view from
+        // that state's catalog rows. Metadata only: nothing is downloaded and
+        // the local cache is not consulted.
+        if ns.controller.is_object_backed() {
+            ns.controller.seed_local_snapshot();
+            let active = catalog.table_spec_status(name)?.active_version();
+            ns.activate_query_version(active)?;
+        }
 
         // Refresh the catalog from the adopted deque so the segments table
         // reflects on-disk reality after a fresh boot from a wiped catalog.
@@ -942,10 +945,6 @@ impl Namespace {
         catalog.upsert_segments(&adopted_rows)?;
         let catalog_refresh_ms = catalog_refresh_started.elapsed().as_millis() as u64;
 
-        if ns.data_dir.is_some() {
-            let handle = spawn_flush_task(Arc::clone(&ns));
-            ns.task_handles.lock().unwrap().push(handle);
-        }
         tracing::info!(
             namespace = name,
             segments = adopted.len(),
@@ -967,30 +966,6 @@ impl Namespace {
     /// object-backed table rejects writes until a restart re-claims it.
     pub(crate) fn write_ready(&self) -> bool {
         self.controller.writes_ready()
-    }
-
-    pub(crate) async fn materialize_query_segments(&self) -> Result<(), StatsError> {
-        let segments = self
-            .controller
-            .local_query_segments(&self.key_column)
-            .await?;
-        let mut inner = self.inner.lock().unwrap();
-        for segment in segments {
-            if inner
-                .local_segments
-                .iter()
-                .any(|existing| existing.path == segment.path)
-            {
-                continue;
-            }
-            inner.local_segments.push_back(segment);
-        }
-        inner
-            .local_segments
-            .make_contiguous()
-            .sort_by_key(|segment| segment.min_seq);
-        debug_assert_unique_paths(&inner.local_segments);
-        Ok(())
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction
@@ -1052,12 +1027,16 @@ impl Namespace {
                 }
                 None => version == 0,
             };
-            if !visible || !Path::new(&row.path).exists() {
+            let record = object_records.get(&row.path);
+            // A legacy segment is visible because its file is there; an
+            // object-backed segment is visible because the table's state
+            // references it. Cache contents never create or remove visibility.
+            if !visible || (record.is_none() && !Path::new(&row.path).exists()) {
                 continue;
             }
             let artifacts = segment_artifacts(
                 self.controller.object_store().map(Arc::as_ref),
-                object_records.get(&row.path),
+                record,
                 Path::new(&row.path),
             )?;
             segments.push_back(LocalSegment {
@@ -1749,7 +1728,79 @@ impl Namespace {
     /// captured the pre-compaction paths keeps scanning the files it snapshotted.
     ///
     /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
-    pub fn query_snapshot(&self) -> SegmentSnapshot {
+    pub fn query_snapshot(&self) -> Result<SegmentSnapshot, StatsError> {
+        // A table is on the snapshot path once it has an activated object-native
+        // definition. Legacy tables, and object-backed tables still importing
+        // their version-0 history, read the local segment files the shared
+        // query-visibility lock guards.
+        if let Some(snapshot) = self.controller.snapshot() {
+            if snapshot
+                .state()
+                .catalog()
+                .active_table_spec_version
+                .unwrap_or(0)
+                > 0
+            {
+                return self.object_query_snapshot(&snapshot);
+            }
+        }
+        Ok(self.local_query_snapshot())
+    }
+
+    /// Plan this table's read from the state its controller last published.
+    ///
+    /// Metadata only: no object is fetched and the local cache is not consulted,
+    /// so a cold cache plans exactly what a warm one does. The scan localizes the
+    /// objects its pruning selected.
+    fn object_query_snapshot(
+        &self,
+        snapshot: &TableSnapshot,
+    ) -> Result<SegmentSnapshot, StatsError> {
+        let store = self.controller.object_store().ok_or_else(|| {
+            StatsError::Internal(format!("table {:?} has no object store", self.name))
+        })?;
+        let planned = plan_visible_segments(snapshot, store.as_ref())?;
+        let mut view = SegmentSnapshot {
+            paths: Vec::with_capacity(planned.len()),
+            key_bounds: BTreeMap::new(),
+            partitions: BTreeMap::new(),
+            min_seq: planned.iter().map(|segment| segment.min_seq).min(),
+            artifacts: SegmentArtifacts::new(),
+            sources: SegmentObjectMap::new(),
+        };
+        for segment in planned {
+            if let Some(bounds) = segment.key_bounds {
+                view.key_bounds.insert(segment.path.clone(), bounds);
+            }
+            if let Some(partition) = segment.partition {
+                view.partitions.insert(segment.path.clone(), partition);
+            }
+            if !segment.artifacts.is_empty() {
+                view.artifacts
+                    .insert(segment.path.clone(), segment.artifacts);
+            }
+            view.sources.insert(segment.path.clone(), segment.objects);
+            view.paths.push(segment.path);
+        }
+        Ok(view)
+    }
+
+    /// The maximum query time this table's pinned state promises, for the
+    /// tables a server read plans from immutable object references. `None` for a
+    /// legacy table, whose readable window is the query-visibility lock rather
+    /// than a duration.
+    pub fn snapshot_query_bound(&self) -> Option<Duration> {
+        let snapshot = self.controller.snapshot()?;
+        let catalog = snapshot.state().catalog();
+        if catalog.active_table_spec_version.unwrap_or(0) == 0 {
+            return None;
+        }
+        Some(Duration::from_millis(catalog.max_query_time_ms.unwrap_or(
+            crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS,
+        )))
+    }
+
+    fn local_query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
         let key_bounds = inner
             .local_segments
@@ -1780,6 +1831,7 @@ impl Namespace {
                 .filter(|segment| !segment.artifacts.is_empty())
                 .map(|segment| (segment.path.clone(), segment.artifacts.clone()))
                 .collect(),
+            sources: SegmentObjectMap::new(),
         }
     }
 
@@ -1789,19 +1841,79 @@ impl Namespace {
         self.persisted_seq.subscribe()
     }
 
-    /// Wake the flush task after an append. Nudges the rate-limited flush loop;
-    /// a buffer that already holds a full segment (`>= SEGMENT_TARGET_BYTES`)
-    /// also trips `force_flush` to bypass the cooldown and bound RAM / L0 size.
-    /// No-op in memory mode, which has no flush task. Call after dropping the
-    /// inner lock.
+    /// Record flush demand after an append and wake the scheduler. A buffer that
+    /// already holds a whole segment also forces the flush, bypassing the
+    /// coalescing window so RAM and L0 size stay bounded. No-op in memory mode,
+    /// which never flushes. Call after dropping the inner lock.
     fn notify_flush_after_append(&self, buffered_bytes: i64) {
         if self.data_dir.is_none() {
             return;
         }
-        self.flush_notify.notify_one();
+        self.flush_requested.store(true, Ordering::SeqCst);
         if buffered_bytes >= self.runtime_policy().max_buffer_bytes {
-            self.force_flush.notify_one();
+            self.flush_forced.store(true, Ordering::SeqCst);
         }
+        self.maintenance_wake.notify_one();
+    }
+
+    /// Record flush demand directly. `forced` bypasses the coalescing window
+    /// the way a buffer holding a whole segment does.
+    #[cfg(test)]
+    pub(crate) fn request_flush(&self, forced: bool) {
+        self.flush_requested.store(true, Ordering::SeqCst);
+        if forced {
+            self.flush_forced.store(true, Ordering::SeqCst);
+        }
+        self.maintenance_wake.notify_one();
+    }
+
+    /// What the scheduler needs to time this namespace's next flush.
+    pub(crate) fn flush_demand(&self) -> FlushDemand {
+        FlushDemand {
+            requested: self.flush_requested.load(Ordering::SeqCst),
+            forced: self.flush_forced.load(Ordering::SeqCst),
+            max_flush_age: self.runtime_policy().max_flush_age,
+        }
+    }
+
+    /// Clear the demand the scheduler is about to satisfy. Called immediately
+    /// before the flush runs, so an append landing during it re-arms.
+    pub(crate) fn clear_flush_demand(&self) {
+        self.flush_requested.store(false, Ordering::SeqCst);
+        self.flush_forced.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether this namespace persists to disk. A memory namespace neither
+    /// flushes nor maintains.
+    pub(crate) fn is_disk_backed(&self) -> bool {
+        self.data_dir.is_some()
+    }
+
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
+    }
+
+    /// How often this namespace owes an ordinary maintenance cycle.
+    pub(crate) fn maintenance_interval(&self) -> Duration {
+        self.compaction_config.check_interval
+    }
+
+    /// Run `work` as a background task this namespace owns.
+    ///
+    /// Returns false when the namespace has already stopped, in which case
+    /// nothing is spawned: `stop_and_join` has drained the handle list and a
+    /// task registered after it would outlive the shutdown window.
+    pub(crate) fn spawn_tracked(
+        self: Arc<Self>,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> bool {
+        let mut handles = self.task_handles.lock().unwrap();
+        if self.stopped.load(Ordering::SeqCst) {
+            return false;
+        }
+        handles.retain(|handle| !handle.is_finished());
+        handles.push(tokio::spawn(work));
+        true
     }
 
     /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
@@ -1877,7 +1989,8 @@ impl Namespace {
         if *rx.borrow() >= target {
             return Ok(());
         }
-        self.flush_notify.notify_one();
+        self.flush_requested.store(true, Ordering::SeqCst);
+        self.maintenance_wake.notify_one();
         let wait = async {
             loop {
                 if *rx.borrow() >= target {
@@ -2406,7 +2519,7 @@ impl Namespace {
         pending
     }
 
-    fn physical_layout_migration_is_pending(&self) -> bool {
+    pub(crate) fn physical_layout_migration_is_pending(&self) -> bool {
         self.physical_layout_migration_pending().any()
     }
 
@@ -3053,7 +3166,7 @@ impl Namespace {
         if config.is_empty() {
             return 0;
         }
-        let Ok(_slot) = self.index_backfill_slot.try_lock() else {
+        let Ok(_slot) = self.limits.index_backfill().try_lock() else {
             return 0;
         };
         let candidates = self.index_backfill_candidates(&config, max);
@@ -3223,7 +3336,7 @@ impl Namespace {
         if self.data_dir.is_none() || max == 0 || segment_indexes_enabled_for(&self.name) {
             return 0;
         }
-        let Ok(_slot) = self.index_backfill_slot.try_lock() else {
+        let Ok(_slot) = self.limits.index_backfill().try_lock() else {
             return 0;
         };
         let segments: Vec<LocalSegment> = self
@@ -3305,7 +3418,7 @@ impl Namespace {
 
     /// Advance local layout work and report whether another fast retry is due.
     fn advance_physical_layout_migration(&self) -> Result<bool, StatsError> {
-        let migration_slot = match self.physical_layout_migration_slot.try_lock() {
+        let migration_slot = match self.limits.layout_migration().try_lock() {
             Ok(slot) => slot,
             Err(TryLockError::WouldBlock) => return Ok(self.physical_layout_migration_is_pending()),
             Err(TryLockError::Poisoned(_)) => {
@@ -3642,18 +3755,8 @@ impl Namespace {
         Ok(())
     }
 
-    /// Spawn the per-namespace maintenance task.
-    /// No-op in memory mode. Called once by the store after construction.
-    ///
-    pub fn spawn_maintenance(self: &Arc<Self>) {
-        if self.data_dir.is_none() {
-            return;
-        }
-        let handle = spawn_maintenance_task(Arc::clone(self));
-        self.task_handles.lock().unwrap().push(handle);
-    }
-
-    /// How many background tasks this namespace is running (flush, maintenance).
+    /// How many background tasks the scheduler currently has in flight against
+    /// this namespace.
     pub fn background_task_count(&self) -> usize {
         self.task_handles.lock().unwrap().len()
     }
@@ -3665,7 +3768,7 @@ impl Namespace {
         (inner.buffers.ram_bytes(), inner.buffers.chunk_count())
     }
 
-    /// Latch the stop flag, wake the flush + maintenance tasks, and JOIN them
+    /// Latch the stop flag, wake any dispatched maintenance work, and JOIN it
     /// bounded by `timeout` (a wedged task that misses the window is aborted, so
     /// this can never hang). Does NOT flush — callers sequence durability
     /// (`shutdown`) or pre-delete teardown (`drop_table` re-register replacement)
@@ -3708,7 +3811,7 @@ impl Namespace {
 
     /// Cooperatively shut the namespace down.
     ///
-    /// Stops + JOINs the flush + maintenance tasks (bounded by `timeout`), then
+    /// Stops + JOINs any dispatched maintenance work (bounded by `timeout`), then
     /// does a final `flush_once` (no RAM-only rows survive; durability is already
     /// preserved — an acked write was on a sealed segment) and, for a
     /// remote-configured namespace, a final bounded `sync_step` so the bucket
@@ -3734,7 +3837,7 @@ impl Namespace {
         }
     }
 
-    /// Signal the flush + maintenance tasks to stop without awaiting them. Safe
+    /// Signal dispatched maintenance work to stop without awaiting it. Safe
     /// to call from a synchronous context with no tokio runtime — used by
     /// `drop_table` for mem-store namespaces, which spawn no background tasks (so
     /// there is nothing to join) before deleting their catalog rows.
@@ -4010,96 +4113,6 @@ fn adopt_local_segments(
 /// under the tokio blocking pool implicitly — the encode is fast for the small
 /// batches the durability path produces; large batches are bounded by the
 /// 16MiB/1Mi write caps).
-fn spawn_flush_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            // Stop latch checked before parking so a stop signalled while we
-            // were mid-flush (and thus missed the Notify wake) still exits.
-            if ns.stopped.load(Ordering::SeqCst) {
-                let _ = ns.flush_once_async().await;
-                return;
-            }
-            let notified = ns.flush_notify.notified();
-            let stopped = ns.stop.notified();
-            let flush_age = ns.runtime_policy().max_flush_age;
-            tokio::select! {
-                _ = notified => {}
-                _ = tokio::time::sleep(flush_age) => {}
-                _ = stopped => {
-                    let _ = ns.flush_once_async().await;
-                    return;
-                }
-            }
-            if ns.stopped.load(Ordering::SeqCst) {
-                let _ = ns.flush_once_async().await;
-                return;
-            }
-            if let Err(e) = ns.flush_once_async().await {
-                tracing::warn!(namespace = %ns.name, error = %e, "flush task: flush_once failed");
-            }
-            // Flush-rate cooldown: coalesce the appends that arrive during the
-            // window into the next single L0 (cap = one segment per
-            // MIN_FLUSH_INTERVAL) instead of sealing a tiny L0 per nudge. A burst
-            // that fills a whole segment cuts the wait short via `force_flush`.
-            tokio::select! {
-                _ = tokio::time::sleep(MIN_FLUSH_INTERVAL) => {}
-                _ = ns.force_flush.notified() => {}
-                _ = ns.stop.notified() => {
-                    let _ = ns.flush_once_async().await;
-                    return;
-                }
-            }
-        }
-    })
-}
-
-/// Every `check_interval` the loop runs one `run_maintenance` cycle (compaction
-/// drain, then sync, then evict). A physical-layout backlog shortens only the
-/// next delay to 100 ms, so the streaming rebuild continues without a 30 s gap
-/// while each cycle still flushes and syncs live writes. On the stop notify the
-/// task exits immediately WITHOUT a final maintenance cycle; the final
-/// drain-to-disk and reconcile on shutdown are handled by
-/// [`Namespace::shutdown`].
-fn spawn_maintenance_task(ns: Arc<Namespace>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let interval = ns.compaction_config.check_interval;
-        let mut migration_pending = ns.physical_layout_migration_is_pending();
-        loop {
-            // Stop latch: a stop signalled while a maintenance cycle was running
-            // (and thus missed the Notify wake) still exits here.
-            if ns.stopped.load(Ordering::SeqCst) {
-                return;
-            }
-            let stopped = ns.stop.notified();
-            let delay = if migration_pending {
-                PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL
-            } else {
-                interval
-            };
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = stopped => {
-                    return;
-                }
-            }
-            if ns.stopped.load(Ordering::SeqCst) {
-                return;
-            }
-            match ns.run_maintenance(false).await {
-                Ok(()) => {
-                    migration_pending = ns.physical_layout_migration_is_pending();
-                }
-                Err(e) => {
-                    // Fall back to the ordinary interval after an error. A bad
-                    // input must not turn the recovery worker into a hot loop.
-                    migration_pending = false;
-                    tracing::warn!(namespace = %ns.name, error = %e, "maintenance task: run_maintenance failed");
-                }
-            }
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -4179,6 +4192,16 @@ mod tests {
 
     /// Open a namespace with default wiring (a fresh shared
     /// query-visibility lock, no remote, empty policy) for the unit tests.
+    /// Seal the buffer the way the maintenance scheduler would, then wait for
+    /// the durability high-water mark. These tests construct a namespace
+    /// directly, so no scheduler is polling it.
+    async fn flush_and_await(ns: &Arc<Namespace>, target: i64) {
+        ns.flush_once_async().await.unwrap();
+        ns.await_persisted(target, Duration::from_secs(10))
+            .await
+            .unwrap();
+    }
+
     fn open_ns(
         name: &str,
         schema: Schema,
@@ -4202,8 +4225,8 @@ mod tests {
             Arc::clone(&catalog),
             Arc::new(RwLock::new(())),
             crate::indices::test_index_registry(),
-            Arc::new(tokio::sync::Mutex::new(())),
-            Arc::new(Mutex::new(())),
+            crate::maintenance::MaintenanceLimits::new(),
+            Arc::new(Notify::new()),
             TableController::start(
                 name.to_string(),
                 catalog,
@@ -4265,8 +4288,8 @@ mod tests {
             catalog,
             Arc::new(RwLock::new(())),
             crate::indices::test_index_registry(),
-            Arc::new(tokio::sync::Mutex::new(())),
-            Arc::new(Mutex::new(())),
+            crate::maintenance::MaintenanceLimits::new(),
+            Arc::new(Notify::new()),
             controller,
             policy,
         )
@@ -4314,9 +4337,7 @@ mod tests {
 
         let last = ns.append_aligned_batch(&aligned(3));
         assert_eq!(last, 3);
-        ns.await_persisted(last, Duration::from_secs(10))
-            .await
-            .unwrap();
+        flush_and_await(&ns, last).await;
 
         // A segment file exists and stats reflect it.
         let segs = discover_segments(&ns_dir);
@@ -4384,7 +4405,7 @@ mod tests {
             Arc::new(Catalog::open(Some(&dir)).unwrap()),
         );
         assert_eq!(reopened.stats().row_count, 2);
-        assert_eq!(reopened.query_snapshot().paths.len(), 2);
+        assert_eq!(reopened.query_snapshot().unwrap().paths.len(), 2);
         reopened.shutdown(Duration::from_secs(10)).await;
 
         std::fs::remove_dir_all(&dir).ok();
@@ -4690,11 +4711,9 @@ mod tests {
             catalog,
         );
         let last = ns.append_aligned_batch(&aligned(3));
-        ns.await_persisted(last, Duration::from_secs(10))
-            .await
-            .unwrap();
+        flush_and_await(&ns, last).await;
 
-        let snapshot = ns.query_snapshot();
+        let snapshot = ns.query_snapshot().unwrap();
         assert_eq!(
             snapshot.key_bounds.values().copied().collect::<Vec<_>>(),
             vec![(1000, 1002)]
@@ -4746,9 +4765,7 @@ mod tests {
                 catalog,
             );
             let last = ns.append_aligned_batch(&aligned(4));
-            ns.await_persisted(last, Duration::from_secs(10))
-                .await
-                .unwrap();
+            flush_and_await(&ns, last).await;
         }
         // Second namespace over the same dir: next seq is past the persisted max,
         // and a previously-durable seq is already satisfied.

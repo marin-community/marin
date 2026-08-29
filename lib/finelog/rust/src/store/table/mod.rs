@@ -15,6 +15,7 @@
 //!   the immutable [`TableSnapshot`] readers observe.
 
 mod controller;
+pub mod query_view;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,6 +27,7 @@ use tokio::sync::{watch, RwLock};
 use crate::errors::StatsError;
 use crate::indices::cache::IndexCache;
 use crate::indices::IndexRegistry;
+use crate::maintenance::MaintenanceLimits;
 use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::Catalog;
 use crate::store::namespace::Namespace;
@@ -65,16 +67,28 @@ pub struct TableManager {
     /// table. Concurrent first registrations must not build and displace
     /// separate engines.
     registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
-    /// side across the full DataFusion scan, because query planning snapshots
-    /// segment PATHS and DataFusion opens those parquet files LAZILY during
-    /// `collect()`. Structural mutations that unlink segment files — drop,
-    /// compaction, eviction — take the WRITE side so no scan is mid-flight over
-    /// paths about to disappear.
+    /// Process-wide query-visibility lock, held for the paths a scan may open
+    /// that some other operation may unlink.
+    ///
+    /// It exists for path-based liveness. An object-backed table no longer
+    /// depends on it: its reads plan from an immutable `TableSnapshot`, its data
+    /// and index objects are immutable, and retirement never unlinks a
+    /// referenced file. The remaining holders that do need it are:
+    ///
+    /// - legacy tables, whose query view is the set of files currently on disk;
+    /// - legacy compaction (`commit_swap`) and eviction, which unlink or rename
+    ///   the very files a snapshot named;
+    /// - `DropTable`, which deletes a table's directory;
+    /// - the version-0 legacy import path, which is on the same file-based view.
+    ///
+    /// Object-backed reads still take the READ side because a single query
+    /// registers every live table, legacy ones included. The lock is deleted
+    /// once no consumer plans from paths and no operation unlinks a referenced
+    /// file.
     ///
     /// ONE shared instance for the whole process (queries are cross-table, so
-    /// the drain must be global). Cloned into each table runtime so the per-table
-    /// maintenance task takes `.blocking_write()` inside its `spawn_blocking`.
+    /// the drain must be global). Cloned into each table runtime so its
+    /// maintenance work takes `.blocking_write()` inside its `spawn_blocking`.
     ///
     /// `tokio::sync::RwLock` is WRITE-preferring (a new reader waits behind a
     /// pending writer). It upholds the safety invariant (a writer never proceeds
@@ -83,8 +97,11 @@ pub struct TableManager {
     /// under a steady query stream.
     query_visibility: Arc<RwLock<()>>,
     indices: Arc<IndexRegistry>,
-    index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
-    physical_layout_migration_slot: Arc<Mutex<()>>,
+    /// Process-wide maintenance concurrency limits, handed to every runtime.
+    limits: Arc<MaintenanceLimits>,
+    /// The maintenance scheduler's wake signal. Held here because runtimes are
+    /// built before the scheduler starts and must already carry it.
+    maintenance_wake: Arc<tokio::sync::Notify>,
 }
 
 impl TableManager {
@@ -114,8 +131,8 @@ impl TableManager {
             indices: Arc::new(IndexRegistry::new(Arc::new(IndexCache::new(
                 index_cache_mb,
             )))),
-            index_backfill_slot: Arc::new(tokio::sync::Mutex::new(())),
-            physical_layout_migration_slot: Arc::new(Mutex::new(())),
+            limits: MaintenanceLimits::new(),
+            maintenance_wake: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -125,6 +142,18 @@ impl TableManager {
 
     pub fn indices(&self) -> &Arc<IndexRegistry> {
         &self.indices
+    }
+
+    pub fn mode(&self) -> ServeMode {
+        self.mode
+    }
+
+    pub fn maintenance_limits(&self) -> &Arc<MaintenanceLimits> {
+        &self.limits
+    }
+
+    pub fn maintenance_wake(&self) -> &Arc<tokio::sync::Notify> {
+        &self.maintenance_wake
     }
 
     /// The on-disk subdirectory for `name`, without validating it. Callers hold
@@ -208,7 +237,7 @@ impl TableManager {
     }
 
     /// Every live table runtime.
-    fn runtimes(&self) -> Vec<Arc<Namespace>> {
+    pub fn runtimes(&self) -> Vec<Arc<Namespace>> {
         self.runtimes.lock().unwrap().values().cloned().collect()
     }
 
@@ -237,8 +266,8 @@ impl TableManager {
     /// A replacement stops and joins the prior runtime's background tasks before
     /// the new one adopts the same directory, so the old tasks cannot flush,
     /// evict, or upsert concurrently. In-memory tables spawn no background tasks,
-    /// so replacing the `Arc` is enough. A live table starts maintenance
-    /// immediately unless the store is in shadow mode.
+    /// so replacing the `Arc` is enough. The maintenance scheduler picks the
+    /// replacement up on its next poll.
     pub fn register(
         &self,
         name: &str,
@@ -262,8 +291,8 @@ impl TableManager {
             Arc::clone(&self.catalog),
             Arc::clone(&self.query_visibility),
             Arc::clone(&self.indices),
-            Arc::clone(&self.index_backfill_slot),
-            Arc::clone(&self.physical_layout_migration_slot),
+            Arc::clone(&self.limits),
+            Arc::clone(&self.maintenance_wake),
             self.controller(name),
             policy,
         )?;
@@ -272,18 +301,6 @@ impl TableManager {
             .unwrap()
             .insert(name.to_string(), Arc::clone(&runtime));
         Ok(runtime)
-    }
-
-    /// Start every table's maintenance task. Called once after bootstrap, before
-    /// serving.
-    pub fn spawn_maintenance(&self) {
-        if self.mode == ServeMode::Shadow {
-            tracing::info!("shadow mode: maintenance not started");
-            return;
-        }
-        for runtime in self.runtimes() {
-            runtime.spawn_maintenance();
-        }
     }
 
     /// Append one validated batch to `name`'s RAM buffer and return its
@@ -335,14 +352,6 @@ impl TableManager {
     /// Run one full maintenance cycle for `name`.
     pub async fn maintain(&self, name: &str, force_compact_l0: bool) -> Result<(), StatsError> {
         self.require(name)?.run_maintenance(force_compact_l0).await
-    }
-
-    /// Localize the objects the current query views reference.
-    pub async fn materialize_query_objects(&self) -> Result<(), StatsError> {
-        for runtime in self.runtimes() {
-            runtime.materialize_query_segments().await?;
-        }
-        Ok(())
     }
 
     /// Remove `name`'s runtime and controller from the registry.

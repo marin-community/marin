@@ -14,6 +14,7 @@ use crate::proto::finelog::logging::{
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
 use crate::query::provider::NamespaceProvider;
+use crate::query::query_deadline;
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::store::log_read::{
     add_cluster_filter, add_common_filters, add_seq_upper_bound, build_log_predicates,
@@ -204,7 +205,7 @@ impl LogService for LogServiceImpl {
 
     async fn fetch_logs(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         request: OwnedFetchLogsRequestView,
     ) -> ServiceResult<FetchLogsResponse> {
         // Wire UNSPECIFIED (and an unset field) maps to REGEX so clients that
@@ -258,24 +259,39 @@ impl LogService for LogServiceImpl {
         // blocking pool, then build the provider over them.
         let store = Arc::clone(&self.store);
         let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
+        let table_bound = self.store.object_query_bound();
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
             .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?
             .with_segment_artifacts(snapshot.artifacts)
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
 
-        // Run the read (DataFusion schedules its own CPU tasks; await directly).
-        let ctx = make_ctx();
-        let rows = fetch_log_rows(
-            &ctx,
+        // Run the read (DataFusion schedules its own CPU tasks; await directly),
+        // under the same effective deadline the Query RPC uses. An object-backed
+        // `log` table bounds the read itself.
+        let query_ctx = make_ctx();
+        let read = fetch_log_rows(
+            &query_ctx,
             provider,
             &predicates.where_parts,
             predicates.include_key,
             tail,
             max_lines,
-        )
-        .await
-        .map_err(|e| ConnectError::internal(format!("log read failed: {e}")))?;
+        );
+        let rows = match query_deadline(ctx.time_remaining(), table_bound) {
+            Some(deadline) => tokio::time::timeout(deadline, read)
+                .await
+                .map_err(|_| {
+                    ConnectError::deadline_exceeded(format!(
+                        "log read exceeded deadline of {} ms",
+                        deadline.as_millis()
+                    ))
+                })?
+                .map_err(|e| ConnectError::internal(format!("log read failed: {e}")))?,
+            None => read
+                .await
+                .map_err(|e| ConnectError::internal(format!("log read failed: {e}")))?,
+        };
 
         let shaped = shape_log_read_result(
             rows,

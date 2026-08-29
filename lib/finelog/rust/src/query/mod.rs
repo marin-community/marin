@@ -348,17 +348,42 @@ fn earliest_timeout(
     }
 }
 
-/// The earlier of the server Query deadline and the caller's remaining budget.
+/// The wall-clock bound one server read runs under.
 ///
-/// `FINELOG_QUERY_TIMEOUT_MS` configures the server deadline (see
-/// [`parse_query_timeout`]); `0` disables only that ceiling, so a caller's
-/// shorter deadline still cancels its scan.
-pub(crate) fn query_timeout(request_timeout: Option<Duration>) -> Option<Duration> {
+/// Three budgets fold into one: the configured server ceiling
+/// (`FINELOG_QUERY_TIMEOUT_MS`, see [`parse_query_timeout`]), the caller's
+/// remaining deadline, and `table_bound` — the tightest `max_query_time` among
+/// the object-backed tables this read plans over.
+///
+/// `table_bound` is not disableable. A table promises that a retired object
+/// stays readable for `max_query_time` after the last state that referenced it,
+/// so a read allowed to outlive that window could scan bytes the table no
+/// longer promises. `FINELOG_QUERY_TIMEOUT_MS=0` therefore removes only the
+/// environment ceiling; a read over an object-backed table is still bounded.
+pub(crate) fn query_deadline(
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
     static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
     let server_timeout = *TIMEOUT.get_or_init(|| {
         parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
     });
-    earliest_timeout(server_timeout, request_timeout)
+    effective_deadline(server_timeout, request_timeout, table_bound)
+}
+
+fn effective_deadline(
+    server_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
+    match (
+        table_bound,
+        earliest_timeout(server_timeout, request_timeout),
+    ) {
+        (Some(bound), Some(configured)) => Some(bound.min(configured)),
+        (Some(bound), None) => Some(bound),
+        (None, configured) => configured,
+    }
 }
 
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
@@ -635,6 +660,35 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    /// A table's maximum query time is a contract about how long retired
+    /// objects stay readable, so neither a disabled server ceiling nor a longer
+    /// caller deadline may lift it.
+    #[test]
+    fn a_table_bound_survives_a_disabled_server_ceiling() {
+        let bound = Some(Duration::from_secs(30));
+        assert_eq!(effective_deadline(None, None, bound), bound);
+        assert_eq!(
+            effective_deadline(None, Some(Duration::from_secs(600)), bound),
+            bound,
+            "a longer caller deadline cannot lift the table bound"
+        );
+        assert_eq!(
+            effective_deadline(None, Some(Duration::from_secs(5)), bound),
+            Some(Duration::from_secs(5)),
+            "a shorter caller deadline still applies"
+        );
+        assert_eq!(
+            effective_deadline(Some(Duration::from_secs(10)), None, bound),
+            Some(Duration::from_secs(10)),
+            "the server ceiling still applies when it is tighter"
+        );
+        assert_eq!(
+            effective_deadline(None, None, None),
+            None,
+            "a read over no object-backed table keeps the configured ceiling"
+        );
     }
 
     #[test]

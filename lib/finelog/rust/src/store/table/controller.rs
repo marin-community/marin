@@ -18,7 +18,6 @@
 //! its caller. The controller serializes lease creation and the short commit
 //! only. Appends never reach it: the RAM buffer's short lock is the ingest path.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -37,12 +36,11 @@ use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::object_store::{
     ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
 };
-use crate::store::segment::segment_bounds;
 use crate::store::table_state::{
     resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
     TableRevision, TableSnapshot, TableState, WriterFence,
 };
-use crate::store::types::{segment_relative_key, LocalSegment, SegmentLocation, SegmentRow};
+use crate::store::types::{segment_relative_key, SegmentRow};
 
 /// An immutable object this table just wrote, and the reference that names it.
 pub struct WrittenObject {
@@ -362,6 +360,22 @@ impl TableController {
         self.snapshot.send_replace(Some(Arc::new(snapshot)));
     }
 
+    /// Publish the locally durable state as this table's first snapshot.
+    ///
+    /// A restart has local state before it has claimed HEAD, and readers need a
+    /// pinned state to plan from. Recovery replaces this with the state the
+    /// writer claim selects. A table that has already published keeps its
+    /// snapshot.
+    pub fn seed_local_snapshot(&self) {
+        if !self.is_object_backed() || self.snapshot.borrow().is_some() {
+            return;
+        }
+        let Ok(revision) = self.local_revision() else {
+            return;
+        };
+        self.publish_local_snapshot(revision);
+    }
+
     /// Publish the current local table state and settle the outcome.
     ///
     /// Returns the state HEAD selects, whose revision is at least the caller's
@@ -585,82 +599,6 @@ impl TableController {
                     self.table
                 ))
             })
-    }
-
-    /// Localize every query-visible object segment and describe it for the
-    /// in-memory query view.
-    pub async fn local_query_segments(
-        &self,
-        key_column: &str,
-    ) -> Result<Vec<LocalSegment>, StatsError> {
-        let Some(objects) = &self.objects else {
-            return Ok(Vec::new());
-        };
-        let status = self.catalog.table_spec_status(&self.table)?;
-        let rows: HashMap<_, _> = self
-            .catalog
-            .list_segments(&self.table)?
-            .into_iter()
-            .map(|row| (row.path.clone(), row))
-            .collect();
-        let mut restored = Vec::new();
-        for record in self.catalog.object_segments(&self.table)? {
-            if !object_segment_is_query_visible(&status, &record) {
-                continue;
-            }
-            let row = rows.get(&record.path).ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object segment {:?} has no local catalog row",
-                    record.path
-                ))
-            })?;
-            let reference = ObjectReference::try_from(&record.source)?;
-            reference.id.table_relative(&self.table).ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object segment {:?} references another table",
-                    record.path
-                ))
-            })?;
-            let path = objects.store.local_path(&reference).await?;
-            if path != Path::new(&record.path) {
-                return Err(StatsError::Internal(format!(
-                    "materialized object path {} differs from catalog path {}",
-                    path.display(),
-                    record.path
-                )));
-            }
-            let (row_count, min_key_value, max_key_value) = segment_bounds(&path, Some(key_column))
-                .ok_or_else(|| {
-                    StatsError::Internal(format!(
-                        "materialized object {} has an unreadable Parquet footer",
-                        path.display()
-                    ))
-                })?;
-            if row_count != row.row_count {
-                return Err(StatsError::Internal(format!(
-                    "materialized object {} has {row_count} rows, expected {}",
-                    path.display(),
-                    row.row_count
-                )));
-            }
-            restored.push(LocalSegment {
-                path: record.path.clone(),
-                size_bytes: row.byte_size,
-                level: row.level,
-                min_seq: row.min_seq,
-                max_seq: row.max_seq,
-                row_count,
-                created_at_ms: row.created_at_ms,
-                min_key_value,
-                max_key_value,
-                partition: row.partition.clone(),
-                location: SegmentLocation::Both,
-                artifacts: local_artifacts(objects.store.as_ref(), &record.artifacts)?,
-            });
-            self.catalog
-                .set_location(&self.table, &record.path, SegmentLocation::Both)?;
-        }
-        Ok(restored)
     }
 
     /// Collect whatever the object store's own retention allows.

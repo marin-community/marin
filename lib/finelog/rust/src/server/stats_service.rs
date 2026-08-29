@@ -22,7 +22,7 @@ use crate::proto::finelog::stats::{
     OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, StatsService,
     WriteRowsResponse,
 };
-use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
+use crate::query::{make_ctx, query_deadline, run_query_over, truncate_sql_for_log};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::catalog::TableSpecStatus;
@@ -302,14 +302,15 @@ impl StatsService for StatsServiceImpl {
         // guard must outlive run_query_over (not just query_providers) to keep a
         // concurrent drop_table / compaction from unlinking a file mid-scan.
         let _read_guard = self.store.query_visibility().read().await;
-        // Materialize visible objects as local files while deletion is fenced,
-        // then snapshot the exact paths DataFusion will open.
-        self.store.materialize_query_objects().await?;
 
-        // Snapshot every live namespace (schema + sealed-segment paths) under
-        // the engine locks on the blocking pool.
+        // Plan every live namespace from its pinned state (schema, bounds,
+        // partitions, exact object references) on the blocking pool. Objects are
+        // localized later, and only for the segments the scan selects.
         let store = Arc::clone(&self.store);
         let providers = run_blocking(move || store.query_providers()).await?;
+        // Object-backed tables bound the read themselves; that bound cannot be
+        // configured away.
+        let table_bound = self.store.object_query_bound();
 
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
@@ -320,7 +321,7 @@ impl StatsService for StatsServiceImpl {
         // scan), so a timed-out caller cannot leave CPU work behind.
         let query_ctx = make_ctx();
         let query = run_query_over(&query_ctx, providers, &sql);
-        let result = match query_timeout(ctx.time_remaining()) {
+        let result = match query_deadline(ctx.time_remaining(), table_bound) {
             Some(deadline) => match tokio::time::timeout(deadline, query).await {
                 Ok(r) => r.map_err(map_query_error)?,
                 Err(_elapsed) => {

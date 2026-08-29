@@ -10,11 +10,16 @@
 //!
 //! ## Read-visibility seam
 //!
-//! The provider holds a *snapshot* of segment paths captured under the
-//! namespace insertion lock before scanning (see `Namespace::query_snapshot`).
-//! Compaction takes the query-visibility write side before unlinking a file, so
-//! a query that snapshotted the pre-compaction paths keeps scanning the files it
-//! captured; the snapshot here is the read side of that seam.
+//! The provider holds a *snapshot* of the segments a read may open (see
+//! `Namespace::query_snapshot`). A legacy table snapshots paths captured under
+//! the namespace insertion lock; compaction takes the query-visibility write
+//! side before unlinking a file, so a query that snapshotted the pre-compaction
+//! paths keeps scanning the files it captured.
+//!
+//! An object-backed table instead snapshots exact object references planned
+//! from an immutable `TableSnapshot`. Those objects are immutable and never
+//! unlinked while referenced, so the scan prunes by the pinned metadata first
+//! and localizes only the objects it selected.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +39,8 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
+use crate::store::object_store::ObjectStore;
+use crate::store::table::query_view::SegmentObjectMap;
 
 /// A live namespace as one DataFusion table.
 ///
@@ -59,6 +66,64 @@ pub struct NamespaceProvider {
     segment_artifacts: Arc<SegmentArtifacts>,
     exact_postings_policy: Option<BTreeMap<String, Vec<String>>>,
     segment_indexes_enabled: bool,
+    /// Set for an object-backed table: the immutable objects behind the planned
+    /// paths, resolved only for the segments a scan selects.
+    object_sources: Option<ObjectSources>,
+}
+
+impl std::fmt::Debug for ObjectSources {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ObjectSources")
+            .field("segments", &self.segments.len())
+            .finish()
+    }
+}
+
+/// The immutable objects an object-backed table's planned paths resolve to.
+struct ObjectSources {
+    store: Arc<dyn ObjectStore>,
+    segments: SegmentObjectMap,
+}
+
+impl ObjectSources {
+    /// Fetch exactly the objects `paths` names, plus the artifacts those
+    /// segments advertise.
+    ///
+    /// A source object that cannot be localized fails the scan: its rows are
+    /// part of the answer. An artifact that cannot be localized is skipped —
+    /// derived indexes are an optimization and the source Parquet remains
+    /// authoritative — matching the fail-open behavior of a corrupt bundle.
+    async fn localize(&self, paths: &[String]) -> DFResult<()> {
+        let selected: Vec<_> = paths
+            .iter()
+            .filter_map(|path| self.segments.get(path))
+            .collect();
+        futures::future::try_join_all(selected.iter().map(|objects| async move {
+            self.store
+                .local_path(&objects.source)
+                .await
+                .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))
+        }))
+        .await?;
+        for objects in selected {
+            for reference in objects
+                .artifacts
+                .bundle
+                .iter()
+                .chain(objects.artifacts.projections.values())
+            {
+                let Ok(artifact) = crate::store::object_store::ObjectReference::try_from(reference)
+                else {
+                    continue;
+                };
+                if let Err(error) = self.store.local_path(&artifact).await {
+                    tracing::debug!(%error, "artifact object unavailable; scanning source parquet");
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -203,6 +268,7 @@ impl NamespaceProvider {
                 segment_artifacts: Arc::new(SegmentArtifacts::new()),
                 exact_postings_policy: None,
                 segment_indexes_enabled: true,
+                object_sources: None,
             });
         }
 
@@ -219,7 +285,24 @@ impl NamespaceProvider {
             segment_artifacts: Arc::new(SegmentArtifacts::new()),
             exact_postings_policy: None,
             segment_indexes_enabled: true,
+            object_sources: None,
         })
+    }
+
+    /// Attach the immutable objects the planned paths resolve to.
+    ///
+    /// With these attached the provider's paths need not exist when the plan is
+    /// built: a scan prunes by the pinned table metadata first, then localizes
+    /// only the objects it selected.
+    pub fn with_object_sources(
+        mut self,
+        store: Arc<dyn ObjectStore>,
+        segments: SegmentObjectMap,
+    ) -> Self {
+        if !segments.is_empty() {
+            self.object_sources = Some(ObjectSources { store, segments });
+        }
+        self
     }
 
     /// Attach exact Int64 key bounds captured with the segment path snapshot.
@@ -318,7 +401,14 @@ impl TableProvider for NamespaceProvider {
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         match &self.inner {
             Inner::Listing(t) => {
+                // Prune from the pinned table metadata BEFORE any object is
+                // fetched, then localize exactly the selected objects. Planning
+                // a cold-cache query costs no downloads for segments the
+                // predicate excluded.
                 let segment_paths = self.segment_paths_for_filters(filters);
+                if let Some(sources) = &self.object_sources {
+                    sources.localize(&segment_paths).await?;
+                }
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.

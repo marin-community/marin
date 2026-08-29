@@ -25,6 +25,7 @@ use clap::ValueEnum;
 use crate::errors::StatsError;
 use crate::indices::IndexRegistry;
 use crate::ingestion_policy::IngestionBatchSource;
+use crate::maintenance::scheduler::MaintenanceScheduler;
 use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
     storage_policy_for, PolicyRegistry,
@@ -50,6 +51,7 @@ use crate::store::schema::{
     validate_and_align_forwarded_batch, validate_index_policies, AlignedBatch, Column, Schema,
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
+use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{TableRevision, TableSnapshot, WriterFence};
@@ -151,6 +153,9 @@ pub struct NamespaceSnapshot {
     pub min_seq: Option<i64>,
     pub indices: Arc<IndexRegistry>,
     pub artifacts: crate::indices::SegmentArtifacts,
+    /// The immutable objects each path resolves to, and the store that
+    /// localizes them. Absent for a legacy table, whose paths are already files.
+    pub sources: Option<(Arc<dyn ObjectStore>, SegmentObjectMap)>,
 }
 
 /// What a store may do to what it opened.
@@ -174,7 +179,6 @@ pub enum ServeMode {
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
-    mode: ServeMode,
     catalog: Arc<Catalog>,
     object_store: Option<Arc<dyn ObjectStore>>,
     /// Durable state authority for object-backed tables. Absent when no remote
@@ -186,6 +190,8 @@ pub struct Store {
     /// The only table control surface. Owns the live registry, the per-table
     /// durable-state controllers, and the query-visibility lock.
     tables: Arc<TableManager>,
+    /// The process's only maintenance cadence owner.
+    scheduler: Arc<MaintenanceScheduler>,
     policies: PolicyRegistry,
     _store_lock: Option<File>,
 }
@@ -315,16 +321,17 @@ impl Store {
             fence,
             index_cache_mb,
         );
+        let scheduler = MaintenanceScheduler::new(Arc::clone(&tables));
         let store = Store {
             data_dir,
             remote_log_dir,
-            mode,
             catalog,
             object_store,
             object_state_store,
             legacy_state_store,
             fence,
             tables,
+            scheduler,
             policies: PolicyRegistry::new(telemetry_root_write_mode),
             _store_lock: store_lock,
         };
@@ -365,12 +372,13 @@ impl Store {
         }
     }
 
-    /// Start each namespace's maintenance task. Called once after `new`, before
-    /// serving.
+    /// Start the maintenance scheduler. Called once after `new`, before serving.
     ///
-    /// Each task runs periodic flush, compaction, publication, and GC work.
+    /// The scheduler is the process's only cadence owner: it polls the registry
+    /// and dispatches flush, compaction, publication, backfill, migration, and
+    /// GC work for every table.
     pub fn bootstrap_maintenance(&self) {
-        self.tables.spawn_maintenance();
+        self.scheduler.start();
     }
 
     /// Load and claim every table's durable state before the server accepts
@@ -842,12 +850,8 @@ impl Store {
                 .map(|table| table.schema() != &effective_schema)
                 .unwrap_or(true);
         if needs_engine {
-            let table = self
-                .tables
+            self.tables
                 .register(name, effective_schema.clone(), effective_policy)?;
-            if self.mode == ServeMode::Live {
-                table.spawn_maintenance();
-            }
         } else {
             // Runtime kept; push the (possibly updated) policy onto it so a
             // policy-only re-register takes effect on the next eviction tick.
@@ -1095,7 +1099,7 @@ impl Store {
             let arrow_schema = Arc::clone(engine.arrow_schema());
             let exact_postings_policy = engine.schema().exact_postings_policy();
             let key_column = engine.key_column().to_string();
-            let segments = engine.query_snapshot();
+            let segments = engine.query_snapshot()?;
             let provider = NamespaceProvider::build(
                 arrow_schema,
                 &segments.paths,
@@ -1107,6 +1111,10 @@ impl Store {
             .with_exact_postings_policy(exact_postings_policy)
             .with_segment_key_bounds(key_column, segments.key_bounds)
             .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
+            let provider = match self.object_store.clone() {
+                Some(store) => provider.with_object_sources(store, segments.sources),
+                None => provider,
+            };
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -1115,9 +1123,17 @@ impl Store {
         Ok(out)
     }
 
-    /// Materialize local files required by the current query snapshots.
-    pub async fn materialize_query_objects(&self) -> Result<(), StatsError> {
-        self.tables.materialize_query_objects().await
+    /// The tightest maximum query time among the object-backed tables a server
+    /// read plans over, or `None` when it plans over none.
+    ///
+    /// The read's effective deadline may not exceed this: past it the table
+    /// stops promising that objects retired by a newer state are still readable.
+    pub fn object_query_bound(&self) -> Option<Duration> {
+        self.tables
+            .runtimes()
+            .iter()
+            .filter_map(|runtime| runtime.snapshot_query_bound())
+            .min()
     }
 
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
@@ -1126,7 +1142,7 @@ impl Store {
     /// reached from one that eviction put out of reach.
     pub fn query_snapshot(&self, name: &str) -> Result<NamespaceSnapshot, StatsError> {
         let engine = self.tables.require(name)?;
-        let segments = engine.query_snapshot();
+        let segments = engine.query_snapshot()?;
         Ok(NamespaceSnapshot {
             schema: Arc::clone(engine.arrow_schema()),
             exact_postings_policy: engine.schema().exact_postings_policy(),
@@ -1137,6 +1153,11 @@ impl Store {
             min_seq: segments.min_seq,
             indices: Arc::clone(self.tables.indices()),
             artifacts: segments.artifacts,
+            sources: self
+                .object_store
+                .clone()
+                .filter(|_| !segments.sources.is_empty())
+                .map(|store| (store, segments.sources)),
         })
     }
 
@@ -1361,6 +1382,9 @@ impl Store {
     /// timeout) guarantees this cannot hang — `main` applies its own outer
     /// timeout around `shutdown` for defense in depth.
     pub async fn shutdown(&self, per_namespace_timeout: Duration) {
+        // Stop dispatching before draining, so no table is handed new work while
+        // it is joining what it already has.
+        self.scheduler.shutdown().await;
         self.tables.shutdown(per_namespace_timeout).await;
     }
 }
@@ -1509,6 +1533,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -1542,6 +1567,18 @@ mod tests {
             initial_catalog,
             current_catalog,
         }
+    }
+
+    /// Scan `table` the way the Query RPC does, so the provider prunes from the
+    /// pinned state and then localizes exactly the objects it selected. Returns
+    /// the row count.
+    async fn scan_table(store: &Store, table: &str) -> i64 {
+        let providers = store.query_providers().unwrap();
+        let sql = format!("SELECT * FROM \"{table}\"");
+        let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, &sql)
+            .await
+            .unwrap();
+        result.batches.iter().map(|b| b.num_rows() as i64).sum()
     }
 
     fn assert_local_content_object(data_dir: &Path, path: &str) {
@@ -1641,8 +1678,12 @@ mod tests {
             Some(last_seq)
         );
 
+        // A scan localizes the objects it selected. Deleting the cached file
+        // does not change what the pinned state says is live, and the next scan
+        // fetches it back.
         std::fs::remove_file(&paths[0]).unwrap();
-        store.materialize_query_objects().await.unwrap();
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, paths);
+        assert_eq!(scan_table(&store, "iris.worker").await, 2);
         assert!(Path::new(&paths[0]).exists());
 
         store.shutdown(Duration::from_secs(1)).await;
@@ -1677,19 +1718,17 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        reopened.bootstrap_maintenance();
 
         // The local revision is ahead of HEAD, so nothing is rebuilt from it.
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
         let recovered_status = reopened.table_spec_status("iris.worker").unwrap();
         assert_eq!(recovered_status.active_version(), 1);
         assert_eq!(recovered_status.desired_version(), 2);
-        // Recovery localized nothing.
+        // Recovery localized nothing: the query view names the segments the
+        // pinned state references, and no object has been fetched for them.
         assert!(!Path::new(&paths[0]).exists());
-        assert!(reopened
-            .query_snapshot("iris.worker")
-            .unwrap()
-            .paths
-            .is_empty());
+        assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
 
         // The claimed fence owns that revision, so publishing it advances HEAD.
         let published = reopened
@@ -1705,13 +1744,6 @@ mod tests {
             recovered_status.catalog_generation
         );
 
-        reopened
-            .tables
-            .require("iris.worker")
-            .unwrap()
-            .materialize_query_segments()
-            .await
-            .unwrap();
         assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
         reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
@@ -1740,21 +1772,22 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
-        assert!(reopened
-            .query_snapshot("iris.worker")
-            .unwrap()
-            .paths
-            .is_empty());
+        reopened.bootstrap_maintenance();
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
-        assert!(reopened
-            .query_snapshot("iris.worker")
-            .unwrap()
-            .paths
-            .is_empty());
-
-        // Visibility follows the selected query path, not the cache contents.
-        reopened.materialize_query_objects().await.unwrap();
+        // Visibility comes from the pinned state. A cache file the state does
+        // not reference is not a segment, and a referenced object is live
+        // whether or not its file is present.
+        let stray = data_dir
+            .join("iris.worker")
+            .join("objects")
+            .join("stray.parquet");
+        std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+        std::fs::copy(&paths[0], &stray).unwrap();
         assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
+        std::fs::remove_file(&paths[0]).unwrap();
+        assert_eq!(reopened.query_snapshot("iris.worker").unwrap().paths, paths);
+        assert_eq!(scan_table(&reopened, "iris.worker").await, 2);
+        assert!(Path::new(&paths[0]).exists());
         reopened.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
@@ -1779,6 +1812,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        replacement.bootstrap_maintenance();
         assert_eq!(replacement.recover_tables().await.unwrap(), 1);
 
         let error = store
@@ -1828,6 +1862,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        recovered_store.bootstrap_maintenance();
         assert_eq!(recovered_store.recover_tables().await.unwrap(), 1);
         assert_eq!(
             recovered_store
@@ -1836,12 +1871,6 @@ mod tests {
                 .active_version(),
             1
         );
-        assert!(recovered_store
-            .query_snapshot("iris.worker")
-            .unwrap()
-            .paths
-            .is_empty());
-        recovered_store.materialize_query_objects().await.unwrap();
         assert_eq!(
             recovered_store
                 .query_snapshot("iris.worker")
@@ -1885,6 +1914,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", object_backed_spec_with_query_time(1, 100))
             .unwrap();
@@ -2009,6 +2039,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
@@ -2119,6 +2150,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
@@ -2172,6 +2204,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
@@ -2237,6 +2270,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", sorted_object_backed_spec(1))
             .unwrap();
@@ -2293,6 +2327,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -2381,6 +2416,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
@@ -2823,6 +2859,7 @@ mod tests {
             )
             .unwrap(),
         );
+        store.bootstrap_maintenance();
         store
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
@@ -2875,6 +2912,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        recovered.bootstrap_maintenance();
         assert_eq!(recovered.recover_tables().await.unwrap(), 0);
         assert!(matches!(
             recovered.get_table_schema("iris.worker"),
@@ -2892,6 +2930,7 @@ mod tests {
             ServeMode::Shadow,
         )
         .unwrap();
+        reopened.bootstrap_maintenance();
         assert_eq!(reopened.recover_tables().await.unwrap(), 0);
         assert!(matches!(
             reopened.get_table_schema("iris.worker"),
@@ -2956,6 +2995,7 @@ mod tests {
             ServeMode::Live,
         )
         .unwrap();
+        store.bootstrap_maintenance();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
         assert_eq!(
             schema.column_names(),
@@ -2975,50 +3015,5 @@ mod tests {
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_shadow_store_starts_no_maintenance_for_a_namespace_registered_at_runtime() {
-        // A shadow boot registers its own namespaces after opening the snapshot,
-        // and a runtime `register_table` normally starts that namespace's
-        // maintenance task itself. Gating only the boot path would leave a
-        // rehearsal free to compact, evict, and rewrite the copy it was handed.
-        let live_dir = crate::test_support::unique_dir("maintenance_live");
-        let shadow_dir = crate::test_support::unique_dir("maintenance_shadow");
-        let mut counts = Vec::new();
-        for (dir, mode) in [
-            (&live_dir, ServeMode::Live),
-            (&shadow_dir, ServeMode::Shadow),
-        ] {
-            let store = Store::new(
-                Some(dir.clone()),
-                String::new(),
-                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
-                mode,
-            )
-            .unwrap();
-            store.bootstrap_maintenance();
-            tokio::task::spawn_blocking(move || {
-                store
-                    .register_table("iris.worker", worker_schema(), StoragePolicy::default())
-                    .unwrap();
-                store
-                    .tables
-                    .require("iris.worker")
-                    .unwrap()
-                    .background_task_count()
-            })
-            .await
-            .map(|count| counts.push(count))
-            .unwrap();
-        }
-        let (live, shadow) = (counts[0], counts[1]);
-        assert!(
-            shadow < live,
-            "a shadow store must run fewer background tasks than a live one \
-             (live {live}, shadow {shadow})"
-        );
-        std::fs::remove_dir_all(&live_dir).ok();
-        std::fs::remove_dir_all(&shadow_dir).ok();
     }
 }

@@ -63,7 +63,7 @@ use tokio::task::JoinHandle;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::provider::NamespaceProvider;
-use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
+use crate::query::{make_ctx, query_deadline, run_query_over, QueryResult, RegisteredProvider};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
@@ -612,6 +612,10 @@ where
             .with_segment_artifacts(snapshot.artifacts)
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
+        let provider = match snapshot.sources {
+            Some((store, segments)) => provider.with_object_sources(store, segments),
+            None => provider,
+        };
 
         let table = quote_ident(name);
         let mut sql =
@@ -628,9 +632,24 @@ where
             name: name.to_string(),
             provider,
         }];
-        let result = run_query_over(&make_ctx(), providers, &sql)
-            .await
-            .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?;
+        // The forwarder is a server read like any other: an object-backed source
+        // bounds it by the same non-disableable effective deadline.
+        let query_ctx = make_ctx();
+        let read = run_query_over(&query_ctx, providers, &sql);
+        let result = match query_deadline(None, self.store.object_query_bound()) {
+            Some(deadline) => tokio::time::timeout(deadline, read)
+                .await
+                .map_err(|_| {
+                    StatsError::DeadlineExceeded(format!(
+                        "forward read of {name:?} exceeded deadline of {} ms",
+                        deadline.as_millis()
+                    ))
+                })?
+                .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?,
+            None => read
+                .await
+                .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?,
+        };
 
         Ok(Batch {
             rows: self.ship_batch(result)?,

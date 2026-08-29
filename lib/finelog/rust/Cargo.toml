@@ -152,3 +152,7 @@ connectrpc-build = "0.6"
 # shells out to protoc to parse the .proto files, and our protos use
 # `edition = "2023"`, which requires protoc >= 27.
 protoc-bin-vendored = "3"
+
+[dev-dependencies]
+# `test-util` gives the maintenance scheduler tests a deterministic clock.
+tokio = { version = "1", features = ["full", "test-util"] }

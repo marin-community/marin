@@ -7,10 +7,12 @@ use buffa::MessageField;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
-    CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, TableVersionSegments,
+    CatalogSegment, MigrationPhase, NamespaceCatalog, ObjectRef, ProjectionArtifact,
+    TableVersionSegments,
 };
 use crate::store::catalog::object_state_store::TABLE_STATE_FORMAT_VERSION;
 use crate::store::catalog::Catalog;
+use crate::store::table_state::ArtifactReferences;
 use crate::store::types::{basename, segment_relative_key, SegmentLocation};
 
 /// Build one immutable, self-contained query and recovery catalog value.
@@ -79,7 +81,11 @@ pub fn namespace_catalog(
             migration_backfill: object_segments
                 .get(&row.path)
                 .map(|record| record.migration_backfill),
-            ..Default::default()
+            ..artifact_fields(
+                object_segments
+                    .get(&row.path)
+                    .map(|record| &record.artifacts),
+            )
         };
         by_version.entry(version).or_default().push(segment.clone());
         let rollback_write_version = if status.desired_version() > 0 {
@@ -165,4 +171,30 @@ pub fn namespace_catalog(
         direct_query_high_water: Some(direct_query_high_water),
         ..Default::default()
     })
+}
+
+/// The artifact-reference fields of a published segment.
+///
+/// Membership is by reference: a reader opens exactly the bundle and projection
+/// objects named here, and validates them against the recorded Parquet footer
+/// UUID. A segment with no artifacts publishes none, and its scan reads the
+/// source Parquet.
+fn artifact_fields(artifacts: Option<&ArtifactReferences>) -> CatalogSegment {
+    let Some(artifacts) = artifacts else {
+        return CatalogSegment::default();
+    };
+    CatalogSegment {
+        index_bundle: artifacts.bundle.clone().into(),
+        projections: artifacts
+            .projections
+            .iter()
+            .map(|(name, object)| ProjectionArtifact {
+                name: Some(name.clone()),
+                object: MessageField::some(object.clone()),
+                ..Default::default()
+            })
+            .collect(),
+        source_segment_uuid: artifacts.binding.segment_uuid.clone(),
+        ..Default::default()
+    }
 }
