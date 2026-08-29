@@ -1710,8 +1710,8 @@ class ControllerServiceImpl:
 
         # Cap the number of non-terminal tasks a single budget principal may hold.
         # A burst of eval submissions once materialized enough tasks to OOM the
-        # controller (#6411). A launcher that admits tasks gradually stays under
-        # the cap as earlier tasks finish.
+        # controller. A launcher that admits tasks gradually stays under the cap
+        # as earlier tasks finish.
         incoming_tasks = int(request.replicas)
         if incoming_tasks > 0:
             with self._db.read_snapshot() as _snap:

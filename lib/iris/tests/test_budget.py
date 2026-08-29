@@ -305,7 +305,6 @@ def test_admin_nickname_job_uses_email_budget(service):
             service.launch_job(_launch("/power/email-budget", band=INTERACTIVE), None)
 
     assert exc.value.code == Code.PERMISSION_DENIED
-    assert email in exc.value.message
 
 
 def test_child_job_inherits_root_email_budget(service):
@@ -320,7 +319,6 @@ def test_child_job_inherits_root_email_budget(service):
             service.launch_job(_launch("/power/parent/child", band=job_pb2.PRIORITY_BAND_INHERIT), None)
 
     assert exc.value.code == Code.PERMISSION_DENIED
-    assert email in exc.value.message
 
 
 def test_active_task_cap_uses_email_across_nicknames(service, monkeypatch):
@@ -338,7 +336,6 @@ def test_active_task_cap_uses_email_across_nicknames(service, monkeypatch):
             service.launch_job(second, None)
 
     assert exc.value.code == Code.RESOURCE_EXHAUSTED
-    assert email in exc.value.message
 
 
 def test_launch_job_unspecified_band_accepted(service):

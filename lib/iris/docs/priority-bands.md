@@ -105,8 +105,8 @@ service-account identity. The friendly owner in a job path remains independent:
 an admin may submit `/power/train` while Iris accounts the job to
 `russell.power@openathena.ai`. Child jobs inherit the root submitter, and a
 federated handoff carries the same principal to the receiving cluster. Trusted
-local submissions (`local_admin`) and rows created before submitter tracking use
-the job-path owner as a fallback budget key.
+local submissions (`local_admin`) and rows with an empty `submitting_user` use the
+job-path owner as a fallback budget key.
 
 If a higher-band submission is rejected:
 
