@@ -25,6 +25,15 @@ Some providers require an account or acceptance of dataset-specific terms.
 Reconstruction does not bypass those requirements. Review each provider's
 license and obtain access before running its download step.
 
+For Hugging Face sources, Marin records the dataset repository ID and pins a
+specific repository revision. The pin is intended to prevent changes on a
+provider's moving branch from changing the reconstructed files. This guarantee
+depends on Hugging Face continuing to serve that revision. Sources fetched
+from the live web, APIs, or other mutable upstreams do not always provide an
+equivalent immutable revision. For those sources, a Marin commit pins the
+retrieval and transformation code, but a later run may retrieve different
+content.
+
 ## Trace a source to its provider
 
 Every catalog entry is a `DatakitSource`. Its `normalize_steps` field contains
