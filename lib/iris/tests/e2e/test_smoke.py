@@ -511,8 +511,13 @@ def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
+    assert_visible(smoke_page, "text=Failure retries")
+    assert_visible(smoke_page, "text=job max 0")
+    assert_visible(smoke_page, "text=max 0/task")
     smoke_screenshot(
-        "job-detail", "Job detail page for succeeded job with state badge, task table, and job-level log viewer"
+        "job-detail",
+        "Job detail page for succeeded job with explicit per-task retry and job-wide failure budgets, "
+        "state badge, task table, and job-level log viewer",
     )
 
 
