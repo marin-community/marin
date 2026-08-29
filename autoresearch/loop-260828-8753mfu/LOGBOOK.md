@@ -538,3 +538,22 @@ delegated); (b) H10 revisit at 0.75 ON THE NEW STACK — the deleted
 hoisted consts freed ~5 GB resident, which may clear the ncclCuMemAlloc
 OOM that blocked pipelined host offloading (cheap feasibility probe);
 (c) upstream JAX report for the inherited empty-group transpose-mask bug.
+
+## 2026-08-29 ~17:20Z: new-stack lever table (from xprof-h92)
+
+Cross-validation: wall 16,837 -> 16,565 ms/step (clean pairs) = -272 ms =
++0.38 MFU predicted vs +0.41 scored. Mechanism refinement: the deletion
+actually removed 564 of the 785 ms (two 1.85 GB sites survive: copy.746/
+copy.748, 48/step each, ~137 ms — T-H9-2b diagnosis delegated); the wall
+gain came via BETTER A2A HIDING (exposed 1,133 -> 820) paid partly by
++550 ms of GEMM SM-contention at matched kernel counts (nvjet 256x192
+1,440 -> 1,906 us/kernel under the now-overlapping a2a). Remat "drop" was
+renaming again (fusion pool flat at ~3,450 ms).
+
+New top levers: (1) exposed a2a 820-858 ms — but each hidden ms costs
+~0.6 ms GEMM slowdown at current dk CTA footprint; (2) exposed offload
+copies ~645 ms — the 10.87 GB device->pinned D2H staging bursts are the
+exposed half; H10's target, now ~+0.95 MFU potential, copy-engine-based
+so NO contention tax (probe mfl-h10n-a on the rack now); (3) NEW: cap the
+a2a dk SM footprint (CTA cap/priority) to reclaim the +550 ms contention
+without re-exposing the a2a; (4) T-H9-2b residual copies ~137 ms.
