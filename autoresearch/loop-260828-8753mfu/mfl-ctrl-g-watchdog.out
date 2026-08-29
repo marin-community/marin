@@ -16,3 +16,10 @@
 14:51:48 t=889s train=running step=30012
 14:53:03 t=964s train=running step=30017
 14:54:19 t=1039s train=running step=30021
+14:55:34 t=1114s train=running step=30027
+14:55:34 cancelling /mwittmann/mfl-ctrl-g-coord: scored through step 30027 (19 past first)
+Cancelled jobs:
+  /mwittmann/mfl-ctrl-g-coord/grug-train-mfl-ctrl-g
+Cancelled jobs:
+  /mwittmann/mfl-ctrl-g-coord
+WATCHDOG scored step=30027 first=30004
