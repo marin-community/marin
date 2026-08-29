@@ -587,3 +587,21 @@ inapplicable.
 GATE: pushing a branch/release to marin-community/xla is an
 external-repo write -> per standing instruction, needs user approval.
 Patch + review will be prepared so the build can start on a word.
+
+## 2026-08-29 ~21:30Z: ideation slate (agent, full text in transcript)
+
+Ranked candidates, deletion-weighted: C1 offload byte titration (offload
+only a layer subset; deletes copy bytes on the contention-free channel;
++0.35-0.45 expected; small code knob, default=all); C2 collective byte
+audit (fp32-AG-before-cast / loop-invariant AG hoists; free phase 1 from
+existing dumps); C3 optimizer-step anatomy (never decomposed; replicated
+Newton-Schulz would be a +0.3-class bitwise deletion); C4 verify the salt
+actually consumed copy.746/748 (needs a tail on a salted arm); C5
+targeted save-policy (slop90's mechanism decoupled from the budget knob;
+highest reschedule risk); C6 dispatch-chain Pallas fusion (~390ms of
+round trips); C7 short_conv fusion (~near-bar); C8 host-side/pure-gap
+audit rider; C9 symmetric-memory NCCL as a headroom enabler only.
+Sequencing: free diagnostics now (C2/C3 from disk, C4 tail on next arm),
+C1 as the first new arm after H11's identity control, C5 after the
+headroom split settles. All memory-budget candidates pre-declare the
+#8490 churn signature.

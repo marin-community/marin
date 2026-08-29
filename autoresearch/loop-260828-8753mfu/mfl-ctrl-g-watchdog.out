@@ -12,3 +12,7 @@
 14:48:02 t=669s train=running step=-1
 14:49:18 t=738s train=running step=30004
 14:49:18 first observed step=30004, step budget 1200s starts now
+14:50:33 t=814s train=running step=30008
+14:51:48 t=889s train=running step=30012
+14:53:03 t=964s train=running step=30017
+14:54:19 t=1039s train=running step=30021
