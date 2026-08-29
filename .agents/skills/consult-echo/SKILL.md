@@ -29,11 +29,14 @@ Discord is excluded by default because messages may be noisy or untrusted. Add
 `--domain discord` only when discussion history is relevant, and open the
 canonical URL when surrounding thread context matters.
 
-Fetch a result's full detail with its printed ID:
+Fetch a result's full detail with the value in the `SOURCE ID` column:
 
 ```bash
-uv run infra/echo/cli.py get <domain:id>
+uv run infra/echo/cli.py get <source-id>
 ```
+
+The `GRADE KEY` column is for `feedback`. `get` also accepts file grading keys
+with numeric suffixes, such as `file:20849`.
 
 Grade evaluated results with the exact query and printed keys:
 
