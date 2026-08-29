@@ -1,2 +1,3 @@
 rid	commit	version	moe_impl	data	master_params	schedule_steps	timeout	restore_from	extra	xla_flags
 mfl-ctrl-a	3e4cb6da4c	2026.08.29.1	ragged_all_to_all	mixture	device	4470000	3500	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none
+mfl-ctrl-a2	11f4578e23	2026.08.29.2	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none

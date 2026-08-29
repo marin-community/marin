@@ -179,3 +179,34 @@ parser if ever duplicated). Both BLOCKED the spec as written. Revised spec:
 
 H6 cleared for rack CONDITIONED on the binding pre-check from iteration-0
 control logs (which now carry remat/LHS evidence for free).
+
+## 2026-08-29 ~07:00Z: mfl-ctrl-a crash diagnosis (iteration 0, attempt 1)
+
+The arm burned its whole 3500s iris timeout with all 16 tasks
+SchedulingGated: Kueue never admitted the gang. Occupant: muchanem's
+mokcamp-08290314 16-node gang (the whole experiment rack, running since
+03:14Z); zack's exp177 r87/r90 gangs (5+8 nodes) are also gated ahead of us.
+Corrections that came out of this:
+
+- `iris job list` is blind to the real occupancy: the HERO IS LIVE (177 pods,
+  38h, its own ~11 racks of the 185-node cluster) and none of it shows in
+  job list. Occupancy checks now go through the 08a kubeconfig
+  (kueue workloads + pods). The pause-if-hero-returns rule is moot — the
+  hero on its own racks is the normal condition (mfu24 ran the same way);
+  the campaign contends only for the single leftover rack.
+- iris --timeout on the coordinator counts the child's queue wait (OPS.md
+  says size for wait+run; the watchdog's queue/compile split already
+  handles the accounting). Occupancy after admission is intrinsically
+  bounded by the absolute NUM_STEPS stop (~30 steps past restore), so a
+  long timeout is safe: ARM_TIMEOUT now defaults 28800, QUEUE_CEILING
+  25200, and the <1h-runtime rule is enforced by the watchdog from
+  admission.
+- The watchdog behaved correctly (compile clock never started, no false
+  classification) but "train=running step=-2 for 58 min" should have been
+  readable as "gated" — iris reports a gated gang as running. QUEUE_CEILING
+  is the working bound; task-level gating detection noted as a possible
+  refinement, not required now.
+
+Resubmitted as mfl-ctrl-a2 (VERSION .2, fresh RID per protocol) at 07:0xZ;
+expect hours of queue. Iteration count: attempt 1 was a harness crash, not
+an experiment — iteration 0 is still in progress.
