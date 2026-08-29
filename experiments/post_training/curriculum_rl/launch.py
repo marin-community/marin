@@ -53,6 +53,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.provenance import username_segment
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.curriculum_rl.pool import (
@@ -348,12 +349,16 @@ def build_arm(
             wandb_entity="marin-community",
         ),
     )
-    evaluation_base_name = f"evals/{EXPERIMENT_NAME}-{sampler.value}{suffix}/{preset.evals}"
+    # The eval artifact is keyed on the model name; include the owner so two
+    # users at the same fixed version evaluate their own checkpoints rather
+    # than sharing one cached result (the RL step is already user-owned).
+    evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{sampler.value}{suffix}"
+    evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation = eval_step(
         SkyRLEvaluationModel(
             step=rl,
             model=ModelConfig(
-                name=f"{EXPERIMENT_NAME}-{sampler.value}{suffix}",
+                name=evaluation_model_name,
                 location=SKYRL_POLICY_LOCATION,
                 tokenizer=QWEN3_MODEL,
                 apply_chat_template=True,
