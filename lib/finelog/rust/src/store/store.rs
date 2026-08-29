@@ -74,6 +74,12 @@ fn writer_epoch() -> Result<u64, StatsError> {
     Ok(nanos ^ u64::from(std::process::id()))
 }
 
+/// A decorator applied to the object store the composition root builds, so a
+/// caller can observe or interfere with every object operation the store makes.
+/// Production composes no decorator.
+pub type ObjectStoreInterposer =
+    Arc<dyn Fn(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> + Send + Sync>;
+
 /// Result of appending one schema-compatible federated batch.
 pub struct ForwardedWrite {
     pub rows_written: i64,
@@ -265,6 +271,46 @@ impl Store {
         mode: ServeMode,
         telemetry_root_write_mode: TelemetryRootWriteMode,
     ) -> Result<Store, StatsError> {
+        Self::open(
+            data_dir,
+            remote_log_dir,
+            index_cache_mb,
+            mode,
+            telemetry_root_write_mode,
+            None,
+        )
+    }
+
+    /// Build a store whose object operations pass through `interpose` first.
+    ///
+    /// The failure-scenario tests use this to fail, delay, or count individual
+    /// object operations against an otherwise complete composition.
+    #[cfg(test)]
+    pub(crate) fn new_with_interposed_objects(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+        mode: ServeMode,
+        interpose: ObjectStoreInterposer,
+    ) -> Result<Store, StatsError> {
+        Self::open(
+            data_dir,
+            remote_log_dir,
+            index_cache_mb,
+            mode,
+            TelemetryRootWriteMode::SemanticOnly,
+            Some(interpose),
+        )
+    }
+
+    fn open(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+        mode: ServeMode,
+        telemetry_root_write_mode: TelemetryRootWriteMode,
+        interpose: Option<ObjectStoreInterposer>,
+    ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
@@ -292,6 +338,10 @@ impl Store {
                 root.clone(),
             )?) as Arc<dyn ObjectStore>),
             _ => None,
+        };
+        let object_store = match (object_store, &interpose) {
+            (Some(store), Some(interpose)) => Some(interpose(store)),
+            (store, _) => store,
         };
         let fence = WriterFence::new(writer_epoch()?);
         let object_state_store = object_store.clone().map(|storage| {
@@ -370,6 +420,13 @@ impl Store {
                 .aggregate_namespace_stats(TELEMETRY_NAMESPACE)?
                 .max_seq),
         }
+    }
+
+    /// The table control surface, for tests that lease maintenance work
+    /// directly instead of going through a maintenance cycle.
+    #[cfg(test)]
+    pub(crate) fn tables(&self) -> &Arc<TableManager> {
+        &self.tables
     }
 
     /// Start the maintenance scheduler. Called once after `new`, before serving.

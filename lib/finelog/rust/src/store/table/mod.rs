@@ -405,20 +405,20 @@ mod tests {
     use super::*;
 
     use arrow::array::{Int64Array, StringArray};
-    use async_trait::async_trait;
     use buffa::MessageField;
     use sha2::{Digest, Sha256};
-    use tokio::sync::oneshot;
 
     use crate::proto::finelog::stats::{
-        ColumnType, NamespaceCatalog, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        ColumnType, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
     use crate::store::catalog::object_state_store::ObjectTableStateStore;
-    use crate::store::catalog::state_store::TableHead;
     use crate::store::object_store::{
         build_remote_object_store, CachedObjectStore, LegacyObjectStore,
     };
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, AlignedBatch, Column};
+    use crate::test_support::{
+        FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault, ObjectOp, ObjectPattern,
+    };
 
     const TABLE: &str = "iris.worker";
 
@@ -455,70 +455,6 @@ mod tests {
         }
     }
 
-    /// A state store whose first commit parks until it is released.
-    struct StallingStateStore {
-        inner: ObjectTableStateStore,
-        entered: Mutex<Option<oneshot::Sender<()>>>,
-        release: tokio::sync::Semaphore,
-    }
-
-    #[async_trait]
-    impl TableStateStore for StallingStateStore {
-        async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
-            self.inner.list().await
-        }
-
-        async fn load(&self, table: &str) -> Result<Option<StoredTableState>, StatsError> {
-            self.inner.load(table).await
-        }
-
-        async fn claim_writer(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            selected: &StoredTableState,
-        ) -> Result<StoredTableState, StatsError> {
-            self.inner.claim_writer(table, fence, selected).await
-        }
-
-        async fn commit(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            expected: Option<&StoredTableState>,
-            next: NamespaceCatalog,
-        ) -> Result<StoredTableState, StatsError> {
-            if let Some(entered) = self.entered.lock().unwrap().take() {
-                let _ = entered.send(());
-            }
-            let permit = self.release.acquire().await.unwrap();
-            permit.forget();
-            self.inner.commit(table, fence, expected, next).await
-        }
-
-        async fn tombstone(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            expected: &StoredTableState,
-        ) -> Result<StoredTableState, StatsError> {
-            self.inner.tombstone(table, fence, expected).await
-        }
-
-        async fn gc_obsolete_states(
-            &self,
-            table: &str,
-            now_ms: i64,
-            state_retention_ms: u64,
-            orphan_grace_ms: u64,
-            fence: WriterFence,
-        ) -> Result<usize, StatsError> {
-            self.inner
-                .gc_obsolete_states(table, now_ms, state_retention_ms, orphan_grace_ms, fence)
-                .await
-        }
-    }
-
     fn register_versioned_spec(catalog: &Catalog) {
         let spec = ProtoTableSpec {
             version: Some(1),
@@ -550,12 +486,17 @@ mod tests {
         let object_store =
             Arc::new(CachedObjectStore::new(Arc::new(provider.clone()), data_dir.clone()).unwrap())
                 as Arc<dyn ObjectStore>;
-        let (entered, publication_started) = oneshot::channel();
-        let state_store = Arc::new(StallingStateStore {
-            inner: ObjectTableStateStore::new(Arc::clone(&object_store)),
-            entered: Mutex::new(Some(entered)),
-            release: tokio::sync::Semaphore::new(0),
-        });
+        // The controller parks inside the HEAD swap its publication performs.
+        let publication = FaultGate::new();
+        let faults = FaultInjectingObjectStore::new(Arc::clone(&object_store));
+        faults.arm(ObjectFault::new(
+            ObjectOp::CompareAndSwap,
+            ObjectPattern::EndsWith("HEAD.json".to_string()),
+            FaultAction::Park(Arc::clone(&publication)),
+        ));
+        let state_store = Arc::new(ObjectTableStateStore::new(
+            Arc::clone(&faults) as Arc<dyn ObjectStore>
+        ));
         let catalog = Arc::new(Catalog::open(Some(&data_dir)).unwrap());
         register_versioned_spec(&catalog);
         let manager = TableManager::new(
@@ -576,7 +517,7 @@ mod tests {
             let manager = Arc::clone(&manager);
             tokio::spawn(async move { manager.publish(TABLE).await.map(|_| ()) })
         };
-        publication_started.await.unwrap();
+        publication.entered().await;
 
         // The controller is parked mid-commit. Ingest is a different path, so it
         // completes rather than queueing behind the publication.
@@ -595,7 +536,7 @@ mod tests {
         assert_eq!(first, 4);
         assert_eq!(second, 6);
 
-        state_store.release.add_permits(1);
+        publication.release();
         publishing.await.unwrap().unwrap();
         assert!(manager.snapshot(TABLE).is_some());
     }

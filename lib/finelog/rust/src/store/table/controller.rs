@@ -895,96 +895,28 @@ fn full_hex(bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
 
-    use async_trait::async_trait;
     use buffa::MessageField;
 
     use crate::proto::finelog::stats::{
-        ColumnType, NamespaceCatalog, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        ColumnType, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
     use crate::store::catalog::object_state_store::ObjectTableStateStore;
-    use crate::store::catalog::state_store::TableHead;
     use crate::store::object_store::build_remote_object_store;
     use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
     use crate::store::table_spec::canonical_json_bytes;
+    use crate::test_support::{
+        lost_head_response, FaultAction, FaultInjectingObjectStore, ObjectFault, ObjectOp,
+        ObjectPattern,
+    };
 
     const TABLE: &str = "iris.worker";
 
-    /// How a commit is lost between this writer and the object store.
-    #[derive(Clone, Copy)]
-    enum LostCommit {
-        /// HEAD swapped, but the caller only sees an ambiguous failure.
-        AppliedButUnreported,
-        /// HEAD never swapped and the store said so definitively.
-        NeverApplied,
-    }
-
-    /// A state store whose commits always fail, either after or without
-    /// applying to the object store underneath.
-    struct LosingStateStore {
-        inner: ObjectTableStateStore,
-        loss: LostCommit,
-    }
-
-    #[async_trait]
-    impl TableStateStore for LosingStateStore {
-        async fn list(&self) -> Result<Vec<TableHead>, StatsError> {
-            self.inner.list().await
-        }
-
-        async fn load(&self, table: &str) -> Result<Option<StoredTableState>, StatsError> {
-            self.inner.load(table).await
-        }
-
-        async fn claim_writer(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            selected: &StoredTableState,
-        ) -> Result<StoredTableState, StatsError> {
-            self.inner.claim_writer(table, fence, selected).await
-        }
-
-        async fn commit(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            expected: Option<&StoredTableState>,
-            next: NamespaceCatalog,
-        ) -> Result<StoredTableState, StatsError> {
-            match self.loss {
-                LostCommit::AppliedButUnreported => {
-                    self.inner.commit(table, fence, expected, next).await?;
-                    Err(StatsError::AmbiguousCommit(
-                        "HEAD swap response was lost".to_string(),
-                    ))
-                }
-                LostCommit::NeverApplied => Err(StatsError::SchemaConflict(
-                    "object pointer changed concurrently".to_string(),
-                )),
-            }
-        }
-
-        async fn tombstone(
-            &self,
-            table: &str,
-            fence: WriterFence,
-            expected: &StoredTableState,
-        ) -> Result<StoredTableState, StatsError> {
-            self.inner.tombstone(table, fence, expected).await
-        }
-
-        async fn gc_obsolete_states(
-            &self,
-            table: &str,
-            now_ms: i64,
-            state_retention_ms: u64,
-            orphan_grace_ms: u64,
-            fence: WriterFence,
-        ) -> Result<usize, StatsError> {
-            self.inner
-                .gc_obsolete_states(table, now_ms, state_retention_ms, orphan_grace_ms, fence)
-                .await
-        }
+    /// The HEAD pointer every table-state commit swaps.
+    fn head_swap() -> (ObjectOp, ObjectPattern) {
+        (
+            ObjectOp::CompareAndSwap,
+            ObjectPattern::EndsWith("HEAD.json".to_string()),
+        )
     }
 
     fn registered_catalog() -> Arc<Catalog> {
@@ -1031,13 +963,16 @@ mod tests {
         )
     }
 
-    /// A controller whose commits are always lost, plus direct access to the
-    /// state store underneath it.
-    fn losing_controller(
+    /// A controller whose state store writes through a fault seam, plus the
+    /// seam and a clean view of the same objects for direct inspection.
+    fn faulted_controller(
         tag: &str,
         fence: u64,
-        loss: LostCommit,
-    ) -> (Arc<TableController>, ObjectTableStateStore) {
+    ) -> (
+        Arc<TableController>,
+        ObjectTableStateStore,
+        Arc<FaultInjectingObjectStore>,
+    ) {
         let remote_dir = crate::test_support::unique_dir(tag);
         let remote = Arc::new(
             build_remote_object_store(remote_dir.to_str().unwrap())
@@ -1045,25 +980,33 @@ mod tests {
                 .unwrap(),
         );
         let states = ObjectTableStateStore::new(remote.clone());
+        let faults = FaultInjectingObjectStore::new(remote.clone());
         let controller = object_controller(
             remote_dir,
             registered_catalog(),
             remote,
-            Arc::new(LosingStateStore {
-                inner: states.clone(),
-                loss,
-            }),
+            Arc::new(ObjectTableStateStore::new(
+                Arc::clone(&faults) as Arc<dyn ObjectStore>
+            )),
             fence,
         );
-        (controller, states)
+        (controller, states, faults)
     }
 
     #[tokio::test]
     async fn a_commit_that_lost_its_response_is_durable_when_head_names_it() {
-        let (controller, _states) = losing_controller(
-            "controller_lost_response",
-            11,
-            LostCommit::AppliedButUnreported,
+        let (controller, _states, faults) = faulted_controller("controller_lost_response", 11);
+        let (op, pattern) = head_swap();
+        faults.arm(
+            ObjectFault::new(
+                op,
+                pattern,
+                FaultAction::LoseResponse {
+                    error: lost_head_response(),
+                    gate: None,
+                },
+            )
+            .forever(),
         );
 
         let published = controller.publish_state().await.unwrap();
@@ -1076,8 +1019,18 @@ mod tests {
 
     #[tokio::test]
     async fn a_commit_the_store_never_applied_stays_owed_at_the_same_revision() {
-        let (controller, _states) =
-            losing_controller("controller_unapplied", 11, LostCommit::NeverApplied);
+        let (controller, _states, faults) = faulted_controller("controller_unapplied", 11);
+        let (op, pattern) = head_swap();
+        faults.arm(
+            ObjectFault::new(
+                op,
+                pattern,
+                FaultAction::Fail(StatsError::SchemaConflict(
+                    "object pointer changed concurrently".to_string(),
+                )),
+            )
+            .forever(),
+        );
 
         let error = controller.publish_state().await.unwrap_err();
 
@@ -1099,8 +1052,7 @@ mod tests {
     /// state HEAD selects.
     #[tokio::test]
     async fn claiming_an_existing_head_retains_the_selected_state() {
-        let (controller, states) =
-            losing_controller("controller_claim", 11, LostCommit::NeverApplied);
+        let (controller, states, _faults) = faulted_controller("controller_claim", 11);
         let objects = controller.objects.as_ref().unwrap();
         let state = namespace_catalog(&controller.catalog, TABLE, &objects.table_dir).unwrap();
         states

@@ -8,6 +8,8 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
+#[cfg(test)]
+mod failure_scenarios;
 pub mod ipc;
 pub mod log_read;
 pub mod namespace;
