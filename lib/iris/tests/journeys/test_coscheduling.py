@@ -39,7 +39,7 @@ def test_coscheduled_job_when_one_task_retries_restarts_the_whole_gang(journey):
     assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_coscheduled_job_when_workers_succeed_before_head_preemption_restarts_the_whole_gang(journey):
+def test_coscheduled_job_when_siblings_succeed_before_task_preemption_restarts_the_whole_gang(journey):
     job = journey.submit(
         "coscheduled-preempted-head",
         tasks=4,
