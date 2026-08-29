@@ -64,9 +64,8 @@ def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
     the latency-hiding scheduler fit. The other transports are unmeasured with the offload, which
     is the only reason they do not take it.
 
-    The hero recipes apply this. The small-scale ablation arms do not, and keep the scheduling
-    posture they were measured under: the scheduler reads the remat mode, so a model without the
-    offload schedules exactly as it did before the mode existed.
+    The scheduler reads the remat mode, so a launcher that skips this keeps the scheduling
+    posture it was measured under, exactly as it did before the mode existed.
     """
     if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
         return model
