@@ -278,3 +278,36 @@ starvation 20ms. Ranked levers (ms/step, % of 17168):
 Optimistic ceiling from this trace: ~28.5% MFU if levers 1-5 fully
 reclaimed. Near-term stack: H6 (remat) + H10 (offload prefetch), both
 compute-stream-freeing without touching transport.
+
+## 2026-08-29 ~09:10Z: H9/H10 mechanism diagnosis + treatment specs (agent investigation)
+
+H9 copies IDENTIFIED by exact size match: the ragged-transport latent-dim
+working buffers, not the layer carry — [TK=524288, 3072] bf16 = 3.221 GB
+(sorted_x/returned) and [C=301466, 3072] bf16 = 1.852 GB (per-chunk
+dispatch), 48 launches = layers, 9 ops = 3 copy sites x 3 loop bodies.
+Root cause: ragged-all-to-all is in-place (result aliases the output-init
+operand); the loop-invariant-hoisted zeros inits and the returned
+double-use force CopyInsertion to copy every iteration.
+
+- T-H9-1 (arm next): ARM_XLA_FLAGS --xla_gpu_async_copy_min_bytes=1000000000
+  -> GpuCopyAsyncWrapper turns the nine >=1GB D2D copies into
+  copy-start/done on their own stream under the ASYNC-COMPUTE resource
+  (limit 2), NOT the pinned collective overlap limit (verified separate
+  branches in gpu_latency_hiding_scheduler.cc). Predicted +0.4-0.9 MFU.
+  Engagement: profile tail — copy.7xx leaves the compute stream,
+  compute-stream MemcpyD2D busy -> ~0. Watch peak_gib and the
+  remat-count line (longer live ranges can eat H6's budget).
+- T-H10-1 (after H9-T1, separate arm): --xla_gpu_enable_pipelined_host_offloading=true
+  -> CollectivePipeliner rotates the carry writeback into iteration i+1
+  and the reload one iteration ahead (verified pass wiring at
+  gpu_compiler.cc:1213-1290; predicates match the jax scan-offload
+  pattern). Predicted +0.5-0.8 MFU. CORRECTNESS-SENSITIVE: changes reload
+  timing in the same machinery as the #8317 offload race (overlap limit
+  stays force-pinned at 1 — arms cannot override it). Hard gate: scored
+  loss series within the C-C null band (max ~1e-4); any excursion = the
+  race, not noise. Engagement: exposed offload-copy time -> ~0 in a
+  profile tail, peak +~1.6 GB.
+- DO NOT STACK the two in one arm (shared async-compute limit 2; joint
+  attribution lost). If both keep, back-ablate per the re-ablation rule;
+  --xla_gpu_experimental_parallel_async_compute_limit=4 is a stacking
+  refinement only.
