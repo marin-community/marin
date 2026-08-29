@@ -212,34 +212,30 @@ scale_groups:
 # 42752 is 4 h100-8x nodes (32 GPUs) at full node resources.
 user_budgets:
   - user_ids:
-      - benjaminfeuer
       - betsy
-      - dlwh
       - eczech
-      - held
       - larry
       - marin
-      - muchanem
-      - mwittmann
-      - power
-      - rav
-      - romain
       - wmoss
       - zack
     budget_limit: 42752
     max_band: PRIORITY_BAND_INTERACTIVE
-  # 171008 is 16 h100-8x nodes: half of this cluster's 32-node fleet.
-  - user_ids: [benjaminfeuer]
-    budget_limit: 171008
-    max_band: PRIORITY_BAND_INTERACTIVE
   - user_ids:
       - ben.feuer@openathena.ai
+      - benjaminfeuer
       - david.hall@openathena.ai
+      - dlwh
       - mark.muchane@openathena.ai
+      - muchanem
       - matt.wittmann@openathena.ai
+      - mwittmann
       - rafal.wojdyla@openathena.ai
+      - rav
       - romain.yon@openathena.ai
+      - romain
       - russell.power@openathena.ai
+      - power
       - will.held@openathena.ai
+      - held
     budget_limit: 0
     max_band: PRIORITY_BAND_INTERACTIVE

@@ -164,12 +164,20 @@ scale_groups:
 user_budgets:
   - user_ids:
       - ben.feuer@openathena.ai
+      - benjaminfeuer
       - david.hall@openathena.ai
+      - dlwh
       - mark.muchane@openathena.ai
+      - muchanem
       - matt.wittmann@openathena.ai
+      - mwittmann
       - rafal.wojdyla@openathena.ai
+      - rav
       - romain.yon@openathena.ai
+      - romain
       - russell.power@openathena.ai
+      - power
       - will.held@openathena.ai
+      - held
     budget_limit: 0
     max_band: PRIORITY_BAND_INTERACTIVE

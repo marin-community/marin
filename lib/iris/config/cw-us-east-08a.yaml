@@ -237,30 +237,30 @@ scale_groups:
 # 128000 is about one NVL72 rack: 18 gb200-4x nodes cost ~102,000.
 user_budgets:
   - user_ids:
-      - benjaminfeuer
       - betsy
-      - dlwh
       - eczech
-      - held
       - larry
       - marin
-      - muchanem
-      - mwittmann
-      - power
-      - rav
-      - romain
       - wmoss
       - zack
     budget_limit: 128000
     max_band: PRIORITY_BAND_INTERACTIVE
   - user_ids:
       - ben.feuer@openathena.ai
+      - benjaminfeuer
       - david.hall@openathena.ai
+      - dlwh
       - mark.muchane@openathena.ai
+      - muchanem
       - matt.wittmann@openathena.ai
+      - mwittmann
       - rafal.wojdyla@openathena.ai
+      - rav
       - romain.yon@openathena.ai
+      - romain
       - russell.power@openathena.ai
+      - power
       - will.held@openathena.ai
+      - held
     budget_limit: 0
     max_band: PRIORITY_BAND_INTERACTIVE
