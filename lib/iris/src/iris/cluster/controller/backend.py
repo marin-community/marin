@@ -204,7 +204,7 @@ class ScheduleResult:
     diagnostics: dict[str, str] = field(default_factory=dict)
     """Per-job scheduling diagnostics surfaced on the dashboard."""
     scheduling_context: SchedulingContext | None = None
-    """Post-placement scheduling context cached for dashboard diagnostics."""
+    """Post-placement scheduling context; ``None`` when no context was built."""
 
 
 @dataclass(frozen=True)

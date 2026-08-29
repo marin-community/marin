@@ -92,10 +92,6 @@ class ScriptedTaskBackend:
         """Queue one observation for the Task's current desired Attempt."""
         self._queued[task_id].append(observation)
 
-    def owns_task(self, task_id: str) -> bool:
-        """Whether the controller currently asks this backend to run ``task_id``."""
-        return any(desired_task_id == task_id for desired_task_id, _ in self._desired)
-
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
 

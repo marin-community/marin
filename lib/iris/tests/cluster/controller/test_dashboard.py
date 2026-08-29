@@ -270,7 +270,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
-    controller_mock.last_scheduling_context = None
     _authoring_backend = _worker_backend(autoscaler)
     controller_mock.backend = _authoring_backend
     controller_mock.worker_health = state._health
