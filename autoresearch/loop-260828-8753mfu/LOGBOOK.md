@@ -458,3 +458,25 @@ negative or blocked — the slop-85/overlap-1/on-stream-copy schedule is a
 defended local optimum. Campaign proceeds to the structural fork
 (marin_ep transport port scoping in flight; XLA-patch lever as the
 alternative).
+
+## 2026-08-29 ~13:15Z: structural fork decided — marin_ep DECLINED, T-H9-2 next
+
+marin_ep scoping (agent, full evidence in transcript): cannot run at EP64
+on the pinned c9526e wheel (kMaxPeers=32, deterministic step-0
+CUDA_ERROR_ILLEGAL_ADDRESS, openxla/xla#47283); the fix is a one-constant
+fork rebuild (~3.5h) plus an 11-file merge with one semantic conflict
+(train.py runtime defaults rewritten on both sides); and the arm is a
+POSTURE PACKAGE — marin_ep's validated posture (LHS + overlap 4, no carry
+offload) conflicts with the #8753 keeps, so it answers "mok posture vs
+campaign posture". Projected numbers: plain-8684 at 30k was 22.31, mep105's
+gap over its own era control was +0.53 -> ~22.8 vs today's 23.3 stack; and
+its headline drops advantage (0.19% vs 3.06%) is void against today's
+ragged transport (3e-5 at the restored router). DECLINED: negative
+expected value for this campaign. Revisit only if the transport posture
+itself becomes the target (own project).
+
+Iteration 4 = T-H9-2: delete the nine init copies at the source instead of
+moving them (H9 proved moving them re-loses the time to contention; true
+deletion removes ~785 ms of copy work minus the ~300 ms contention
+giveback the schedule may re-take). Implementation being drafted; dual
+review before rack per protocol.
