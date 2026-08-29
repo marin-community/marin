@@ -815,3 +815,24 @@ k=0 is HLO-hash-identical and stays. Both review GOs missed this — the
 lesson for the protocol: bitwise CPU evidence does not transfer to GPU
 aliasing semantics; future placement-touching treatments need a
 GPU-executable smoke (even 2 steps) before a scored arm.
+
+## 2026-08-30 ~11:10Z: C3' NaN root-cause — narrowed to two GB200-only suspects
+
+Local work (GPU A/B on stock XLA + real muonh: k=0 vs k=1 BITWISE
+lockstep 8-12 steps under deterministic ops; production save->restore
+roundtrip bitwise-exact): H-B (restore) DEAD; H-A-as-stated (JAX donation
+semantics) contradicted at probe scale; CPU "bitwise proofs" were VACUOUS
+(CPU drops pinned_host — the xla-cpu-hides pattern again). Trajectory
+analysis: garbage momentum would NaN at 30001, zeros can never NaN;
+observed +7.3e-4 -> compounding -> discontinuous NaN at 30008 = 
+progressive per-step clobbering. Survivors: S1 donation-enabled buffer
+reuse under the async offload schedule (the #8317 territory); S2 a stray
+write from the patched ragged-a2a transport (T-H9-2 zero-copy inits + dk
+wheel, symmetric-memory windows) into the address range the resident
+leaf newly occupies — at k=0 it would land in unoccupied pool space,
+invisible to every loss gate to date. S2 GATES THE KEEPS' HERO
+PROMOTION: before recommending T-H9-2/H11 for the hero, discriminate.
+Plan: disc-3 first (k=1 on fixed_pooled_wave_all_to_all — whole ragged
+path inert; finite sane loss => S2 implicated, NaN => S1/generic), then
+the canary checksum arm if needed. Note today's hero runs NEITHER keep,
+so no live risk exists now.
