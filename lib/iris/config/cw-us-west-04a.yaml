@@ -163,6 +163,7 @@ scale_groups:
 
 user_budgets:
   - user_ids:
+      - ben.feuer@openathena.ai
       - david.hall@openathena.ai
       - mark.muchane@openathena.ai
       - matt.wittmann@openathena.ai

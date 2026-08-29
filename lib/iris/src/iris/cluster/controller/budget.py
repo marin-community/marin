@@ -15,7 +15,7 @@ from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.types import UserBudgetDefaults
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, UserBudgetDefaults
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, PRIORITY_BAND_VALUES
 
@@ -28,6 +28,18 @@ T = TypeVar("T")
 class UserTask(Generic[T]):
     user_id: str
     task: T
+
+
+def budget_user_id(job_id: JobName, submitting_user: str) -> str:
+    """Return the principal used for budget accounting.
+
+    Authenticated submissions use the verified email or service-account identity
+    stored on the job. Trusted local submissions and pre-migration rows have no
+    distinct principal, so their friendly job owner remains the budget key.
+    """
+    if submitting_user and submitting_user != LOCAL_ADMIN_SUBMITTER:
+        return submitting_user
+    return job_id.user
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:
@@ -47,14 +59,13 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
     Sums ``resource_value * task_count`` per user over the active, non-BATCH
     task rows returned by :func:`reads.user_spend_rows`.
 
-    Returns ``{user_id: total_resource_value}`` for users with active tasks.
+    Returns ``{budget_user_id: total_resource_value}`` for principals with active tasks.
     """
     rows = reads.user_spend_rows(tx)
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
-        # job_id is decoded by JobNameType to JobName
-        user_id = row.job_id.user
+        user_id = budget_user_id(row.job_id, str(row.submitting_user))
         cpu = row.res_cpu_millicores
         mem = row.res_memory_bytes
         counts = device_counts_from_json(row.res_device_json)

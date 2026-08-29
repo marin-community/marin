@@ -233,6 +233,7 @@ user_budgets:
     budget_limit: 342016
     max_band: PRIORITY_BAND_INTERACTIVE
   - user_ids:
+      - ben.feuer@openathena.ai
       - david.hall@openathena.ai
       - mark.muchane@openathena.ai
       - matt.wittmann@openathena.ai

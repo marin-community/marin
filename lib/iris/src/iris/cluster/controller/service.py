@@ -50,6 +50,7 @@ from iris.cluster.controller.backend import (
     dashboard_backend_descriptor,
 )
 from iris.cluster.controller.budget import (
+    budget_user_id,
     compute_effective_band,
     compute_user_spend,
 )
@@ -73,7 +74,6 @@ from iris.cluster.controller.schema import (
     federation_sync_state_table,
     job_config_table,
     jobs_table,
-    local_tasks,
     meta_table,
     task_attempts_table,
     tasks_table,
@@ -1599,14 +1599,21 @@ class ControllerServiceImpl:
         # the verified identity (or, for a received handoff, the parent's signed
         # claim); a child inherits its root's value at insert time.
         submitting_user = submitting_user_for_root(identity, request)
+        if job_id.parent is not None:
+            with self._db.read_snapshot() as _snap:
+                root_submitting_user = reads.get_job_submitting_user(_snap, job_id.root_job)
+            if root_submitting_user is not None:
+                submitting_user = root_submitting_user
+        budget_user = budget_user_id(job_id, submitting_user)
 
         # Priority band validation.
         #
         # - SYSTEM and PRODUCTION additionally require MANAGE_BUDGETS when auth
         #   is on; admins pass here and skip the max_band cap below.
-        # - The max_band cap fires regardless of auth mode, keyed on the
-        #   claimed job_id.user. In anonymous mode this doesn't guarantee the
-        #   user is who they claim to be, but it ensures the cluster's
+        # - The max_band cap fires regardless of auth mode, keyed on the verified
+        #   submitter for authenticated jobs and the job owner for trusted local
+        #   or legacy jobs. In anonymous mode this doesn't guarantee the owner
+        #   is who they claim to be, but it ensures the cluster's
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   SYSTEM or PRODUCTION just by skipping auth.
@@ -1646,18 +1653,16 @@ class ControllerServiceImpl:
                 authorize(AuthzAction.MANAGE_BUDGETS)
             else:
                 with self._db.read_snapshot() as _snap:
-                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                    user_budget = reads.get_user_budget(_snap, budget_user)
                 max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
                 if priority_band_rank(band) < priority_band_rank(max_band):
                     raise ConnectError(
                         Code.PERMISSION_DENIED,
-                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"Budget identity {budget_user} cannot submit {priority_band_name(band)} jobs "
                         f"(max band: {priority_band_name(max_band)}). "
                         f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
                         f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                        f"if you believe your username ({job_id.user}) should have a higher band — "
-                        f"either to be added to the researcher list or to confirm your username is "
-                        f"registered correctly.",
+                        f"to request a higher band for {budget_user}.",
                     )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
@@ -1703,19 +1708,18 @@ class ControllerServiceImpl:
                 "accelerator tasks.",
             )
 
-        # Cap the number of non-terminal tasks a single user may hold at once.
+        # Cap the number of non-terminal tasks a single budget principal may hold.
         # A burst of eval submissions once materialized enough tasks to OOM the
-        # controller (#6411); reject up front any submission that would push the
-        # user past the cap. Keyed on job_id.user, so a launcher that admits
-        # tasks gradually stays under the cap as earlier tasks finish.
+        # controller (#6411). A launcher that admits tasks gradually stays under
+        # the cap as earlier tasks finish.
         incoming_tasks = int(request.replicas)
         if incoming_tasks > 0:
             with self._db.read_snapshot() as _snap:
-                active_tasks = reads.count_active_tasks_for_user(_snap, job_id.user)
+                active_tasks = reads.count_active_tasks_for_budget_user(_snap, budget_user)
             if active_tasks + incoming_tasks > MAX_ACTIVE_TASKS_PER_USER:
                 raise ConnectError(
                     Code.RESOURCE_EXHAUSTED,
-                    f"User {job_id.user} has {active_tasks} active task(s); submitting "
+                    f"Budget identity {budget_user} has {active_tasks} active task(s); submitting "
                     f"{incoming_tasks} more would exceed the per-user cap of "
                     f"{MAX_ACTIVE_TASKS_PER_USER}. Wait for running tasks to finish, or "
                     f"structure the work as a launcher job that admits tasks gradually.",
@@ -3249,23 +3253,23 @@ class ControllerServiceImpl:
             budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
-            # Pending tasks: the scheduler's pending-task projection, reused here for
-            # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
-            pending_raw = snap.execute(
-                select(*reads.PENDING_TASK_COLS).where(local_tasks.c.state == job_pb2.TASK_STATE_PENDING)
-            ).all()
-            pending_rows = pending_raw
+            # Reuse the scheduler's filtered pending-task projection so dashboard
+            # aggregation and scheduling apply the same admission gates.
+            pending_rows = reads.pending_tasks_with_jobs(snap)
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
-            # Running tasks: only task_id, priority_band, worker, and backend_id — no
-            # job_config join is needed for the rolled-up counts below.
+            # The jobs join supplies the budget principal; no job_config fields are
+            # needed for running tasks because assignment stamps the effective band.
             running_raw = snap.execute(
                 select(
                     tasks_table.c.task_id,
+                    jobs_table.c.submitting_user,
                     tasks_table.c.priority_band,
                     tasks_table.c.current_worker_id.label("worker_id"),
                     tasks_table.c.backend_id,
-                ).where(
+                )
+                .select_from(tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id))
+                .where(
                     tasks_table.c.state == job_pb2.TASK_STATE_RUNNING,
                     tasks_table.c.current_worker_id.is_not(None),
                 )
@@ -3277,9 +3281,7 @@ class ControllerServiceImpl:
         pending_counts: dict[tuple[int, str, str, str], int] = {}
         total_pending = 0
         for row in pending_rows:
-            if not task_row_can_be_scheduled(row):
-                continue
-            user_id = row.task_id.user
+            user_id = budget_user_id(row.job_id, row.submitting_user)
             eff_band = compute_effective_band(
                 pending_requested_bands.get(row.job_id, row.priority_band),
                 user_id,
@@ -3300,7 +3302,7 @@ class ControllerServiceImpl:
         running_counts: dict[tuple[int, str, str, str, str], int] = {}
         total_running = 0
         for row in running_rows:
-            user_id = row.task_id.user
+            user_id = budget_user_id(row.task_id, str(row.submitting_user))
             job_id = (row.task_id.parent or row.task_id).to_wire()
             backend_id = str(row.backend_id or "")
             key = (row.priority_band, user_id, str(row.worker_id), job_id, backend_id)
