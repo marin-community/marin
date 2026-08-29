@@ -52,6 +52,7 @@ use crate::store::schema::{
     MAX_WRITE_ROWS_BYTES, MAX_WRITE_ROWS_ROWS,
 };
 use crate::store::table::query_view::SegmentObjectMap;
+use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::table_state::{TableRevision, TableSnapshot, WriterFence};
@@ -451,16 +452,13 @@ impl Store {
     /// Claim the writer fence for every table whose authority is SQLite.
     ///
     /// The claim confirms this process owns the data directory it already
-    /// flocked. A table with a versioned specification is object-backed and is
-    /// claimed against its object HEAD instead.
+    /// flocked. A table whose specification keeps its data in objects is
+    /// claimed against its object HEAD instead; a versioned specification that
+    /// still writes local L0 is claimed here like any other legacy table.
     async fn claim_legacy_tables(&self) -> Result<(), StatsError> {
         for head in self.legacy_state_store.list().await? {
-            if self
-                .catalog
-                .table_spec_status(&head.table)?
-                .catalog_generation
-                > 0
-            {
+            let status = self.catalog.table_spec_status(&head.table)?;
+            if TableRuntimePolicy::from_status(&status).object_backed() {
                 continue;
             }
             let Some(selected) = self.legacy_state_store.load(&head.table).await? else {
@@ -1283,6 +1281,14 @@ impl Store {
         self.catalog.table_spec_status(name)
     }
 
+    /// The repeated error `name`'s specification transition is stuck on, or
+    /// `None` while it is progressing, has none to run, or has no live runtime.
+    pub fn blocked_migration_error(&self, name: &str) -> Option<String> {
+        self.tables
+            .get(name)
+            .and_then(|table| table.blocked_migration_error())
+    }
+
     pub async fn abort_table_migration(&self, name: &str) -> Result<TableSpecStatus, StatsError> {
         self.catalog.require_live(name)?;
         let _visibility_guard = self.tables.query_visibility().write().await;
@@ -1378,7 +1384,6 @@ impl Store {
             )));
         }
         self.catalog.begin_drop(name)?;
-        let object_generation = self.catalog.table_spec_status(name)?.catalog_generation;
         // Remove the table from the registry first so its flush task stops
         // touching the dir/catalog before we delete rows + files.
         let (engine, controller) = self.tables.take(name);
@@ -1399,12 +1404,11 @@ impl Store {
                     engine.request_stop();
                 }
             }
-            if object_generation > 0 {
-                let controller = controller.ok_or_else(|| {
-                    StatsError::Internal(format!(
-                        "namespace {name:?} has an object generation without a controller"
-                    ))
-                })?;
+            // Only an object-backed table has a HEAD to tombstone. A legacy
+            // table's deletion is complete once its catalog rows and files are
+            // gone.
+            if let Some(controller) = controller.filter(|controller| controller.is_object_backed())
+            {
                 tokio::runtime::Handle::current().block_on(controller.tombstone())?;
             }
             self.catalog.delete(name)?;

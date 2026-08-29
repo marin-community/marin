@@ -360,9 +360,10 @@ message WriteRowsResponse {
 }
 
 message QueryRequest {
-  // Postgres-flavored SQL passed to DuckDB. Tables in the FROM clause must
-  // be registered namespaces; the server registers a DuckDB view per
-  // namespace before executing the query and never rewrites the user SQL.
+  // Postgres-flavored SQL executed by the server's DataFusion engine. Tables
+  // in the FROM clause must be registered namespaces; the server registers a
+  // table provider per namespace before executing the query and never rewrites
+  // the user SQL.
   string sql = 1;
 }
 
@@ -424,6 +425,12 @@ message GetTableStatusResponse {
   TableSpec desired_table_spec = 2;
   TableMigrationStatus migration = 3;
   uint64 catalog_generation = 4;
+  // Set when the transition has failed repeatedly with the same error and is
+  // making no progress, so a stalled migration is distinguishable from a
+  // slow one.
+  bool migration_blocked = 5;
+  // The repeated error a blocked transition is stuck on; empty otherwise.
+  string migration_error = 6;
 }
 
 message AbortTableMigrationRequest {

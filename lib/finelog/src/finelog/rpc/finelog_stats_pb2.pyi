@@ -501,16 +501,20 @@ class GetTableStatusRequest(_message.Message):
     def __init__(self, namespace: _Optional[str] = ...) -> None: ...
 
 class GetTableStatusResponse(_message.Message):
-    __slots__ = ("active_table_spec", "desired_table_spec", "migration", "catalog_generation")
+    __slots__ = ("active_table_spec", "desired_table_spec", "migration", "catalog_generation", "migration_blocked", "migration_error")
     ACTIVE_TABLE_SPEC_FIELD_NUMBER: _ClassVar[int]
     DESIRED_TABLE_SPEC_FIELD_NUMBER: _ClassVar[int]
     MIGRATION_FIELD_NUMBER: _ClassVar[int]
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
+    MIGRATION_BLOCKED_FIELD_NUMBER: _ClassVar[int]
+    MIGRATION_ERROR_FIELD_NUMBER: _ClassVar[int]
     active_table_spec: TableSpec
     desired_table_spec: TableSpec
     migration: TableMigrationStatus
     catalog_generation: int
-    def __init__(self, active_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., desired_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., catalog_generation: _Optional[int] = ...) -> None: ...
+    migration_blocked: bool
+    migration_error: str
+    def __init__(self, active_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., desired_table_spec: _Optional[_Union[TableSpec, _Mapping]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., catalog_generation: _Optional[int] = ..., migration_blocked: _Optional[bool] = ..., migration_error: _Optional[str] = ...) -> None: ...
 
 class AbortTableMigrationRequest(_message.Message):
     __slots__ = ("namespace",)

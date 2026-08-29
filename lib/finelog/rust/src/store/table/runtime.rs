@@ -39,6 +39,7 @@ use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
 use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table::segment_format::SegmentFormat;
 use crate::store::table::segment_view::{visible_segments, SegmentSnapshot, SegmentView};
+use crate::store::table::spec_migration::MigrationBlock;
 use crate::store::table_state::TableSnapshot;
 use crate::store::types::{segment_to_row, NamespaceStats, SegmentRow};
 
@@ -86,6 +87,9 @@ pub struct TableRuntime {
     pub(super) limits: Arc<MaintenanceLimits>,
     pub(super) layout_tracker: LayoutTracker,
     pub(super) index_skips: Mutex<BackfillSkips>,
+    /// How this table's specification transition is failing, carried across
+    /// maintenance ticks.
+    pub(super) migration_block: Mutex<MigrationBlock>,
     pub(super) last_object_gc: Mutex<Option<Instant>>,
     pub(super) stop: Arc<Notify>,
     /// Latched stop flag the dispatched work checks at the top of each loop
@@ -208,6 +212,7 @@ impl TableRuntime {
             limits,
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
+            migration_block: Mutex::new(MigrationBlock::default()),
             last_object_gc: Mutex::new(None),
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
@@ -264,11 +269,6 @@ impl TableRuntime {
         self.format.key_column()
     }
 
-    /// Whether this table has a remote offload target configured.
-    pub fn has_remote(&self) -> bool {
-        self.controller.is_object_backed()
-    }
-
     /// Whether this process still owns the table's durable state. A fenced
     /// object-backed table rejects writes until a restart re-claims it.
     pub fn write_ready(&self) -> bool {
@@ -278,6 +278,16 @@ impl TableRuntime {
     /// The durable-state commit owner for this table.
     pub fn controller(&self) -> &Arc<TableController> {
         &self.controller
+    }
+
+    /// The repeated error this table's specification transition is stuck on.
+    /// `None` while the transition is progressing or has none to run.
+    pub fn blocked_migration_error(&self) -> Option<String> {
+        self.migration_block
+            .lock()
+            .unwrap()
+            .blocked_error()
+            .map(str::to_string)
     }
 
     /// Swap in a new retention policy (re-register). Picked up next eviction.
@@ -625,7 +635,7 @@ impl TableRuntime {
         }
         // Legacy tables get one final bounded archive sync. Object-backed tables
         // already publish through their write path, so this is a no-op for them.
-        if self.has_remote() {
+        if self.controller.object_persistence_configured() {
             match tokio::time::timeout(timeout, super::maintenance::sync_archive(self)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {

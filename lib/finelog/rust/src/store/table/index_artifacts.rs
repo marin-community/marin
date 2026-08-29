@@ -649,6 +649,63 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Object persistence is a property of the server: every table it serves
+    /// has a remote available, and the legacy ones among them still keep their
+    /// data in local segment files. A legacy table classified object-backed
+    /// would look itself up among object segments it never wrote and fail every
+    /// backfill commit, so both the classification and the commit are asserted.
+    #[tokio::test]
+    async fn a_legacy_table_backfills_locally_on_a_remote_configured_store() {
+        let dir = tempdir();
+        let table_dir = dir.join("log.test");
+        let remote = dir.join("remote");
+        std::fs::create_dir_all(&remote).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let table = open_table_remote(
+            "log.test",
+            data_schema(),
+            Some(table_dir.clone()),
+            catalog,
+            remote.to_str().unwrap(),
+            crate::store::policy::StoragePolicy::default(),
+        );
+
+        assert!(
+            table.controller().object_persistence_configured(),
+            "the store has a remote configured"
+        );
+        assert!(
+            !table.controller().is_object_backed(),
+            "a table with no object-store specification keeps its data locally"
+        );
+
+        table.append_aligned_batch(&data_aligned(5, 0));
+        table.flush().await.unwrap();
+        let last = table.append_aligned_batch(&data_aligned(5, 5));
+        table.flush().await.unwrap();
+        table
+            .await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+        maintain_cycle(&table, true).await;
+
+        let segments = discover_segments(&table_dir);
+        assert_eq!(segments.len(), 1, "two L0 merged into one L1");
+        let bundle = crate::indices::format::bundle_path(&segments[0]);
+        std::fs::remove_file(&bundle).unwrap();
+
+        assert_eq!(
+            maintain_artifacts(&table, 10).await,
+            1,
+            "the legacy branch commits the rebuilt bundle"
+        );
+        assert!(bundle.exists());
+        assert_eq!(maintain_artifacts(&table, 10).await, 0);
+
+        table.shutdown(Duration::from_secs(10)).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn exact_backfill_rebuilds_a_missing_filtered_projection() {
         let dir = tempdir();

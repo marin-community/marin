@@ -37,6 +37,7 @@ use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::object_store::{
     ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
 };
+use crate::store::table::runtime_policy::TableRuntimePolicy;
 use crate::store::table_state::{
     resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
     TableRevision, TableSnapshot, TableState, WriterFence,
@@ -50,7 +51,12 @@ pub struct WrittenObject {
     pub byte_size: i64,
 }
 
-/// Object storage for one object-backed table.
+/// The object storage this server can persist a table through.
+///
+/// Present whenever the server is configured with a remote log directory, for
+/// every table it serves. Holding it says nothing about whether a particular
+/// table keeps its data in objects — see
+/// [`TableController::is_object_backed`].
 pub struct ObjectPersistence {
     pub table_dir: PathBuf,
     pub store: Arc<dyn ObjectStore>,
@@ -102,9 +108,18 @@ pub struct TableController {
     table: String,
     catalog: Arc<Catalog>,
     fence: WriterFence,
-    /// Present exactly for object-backed tables. A legacy table commits to the
-    /// local catalog and publishes no HEAD.
+    /// Present whenever this server has object persistence configured. Server
+    /// configuration, shared by every table it serves.
     objects: Option<ObjectPersistence>,
+    /// Whether the table's own specification puts its data in immutable
+    /// objects. Refreshed from the catalog by every durable transition that
+    /// advances the table's revision, which is how a specification lands.
+    spec_selects_objects: AtomicBool,
+    /// Set once this table is known to have a published HEAD, whether this
+    /// writer wrote it or claimed one another writer left. It outlives the
+    /// specification that introduced it: a transition rolled back to the
+    /// version-0 layout still owns its objects and its HEAD.
+    head_published: AtomicBool,
     /// Serializes the revision-allocating transaction. Held only across the
     /// synchronous mutation, never across I/O.
     mutation_gate: Mutex<()>,
@@ -124,10 +139,11 @@ pub struct TableController {
 }
 
 impl TableController {
-    /// Build a controller and, for an object-backed table, start its task.
+    /// Build a controller and, where objects can be persisted, start its task.
     ///
-    /// A legacy table needs no task: it publishes no HEAD, so its only durable
-    /// transition is the gated local mutation.
+    /// The task publishes HEAD, so it exists whenever this server could publish
+    /// one. A legacy table simply never sends it a command: it publishes no
+    /// HEAD, so its only durable transition is the gated local mutation.
     pub fn start(
         table: String,
         catalog: Arc<Catalog>,
@@ -135,30 +151,78 @@ impl TableController {
         fence: WriterFence,
     ) -> Arc<Self> {
         let (snapshot, _) = watch::channel(None);
-        let object_backed = objects.is_some();
+        let object_persistence = objects.is_some();
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_DEPTH);
         let controller = Arc::new(Self {
             table,
             catalog,
             fence,
             objects,
+            spec_selects_objects: AtomicBool::new(false),
+            head_published: AtomicBool::new(false),
             mutation_gate: Mutex::new(()),
             selected: Mutex::new(None),
             claimed: AtomicBool::new(false),
             writes_ready: AtomicBool::new(true),
             publication_owed: AtomicBool::new(false),
             snapshot,
-            commands: object_backed.then(|| sender.clone()),
+            commands: object_persistence.then(|| sender.clone()),
         });
-        if object_backed {
+        if let Err(error) = controller.refresh_object_backing() {
+            // The next durable transition re-reads it. Serving a table as
+            // legacy is the safe reading: it commits locally and publishes no
+            // HEAD.
+            tracing::error!(
+                table = %controller.table,
+                %error,
+                "reading a table specification to classify its storage failed"
+            );
+        }
+        if object_persistence {
             drop(sender);
             tokio::spawn(run_controller(Arc::downgrade(&controller), receiver));
         }
         controller
     }
 
-    pub fn is_object_backed(&self) -> bool {
+    /// Whether this server can persist objects for this table at all: a remote
+    /// object store, its legacy view, and the durable state authority are all
+    /// configured.
+    ///
+    /// This is a property of the server, not of the table. Every table on a
+    /// server with a remote log directory has object persistence available, and
+    /// the legacy ones among them are still not object-backed.
+    pub fn object_persistence_configured(&self) -> bool {
         self.objects.is_some()
+    }
+
+    /// Whether this table's own durable state keeps its data in immutable
+    /// objects under a published HEAD.
+    ///
+    /// The table's specification decides it — the desired version while a
+    /// transition onto object storage runs, the active version otherwise — and
+    /// a claimed HEAD is equally conclusive. A legacy table on a
+    /// remote-configured server is not object-backed: it commits to the local
+    /// catalog, records artifacts beside its Parquet, and publishes no state.
+    pub fn is_object_backed(&self) -> bool {
+        self.object_persistence_configured()
+            && (self.spec_selects_objects.load(Ordering::SeqCst)
+                || self.head_published.load(Ordering::SeqCst))
+    }
+
+    /// Re-read the table's specification and cache whether it selects
+    /// object-store L0, returning the status the read produced.
+    ///
+    /// [`TableRuntimePolicy`] is the one place a specification resolves to
+    /// operating knobs, so the flush path and this classification cannot drift
+    /// apart.
+    fn refresh_object_backing(&self) -> Result<TableSpecStatus, StatsError> {
+        let status = self.catalog.table_spec_status(&self.table)?;
+        self.spec_selects_objects.store(
+            TableRuntimePolicy::from_status(&status).object_backed(),
+            Ordering::SeqCst,
+        );
+        Ok(status)
     }
 
     /// Whether this writer still owns the table's durable state.
@@ -200,7 +264,10 @@ impl TableController {
 
     fn require_objects(&self) -> Result<&ObjectPersistence, StatsError> {
         self.objects.as_ref().ok_or_else(|| {
-            StatsError::Internal(format!("table {:?} is not object-backed", self.table))
+            StatsError::Internal(format!(
+                "table {:?} has no object persistence configured",
+                self.table
+            ))
         })
     }
 
@@ -254,6 +321,7 @@ impl TableController {
         let snapshot = TableSnapshot::from_stored(&claimed);
         *self.selected.lock().unwrap() = Some(claimed);
         self.claimed.store(true, Ordering::SeqCst);
+        self.head_published.store(true, Ordering::SeqCst);
         self.snapshot.send_replace(Some(Arc::new(snapshot)));
     }
 
@@ -330,6 +398,11 @@ impl TableController {
             self.table
         );
         if revision > previous {
+            // The mutation may have registered or activated a specification, so
+            // the storage classification is re-read before this commit decides
+            // whether it owes a publication.
+            self.refresh_object_backing()
+                .map_err(CommitError::NotCommitted)?;
             self.mark_publication_owed();
         }
         Ok((previous, revision, output))
@@ -337,9 +410,7 @@ impl TableController {
 
     fn local_revision(&self) -> Result<TableRevision, StatsError> {
         Ok(TableRevision::new(
-            self.catalog
-                .table_spec_status(&self.table)?
-                .catalog_generation,
+            self.refresh_object_backing()?.catalog_generation,
         ))
     }
 
@@ -619,6 +690,7 @@ impl TableController {
             self.snapshot
                 .send_replace(Some(Arc::new(TableSnapshot::from_stored(&claimed))));
             *self.selected.lock().unwrap() = Some(claimed);
+            self.head_published.store(true, Ordering::SeqCst);
         }
         self.claimed.store(true, Ordering::SeqCst);
         Ok(())
@@ -669,6 +741,9 @@ impl TableController {
                 }
             },
         };
+        // HEAD now names a state for this table, and keeps doing so however
+        // its specification later moves.
+        self.head_published.store(true, Ordering::SeqCst);
         self.publication_owed.store(false, Ordering::SeqCst);
         let published = Arc::new(published);
         self.snapshot.send_replace(Some(Arc::clone(&published)));
@@ -895,7 +970,7 @@ mod tests {
     use buffa::MessageField;
 
     use crate::proto::finelog::stats::{
-        ColumnType, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
     use crate::store::catalog::object_state_store::ObjectTableStateStore;
     use crate::store::object_store::build_remote_object_store;
@@ -916,6 +991,8 @@ mod tests {
         )
     }
 
+    /// A catalog holding one table whose specification puts its data in
+    /// objects, which is what makes its controller publish a HEAD.
     fn registered_catalog() -> Arc<Catalog> {
         let catalog = Catalog::open(None).unwrap();
         let schema = with_implicit_seq(Schema::new(
@@ -930,7 +1007,10 @@ mod tests {
             version: Some(1),
             logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
             source_layout: MessageField::some(SourceLayout::default()),
-            operating_policy: MessageField::some(OperatingPolicy::default()),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let hash: [u8; 32] = Sha256::digest(canonical_json_bytes(&spec).unwrap()).into();

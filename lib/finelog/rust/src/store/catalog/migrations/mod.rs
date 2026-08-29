@@ -122,6 +122,7 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<(), StatsError> {
         )));
     }
 
+    let mut newly_applied = 0;
     for &(version, name, apply) in MIGRATIONS {
         let applied = conn
             .query_row(
@@ -139,7 +140,18 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<(), StatsError> {
         apply(&transaction)?;
         record_migration(&transaction, version, name)?;
         transaction.commit().map_err(sqlite_error)?;
+        newly_applied += 1;
+        tracing::info!(
+            version,
+            migration = name,
+            "applied catalog schema migration"
+        );
     }
+    tracing::info!(
+        version = latest_known,
+        applied = newly_applied,
+        "catalog at version {latest_known}"
+    );
     Ok(())
 }
 

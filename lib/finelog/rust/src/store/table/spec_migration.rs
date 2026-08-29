@@ -50,6 +50,54 @@ const SEGMENTS_PER_TICK: usize = 4;
 /// from colliding.
 const PARTITION_DIRECTORIES: u32 = 64;
 
+/// Consecutive identical failures after which a transition is reported blocked.
+///
+/// A few repeats are ordinary — a contended commit, a transient object read —
+/// and the maintenance cadence retries them within a minute or two. Beyond this
+/// the same error is not going to clear itself.
+const BLOCKED_FAILURE_THRESHOLD: u32 = 5;
+
+/// How one table's specification transition is failing.
+///
+/// A transition that fails the same way every tick makes no progress while its
+/// status keeps reporting an ordinary BACKFILL phase, so without this an
+/// operator sees only a repeating warning. Once the same error has repeated
+/// [`BLOCKED_FAILURE_THRESHOLD`] times the table reports itself blocked and the
+/// failure is logged at ERROR; any tick that gets through clears it.
+#[derive(Default)]
+pub struct MigrationBlock {
+    error: Option<String>,
+    consecutive_failures: u32,
+}
+
+impl MigrationBlock {
+    /// The repeated error this transition is stuck on, or `None` while it is
+    /// still making progress or failing in varied ways.
+    pub fn blocked_error(&self) -> Option<&str> {
+        if self.consecutive_failures < BLOCKED_FAILURE_THRESHOLD {
+            return None;
+        }
+        self.error.as_deref()
+    }
+
+    /// Count one failed tick and report how many times this exact error has now
+    /// repeated. A different error starts the count over.
+    fn record_failure(&mut self, error: &str) -> u32 {
+        if self.error.as_deref() == Some(error) {
+            self.consecutive_failures += 1;
+        } else {
+            self.error = Some(error.to_string());
+            self.consecutive_failures = 1;
+        }
+        self.consecutive_failures
+    }
+
+    fn clear(&mut self) {
+        self.error = None;
+        self.consecutive_failures = 0;
+    }
+}
+
 /// Everything a migration step reads and commits through.
 pub struct SpecMigration<'a> {
     pub table: &'a str,
@@ -64,16 +112,56 @@ pub struct SpecMigration<'a> {
     /// concurrent flush would commit against, so the two never overlap.
     pub flush_gate: &'a tokio::sync::Mutex<()>,
     pub max_merge_arrow_bytes: i64,
+    /// How this table's transition is failing, carried across ticks so a
+    /// permanently stuck transition becomes visible.
+    pub blocked: &'a std::sync::Mutex<MigrationBlock>,
     /// Applied when an activation moves the table to a new version, so the
     /// runtime's cached policy and query view follow the commit.
     pub on_activated: &'a (dyn Fn(&TableSpecStatus) -> Result<(), StatsError> + Send + Sync),
 }
 
-/// Advance an automatic transition by one tick.
+/// Advance an automatic transition by one tick, recording whether it is stuck.
 ///
 /// Returns true while ordinary compaction and eviction must stay frozen to
 /// preserve the migration source.
 pub async fn advance(migration: &SpecMigration<'_>) -> Result<bool, StatsError> {
+    match advance_phase(migration).await {
+        Ok(owns_cycle) => {
+            migration.blocked.lock().unwrap().clear();
+            Ok(owns_cycle)
+        }
+        Err(error) => {
+            report_failure(migration, &error);
+            Err(error)
+        }
+    }
+}
+
+/// Escalate a transition that keeps failing the same way.
+///
+/// The failure itself is already reported by the maintenance scheduler at WARN.
+/// This adds the one line an operator needs to tell a retry from a wedge: the
+/// phase it is stuck in and how far its backfill got.
+fn report_failure(migration: &SpecMigration<'_>, error: &StatsError) {
+    let message = error.to_string();
+    let failures = migration.blocked.lock().unwrap().record_failure(&message);
+    if failures < BLOCKED_FAILURE_THRESHOLD {
+        return;
+    }
+    let status = migration.catalog.table_spec_status(migration.table).ok();
+    let progress = status.as_ref().and_then(|status| status.migration.as_ref());
+    tracing::error!(
+        namespace = %migration.table,
+        phase = ?status.as_ref().map(|status| status.phase),
+        rows_completed = progress.and_then(|progress| progress.rows_completed).unwrap_or(0),
+        rows_total = progress.and_then(|progress| progress.rows_total).unwrap_or(0),
+        consecutive_failures = failures,
+        error = %message,
+        "spec migration blocked"
+    );
+}
+
+async fn advance_phase(migration: &SpecMigration<'_>) -> Result<bool, StatsError> {
     let status = migration.catalog.table_spec_status(migration.table)?;
     let Some(pending) = status.migration.clone() else {
         return Ok(false);
@@ -412,6 +500,40 @@ impl TargetPartitions {
             spec_id,
             layout: layout.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The point of the counter is to separate a transition that retries from
+    /// one that cannot proceed, so only an unchanging error escalates and any
+    /// progress clears the verdict.
+    #[test]
+    fn only_an_unchanging_error_reports_a_transition_blocked() {
+        let mut block = MigrationBlock::default();
+        for _ in 0..BLOCKED_FAILURE_THRESHOLD - 1 {
+            block.record_failure("object read timed out");
+            assert_eq!(block.blocked_error(), None);
+        }
+        block.record_failure("object read timed out");
+        assert_eq!(block.blocked_error(), Some("object read timed out"));
+
+        block.record_failure("a different failure");
+        assert_eq!(
+            block.blocked_error(),
+            None,
+            "a new error is a fresh problem, not a continuation"
+        );
+
+        for _ in 1..BLOCKED_FAILURE_THRESHOLD {
+            block.record_failure("a different failure");
+        }
+        assert_eq!(block.blocked_error(), Some("a different failure"));
+
+        block.clear();
+        assert_eq!(block.blocked_error(), None);
     }
 }
 

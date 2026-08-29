@@ -356,10 +356,9 @@ impl TableManager {
     pub async fn publish(&self, name: &str) -> Result<Arc<TableSnapshot>, StatsError> {
         let controller = self.controller(name);
         if !controller.is_object_backed() {
-            return Err(StatsError::SchemaValidation(
-                "object-backed table specifications require a configured remote_log_dir"
-                    .to_string(),
-            ));
+            return Err(StatsError::SchemaValidation(format!(
+                "namespace {name:?} is not object-backed and publishes no table state"
+            )));
         }
         Ok(controller.publish_state().await?)
     }
@@ -452,7 +451,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::proto::finelog::stats::{
-        ColumnType, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+        ColumnType, L0Mode, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     };
     use crate::store::catalog::object_state_store::ObjectTableStateStore;
     use crate::store::object_store::{
@@ -503,7 +502,10 @@ mod tests {
             version: Some(1),
             logical_schema: MessageField::some(schema_to_proto_owned(&worker_schema())),
             source_layout: MessageField::some(SourceLayout::default()),
-            operating_policy: MessageField::some(OperatingPolicy::default()),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let hash: [u8; 32] =

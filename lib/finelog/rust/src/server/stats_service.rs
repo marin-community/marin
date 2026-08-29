@@ -436,8 +436,11 @@ impl StatsService for StatsServiceImpl {
             .ok_or_else(|| ConnectError::invalid_argument("namespace required"))?
             .to_string();
         let store = Arc::clone(&self.store);
+        let blocked_error = store.blocked_migration_error(&namespace);
         let status = run_blocking(move || store.table_spec_status(&namespace)).await?;
         connectrpc::Response::ok(GetTableStatusResponse {
+            migration_blocked: Some(blocked_error.is_some()),
+            migration_error: Some(blocked_error.unwrap_or_default()),
             active_table_spec: status
                 .active
                 .map(MessageField::some)

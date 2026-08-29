@@ -114,6 +114,7 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
                 query_visibility: &runtime.query_visibility,
                 flush_gate: &runtime.object_flush_lock,
                 max_merge_arrow_bytes: runtime.compaction_config.max_merge_arrow_bytes,
+                blocked: &runtime.migration_block,
                 on_activated: &activated,
             })
             .await?;
