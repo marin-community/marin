@@ -268,6 +268,9 @@ def verify_ragged_pjrt() -> None:
             f"({expected_prefix}*), found {installed}. The patched wheel is aarch64-only and the "
             "expert MLP is SM100-specialized; run the ragged transport on GB200."
         )
+    # The prefix check accepts any marin build, so wheel-substitution arms need the exact
+    # version in the run-phase log to prove which plugin this process actually carries.
+    logger.info("%s version at runtime: %s", PJRT_DISTRIBUTION, installed)
 
 
 @dataclass(frozen=True)

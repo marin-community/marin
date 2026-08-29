@@ -694,3 +694,32 @@ C8 rider: empty (no hoistable fa4 precompute).
   from scored arms. Engagement: xplane kernel grid dims from the profile
   tail on ONE treatment draw (592 vs 1184), plus the custody line; the
   identity arm needs no cta line (identical by design).
+
+## Fable H11 review dispositions (round complete; both reviewers addressed)
+
+F1/F4 = codex P0-1/P0-3, already fixed (pip route; DK_CTAS plumb). F2:
+run-phase custody added — verify_ragged_pjrt now logs the exact installed
+pjrt version at startup; per-arm scoring greps BOTH the uv install line
+('+ jax-cuda13-pjrt==0.11.1+marin.ce6db0d2c555', after 'syncing deps')
+AND the runtime line. F3 identity gate recalibrated: hard-stop only below
+mean-3sigma (~23.54); gray zone [23.54, 23.645) -> second identity draw
+(the min-max band alone false-alarms 40% at n=1). F5 adopted (= codex
+P1-6): c4 scored against wheel-matched identity draws (2 of each,
+interleaved); pre-salt draws are a sanity band only; the step-4
+confirmation prices the deployable delta vs a fresh no-wheel salted
+control. F6 REVIEWER DISAGREEMENT RESOLVED: codex estimated ~12k
+lines/step and said drop; fable counted the engaged-path VLOG sites
+(~12/step/process; fallback sites early-return) and says keep — and the
+cta_count line is the only guard against an invalid knob silently
+running at 8 (F4b). Fable's count is the more specific evidence:
+ragged_all_to_all_thunk=3 ADDED to the uniform VMODULE for all H11-era
+arms; identity tests wheel+VMODULE jointly (both expected null; a
+VMODULE-only salted draw splits them if identity misses). F7 noted:
+ctrl-f/g remain valid non-wheel references (the plumbing commits are
+inert with empty worker_pip_packages).
+
+H11 GO. Sequence: id-a, c4-a, id-b, c4-b (interleaved, all new wheel,
+salted tree, uniform VMODULE); c4 keep = median(c4 pair) - median(id
+pair) > max(0.17, 3 x contemporaneous sd); then best-rung confirmation +
+fresh no-wheel salted control; c2 only after a genuine c4 keep-class
+result.

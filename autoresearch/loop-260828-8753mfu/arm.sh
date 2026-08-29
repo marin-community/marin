@@ -106,7 +106,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e XLA_PYTHON_CLIENT_MEM_FRACTION "${MEM_FRACTION:-0.75}" \
   -e XLA_RAGGED_A2A_DK_CTAS_PER_SM "${DK_CTAS_PER_SM:-}" \
   -e TF_CPP_MIN_LOG_LEVEL 0 \
-  -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1" \
+  -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1,ragged_all_to_all_thunk=3" \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
      --run-id "${RID}" \
      --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
