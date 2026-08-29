@@ -141,7 +141,7 @@ SMOKE = ScalePreset(
 
 # 64 GPUs: generation dominates for a 0.6B policy, so 2 training nodes and
 # 6 single-GPU vLLM engine nodes. ~120 steps * 512 prompts * 8 samples at
-# <=2048 new tokens bounds the run at roughly 0.3-1.0B output tokens.
+# <=1024 non-thinking tokens bounds the run at roughly 0.2-0.5B output tokens.
 FULL = ScalePreset(
     label="full",
     num_nodes=8,
@@ -159,8 +159,8 @@ FULL = ScalePreset(
     max_steps=120,
     eval_interval=10,
     ckpt_interval=10,
-    request_window_tokens=3072,
-    max_new_tokens=2048,
+    request_window_tokens=2048,
+    max_new_tokens=1024,
     micro_forward_batch_size_per_gpu=16,
     evals="math500,gsm8k-0shot",
 )
@@ -264,7 +264,11 @@ generator:
   run_engines_locally: true
   weight_sync_backend: nccl
   async_engine: true
-  batched: true
+  batched: false
+  # Thinking mode eats the whole generation budget at 0.6B (85% truncation in
+  # the smoke run); every arm trains and evaluates in non-thinking mode.
+  chat_template_kwargs:
+    enable_thinking: false
   sampling_params:
     temperature: 1.0
     top_p: 1.0
