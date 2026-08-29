@@ -1,0 +1,5 @@
+08:07:02 t=0s train=none step=-2
+08:08:16 t=75s train=running step=-2
+08:08:40 gang up (wandb run exists), compile ceiling 1800s starts now
+08:09:27 t=146s train=running step=-1
+08:10:35 t=215s train=running step=-1

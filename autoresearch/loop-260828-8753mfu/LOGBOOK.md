@@ -226,3 +226,26 @@ instructions added` on every rank, with long per-computation remat sweeps.
 The slop-85 budget binds. Mechanism-engagement metric for the treatment:
 the remat-instruction count at slop=90 vs 325 at 85, plus the LHS/remat
 limit values in the logs. H6 is GO after iteration 0 completes.
+
+## 2026-08-29 ~08:20Z: iteration 0 draw 2 (mfl-ctrl-b) + engagement confirmations
+
+mfl-ctrl-b VALID but noisy: mfu_mean 22.872, sd 0.856 (7x draw 1), drops
+3.3e-5, peak 116.57, ran to natural completion at 30030. Per-step series
+shows 11/15 steps at draw-1 level (23.1-23.5) and 4 isolated stalls
+(21.97/21.87/20.55/22.09 at 30006/30010/30012/30014). Only functional
+config delta vs a2 is profiler enabled (trace at 30021-23, past the
+window). Draw c (plain control) disambiguates profiler-hook vs
+environment; per DESIGN, draw b is dropped from the noise estimate if c
+matches a2.
+
+FA4 wide-tile engagement CONFIRMED (M3 closed): heuristic.py:109 selects
+gpu_fa4_cute_wide for HERO_MODEL; _segmented_kernel_config RAISES rather
+than silently downgrading off sm100/head_dim!=128 (its comment: refusing
+beats reporting a false null); fa4_cute forward/backward kernels appear in
+the draw-b trace; MFU sits on the tile-stack reference. Config-level
+fallback is impossible by construction.
+
+Fidelity null band (first C-C pair, a2 vs b, steps 30005-30019):
+pointwise |dloss| max 4.1e-5, median 1.6e-5. Draw c adds the second pair.
+Trace analysis delegated (ranked lever table incl. remat-cost estimate for
+H6, marshal leg check, ragged transport exposure).
