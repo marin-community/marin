@@ -31,13 +31,7 @@ class UserTask(Generic[T]):
 
 
 def budget_user_id(job_id: JobName, submitting_user: str) -> str:
-    """Return the principal used for budget accounting.
-
-    Authenticated submissions use the verified email or service-account identity
-    stored on the job. Trusted local submissions and rows with an empty
-    ``submitting_user`` have no distinct principal, so their friendly job owner
-    remains the budget key.
-    """
+    """Use the authenticated submitter, with job-owner fallback for local or empty identities."""
     if submitting_user and submitting_user != LOCAL_ADMIN_SUBMITTER:
         return submitting_user
     return job_id.user

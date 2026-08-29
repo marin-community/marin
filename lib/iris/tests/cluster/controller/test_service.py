@@ -1366,6 +1366,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
     """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
+    email = "alice@example.com"
     # Submit a job and move a task to RUNNING
     job_id = JobName.root("alice", "sched-test")
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -1381,7 +1382,7 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             job_id=job_id,
             request=request,
             ts=Timestamp.now(),
-            submitting_user="alice@example.com",
+            submitting_user=email,
         )
 
     w1 = WorkerId("w1")
@@ -1413,12 +1414,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert len(resp.running_buckets) == 1
         bucket = resp.running_buckets[0]
         assert bucket.job_id == job_id.to_wire()
-        assert bucket.user_id == "alice@example.com"
+        assert bucket.user_id == email
         assert bucket.worker_id == "w1"
         assert bucket.count == 1
         # The email has no explicit user_budgets row but has an active task. The
         # scheduler state must apply UserBudgetDefaults to that principal.
-        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice@example.com"), None)
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == email), None)
         assert alice_budget is not None
         assert alice_budget.budget_spent > 0
         assert alice_budget.budget_limit == UserBudgetDefaults().budget_limit

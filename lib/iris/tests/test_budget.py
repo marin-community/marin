@@ -19,7 +19,7 @@ from iris.cluster.controller.budget import (
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     MockController,
@@ -32,6 +32,7 @@ SYSTEM = job_pb2.PRIORITY_BAND_SYSTEM
 PRODUCTION = job_pb2.PRIORITY_BAND_PRODUCTION
 INTERACTIVE = job_pb2.PRIORITY_BAND_INTERACTIVE
 BATCH = job_pb2.PRIORITY_BAND_BATCH
+OPENATHENA_USER = "russell.power@openathena.ai"
 
 GiB = 1024**3
 
@@ -64,8 +65,8 @@ def test_resource_value(cpu_millicores, memory_bytes, accelerator_count, expecte
 @pytest.mark.parametrize(
     "submitting_user,expected",
     [
-        ("russell.power@openathena.ai", "russell.power@openathena.ai"),
-        ("local_admin", "power"),
+        (OPENATHENA_USER, OPENATHENA_USER),
+        (LOCAL_ADMIN_SUBMITTER, "power"),
         ("", "power"),
     ],
 )
@@ -296,11 +297,10 @@ def test_launch_job_rejects_band_above_user_max(service):
 
 
 def test_admin_nickname_job_uses_email_budget(service):
-    email = "russell.power@openathena.ai"
     _as_admin(service.set_user_budget, _set_budget("power", 0, INTERACTIVE), None)
-    _as_admin(service.set_user_budget, _set_budget(email, 0, BATCH), None)
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, BATCH), None)
 
-    with identity_scope(VerifiedIdentity(user_id=email, role="admin")):
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
         with pytest.raises(ConnectError) as exc:
             service.launch_job(_launch("/power/email-budget", band=INTERACTIVE), None)
 
@@ -308,13 +308,12 @@ def test_admin_nickname_job_uses_email_budget(service):
 
 
 def test_child_job_inherits_root_email_budget(service):
-    email = "russell.power@openathena.ai"
-    _as_admin(service.set_user_budget, _set_budget(email, 0, INTERACTIVE), None)
-    with identity_scope(VerifiedIdentity(user_id=email, role="admin")):
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, INTERACTIVE), None)
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
         service.launch_job(_launch("/power/parent", band=INTERACTIVE), None)
 
-    _as_admin(service.set_user_budget, _set_budget(email, 0, BATCH), None)
-    with identity_scope(VerifiedIdentity(user_id=email, role="admin")):
+    _as_admin(service.set_user_budget, _set_budget(OPENATHENA_USER, 0, BATCH), None)
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
         with pytest.raises(ConnectError) as exc:
             service.launch_job(_launch("/power/parent/child", band=job_pb2.PRIORITY_BAND_INHERIT), None)
 
@@ -322,10 +321,9 @@ def test_child_job_inherits_root_email_budget(service):
 
 
 def test_active_task_cap_uses_email_across_nicknames(service, monkeypatch):
-    email = "russell.power@openathena.ai"
     monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
-    with identity_scope(VerifiedIdentity(user_id=email, role="admin")):
+    with identity_scope(VerifiedIdentity(user_id=OPENATHENA_USER, role="admin")):
         first = _launch("/power/first")
         first.replicas = 3
         service.launch_job(first, None)
