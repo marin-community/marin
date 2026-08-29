@@ -28,6 +28,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
@@ -46,6 +47,18 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
+
+# Named dispatch products a remat policy can keep for the backward instead of recomputing.
+# Both are local (pre-collective) values: saving them deletes the recompute of the expert
+# argsort and the bincount without pinning any transport buffer. Sizes at the hero shape
+# (65,536 tokens x top-8 per device): sorted_indices s32[TK] = 2.1 MB/layer, group_sizes
+# s32[E] = 1.5 KB/layer.
+RAGGED_SORTED_INDICES_REMAT_NAME = "grug_moe_ragged_sorted_indices"
+RAGGED_GROUP_SIZES_REMAT_NAME = "grug_moe_ragged_group_sizes"
+RAGGED_DISPATCH_REMAT_SAVE_NAMES = (
+    RAGGED_SORTED_INDICES_REMAT_NAME,
+    RAGGED_GROUP_SIZES_REMAT_NAME,
+)
 
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
@@ -405,8 +418,10 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     with jax.named_scope("dispatch"):
         flat_selected = selected_experts_local.reshape(-1)  # [TK]
-        sorted_indices = jnp.argsort(flat_selected)  # [TK]
-        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
+        sorted_indices = tree_checkpoint_name(jnp.argsort(flat_selected), RAGGED_SORTED_INDICES_REMAT_NAME)  # [TK]
+        group_sizes = tree_checkpoint_name(
+            jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32), RAGGED_GROUP_SIZES_REMAT_NAME
+        )  # [E]
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
 

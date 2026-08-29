@@ -45,7 +45,10 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    RAGGED_DISPATCH_REMAT_SAVE_NAMES as RAGGED_DISPATCH_REMAT_SAVE_NAMES,
+    _moe_mlp_ep_ragged_a2a_local,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (

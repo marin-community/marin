@@ -45,6 +45,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.model import REMAT_SAVE_BUNDLES
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -76,6 +77,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
+    remat_save: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     opt_resident_leaves: int = 0,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
@@ -131,6 +133,8 @@ def build_diagnostic_run(
         num_train_steps=total_schedule_steps,
         batch_size=batch_size,
     )
+    if remat_save is not None and remat_save not in REMAT_SAVE_BUNDLES:
+        raise ValueError(f"remat_save must be one of {sorted(REMAT_SAVE_BUNDLES)}, got {remat_save!r}")
     model = HERO_MODEL_CONFIG
     overrides = {
         name: value
@@ -141,6 +145,7 @@ def build_diagnostic_run(
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
+            ("remat_save_names", REMAT_SAVE_BUNDLES[remat_save] if remat_save is not None else None),
         )
         if value is not None
     }
@@ -171,6 +176,7 @@ def build_diagnostic_run(
     transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
+    remat_save_tags = (f"remat-save-{remat_save.replace('_', '-')}",) if remat_save is not None else ()
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
@@ -235,6 +241,7 @@ def build_diagnostic_run(
                     *transport_capacity_tags,
                     wave_tag,
                     size_tag,
+                    *remat_save_tags,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
                     "MHEP",
@@ -374,6 +381,17 @@ def build_diagnostic_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
+    "--remat-save",
+    type=click.Choice(sorted(REMAT_SAVE_BUNDLES)),
+    default=None,
+    help=(
+        "Save a curated bundle of named per-token intermediates on device for the backward "
+        "instead of recomputing them. Only the remat policy's saved-name list changes; the "
+        "layer-carry offload and the XLA memory-budget flags stay untouched. Default keeps "
+        "the hero's recompute-everything policy."
+    ),
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -505,6 +523,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    remat_save: str | None,
     master_params: str,
     opt_resident_leaves: int,
     processes_per_task: int,
@@ -534,6 +553,7 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
+        remat_save=remat_save,
         master_param_mode=MasterParamMode(master_params),
         opt_resident_leaves=opt_resident_leaves,
         processes_per_task=processes_per_task,

@@ -42,6 +42,7 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
+    RAGGED_DISPATCH_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
     MoeImplementation,
@@ -98,6 +99,64 @@ RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+
+# Named per-token intermediates that `remat_save_names` can keep resident for the backward
+# instead of recomputing. Every name marks a tensor that is small next to the recompute it
+# deletes; per-name resident cost below is per layer at the hero shape (65,536 tokens per
+# device) and multiplies by num_layers=48, because the layer scan stacks each saved name
+# into one [num_layers, ...] residual that lives from forward to backward.
+#
+# RMS_NORM_VARIANCE: the square-mean variance of every RMSNorm module application
+# (rms_attn, rms_mlp, latent_norm inside the scan). f32[T, 1] = 0.26 MB x 3 sites -> 38 MB
+# resident across 48 layers. Deletes the fp32 square-mean reduce over the full-width input
+# in the backward recompute (trace families input_reduce_fusion_11_remat3 /
+# input_reduce_fusion_9_remat* at ~450 us per instance, input_add_reduce_fusion_3_remat for
+# the latent norm; ~90 ms/step combined). The variance is the saved tensor, not the rsqrt
+# scale, because the rsqrt vjp reads its input.
+RMS_NORM_VARIANCE_REMAT_NAME = "grug_rms_norm_variance"
+# QK_NORM_VARIANCE: the same quantity for the non-parametric q/k head norms.
+# f32[T, num_heads, 1] + f32[T, kv_heads, 1] = 15.7 MB/layer -> 0.74 GiB resident. Deletes
+# the q-norm variance reduce, the same 402M-element fp32 reduce as above (part of the
+# ~90 ms/step pool).
+QK_NORM_VARIANCE_REMAT_NAME = "grug_qk_norm_variance"
+# XSA_MOMENT: the two per-head XSA reduction moments dot(y, v) and ||v||^2. bf16[T, heads, 1]
+# x 2 = 12.6 MB/layer -> 576 MiB resident. Deletes the two fused multiply-add reduces over
+# [T, heads, head_dim] in the recompute (trace family input_add_reduce_fusion_remat2,
+# ~32 ms/step).
+XSA_MOMENT_REMAT_NAME = "grug_xsa_moment"
+# ROUTER_SELECTED_EXPERTS / ROUTER_COMBINE_WEIGHTS: the routing decision. s32[T, K] +
+# bf16[T, K] = 3.1 MB/layer -> 0.15 GiB resident. Deletes the top-(K+1) sort from the
+# recompute (trace kernel sort_100_2, ~45 ms/step). It does NOT delete the router GEMM:
+# the gradient into the router flows through combine_weights, whose renormalization vjp
+# reads the pre-renorm gathered logits, and rebuilding those pins the GEMM recompute
+# (review-verified: the router dot stays in the treated remat region). The softmax
+# stat reduces were never in the recompute region (they feed logging scan-outputs only).
+ROUTER_SELECTED_EXPERTS_REMAT_NAME = "grug_router_selected_experts"
+ROUTER_COMBINE_WEIGHTS_REMAT_NAME = "grug_router_combine_weights"
+
+# The curated bundle for the hero: every save above plus the ragged-dispatch products
+# (expert argsort + bincount; see RAGGED_DISPATCH_REMAT_SAVE_NAMES). Total resident cost at
+# the hero shape is ~1.5 GiB against a 25 GiB headroom, deleting ~180-230 ms/step of
+# measured backward recompute. The remaining remat pool (receiver-buffer masks of the
+# chunked expert MLP, RoPE products, shared-expert SwiGLU) bottoms out on [T, hidden]-scale
+# or [capacity, latent]-scale tensors at 9-160 GiB per family and stays recomputed.
+REMAT_SAVE_CHEAP_RECOMPUTE_BUNDLE = (
+    RMS_NORM_VARIANCE_REMAT_NAME,
+    QK_NORM_VARIANCE_REMAT_NAME,
+    XSA_MOMENT_REMAT_NAME,
+    ROUTER_SELECTED_EXPERTS_REMAT_NAME,
+    ROUTER_COMBINE_WEIGHTS_REMAT_NAME,
+    *RAGGED_DISPATCH_REMAT_SAVE_NAMES,
+)
+
+REMAT_SAVE_BUNDLES: dict[str, tuple[str, ...]] = {
+    "cheap_recompute": REMAT_SAVE_CHEAP_RECOMPUTE_BUNDLE,
+}
+
+# Names `remat_save_names` accepts: the model-side names above, the ragged-dispatch names,
+# and the dispatch names the non-ragged MoE backends tag (inert under the ragged backend).
+# The layer carry is deliberately absent: it is the offload target, not a saveable.
+REMAT_SAVEABLE_NAMES = frozenset(REMAT_SAVE_CHEAP_RECOMPUTE_BUNDLE) | frozenset(MOE_REMAT_SAVE_NAMES)
 
 
 def _batch_spec() -> P:
@@ -201,6 +260,12 @@ class GrugModelConfig:
     backward skips re-running expert dispatch and its EP collectives; "offload_carry"
     recomputes everything but stages the layer-input residual on pinned host, which
     releases its HBM between forward and backward."""
+    remat_save_names: tuple[str, ...] = ()
+    """Named intermediates the remat policy keeps on device for the backward, deleting
+    their recompute. Names must come from REMAT_SAVEABLE_NAMES; the empty default keeps
+    every remat mode's existing policy unchanged. This extends only which named tensors
+    are saved -- the offload_carry offload list and the XLA memory-budget flags are
+    untouched. Saved values are bit-identical to their recompute; only residency changes."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -251,6 +316,12 @@ class GrugModelConfig:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
+        unknown_save_names = set(self.remat_save_names) - REMAT_SAVEABLE_NAMES
+        if unknown_save_names:
+            raise ValueError(
+                f"remat_save_names contains names with no call site: {sorted(unknown_save_names)}; "
+                f"choose from {sorted(REMAT_SAVEABLE_NAMES)}"
+            )
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -377,7 +448,11 @@ class GrugModelConfig:
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     """Non-parametric RMS norm over the last dimension."""
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    # Name the variance, not the rsqrt: the rsqrt vjp reads its *input*, so saving the scale
+    # would leave the full-width square-mean reduce in the backward recompute.
+    variance = tree_checkpoint_name(
+        jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True), QK_NORM_VARIANCE_REMAT_NAME
+    )
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
@@ -582,8 +657,8 @@ class CausalSelfAttention(eqx.Module):
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;
         # match v to that dynamic sharding before the per-head projection math.
         aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+        dot = tree_checkpoint_name(jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True), XSA_MOMENT_REMAT_NAME)
+        v_norm_sq = tree_checkpoint_name(jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True), XSA_MOMENT_REMAT_NAME)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
@@ -610,7 +685,9 @@ class RMSNorm(eqx.Module):
         weight = unshard(self.weight)
         dtype = x.dtype
         x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        # Name the variance, not the rsqrt: the rsqrt vjp reads its *input*, so saving the
+        # scale would leave the full-width square-mean reduce in the backward recompute.
+        variance = tree_checkpoint_name(jnp.mean(jnp.square(x), axis=-1, keepdims=True), RMS_NORM_VARIANCE_REMAT_NAME)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
 
@@ -979,14 +1056,14 @@ class MoEMLP(eqx.Module):
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
+        selected_experts = tree_checkpoint_name(selected_experts[:, :-1], ROUTER_SELECTED_EXPERTS_REMAT_NAME)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        combine_weights = tree_checkpoint_name(combine_weights_f.astype(x.dtype), ROUTER_COMBINE_WEIGHTS_REMAT_NAME)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
         router_stats = _local_routing_stats(
@@ -1244,18 +1321,23 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
+        # `remat_save_names` extends every mode with device-resident saves of the named
+        # per-token tensors; the empty default reproduces each mode's existing policy exactly.
+        extra_save_names = list(cfg.remat_save_names)
         if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES, *extra_save_names)
         elif cfg.remat_mode == "offload_carry":
             # XLA stacks each offloaded name's scan residuals into one pinned allocation. Adding
             # names is therefore not free: carry plus the attention residuals asked for 72.56 GiB
             # per rank, above the node's host budget.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[],
+                names_which_can_be_saved=extra_save_names,
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",
             )
+        elif extra_save_names:
+            remat_policy = jax.checkpoint_policies.save_only_these_names(*extra_save_names)
         else:
             remat_policy = None
 

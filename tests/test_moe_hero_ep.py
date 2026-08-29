@@ -3,6 +3,7 @@
 
 import math
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -10,6 +11,7 @@ import tomllib
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 from unittest.mock import patch
 from urllib.parse import unquote
 
@@ -20,13 +22,13 @@ import jmp
 import numpy as np
 import optax
 import pytest
-from typing import NamedTuple
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.grug._moe import ep_ragged_all_to_all as ragged_backend
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
@@ -484,6 +486,157 @@ def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, 
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.model.remat_mode == expected_remat_mode
+
+
+def _remat_probe_config(**overrides):
+    """A tiny hero-structured config: ragged transport, latent MoE, hybrid KV, XSA, QB HIST."""
+    return model.GrugModelConfig(
+        vocab_size=512,
+        hidden_dim=128,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_shared_experts=2,
+        num_experts=8,
+        num_experts_per_token=2,
+        latent_dim=64,
+        qb_estimator=model.QbEstimator.HIST,
+        qb_hist_bins=16,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=32,
+        max_seq_len=64,
+        sliding_window=32,
+        global_every=4,
+        capacity_factor=1.15,
+        moe_implementation="ragged_all_to_all",
+        rope_fused=True,
+        remat_mode="offload_carry",
+        report_capacity_overflow=True,
+        **overrides,
+    )
+
+
+def _lower_hero_loss_grad(cfg, *, debug_info: bool = True):
+    """Lower the loss gradient of the scanned Block stack on an abstract 4-device mesh."""
+    mesh, token_pspec = model.debug_mesh_and_token_pspec(num_devices=4)
+    tokens = jnp.zeros((8, cfg.max_seq_len), dtype=jnp.int32)
+    loss_weight = jnp.ones((8, cfg.max_seq_len), dtype=jnp.float32)
+
+    def build_and_grad(tokens, loss_weight):
+        sharded_tokens = jax.sharding.reshard(tokens, token_pspec)
+        sharded_weight = jax.sharding.reshard(loss_weight, token_pspec)
+        built = model.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        built = jax.tree.map(
+            lambda x: x.astype(jnp.bfloat16) if isinstance(x, jax.Array) and x.dtype == jnp.float32 else x,
+            built,
+        )
+        params, static = eqx.partition(built, eqx.is_array)
+
+        def loss(params):
+            return eqx.combine(params, static).next_token_loss(sharded_tokens, sharded_weight)
+
+        return jax.grad(loss)(params)
+
+    with use_abstract_mesh(mesh):
+        return (
+            jax.jit(build_and_grad)
+            .trace(tokens, loss_weight)
+            .lower(lowering_platforms=("cuda",))
+            .as_text(dialect="hlo", debug_info=debug_info)
+        )
+
+
+def _remat_region_op_counts(hlo: str) -> dict[str, int]:
+    """Count HLO compute ops whose metadata places them in the checkpoint recompute region."""
+    counts: dict[str, int] = {}
+    for line in hlo.splitlines():
+        if "rematted_computation" not in line:
+            continue
+        matched = re.match(r"\s*(?:ROOT\s+)?%?[\w.\-]+ = .* (\w[\w-]*)\(", line)
+        if matched is None:
+            continue
+        op = matched.group(1)
+        counts[op] = counts.get(op, 0) + 1
+    return counts
+
+
+def test_remat_save_names_are_inert_until_saved():
+    # The named call sites must not perturb the lowered step on their own: stripping every
+    # name the bundle can save, with the carry offload name left in place, lowers to
+    # byte-identical HLO when remat_save_names is empty. Debug info stays off because the
+    # wrappers shift source columns in the metadata without changing any op.
+    default_hlo = _lower_hero_loss_grad(_remat_probe_config(), debug_info=False)
+
+    bundle = set(model.REMAT_SAVE_BUNDLES["cheap_recompute"])
+
+    def strip_bundle_names(original):
+        def wrapped(tree, name):
+            return tree if name in bundle else original(tree, name)
+
+        return wrapped
+
+    with (
+        patch.object(model, "tree_checkpoint_name", strip_bundle_names(model.tree_checkpoint_name)),
+        patch.object(ragged_backend, "tree_checkpoint_name", strip_bundle_names(ragged_backend.tree_checkpoint_name)),
+    ):
+        stripped_hlo = _lower_hero_loss_grad(_remat_probe_config(), debug_info=False)
+
+    assert default_hlo == stripped_hlo
+
+
+def test_remat_save_bundle_deletes_recompute_without_touching_collectives():
+    default_hlo = _lower_hero_loss_grad(_remat_probe_config())
+    bundle_hlo = _lower_hero_loss_grad(_remat_probe_config(remat_save_names=model.REMAT_SAVE_BUNDLES["cheap_recompute"]))
+
+    default_remat = _remat_region_op_counts(default_hlo)
+    bundle_remat = _remat_region_op_counts(bundle_hlo)
+    # The saved names delete their upstream recompute: the router top-(K+1) selection and
+    # the norm variance reduces no longer appear in the recompute region.
+    assert default_remat.get("topk", 0) > 0
+    assert bundle_remat.get("topk", 0) == 0
+    assert bundle_remat.get("reduce", 0) < default_remat.get("reduce", 0)
+
+    # The treatment changes only which named tensors are saved: every collective count is
+    # untouched, in particular no transport buffer became a saved residual.
+    for op in ("ragged-all-to-all", "all-gather", "all-to-all", "all-reduce", "reduce-scatter"):
+        assert default_hlo.count(f" {op}(") == bundle_hlo.count(f" {op}(")
+
+    # The saved routing decision shows up as a scan residual stacked over the layer axis
+    # (num_layers=2, 512 local tokens, top-2), instead of being rematerialized.
+    assert "s32[2,512,2]" not in default_hlo
+    assert "s32[2,512,2]" in bundle_hlo
+
+
+def test_remat_save_names_reject_unknown_and_carry_names():
+    with pytest.raises(ValueError, match="no call site"):
+        _remat_probe_config(remat_save_names=("grug_typo",))
+    # The layer carry is the offload target, not a saveable.
+    with pytest.raises(ValueError, match="no call site"):
+        _remat_probe_config(remat_save_names=(model.LAYER_CARRY_REMAT_NAME,))
+
+
+def test_remat_save_flag_plumbs_the_bundle_into_the_model():
+    step = launch.build_diagnostic_run(
+        run_id="remat-save-bundle",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        remat_save="cheap_recompute",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_save_names == model.REMAT_SAVE_BUNDLES["cheap_recompute"]
+    assert config.model.remat_mode == "offload_carry"
+
+    default_step = launch.build_diagnostic_run(run_id="remat-save-default", dp_racks=1, num_steps=1, version="dev")
+    default_config = default_step.build_config(StepContext.for_fingerprint(default_step.runtime_args, default_step.deps))
+    assert default_config.model.remat_save_names == ()
+
+    with pytest.raises(ValueError, match="remat_save"):
+        launch.build_diagnostic_run(run_id="remat-save-typo", dp_racks=1, num_steps=1, version="dev", remat_save="typo")
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
