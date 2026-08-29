@@ -723,3 +723,36 @@ salted tree, uniform VMODULE); c4 keep = median(c4 pair) - median(id
 pair) > max(0.17, 3 x contemporaneous sd); then best-rung confirmation +
 fresh no-wheel salted control; c2 only after a genuine c4 keep-class
 result.
+
+## 2026-08-30 ~01:40Z: C3 RETRACTED — the "replicated NS" was an analysis artifact
+
+Root-cause agent (three independent verifications: static, CPU repro with
+the exact optimizer build, re-analysis of BOTH the diagnostic and the
+11-rack hero profiles): Newton-Schulz sharding is NOT broken anywhere.
+The two misreads in the earlier diagnostic: (1) the 110,592-CTA GEMMs are
+the SHARDED expert NS inside shard_map (local operand bf16[288,3072,3072]
+= 48 layers x 6 LOCAL experts; 288x24x16 tiles = 110,592), scope
+grugmuon_hero.py:204 — each device does 1/64 of the work as designed;
+(2) 10,871,635,968 B matches BOTH 48x6144x9216x4 AND 48x6x3072x3072x4 —
+a byte-size coincidence; the buffers are the per-device fp32 momentum
+SHARDS of the three expert leaves under offload_opt_state=True, already
+1/64-sharded. The dense 3D padded-stack sharded path is also engaged
+(line-325 pads, line-326 reshard a2as visible in-trace). The live hero
+profiles show identical anatomy. The earlier "smoking gun" logbook entry
+is WRONG and superseded by this one. Cost of the error: zero arms (the
+falsification ran before any treatment) — the review-first protocol
+working as intended.
+
+Genuine residue -> C3' (opt-state offload titration): the tail's real
+copy cost is the offload feature itself (~65 GB/step momentum round-trips
+= ~450-530 ms partially overlapped + embed Adam ~106 ms). Keeping ALL
+three expert momentum shards on device (+32.6 GB) does NOT fit (peak
+112.75 + 32.6 > 138.2 threshold); keeping ONE (+10.9 GB -> peak ~123.6)
+fits comfortably and deletes ~1/3 of the traffic (~+0.2 MFU class); TWO
+(+21.7 -> ~134.5) sits 3.7 GiB from the churn cliff. Treatment shape:
+per-leaf offload selection in initial_state (code knob, default =
+current all-offload); checkpoint-compat question (memory-kind change on
+restore templates) must be answered in review. Latent footgun for the
+eventual PR: an optimizer harness calling update() outside set_mesh
+silently retraces onto the replicated fallback — hardening = derive the
+mesh from the param sharding or assert non-empty.
