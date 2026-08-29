@@ -56,7 +56,7 @@ def dispatch_grug_training_run(
     max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
-    setup_scripts: Sequence[str] | None = None,
+    pip_packages: Sequence[str] | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -76,7 +76,9 @@ def dispatch_grug_training_run(
         environment=create_environment(
             env_vars=env_vars,
             extras=extras_for_resources(resources),
-            setup_scripts=list(setup_scripts) if setup_scripts else None,
+            # Installed by the default setup AFTER uv sync, so a wheel here overrides the locked
+            # one without suppressing the sync (explicit setup_scripts would replace it wholesale).
+            pip_packages=list(pip_packages) if pip_packages else None,
         ),
         max_retries_failure=max_retries_failure,
         max_task_failures=max_task_failures,

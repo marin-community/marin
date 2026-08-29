@@ -352,10 +352,10 @@ class GrugRunConfig:
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
-    # Shell scripts run on each worker before the task command, in order. Measurement harnesses
-    # use this to sideload a self-built jax-cuda13-pjrt wheel; empty means the bundled env runs
-    # exactly as locked.
-    worker_setup_scripts: tuple[str, ...] = ()
+    # Extra pip installs applied on each worker after the env sync, in order. Measurement
+    # harnesses use this to substitute a self-built jax-cuda13-pjrt wheel (a fetchable URL);
+    # empty means the bundled env runs exactly as locked.
+    worker_pip_packages: tuple[str, ...] = ()
 
 
 def build_train_dataset(
@@ -1267,7 +1267,7 @@ def run_grug(config: GrugRunConfig) -> None:
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
         max_task_failures=config.max_task_failures,
-        setup_scripts=config.worker_setup_scripts,
+        pip_packages=config.worker_pip_packages,
     )
 
 

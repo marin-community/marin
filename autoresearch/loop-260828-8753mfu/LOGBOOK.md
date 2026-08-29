@@ -662,3 +662,35 @@ the abstract-mesh context). If the LIVE HERO takes the same fallback,
 fixing it is +0.6-0.8 MFU at hero scale AND deletes most of the exposed
 offload leg (C1's target collapses into C3). Root-cause agent running.
 C8 rider: empty (no hoistable fa4 precompute).
+
+## 2026-08-30 ~00:20Z: codex H11 review — NO-GO parsed, all P0s fixed
+
+- P0-1 sideload suppressed uv sync (worker would have NO venv — the
+  mok-era semantics differed; on this iris a setup_scripts list replaces
+  the default wholesale, and the bundle excludes .venv): FIXED by
+  switching to the pip route — GrugRunConfig.worker_pip_packages ->
+  dispatch pip_packages -> create_environment; the default setup keeps uv
+  sync and installs the wheel AFTER it. pjrt_sideload.py deleted.
+  --pjrt-wheel now takes a fetchable URL (presigned S3 works; 7-day link
+  generated via rclone link).
+- P0-2 loaded-binary proof: custody chain documented — uv's task-log
+  line '+ jax-cuda13-pjrt==0.11.1+marin.ce6db0d2c555' proves the exact
+  version installed into IRIS_VENV after sync; codex itself verified
+  nothing installs after; scoring requires grepping that line per arm.
+- P0-3 knob not plumbed: arm.sh now passes -e XLA_RAGGED_A2A_DK_CTAS_PER_SM
+  (empty default = identity), guards it behind TREATMENT=1, and records a
+  dk_ctas column in arms.tsv.
+- P1-4 mismatch hangs -> compile-ceiling kill: accepted, classification
+  noted in the plan.
+- P1-5 identity weaker than claimed (2-file branch diff, unpinned
+  toolchain, vacuous delta grep): accepted with the codex identity-miss
+  protocol — a low identity draw freezes the sweep and triggers a second
+  identity draw + a contemporaneous stock-wheel salted control; wheel
+  sha256 recorded (from the CI output).
+- P1-6 pooling: adopted — the keep rule compares WITHIN the new wheel:
+  interleaved id-a, c4-a, id-b, c4-b; median(c4) - median(id) >
+  max(0.17, 3 x contemporaneous sd); pre-salt draws inform noise only.
+- P1-7 thunk=3 VMODULE too chatty (~12k lines/step across ranks): DROPPED
+  from scored arms. Engagement: xplane kernel grid dims from the profile
+  tail on ONE treatment draw (592 vs 1184), plus the custody line; the
+  identity arm needs no cta line (identical by design).

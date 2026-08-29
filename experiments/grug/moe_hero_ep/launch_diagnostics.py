@@ -45,7 +45,6 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
-from experiments.grug.moe_hero_ep.pjrt_sideload import pjrt_wheel_install_script
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -286,7 +285,7 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
-            worker_setup_scripts=((pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel is not None else ()),
+            worker_pip_packages=((pjrt_wheel,) if pjrt_wheel is not None else ()),
         )
 
     return ArtifactStep(
@@ -473,8 +472,9 @@ def build_diagnostic_run(
 @click.option(
     "--pjrt-wheel",
     default=None,
-    help="fsspec URL of a self-built jax-cuda13-pjrt wheel (or a directory holding one); workers "
-    "reinstall exactly that package before the task starts.",
+    help="Fetchable wheel URL (https, presigned object storage) of a self-built jax-cuda13-pjrt; "
+    "workers pip-install it after the env sync, replacing the locked wheel. The task log's "
+    "'+ jax-cuda13-pjrt==<version>' line is the install custody proof.",
 )
 @build_options
 def main(
