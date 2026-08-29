@@ -80,11 +80,15 @@ SEED = 17
 
 
 class SamplerKind(StrEnum):
-    """How each step's rollout prompts are drawn from the graded pool."""
+    """How each step's rollout prompts are drawn from the graded pool.
+
+    Round 1 also ran a ``grade-uniform`` arm (equal budget per grade); it
+    trailed every other curriculum arm and was dropped from the catalog.
+    """
 
     NAIVE = "naive"
     THOMPSON = "thompson"
-    GRADE_UNIFORM = "grade-uniform"
+    LEARNABILITY = "learnability"
     GRADE_ADAPTIVE = "grade-adaptive"
     GRADE_PRIOR = "grade-prior"
 
@@ -101,16 +105,50 @@ BASE_OVERRIDES = (
 )
 
 
-def sampler_overrides(sampler: SamplerKind) -> tuple[str, ...]:
+# DAPO-style dynamic sampling: drop zero-advantage GRPO groups and keep
+# drawing batches until a full batch of informative groups accumulates. The
+# curriculum sampler is updated on raw pre-filter batches, so its statistics
+# stay unbiased under filtering.
+DAPO_OVERRIDE = "trainer.algorithm.dynamic_sampling.type=filter"
+
+
+@dataclass(frozen=True)
+class ArmSpec:
+    """One experiment arm: a sampling policy, optionally with DAPO filtering."""
+
+    name: str
+    sampler: SamplerKind
+    dapo: bool = False
+
+
+ARMS = {
+    spec.name: spec
+    for spec in (
+        ArmSpec("naive", SamplerKind.NAIVE),
+        ArmSpec("thompson", SamplerKind.THOMPSON),
+        ArmSpec("learnability", SamplerKind.LEARNABILITY),
+        ArmSpec("grade-adaptive", SamplerKind.GRADE_ADAPTIVE),
+        ArmSpec("grade-prior", SamplerKind.GRADE_PRIOR),
+        ArmSpec("naive-dapo", SamplerKind.NAIVE, dapo=True),
+        ArmSpec("thompson-dapo", SamplerKind.THOMPSON, dapo=True),
+    )
+}
+
+
+def arm_overrides(spec: ArmSpec) -> tuple[str, ...]:
     """Per-arm hydra overrides; curriculum arms select a data.sampling policy.
 
-    The naive arm keeps ``data.sampling.kind`` at its null default, i.e. the stock
-    uniform shuffle without replacement. Curriculum arms use the branch defaults
-    for decay, priors, and adaptive thresholds so arms differ only in kind.
+    The naive sampler keeps ``data.sampling.kind`` at its null default, i.e. the
+    stock uniform shuffle without replacement. Curriculum arms use the branch
+    defaults for decay, priors, and adaptive thresholds so arms differ only in
+    kind.
     """
-    if sampler is SamplerKind.NAIVE:
-        return BASE_OVERRIDES
-    return (*BASE_OVERRIDES, f"data.sampling.kind={sampler.value}")
+    overrides = BASE_OVERRIDES
+    if spec.sampler is not SamplerKind.NAIVE:
+        overrides = (*overrides, f"data.sampling.kind={spec.sampler.value}")
+    if spec.dapo:
+        overrides = (*overrides, DAPO_OVERRIDE)
+    return overrides
 
 
 @dataclass(frozen=True)
@@ -297,21 +335,21 @@ data:
 
 @dataclass(frozen=True)
 class CurriculumArm:
-    sampler: SamplerKind
+    spec: ArmSpec
     rl: ArtifactStep[SkyRLModel]
     evaluation: ArtifactStep[EvaluationResult]
 
 
 def build_arm(
     *,
-    sampler: SamplerKind,
+    spec: ArmSpec,
     preset: ScalePreset,
     version: str | None,
     model: ArtifactStep[LevanterCheckpoint],
     pool: ArtifactStep,
 ) -> CurriculumArm:
     suffix = "" if preset is FULL else f"-{preset.label}"
-    rl_base_name = f"checkpoints/{EXPERIMENT_NAME}/{sampler.value}{suffix}"
+    rl_base_name = f"checkpoints/{EXPERIMENT_NAME}/{spec.name}{suffix}"
     rl = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(rl_base_name),
@@ -334,7 +372,7 @@ def build_arm(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
-            overrides=sampler_overrides(sampler),
+            overrides=arm_overrides(spec),
         ),
         IrisSkyRLExecution(
             cluster=CLUSTER,
@@ -352,7 +390,7 @@ def build_arm(
     # The eval artifact is keyed on the model name; include the owner so two
     # users at the same fixed version evaluate their own checkpoints rather
     # than sharing one cached result (the RL step is already user-owned).
-    evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{sampler.value}{suffix}"
+    evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{spec.name}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation = eval_step(
         SkyRLEvaluationModel(
@@ -377,17 +415,14 @@ def build_arm(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return CurriculumArm(sampler=sampler, rl=rl, evaluation=evaluation)
+    return CurriculumArm(spec=spec, rl=rl, evaluation=evaluation)
 
 
-def build_arms(*, samplers: tuple[SamplerKind, ...], scale: str, version: str | None = None) -> dict[str, CurriculumArm]:
+def build_arms(*, specs: tuple[ArmSpec, ...], scale: str, version: str | None = None) -> dict[str, CurriculumArm]:
     preset = SCALES[scale]
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
-    return {
-        sampler.value: build_arm(sampler=sampler, preset=preset, version=version, model=model, pool=pool)
-        for sampler in samplers
-    }
+    return {spec.name: build_arm(spec=spec, preset=preset, version=version, model=model, pool=pool) for spec in specs}
 
 
 @click.command(help=__doc__)
@@ -395,8 +430,8 @@ def build_arms(*, samplers: tuple[SamplerKind, ...], scale: str, version: str | 
     "--arm",
     "arms",
     multiple=True,
-    type=click.Choice([kind.value for kind in SamplerKind]),
-    default=(SamplerKind.NAIVE.value,),
+    type=click.Choice(sorted(ARMS)),
+    default=("naive",),
     show_default=True,
 )
 @click.option("--scale", type=click.Choice(sorted(SCALES)), default="smoke", show_default=True)
@@ -409,7 +444,7 @@ def build_arms(*, samplers: tuple[SamplerKind, ...], scale: str, version: str | 
 )
 @build_options
 def main(arms: tuple[str, ...], scale: str, stage: str) -> dict[str, ArtifactStep]:
-    built = build_arms(samplers=tuple(SamplerKind(arm) for arm in arms), scale=scale)
+    built = build_arms(specs=tuple(ARMS[arm] for arm in arms), scale=scale)
     return {name: getattr(arm, stage) for name, arm in built.items()}
 
 

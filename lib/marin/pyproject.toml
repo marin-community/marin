@@ -162,6 +162,12 @@ dedup = [
     "marin-dupekit",
 ]
 
+# Procedural task generation for the curriculum-RL pool; pinned to the version
+# skyrl-gym uses so pool build and training score identically.
+reasoning-gym = [
+    "reasoning-gym==0.1.25",
+]
+
 datakit = [
     "luxical",
     "huggingface-hub",

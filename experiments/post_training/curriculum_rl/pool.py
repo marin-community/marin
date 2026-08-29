@@ -1,22 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Difficulty-graded math problem pool for the curriculum-RL experiment.
+"""Difficulty-graded problem pool for the curriculum-RL experiment.
 
 The pool is one partition shared by every sampling arm: bins ordered by grade
-(0 easiest), each bin a pinned slice of a public math dataset. Rows use the
-SkyRL parquet schema with a per-row ``env_class`` so one training run mixes
-verifier environments freely; ``extra_info`` carries the bin name and grade for
+(0 easiest), each bin either a pinned slice of a public math dataset or a
+seeded procedurally generated reasoning-gym task family. Rows use the SkyRL
+parquet schema with a per-row ``env_class`` so one training run mixes verifier
+environments freely; ``extra_info`` carries the bin name and grade for
 curriculum samplers and per-source metrics.
+
+Math bins are graded from source metadata (MATH level, contest provenance).
+Reasoning-gym bins are graded a priori from generator difficulty knobs, so
+grades encode a genuine prior rather than a measured solve rate.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from datasets import concatenate_datasets, load_dataset
 from fray.types import ResourceConfig
@@ -49,6 +55,7 @@ MATH500_REVISION = "6e4ed1a"
 
 GSM8K_ENV = "gsm8k"
 ANSWER_LINE_ENV = "aime"
+REASONING_GYM_ENV = "reasoning_gym"
 
 GSM8K_INSTRUCTION = ' Let\'s think step by step and output the final answer after "####".'
 # The aime env verifies with the Minerva "Answer: ..." extraction (not \boxed),
@@ -81,14 +88,15 @@ class PoolBin:
     env_class: str
 
 
-# Grades order bins easiest to hardest. MATH levels 1-2 sit in one bin because
-# level 1 alone has only 564 train rows.
-GSM8K_BIN = PoolBin("g0-gsm8k", grade=0, env_class=GSM8K_ENV)
-MATH_L12_BIN = PoolBin("g1-math-l12", grade=1, env_class=ANSWER_LINE_ENV)
-MATH_L3_BIN = PoolBin("g2-math-l3", grade=2, env_class=ANSWER_LINE_ENV)
-MATH_L4_BIN = PoolBin("g3-math-l4", grade=3, env_class=ANSWER_LINE_ENV)
-MATH_L5_BIN = PoolBin("g4-math-l5", grade=4, env_class=ANSWER_LINE_ENV)
-AIME_BIN = PoolBin("g5-aime", grade=5, env_class=ANSWER_LINE_ENV)
+# Grades order bins easiest to hardest on one shared 0-10 scale. MATH levels
+# 1-2 sit in one bin because level 1 alone has only 564 train rows. Two bins
+# may share a grade (they are distinct arms of the same difficulty band).
+GSM8K_BIN = PoolBin("g01-gsm8k", grade=1, env_class=GSM8K_ENV)
+MATH_L12_BIN = PoolBin("g02-math-l12", grade=2, env_class=ANSWER_LINE_ENV)
+MATH_L3_BIN = PoolBin("g04-math-l3", grade=4, env_class=ANSWER_LINE_ENV)
+MATH_L4_BIN = PoolBin("g06-math-l4", grade=6, env_class=ANSWER_LINE_ENV)
+MATH_L5_BIN = PoolBin("g08-math-l5", grade=8, env_class=ANSWER_LINE_ENV)
+AIME_BIN = PoolBin("g10-aime", grade=10, env_class=ANSWER_LINE_ENV)
 MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 1": MATH_L12_BIN,
     "Level 2": MATH_L12_BIN,
@@ -98,6 +106,107 @@ MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
 }
 VALIDATION_GSM8K_SOURCE = "val-gsm8k"
 VALIDATION_MATH500_SOURCE = "val-math500"
+
+
+@dataclass(frozen=True)
+class ReasoningGymBin:
+    """A seeded, procedurally generated reasoning-gym bin.
+
+    ``knobs`` are the generator's difficulty parameters; the grade is assigned
+    a priori from those knobs, before any model sees a sample.
+    """
+
+    pool_bin: PoolBin
+    task: str
+    size: int
+    seed: int
+    knobs: Mapping[str, object] = field(default_factory=dict)
+
+
+RG_TRAIN_ROWS = 1200
+RG_VALIDATION_ROWS = 128
+
+# A-priori grading rationale: single small additions are trivial (grade 0);
+# longer mixed-sign chains with more digits track MATH mid-levels; spelling
+# and base conversion are hard for a subword-tokenized 0.6B model, scaling
+# with word length and base size.
+REASONING_GYM_BINS = (
+    ReasoningGymBin(
+        PoolBin("g00-rg-sum-easy", grade=0, env_class=REASONING_GYM_ENV),
+        task="chain_sum",
+        size=RG_TRAIN_ROWS,
+        seed=101,
+        knobs={"min_terms": 2, "max_terms": 2, "min_digits": 1, "max_digits": 2},
+    ),
+    ReasoningGymBin(
+        PoolBin("g03-rg-sum-med", grade=3, env_class=REASONING_GYM_ENV),
+        task="chain_sum",
+        size=RG_TRAIN_ROWS,
+        seed=102,
+        knobs={"min_terms": 3, "max_terms": 4, "min_digits": 2, "max_digits": 3},
+    ),
+    ReasoningGymBin(
+        PoolBin("g05-rg-spell-short", grade=5, env_class=REASONING_GYM_ENV),
+        task="spell_backward",
+        size=RG_TRAIN_ROWS,
+        seed=103,
+        knobs={"min_word_len": 3, "max_word_len": 5},
+    ),
+    ReasoningGymBin(
+        PoolBin("g05-rg-base-small", grade=5, env_class=REASONING_GYM_ENV),
+        task="base_conversion",
+        size=RG_TRAIN_ROWS,
+        seed=104,
+        knobs={"min_base": 2, "max_base": 10, "min_value": 0, "max_value": 500},
+    ),
+    ReasoningGymBin(
+        PoolBin("g07-rg-sum-hard", grade=7, env_class=REASONING_GYM_ENV),
+        task="chain_sum",
+        size=RG_TRAIN_ROWS,
+        seed=105,
+        knobs={"min_terms": 5, "max_terms": 6, "min_digits": 4, "max_digits": 4, "allow_negation": True},
+    ),
+    ReasoningGymBin(
+        PoolBin("g09-rg-spell-long", grade=9, env_class=REASONING_GYM_ENV),
+        task="spell_backward",
+        size=RG_TRAIN_ROWS,
+        seed=106,
+        knobs={"min_word_len": 8, "max_word_len": 10},
+    ),
+    ReasoningGymBin(
+        PoolBin("g09-rg-base-large", grade=9, env_class=REASONING_GYM_ENV),
+        task="base_conversion",
+        size=RG_TRAIN_ROWS,
+        seed=107,
+        knobs={"min_base": 11, "max_base": 16, "min_value": 100, "max_value": 1000},
+    ),
+)
+
+# Held-out generator draws at the medium difficulty of each family, for
+# in-run validation curves on the procedural tasks.
+VALIDATION_REASONING_GYM_BINS = (
+    ReasoningGymBin(
+        PoolBin("val-rg-sum", grade=3, env_class=REASONING_GYM_ENV),
+        task="chain_sum",
+        size=RG_VALIDATION_ROWS,
+        seed=201,
+        knobs={"min_terms": 3, "max_terms": 4, "min_digits": 2, "max_digits": 3},
+    ),
+    ReasoningGymBin(
+        PoolBin("val-rg-spell", grade=5, env_class=REASONING_GYM_ENV),
+        task="spell_backward",
+        size=RG_VALIDATION_ROWS,
+        seed=202,
+        knobs={"min_word_len": 3, "max_word_len": 5},
+    ),
+    ReasoningGymBin(
+        PoolBin("val-rg-base", grade=5, env_class=REASONING_GYM_ENV),
+        task="base_conversion",
+        size=RG_VALIDATION_ROWS,
+        seed=203,
+        knobs={"min_base": 2, "max_base": 10, "min_value": 0, "max_value": 500},
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -216,6 +325,29 @@ def _math500_records() -> list[dict[str, object]]:
     ]
 
 
+def _reasoning_gym_records(rg_bin: ReasoningGymBin, split: str) -> list[dict[str, object]]:
+    # Optional dependency: only the remote pool build installs the
+    # reasoning-gym group, so keep the import out of module scope.
+    import reasoning_gym  # noqa: PLC0415
+
+    dataset = reasoning_gym.create_dataset(rg_bin.task, size=rg_bin.size, seed=rg_bin.seed, **rg_bin.knobs)
+    records = []
+    for index, entry in enumerate(dataset):
+        # The reasoning_gym env re-scores against the full entry (question,
+        # answer, metadata), so the ground truth carries it verbatim.
+        ground_truth = json.dumps({"task": rg_bin.task, "entry": entry}, sort_keys=True)
+        records.append(
+            _pool_record(
+                question=entry["question"],
+                answer=ground_truth,
+                pool_bin=rg_bin.pool_bin,
+                split=split,
+                index=index,
+            )
+        )
+    return records
+
+
 def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
     """Drop rows whose templated prompt would be skipped by the trainer."""
     tokenizer = AutoTokenizer.from_pretrained(QWEN3_MODEL, revision=QWEN3_REVISION)
@@ -241,11 +373,13 @@ def write_pool_parquet(config: PoolParquetConfig) -> None:
             *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
             *_math_records(),
             *_aime_records(),
+            *(record for rg_bin in REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "train")),
         ]
     )
     validation = [
         *_gsm8k_records("test", GSM8K_VALIDATION_ROWS, data_source=VALIDATION_GSM8K_SOURCE),
         *_math500_records(),
+        *(record for rg_bin in VALIDATION_REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "test")),
     ]
     for records, filename in ((train, TRAIN_FILENAME), (validation, VALIDATION_FILENAME)):
         destination = prefix_join(config.output_path, filename)
@@ -258,6 +392,10 @@ def pool_step(name: str, version: str) -> ArtifactStep[Artifact]:
         name=name,
         version=version,
         artifact_type=Artifact,
-        run=remote(write_pool_parquet, resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g")),
+        run=remote(
+            write_pool_parquet,
+            resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="32g"),
+            pip_dependency_groups=["reasoning-gym"],
+        ),
         build_config=lambda ctx: PoolParquetConfig(output_path=ctx.output_path),
     )
