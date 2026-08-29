@@ -40,6 +40,14 @@ if [ -z "${ALLOW_DIRTY:-}" ] && [ -n "$dirty" ]; then
   exit 1
 fi
 
+# JAX_* env leaks into train tasks via dispatch forwarding, and this fork enables pipelined host
+# offloading at optimization level O1+ regardless of its flag -- a leaked level would silently
+# turn a control into an H10 treatment.
+if [ -n "${JAX_OPTIMIZATION_LEVEL:-}" ]; then
+  echo "JAX_OPTIMIZATION_LEVEL is set (${JAX_OPTIMIZATION_LEVEL}); unset it -- it changes compiler passes behind the arms' backs" >&2
+  exit 1
+fi
+
 # A flag-based treatment must be deliberate: an ARM_XLA_FLAGS value leaking from the supervisor
 # shell into a "control" draw silently runs the treatment and records nothing -- the null delta
 # then reads as "dead lever". Controls run with TREATMENT unset and ARM_XLA_FLAGS empty.

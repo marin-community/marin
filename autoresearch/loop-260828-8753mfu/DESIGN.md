@@ -234,13 +234,27 @@ anything breaking hero restore.
 
 ## Decision rules
 
-- keep: same-night pair shows treatment > control by >0.15 MFU with guards
-  clean → commit stays, becomes the new control for later iterations.
-- discard: delta <= noise or guards fail → revert commit.
-- crash/invalid: watchdog kill, preemption, incomplete window → arm is
-  invalid, does not consume the hypothesis; resubmit once before discarding.
-- Every keep is re-verified implicitly by later same-night controls (the
-  control arm always runs the current kept stack).
+(The calibrated rules in "Metric and guards" are authoritative; this section
+restates them — an earlier draft here allowed single-pair keeps and
+auto-discard on any guard excursion, both wrong.)
+
+- keep: >=2 treatment draws and >=2 bracketing controls, run-MEDIAN delta >
+  max(0.15, 3 x sd̂_run) (currently 0.16) with calibrated guards clean →
+  commit stays. A single C/T pair NEVER keeps.
+- discard: replicated delta <= bar with engagement CONFIRMED → dead lever
+  (record which: not-engaged / engaged-null / engaged-negative). A guard
+  excursion within ~2x the calibrated band triggers another draw or an
+  investigation, not an automatic kill; far-out excursions (non-finite,
+  drops >> band) are hard fails.
+- crash/invalid: watchdog kill, preemption, incomplete window, wrong first
+  step → arm is invalid, does not consume the hypothesis; resubmit with a
+  FRESH RID/VERSION after reading the task logs (an OOM ladders, an infra
+  failure retries; never classify from the watchdog marker alone).
+- ATTRIBUTION FREEZE: never pool controls or treatment draws across a
+  change in the kept stack (e.g. a slop keep); when the stack changes,
+  rerun fresh bracketing controls, and prior results become claims about
+  the old stack only. Interacting keeps (shared scheduler resources or
+  memory budgets) get a back-ablation before promotion.
 
 ## Review protocol
 

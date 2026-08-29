@@ -20,3 +20,16 @@
 08:46:53 t=1211s train=running step=-1
 08:47:58 t=1276s train=running step=-1
 08:49:03 t=1341s train=running step=-1
+08:50:15 t=1406s train=running step=30003
+08:50:15 first observed step=30003, step budget 1200s starts now
+08:51:27 t=1478s train=running step=30007
+08:52:39 t=1550s train=running step=30011
+08:53:50 t=1622s train=running step=30016
+08:55:02 t=1692s train=running step=30019
+08:56:13 t=1764s train=running step=30023
+08:56:13 cancelling /mwittmann/mfl-slop90-a-coord: scored through step 30023 (19 past first)
+Cancelled jobs:
+  /mwittmann/mfl-slop90-a-coord/grug-train-mfl-slop90-a
+Cancelled jobs:
+  /mwittmann/mfl-slop90-a-coord
+WATCHDOG scored step=30023 first=30003
