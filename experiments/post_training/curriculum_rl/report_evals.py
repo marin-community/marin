@@ -22,10 +22,8 @@ ARMS = ("naive", "thompson", "grade-uniform", "grade-adaptive", "grade-prior")
 def main(version: str, evals: str) -> None:
     for arm in ARMS:
         root = StoragePath(f"{EVALS_ROOT}/curriculum-rl-{arm}/{evals}/{version}")
-        for child in root.iterdir_recursive():
+        for child in root.glob("**/*.json"):
             name = str(child)
-            if not name.endswith(".json"):
-                continue
             payload = json.loads(child.read_text())
             print(f"== {arm} {'/'.join(name.rsplit('/', 3)[-2:])}")
             print(json.dumps(payload)[:1500])
