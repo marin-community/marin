@@ -7,10 +7,13 @@
 #     STEP_BUDGET=1200 inner caps (20-min post-compile cap)
 #   - restore from the live hero's step-30000 checkpoint, mixture data (trained-router routing);
 #     NUM_STEPS is the ABSOLUTE stop step (checkpoint step + window), never a relative count
-#   - no profiler, no checkpoints, no eval
-#   - no MARIN_PJRT_WHEEL overlay: the xla-fork base's pinned wheel runs ragged EP64 (validated
-#     by the t8684-* arms 2026-08-28); COORD_SKIP_JAX_FLOOR=1 keeps the coordinator's stock jax
-#   - JAX_COMPILATION_CACHE_DIR rotated per run id (clique-init deadlock dodge)
+#   - no checkpoints, no eval; profiler off on SCORED arms (a profile tail on an otherwise-scored
+#     draw is allowed: PROFILE_STEPS>0 with PROFILE_START_STEP as an ABSOLUTE step past the
+#     scoring window, e.g. 30021)
+#   - no MARIN_PJRT_WHEEL overlay: the branch's uv.lock pins jax_cuda13_pjrt 0.11.1+marin.c9526e8c0272
+#   - JAX_COMPILATION_CACHE_DIR rotated per run id (clique-init deadlock dodge); a RESUBMITTED
+#     arm must use a fresh RID (and VERSION): reusing one merges W&B histories, reuses the
+#     leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts
 #
 # usage: RID=<run-id> VERSION=<calver> [REPO=<worktree>] [EXTRA_LAUNCH_ARGS="..."] arm.sh
 set -euo pipefail
@@ -22,11 +25,20 @@ VERSION="${VERSION:?set VERSION -- bump it per arm or the artifact layer reuses 
 LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(cd "${LOOP_DIR}/../.." && pwd)}"
 
+# Iris bundles the working tree, not HEAD: uncommitted edits (including another session writing
+# to a shared checkout) would ship silently and break arm attribution. The loop dir itself is
+# exempt -- it accumulates logs between commits.
+if [ -z "${ALLOW_DIRTY:-}" ] && git -C "$REPO" status --porcelain | grep -v "autoresearch/" | grep -q .; then
+  echo "refusing to submit from a dirty tree (set ALLOW_DIRTY=1 to override):" >&2
+  git -C "$REPO" status --porcelain | grep -v "autoresearch/" >&2
+  exit 1
+fi
+
 PRIORITY="${PRIORITY:-production}"
 ARM_TIMEOUT="${ARM_TIMEOUT:-3500}"
 NUM_STEPS="${NUM_STEPS:-30030}"
 TRAINING_DATA="${TRAINING_DATA:-mixture}"
-MASTER_PARAMS="${MASTER_PARAMS:-disabled}"
+MASTER_PARAMS="${MASTER_PARAMS:-device}"
 MOE_IMPL="${MOE_IMPL:-ragged_all_to_all}"
 RESTORE_FROM="${RESTORE_FROM:-s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000}"
 RESTORE_ARGS=()
@@ -48,7 +60,6 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e WANDB_API_KEY "${WANDB_API_KEY}" \
   -e WANDB_PROJECT marin_moe \
   -e MARIN_PREFIX s3://marin-us-east-02a/marin \
-  -e COORD_SKIP_JAX_FLOOR 1 \
   -e IRIS_PORT_JAX 32703 \
   -e AWS_MAX_ATTEMPTS 25 -e AWS_RETRY_MODE adaptive \
   -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
@@ -61,12 +72,13 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --processes-per-task 4 \
      --master-params "${MASTER_PARAMS}" \
      --training-data "${TRAINING_DATA}" \
-     --profile-steps "${PROFILE_STEPS:-0}" --profile-start-step "${PROFILE_START_STEP:-5}" \
+     --profile-steps "${PROFILE_STEPS:-0}" --profile-start-step "${PROFILE_START_STEP:-30021}" \
      --watch-interval 0 --eval-every 0 \
      --no-save-checkpoints \
      "${RESTORE_ARGS[@]}" \
      "${EXTRA[@]}" \
-     --version "${VERSION}" --run >/dev/null 2>&1
+     --version "${VERSION}" --run >"${LOOP_DIR}/${RID}-submit.log" 2>&1 \
+  || { echo "submit FAILED, tail of ${RID}-submit.log:" >&2; tail -20 "${LOOP_DIR}/${RID}-submit.log" >&2; exit 1; }
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \

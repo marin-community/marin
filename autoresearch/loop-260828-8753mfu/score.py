@@ -77,6 +77,13 @@ def main() -> None:
         # moving tokens the pooled one clips, so a throughput win that costs drops is not a win.
         "drop_fraction_max": max(drops) if drops else None,
         "drop_fraction_mean": round(statistics.fmean(drops), 6) if drops else None,
+        # Guard-series completeness: a killed run can leave the last rows of less-frequent keys
+        # unflushed, so a "last loss" alone can silently come from an earlier step. Emit the full
+        # series; the loop compares max |delta| against the paired control (data is deterministic
+        # across arms at a fixed restore step, so the series pair pointwise).
+        "drop_points": len(drops),
+        "loss_points": len(losses),
+        "loss_series": [[s, round(float(v), 6)] for s, v in losses],
         "loss_last": float(losses[-1][1]) if losses else None,
         "loss_last_step": losses[-1][0] if losses else None,
     }
