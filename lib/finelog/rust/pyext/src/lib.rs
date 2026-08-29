@@ -80,9 +80,10 @@ impl EmbeddedServer {
                 )
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
-            store.recover_tables().await.map_err(|e| {
-                PyRuntimeError::new_err(format!("failed to recover tables: {e}"))
-            })?;
+            store
+                .recover_tables()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("failed to recover tables: {e}")))?;
             store.bootstrap_maintenance();
             // No policy → the private allow-localhost default (loopback only); a
             // JSON layer list configures a global finelog's cidr+jwt stack.
