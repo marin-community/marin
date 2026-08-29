@@ -76,9 +76,10 @@ fans one PR into several simultaneous requests. `--github-concurrency` can
 lower that cap; GitHub errors fail the run without automatic retries.
 
 `Ops - Code-health Review Data` runs the aggregator directly every day. The
-runner uses the repository's CI Google credentials and SSH key to reach Finelog,
-and an OpenAI key mirrored from Secret Manager for classification. Skipped
-batches, GitHub fetch failures, and Finelog flush failures fail the job.
+runner uses the repository's CI Google credentials to mint an IAP token for
+Finelog, and an OpenAI key mirrored from Secret Manager for classification. No
+Iris CLI, gcloud CLI, or SSH connection is involved. Skipped batches, GitHub
+fetch failures, and Finelog flush failures fail the job.
 Scheduled publication belongs to the refinement job that consumes these rows;
 `report` remains available for an operator with gist credentials.
 
@@ -93,7 +94,9 @@ must validate before the corpus is published.
 
 The workflow uploads the frozen archive to GitHub Actions for 90 days and
 attaches the identical archive to one plan-mode Loom session. It deletes the
-Google and SSH credentials before launching Loom and supplies no OpenAI key.
+Google credential file before launching Loom and supplies no OpenAI key. The
+runner environment is not forwarded to the Loom session; its environment and
+tool access come from the credential-free Loom profile.
 Collection stages a GraphQL activity scan before hydrating only pull requests
 with in-window human review activity. Initial hydration, connection
 continuations, and snapshot fingerprint checks are batched. REST reads the two

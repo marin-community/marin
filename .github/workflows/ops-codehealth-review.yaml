@@ -26,9 +26,6 @@ jobs:
         uses: ./.github/actions/codehealth-setup
         with:
           gcp-credentials-json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
-          ssh-key: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
-          ssh-key-pub: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
 
       - name: Aggregate review data
         env:

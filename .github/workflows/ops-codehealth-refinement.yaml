@@ -29,9 +29,6 @@ jobs:
         uses: ./.github/actions/codehealth-setup
         with:
           gcp-credentials-json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
-          ssh-key: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
-          ssh-key-pub: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
 
       - name: Export frozen review corpus
         env:
@@ -54,13 +51,8 @@ jobs:
             *) echo "Unexpected Google credential path" >&2; exit 1 ;;
           esac
           rm -f -- "$CREDENTIAL_PATH"
-          rm -f -- /home/runner/.ssh/google_compute_engine /home/runner/.ssh/google_compute_engine.pub
 
       - name: Archive corpus
-        env:
-          CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ""
-          GOOGLE_APPLICATION_CREDENTIALS: ""
-          GOOGLE_GHA_CREDS_PATH: ""
         run: tar --create --gzip --file refinement-corpus.tar.gz refinement-corpus
 
       - name: Upload frozen corpus
@@ -74,10 +66,6 @@ jobs:
 
       - name: Launch refinement analysis
         uses: ./.github/actions/launch-loom-run
-        env:
-          CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ""
-          GOOGLE_APPLICATION_CREDENTIALS: ""
-          GOOGLE_GHA_CREDS_PATH: ""
         with:
           profile: ${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}
           idempotency-key: codehealth-refinement:${{ github.run_id }}:${{ github.run_attempt }}

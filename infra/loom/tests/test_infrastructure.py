@@ -227,6 +227,9 @@ def test_codehealth_refinement_workflow_collects_one_complete_corpus() -> None:
     assert checkout["with"]["persist-credentials"] is False
     setup = steps["Set up code-health environment"]
     assert setup["uses"] == "./.github/actions/codehealth-setup"
+    assert setup["with"] == {"gcp-credentials-json": "${{ secrets.IRIS_CI_GCP_SA_KEY }}"}
+    setup_action = yaml.safe_load((ROOT.parent.parent / ".github/actions/codehealth-setup/action.yaml").read_text())
+    assert set(setup_action["inputs"]) == {"gcp-credentials-json"}
     export_step = steps["Export frozen review corpus"]
     assert export_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
     export = export_step["run"]
@@ -238,17 +241,13 @@ def test_codehealth_refinement_workflow_collects_one_complete_corpus() -> None:
 
 
 def test_codehealth_refinement_workflow_removes_credentials_before_handoff() -> None:
-    workflow, _, steps = _codehealth_refinement_workflow()
+    workflow, workflow_text, steps = _codehealth_refinement_workflow()
     step_names = [step["name"] for step in workflow["jobs"]["refine"]["steps"]]
     remove_credentials = steps["Remove export credentials"]["run"]
     assert '"$GITHUB_WORKSPACE"/*)' in remove_credentials
     assert 'rm -f -- "$CREDENTIAL_PATH"' in remove_credentials
     archive = steps["Archive corpus"]
-    assert archive["env"] == {
-        "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": "",
-        "GOOGLE_APPLICATION_CREDENTIALS": "",
-        "GOOGLE_GHA_CREDS_PATH": "",
-    }
+    assert "env" not in archive
     assert "tar --create --gzip --file refinement-corpus.tar.gz refinement-corpus" in archive["run"]
     assert step_names.index("Remove export credentials") < step_names.index("Archive corpus")
     assert step_names.index("Archive corpus") < step_names.index("Launch refinement analysis")
@@ -257,10 +256,12 @@ def test_codehealth_refinement_workflow_removes_credentials_before_handoff() -> 
     assert upload["with"]["path"] == "refinement-corpus.tar.gz"
     launch = steps["Launch refinement analysis"]
     assert launch["uses"] == "./.github/actions/launch-loom-run"
-    assert launch["env"] == archive["env"]
+    assert "env" not in launch
     assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
     assert launch["with"]["channel"] == "codehealth-refinement"
     assert launch["with"]["scratch-file"] == "refinement-corpus.tar.gz"
+    assert "IRIS_CI_GCP_SSH_KEY" not in workflow_text
+    assert "google_compute_engine" not in workflow_text
 
 
 def test_codehealth_refinement_workflow_delegates_read_only_analysis() -> None:
