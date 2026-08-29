@@ -20,6 +20,7 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from typing import NamedTuple
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
@@ -227,6 +228,7 @@ def _runtime_env_config(
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
+        worker_pip_packages=(),
     )
 
 
@@ -1008,6 +1010,81 @@ def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
     assert isinstance(count_sharding, NamedSharding)
     assert count_sharding.mesh == mesh
     assert count_sharding.spec == P()
+
+
+def test_opt_state_offload_mask_keeps_the_first_expert_shards_in_flatten_order():
+    # Field names and DECLARATION order mirror the production muonh momentum tree (an eqx
+    # dataclass flattens in declaration order; plain dicts sort their keys and would reorder).
+    # The mask fails closed on any other 4D-leaf structure, so this fixture doubles as the
+    # drift-guard contract.
+    class Momentum(NamedTuple):
+        w_gate: jax.Array
+        w_up: jax.Array
+        w_down: jax.Array
+
+    opt_state = {
+        "count": jnp.zeros(()),
+        "momentum": Momentum(
+            w_gate=jnp.zeros((2, 2, 3, 4)),
+            w_up=jnp.zeros((2, 2, 3, 4)),
+            w_down=jnp.zeros((2, 2, 4, 3)),
+        ),
+        "mu": jnp.zeros((2, 3)),
+    }
+
+    mask = train._opt_state_offload_mask(opt_state, 2)
+    assert mask == {
+        "count": True,
+        "momentum": Momentum(w_gate=False, w_up=False, w_down=True),
+        "mu": True,
+    }
+
+    assert all(jax.tree.leaves(train._opt_state_offload_mask(opt_state, 0)))
+
+    with pytest.raises(ValueError, match="4D expert leaves"):
+        train._opt_state_offload_mask(opt_state, 4)
+
+    drifted = {"momentum": {"w_gate": jnp.zeros((2, 2, 3, 4)), "extra": jnp.zeros((2, 2, 3, 4))}}
+    with pytest.raises(ValueError, match="structure drifted"):
+        train._opt_state_offload_mask(drifted, 1)
+
+
+def test_resident_expert_momentum_stays_off_the_host(monkeypatch):
+    moved = []
+
+    def record_moves(tree, memory_kind):
+        moved.extend(jax.tree.leaves(tree))
+        return tree
+
+    monkeypatch.setattr(train, "_tree_to_memory_kind", record_moves)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1)):
+        state = train.initial_state(
+            _latent_config(),
+            optimizer=optax.sgd(0.1, momentum=0.9),
+            mp=jmp.get_policy("f32"),
+            key=jax.random.key(0),
+            ema_beta=None,
+            offload_opt_state=True,
+            opt_state_resident_expert_leaves=1,
+        )
+
+    expert_leaves = [leaf for leaf in jax.tree.leaves(state.opt_state) if getattr(leaf, "ndim", 0) == 4]
+    assert len(expert_leaves) == 3
+    moved_ids = {id(leaf) for leaf in moved}
+    assert id(expert_leaves[0]) not in moved_ids
+    assert all(id(leaf) in moved_ids for leaf in expert_leaves[1:])
+
+
+def test_resident_expert_leaves_require_the_offload():
+    with pytest.raises(ValueError, match="requires offload_opt_state"):
+        train._make_train_step(
+            optax.sgd(0.1),
+            jmp.get_policy("f32"),
+            z_loss_weight=0,
+            ema_beta=None,
+            opt_state_resident_expert_leaves=1,
+        )
 
 
 def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
