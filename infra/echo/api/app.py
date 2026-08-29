@@ -203,6 +203,12 @@ class RepositoryFileDetail(BaseModel):
     text: str
 
 
+class SearchResultIdentity(BaseModel):
+    key: str
+    source_id: str
+    domain: search_config.SearchDomain
+
+
 class SearchDomainOption(BaseModel):
     value: search_config.SearchDomain
     label: str
@@ -1349,6 +1355,19 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
         if field not in ("score", "distance", "lexical_score", "snippet")
     }
     return Chunk(score=0.0, distance=None, lexical_score=None, snippet=snippet(row), **fields)
+
+
+@api.get("/search-results/{search_result_id}", response_model=SearchResultIdentity)
+def search_result_identity(search_result_id: int, engine: Engine) -> SearchResultIdentity:
+    with engine.connect() as conn:
+        result = stored_feedback_results(conn, {search_result_id}).get(search_result_id)
+    if result is None:
+        raise HTTPException(404, f"no search result {search_result_id}")
+    return SearchResultIdentity(
+        key=f"{result.domain}:{result.id}",
+        source_id=result.source_id,
+        domain=result.domain,
+    )
 
 
 @api.get("/repository-files/{reference_value:path}", response_model=RepositoryFileDetail)

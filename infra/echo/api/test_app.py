@@ -1379,6 +1379,31 @@ def test_same_path_file_detail_uses_qualified_repository_and_commit(client_with,
     }
 
 
+def test_search_result_key_resolves_to_exact_source_id(client_with):
+    row = make_row(
+        id=20849,
+        execution_id=991,
+        result_id="file:marin-community/marin@main:infra/echo/README.md",
+        domain="file",
+        title="Echo",
+        url="https://github.com/marin-community/marin/blob/abc123/infra/echo/README.md",
+    )
+    response = client_with([row]).client.get("/api/search-results/20849")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "key": "file:20849",
+        "source_id": "file:marin-community/marin@main:infra/echo/README.md",
+        "domain": "file",
+    }
+
+
+def test_search_result_key_reports_missing_row(client_with):
+    response = client_with([]).client.get("/api/search-results/20849")
+
+    assert response.status_code == 404
+
+
 def test_repository_index_reports_searchable_partial_build(client_with):
     state = make_row(
         repository="marin-community/vllm",
