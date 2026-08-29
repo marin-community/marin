@@ -148,14 +148,22 @@ namespace scope in
 [`KueueAddon`](../../../infra/pulumi/src/iac/coreweave/kueue.py); do not replace
 that release with an ad hoc cluster-wide install.
 
+Pulumi pins `cks-kueue` 1.5.0, which contains Kueue 0.18.3. Iris explicitly
+enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
+so a workload's hostname assignment is recomputed when an earlier admission in
+the same scheduling cycle consumes that domain.
+
 #### TAS preemption and CPU spillover
 
 All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
-in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
-can then remove a lower-priority CPU Workload from the topology snapshot before
-retrying a blocked GPU gang's fit.
+in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
+are derived from the configured maximum GPU node count and per-node device
+count; CPU, memory, disk, and Pods retain non-binding sentinels. Accelerator
+quota pressure activates `preemption.withinClusterQueue: LowerPriority`, and TAS
+then checks whether removing lower-priority candidates creates a compatible
+topology before admitting the waiting Workload.
 
 Each Iris band has three Kueue admission tiers. The controller reconciles the
 twelve `WorkloadPriorityClass` objects at startup.
@@ -199,10 +207,12 @@ flowchart TD
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue
     cpu --> queue
-    queue --> fit{TAS topology fit?}
+    queue --> quota{Accelerator quota available?}
+    quota -- No --> preempt[withinClusterQueue: LowerPriority<br/>select compatible victims]
+    preempt --> fit{Quota and TAS fit after victims?}
+    quota -- Yes --> fit
     fit -- Yes --> admit[Admit workload and release scheduling gate]
-    fit -- No --> preempt[withinClusterQueue: LowerPriority<br/>select compatible victims]
-    preempt --> fit
+    fit -- No --> wait[Remain SchedulingGated]
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
@@ -225,6 +235,12 @@ tracked by
 When migrating from the split flavors, apply the NodePool labels before
 switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
 topology cache.
+
+TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
+same-cycle recomputation gate prevents two newly admitted Workloads from keeping
+the same hostname when only one has capacity. If capacity becomes unavailable
+after admission for another reason, kube-scheduler reports an affinity plus
+resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 
 ## Resource ownership
 

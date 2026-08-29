@@ -9,12 +9,13 @@ builders so they render byte-identical manifests. Everything here is pure — th
 functions return plain dicts and do no I/O.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
 import yaml
 
+from iris.cluster.platforms.k8s.constants import NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_INFINIBAND_TOPOLOGY_LABELS,
     CW_MULTINODE_TOPOLOGY_LABELS,
@@ -39,6 +40,7 @@ CW_CHART = f"{CW_REPO_NAME}/cks-kueue"
 
 RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
+TAS_RECOMPUTE_ASSIGNMENT_FEATURE = "TASRecomputeAssignmentWithinSchedulingCycle"
 
 # Controller-manager feature gates for the cks-kueue chart. Helm replaces list values
 # wholesale, so this enumerates the full set the chart ships with, changing one entry:
@@ -56,6 +58,7 @@ CKS_KUEUE_FEATURE_GATES = [
     {"name": "TopologyAwareScheduling", "enabled": True},
     {"name": "TASBalancedPlacement", "enabled": False},
     {"name": "TASMultiLayerTopology", "enabled": True},
+    {"name": TAS_RECOMPUTE_ASSIGNMENT_FEATURE, "enabled": True},
 ]
 
 # Namespace(s) Iris submits gang pods into (the k8s provider namespace, default
@@ -101,24 +104,20 @@ RESOURCE_FLAVOR_NODE_LABELS = {KUEUE_NODE_LABEL: "true"}
 # request cpu/memory/nvidia.com/gpu plus ephemeral-storage (from the disk request)
 # and rdma/ib (the InfiniBand devices), so all five must be covered.
 #
-# Iris does NOT use Kueue for capacity *enforcement*: the Iris autoscaler bounds
-# capacity via scale-group max_slices, so every resource's nominalQuota is a
-# sentinel large enough never to bind — Kueue never rejects on quota, and the real
-# capacity authority stays the scheduler/autoscaler.
-#
-# It DOES use Kueue for preemption (see build_cluster_queue's preemption stanza).
-# The pressure signal is Topology-Aware Scheduling, not quota. Every Iris Pod
-# uses the same TAS flavor so simulated victim removal can reclaim lower-priority
-# CPU reservations before retrying a GPU gang's topology fit. Quota stays
-# non-binding so it does not fight the autoscaler.
+# Iris uses binding accelerator quota to enter Kueue's preemption path. Pulumi
+# derives that quota from scale-group max_slices, so it agrees with the Iris
+# autoscaler's configured upper bound. Other resources keep sentinel quotas and
+# do not become independent capacity limits. Every Iris Pod uses the same TAS
+# flavor so Kueue can check whether removing lower-priority victims creates a
+# compatible accelerator placement.
 NON_BINDING_QUOTA = {
     # Use "1G" not "1000000000" because the Kubernetes API server canonicalizes to 1G
     # and always returns that, which causes a perpetual, cosmetic `pulumi preview` diff
     "cpu": "1G",  # cores
     "memory": "1Pi",
     "ephemeral-storage": "1Pi",
-    "nvidia.com/gpu": "1G",
-    "rdma/ib": "1G",
+    NVIDIA_GPU_RESOURCE: "1G",
+    RDMA_RESOURCE: "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
@@ -296,7 +295,10 @@ def build_upstream_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES
     return {
         "enableKueueViz": False,
         "controllerManager": {
-            "featureGates": [{"name": "TopologyAwareScheduling", "enabled": True}],
+            "featureGates": [
+                {"name": "TopologyAwareScheduling", "enabled": True},
+                {"name": TAS_RECOMPUTE_ASSIGNMENT_FEATURE, "enabled": True},
+            ],
         },
         "managerConfig": {"controllerManagerConfigYaml": config_yaml},
     }
@@ -343,21 +345,24 @@ def build_workload_priority_class(name: str, value: int) -> dict:
     }
 
 
-def build_cluster_queue(name: str) -> dict:
+def build_cluster_queue(name: str, *, nominal_quotas: Mapping[str, str] | None = None) -> dict:
     """Return the cluster-scoped, admin-owned ClusterQueue.
 
-    Covers every resource Iris pods request (COVERED_RESOURCES) with a non-binding
-    nominalQuota (NON_BINDING_QUOTA) — Kueue does not enforce capacity here (the Iris
-    autoscaler does). It DOES enforce priority: ``preemption.withinClusterQueue:
-    LowerPriority`` lets a higher-priority pending Workload evict compatible
-    lower-priority admitted Workloads when it cannot otherwise be admitted. One
-    flavor covers all resources and nodes so CPU reservations on accelerator
-    nodes are compatible preemption candidates for GPU gangs.
+    Covers every resource Iris pods request (COVERED_RESOURCES). Resources omitted
+    from ``nominal_quotas`` keep their non-binding sentinel. Production supplies
+    accelerator quota from the configured scale-group maxima so accelerator pressure
+    enters Kueue's quota-driven priority preemption path. One flavor covers all
+    resources and nodes so TAS can simulate removal of compatible victims.
     """
+    nominal_quotas = nominal_quotas or {}
+    unknown_resources = nominal_quotas.keys() - NON_BINDING_QUOTA.keys()
+    if unknown_resources:
+        raise ValueError(f"nominal quota provided for uncovered resources: {sorted(unknown_resources)}")
+    quotas = {**NON_BINDING_QUOTA, **nominal_quotas}
     flavors = [
         {
             "name": RESOURCE_FLAVOR_NAME,
-            "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],
+            "resources": [{"name": resource, "nominalQuota": quotas[resource]} for resource in COVERED_RESOURCES],
         },
     ]
     return {

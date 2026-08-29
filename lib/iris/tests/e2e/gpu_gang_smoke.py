@@ -51,8 +51,13 @@ from pathlib import Path
 
 import click
 from iris.client.client import IrisClient
+from iris.cluster.backends.k8s.tasks import LOGSHIP_CPU_REQUEST, OUTPUT_UPLOADER_CPU_REQUEST
 from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
-from iris.cluster.platforms.k8s.controller import K8sControllerProvider, _build_controller_deployment
+from iris.cluster.platforms.k8s.controller import (
+    K8sControllerProvider,
+    _build_controller_deployment,
+    _build_controller_state_pvc,
+)
 from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_FABRIC,
     CW_LABEL_LEAFGROUP,
@@ -75,8 +80,10 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     service_account_manifest,
 )
 from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.platforms.k8s.types import parse_k8s_cpu
 from iris.cluster.platforms.types import Labels, find_free_port
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
+from iris.resources.state import JobState
 from iris.rpc import job_pb2
 
 # install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the
@@ -108,6 +115,7 @@ _KIND_NODE_LABELS = {
     CW_LABEL_LEAFGROUP: "leafgroup-0",
     CW_LABEL_NVLINK_DOMAIN: "nvlink-domain-0",
 }
+_PREEMPTION_BATCH_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -245,6 +253,8 @@ class ControllerTarget:
             }
         )
         c.ensure_kueue_queues(cfg)
+        c.ensure_priority_classes()
+        self.kubectl.apply_json(_build_controller_state_pvc(namespace=self.namespace))
 
         # fresh=False: a controller restart must NOT wipe the SQLite DB, or an
         # in-flight submitted job vanishes (client then sees the job NOT_FOUND).
@@ -256,7 +266,12 @@ class ControllerTarget:
             fresh=False,
         )
         if local_image:
-            dep["spec"]["template"]["spec"]["containers"][0]["imagePullPolicy"] = "IfNotPresent"
+            controller_container = dep["spec"]["template"]["spec"]["containers"][0]
+            controller_container["imagePullPolicy"] = "IfNotPresent"
+            controller_container["resources"] = {
+                "requests": {"cpu": "2", "memory": "4Gi"},
+                "limits": {"memory": "4Gi"},
+            }
         self.kubectl.apply_json(dep)
         self.kubectl.apply_json(
             {
@@ -337,12 +352,17 @@ class KindTarget(ControllerTarget):
         # flavor binds multinode-nvlink-ib (the superset Topology that includes the
         # nvlink.domain level) so the kind-mocked NVLink domain resolves and the gang
         # can exercise BOTH the soft leafgroup and hard nvlink.domain placements.
+        task_resources, _ = self.job_resources()
+        pod_cpu_millicores = int(task_resources.cpu * 1000) + parse_k8s_cpu(LOGSHIP_CPU_REQUEST)
+        if cfg.task_outputs is not None:
+            pod_cpu_millicores += parse_k8s_cpu(OUTPUT_UPLOADER_CPU_REQUEST)
         install_kueue.run_install(
             variant=install_kueue.VARIANT_UPSTREAM,
             kubeconfig=self.kubeconfig,
             chart_version=install_kueue.UPSTREAM_DEFAULT_VERSION,
             with_queues=True,
             cluster_queue=cfg.kubernetes_provider.kueue.cluster_queue,
+            nominal_quotas={"cpu": f"{self.args.replicas * pod_cpu_millicores}m"},
             flavor_topology=install_kueue.MULTINODE_TOPOLOGY_NAME,
             apply=True,
         )
@@ -562,9 +582,80 @@ def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, 
         coscheduling=CoschedulingConfig(group_by=group_by),
     )
     status = job.wait(timeout=args.timeout, poll_interval=10.0, stream_logs=True, raise_on_failure=False)
-    state = job_pb2.JobState.Name(status.state)
-    logger.info("job %s finished in state %s", job_name, state)
-    return status.state == job_pb2.JOB_STATE_SUCCEEDED
+    logger.info("job %s finished in state %s", job_name, status.state)
+    return status.state is JobState.SUCCEEDED
+
+
+def kueue_preemption_events(target: ControllerTarget) -> dict[str, str]:
+    """Return Kueue Workload preemption event UIDs and object names."""
+    service = target.kubectl
+    assert service is not None
+    events = service.get_events()
+    return {
+        event["metadata"]["uid"]: event["involvedObject"]["name"]
+        for event in events
+        if event.get("reason") == "Preempted" and event.get("involvedObject", {}).get("kind") == "Workload"
+    }
+
+
+def validate_priority_preemption(controller_url: str, target: ControllerTarget, args: SmokeArgs) -> bool:
+    """Fill kind's binding CPU quota with batch, then require interactive to reclaim it."""
+    resources, _ = target.job_resources()
+    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=300_000)
+    environment = EnvironmentSpec(setup_scripts=[])
+    batch = client.submit(
+        entrypoint=Entrypoint.from_command("python", "-c", f"import time; time.sleep({_PREEMPTION_BATCH_SECONDS})"),
+        name=f"{args.job_name}-preemption-batch",
+        resources=resources,
+        environment=environment,
+        replicas=args.replicas,
+        coscheduling=CoschedulingConfig(group_by=_GROUP_BY),
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+    )
+    try:
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            if batch.status().state is JobState.RUNNING:
+                break
+            time.sleep(1)
+        else:
+            logger.error("batch quota filler did not reach RUNNING")
+            return False
+
+        existing_preemptions = kueue_preemption_events(target)
+        interactive = client.submit(
+            entrypoint=Entrypoint.from_command("python", "-c", "print('interactive preemption admitted')"),
+            name=f"{args.job_name}-preemption-interactive",
+            resources=resources,
+            environment=environment,
+            replicas=1,
+            coscheduling=CoschedulingConfig(group_by=_GROUP_BY),
+            priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        )
+        interactive_status = interactive.wait(
+            timeout=args.timeout,
+            poll_interval=2,
+            raise_on_failure=False,
+            stream_logs=True,
+        )
+        if interactive_status.state is not JobState.SUCCEEDED:
+            logger.error("interactive preemption probe finished in %s", interactive_status.state)
+            return False
+
+        preemption_deadline = time.monotonic() + args.timeout
+        while time.monotonic() < preemption_deadline:
+            current_preemptions = kueue_preemption_events(target)
+            new_preemptions = current_preemptions.keys() - existing_preemptions.keys()
+            if new_preemptions:
+                event_uid = next(iter(new_preemptions))
+                workload_name = current_preemptions[event_uid]
+                logger.info("interactive workload triggered Kueue preemption of Workload %s", workload_name)
+                return True
+            time.sleep(1)
+        logger.error("interactive workload ran without a Kueue Workload preemption event")
+        return False
+    finally:
+        batch.cancel()
 
 
 def run_smoke(cfg: IrisClusterConfig, args: SmokeArgs) -> bool:
@@ -580,6 +671,9 @@ def run_smoke(cfg: IrisClusterConfig, args: SmokeArgs) -> bool:
         if ok and args.target == "kind":
             logger.info("kind mirrors a GB200 NVLink layout; exercising hard nvlink.domain topology")
             ok = submit_gang(url, target, args, group_by=_NVLINK_GROUP_BY, job_name=f"{args.job_name}-nvlink")
+        if ok and args.target == "kind":
+            logger.info("kind exercising binding-quota interactive-over-batch preemption")
+            ok = validate_priority_preemption(url, target, args)
         return ok
     finally:
         if args.keep:
