@@ -134,8 +134,9 @@ download modules pin the code and configuration that produced those shards:
 
 Run the linked reconstruction process first, place its output at the relative
 path named by the module under `MARIN_PREFIX`, and then run `trigger_sources`
-for that catalog entry. Each pre-staged step validates the expected input
-before normalization.
+for that catalog entry. Each pre-staged step checks that input shards are
+present before normalization. Use the shard counts recorded in the module to
+verify that staging completed.
 
 Provider availability can change after a Marin revision is published. A
 provider removal, license change, or expired credential may prevent a later
