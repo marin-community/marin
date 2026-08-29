@@ -210,3 +210,19 @@ Corrections that came out of this:
 Resubmitted as mfl-ctrl-a2 (VERSION .2, fresh RID per protocol) at 07:0xZ;
 expect hours of queue. Iteration count: attempt 1 was a harness crash, not
 an experiment — iteration 0 is still in progress.
+
+## 2026-08-29 ~07:50Z: iteration 0 draw 1 + H6 binding pre-check
+
+mfl-ctrl-a2 VALID: mfu_mean 23.3362 (sd 0.115), tokens/s 249358, drops
+3.5e-5 mean / 8.5e-5 max, peak_gib 116.57, loss_last 1.26232@30019, window
+30005-30019 complete. Queue cleared fast (mokcamp ended); total occupancy
+~30 min. Score matches the mfu24 tile-stack numbers (23.32-23.37 at 24k) —
+implicit sign the gpu_fa4_cute_wide dispatch engaged; positive kernel-name
+confirmation comes from draw b's profile tail.
+
+H6 BINDING PRE-CHECK PASSED from a2's TF_CPP logs (the forwarding worked):
+`Rematerialized 325 instructions in module jit_train_step; 1822 net
+instructions added` on every rank, with long per-computation remat sweeps.
+The slop-85 budget binds. Mechanism-engagement metric for the treatment:
+the remat-instruction count at slop=90 vs 325 at 85, plus the LHS/remat
+limit values in the logs. H6 is GO after iteration 0 completes.
