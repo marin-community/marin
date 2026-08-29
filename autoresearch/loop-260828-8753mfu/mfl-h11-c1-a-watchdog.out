@@ -1,0 +1,24 @@
+16:51:39 t=0s train=none step=-2
+16:52:52 t=74s train=running step=-2
+16:53:17 gang up (wandb run exists), compile ceiling 1800s starts now
+16:54:03 t=146s train=running step=-1
+16:55:12 t=215s train=running step=-1
+16:56:21 t=284s train=running step=-1
+16:57:30 t=353s train=running step=-1
+16:58:39 t=422s train=running step=-1
+16:59:48 t=491s train=running step=-1
+17:00:58 t=560s train=running step=-1
+17:02:06 t=629s train=running step=-1
+17:03:22 t=698s train=running step=30002
+17:03:22 first observed step=30002, step budget 1200s starts now
+17:04:37 t=774s train=running step=30007
+17:05:53 t=849s train=running step=30011
+17:07:09 t=925s train=running step=30016
+17:08:24 t=1001s train=running step=30020
+17:09:44 t=1076s train=running step=30025
+17:09:44 cancelling /mwittmann/mfl-h11-c1-a-coord: scored through step 30025 (19 past first)
+  Caused by: Failed to fetch: `https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260828-c9526e8c0272/jax_cuda13_pjrt-0.11.1%2Bmarin.c9526e8c0272-py3-none-manylinux_2_27_aarch64.whl`
+  Caused by: HTTP status server error (504 Gateway Timeout) for url (https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260828-c9526e8c0272/jax_cuda13_pjrt-0.11.1%2Bmarin.c9526e8c0272-py3-none-manylinux_2_27_aarch64.whl)
+Cancelled jobs:
+  /mwittmann/mfl-h11-c1-a-coord
+WATCHDOG scored step=30025 first=30002
