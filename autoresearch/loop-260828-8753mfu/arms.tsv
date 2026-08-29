@@ -16,3 +16,4 @@ mfl-h92-b	76c13a6170	2026.08.29.14	ragged_all_to_all	mixture	device	4470000	2880
 mfl-ctrl-e	5324007f19	2026.08.29.15	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none	0.75
 mfl-h10n-a	e1e1d96be8	2026.08.29.16	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_enable_pipelined_host_offloading=true	0.75
 mfl-h10n-b	e1e1d96be8	2026.08.29.17	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_enable_pipelined_host_offloading=true	0.75
+mfl-ctrl-f	cee9e12b78	2026.08.29.18	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none	0.75
