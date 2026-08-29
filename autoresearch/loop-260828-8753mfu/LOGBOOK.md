@@ -799,3 +799,19 @@ before-declaring-bug; k=2 stays off (churn band). HERO-ADOPTION NOTE:
 launch_scaling_ladder does not pass the knob — one-line wire needed if
 this keeps. Arms: k1-a, fresh control i (post-commit tree, HLO-identical
 to f/g/h by evidence), k1-b.
+
+## 2026-08-30 ~09:20Z: iteration 7 — C3' k=1 DISCARD-UNSAFE (NaN), parked
+
+Loss anatomy: 30000 bitwise-equal to control (1.280589 both — restore of
+params clean); 30001 +7.3e-4; grows ~1.5e-3/step; NaN at 30008. The
+corruption enters at the FIRST optimizer update -> the resident momentum
+leaf is wrong at update time. Prime suspect: donate_argnums aliasing on
+GPU — the resident leaf's donated input can alias the output while the
+update still reads it; CPU (serial) bitwise proofs cannot expose a race.
+Secondary suspect: hero-scale restore into the device-kind template
+(small-probe restore was clean but not at scale/with master migration).
+Root-cause delegated; k>0 banned until resolved; the committed default
+k=0 is HLO-hash-identical and stays. Both review GOs missed this — the
+lesson for the protocol: bitwise CPU evidence does not transfer to GPU
+aliasing semantics; future placement-touching treatments need a
+GPU-executable smoke (even 2 steps) before a scored arm.

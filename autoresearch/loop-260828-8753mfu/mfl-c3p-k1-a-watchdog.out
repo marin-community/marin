@@ -1,0 +1,20 @@
+18:10:20 t=0s train=none step=-2
+18:11:27 t=68s train=running step=-2
+18:11:50 gang up (wandb run exists), compile ceiling 1800s starts now
+18:12:34 t=136s train=running step=-1
+18:13:40 t=201s train=running step=-1
+18:14:46 t=267s train=running step=-1
+18:15:52 t=333s train=running step=-1
+18:16:58 t=399s train=running step=-1
+18:18:03 t=465s train=running step=-1
+18:19:09 t=530s train=running step=-1
+18:20:15 t=596s train=running step=-1
+18:21:26 t=662s train=running step=30000
+18:21:26 first observed step=30000, step budget 1200s starts now
+18:22:38 t=733s train=running step=30005
+18:23:20 cancelling /mwittmann/mfl-c3p-k1-a-coord: train task failed (failures=1)
+Cancelled jobs:
+  /mwittmann/mfl-c3p-k1-a-coord/grug-train-mfl-c3p-k1-a
+Cancelled jobs:
+  /mwittmann/mfl-c3p-k1-a-coord
+WATCHDOG task-failed train=worker_failed failures=1 step=30005
