@@ -783,3 +783,19 @@ ledger belongs to the salt (consistent with its predicted sub-noise
 ~8x for overlapped MoE training; recommended deployment default here is
 152 (1/SM); upstream-worthy fix is a tunable/occupancy-aware per-SM
 factor (report only with user permission).
+
+## 2026-08-30 ~08:20Z: C3' dual review GO; iteration 7 arms
+
+Codex GO (P2 hardenings applied: fail-closed key-path assertion — which
+also covers fable's attn-4D-leaf fragility — and CLI range cap 0..3).
+Fable GO with independent re-derivation: real optimizer stack flattens
+the only 4D leaves at indices 35-37 as muonh w_gate/w_up/w_down; k=0
+HLO byte-identical (re-proven); donation/aliasing clean; guards loud
+never clamping; checkpoint loss-free both ways. Watch items: slop-arena
+arithmetic ages at k=1 (persistent ~29 GiB; first-step alloc failure
+would be loud; slop 78 in pocket — NOT applied preemptively, it would
+change both sides); loss-overlay expectation is exact-but-diff-HLOs-
+before-declaring-bug; k=2 stays off (churn band). HERO-ADOPTION NOTE:
+launch_scaling_ladder does not pass the knob — one-line wire needed if
+this keeps. Arms: k1-a, fresh control i (post-commit tree, HLO-identical
+to f/g/h by evidence), k1-b.
