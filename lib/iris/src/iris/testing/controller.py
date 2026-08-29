@@ -51,6 +51,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    JobFeasibilityRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
@@ -175,13 +176,7 @@ class FakeProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
-    def job_feasibility(
-        self,
-        constraints: list[Constraint],
-        *,
-        replicas: int | None,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
     def get_process_status(

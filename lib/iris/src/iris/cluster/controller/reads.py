@@ -1832,12 +1832,11 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
+    """Controller-owned intermediate rows for reconcile and timeout phases.
 
-    One snapshot type feeds all three uniform backend methods; each control loop
-    populates the section its phase needs and leaves the rest empty (the
-    ``scan_timeouts`` flag is the pattern). The backend reads its section and
-    never touches the database.
+    Backends never receive this aggregate. The controller converts worker rows
+    into ``WorkerFleetReconcileRequest``, direct-dispatch rows into
+    ``DirectReconcileRequest``, and timeout rows into controller decisions.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
@@ -1845,7 +1844,7 @@ class ControlSnapshot:
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
-      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+      rows used to build per-worker reconcile plans.
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 

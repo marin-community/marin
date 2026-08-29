@@ -35,7 +35,6 @@ from iris.cluster.backends.k8s.output_contract import (
     output_uploader_environment,
 )
 from iris.cluster.config import TaskOutputPolicy
-from iris.cluster.constraints import Constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -46,6 +45,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryResult,
     DeviceCapacity,
     DirectReconcileRequest,
+    JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
     ReconcileRequest,
@@ -2483,13 +2483,7 @@ class K8sTaskProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
-    def job_feasibility(
-        self,
-        constraints: list[Constraint],
-        *,
-        replicas: int | None,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:

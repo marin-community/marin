@@ -273,7 +273,7 @@ def filter_observations_to_plan(
         else:
             dropped += 1
     if dropped:
-        logger.warning("apply_reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped)
+        logger.warning("worker reconcile: worker %s sent %d observations outside the plan; dropping", worker_id, dropped)
     return kept
 
 

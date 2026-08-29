@@ -143,6 +143,7 @@ _RPC_HANDLER_THREADS = 64
 _CONTROLLER_KEEPALIVE = 120
 _PRIVATE_CONTROLLER_HOST = "127.0.0.1"
 _SYNCHRONOUS_PHASE_INTERVAL = 0.0
+_WORKER_FAILING_EVENT = "worker_failing"
 _WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
 
@@ -195,6 +196,30 @@ class _TickInputs:
     # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
     # timeout scan never sees them).
     expired_queued_federation: list[JobName] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _SchedulingInputs:
+    context: SchedulingContext | None
+    queued_federation: list[QueuedCandidate]
+    expired_queued_federation: list[JobName]
+
+
+def backend_observation_request(
+    snap: Tx,
+    worker_health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+) -> BackendObservationRequest:
+    """Build the provider observation input from one controller snapshot."""
+    liveness = worker_health.all()
+    usage = reads.resource_usage_by_worker(snap)
+    workers = reads.healthy_active_workers_with_attributes(snap, worker_health, worker_attrs)
+    running = reads.running_tasks_by_worker(snap, set(liveness))
+    return BackendObservationRequest(
+        workers=[worker_snapshot_from_row(worker, usage.get(worker.worker_id)) for worker in workers],
+        liveness=liveness,
+        running_tasks=running,
+    )
 
 
 @dataclass(frozen=True)
@@ -982,13 +1007,25 @@ class Controller:
         self._force_reconcile = False
         scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
 
-        inputs = self._build_tick_inputs(
-            now=now,
-            run_schedule=run_schedule,
-            run_reconcile=run_reconcile,
-            run_autoscale=run_autoscale,
-            scan_timeouts=scan_timeouts,
-        )
+        inputs = _TickInputs()
+        direct_dispatch = BackendCapability.DIRECT_DISPATCH in self.backend.descriptor.capabilities
+        if run_reconcile and direct_dispatch:
+            inputs.reconcile_request = self._direct_reconcile_request()
+
+        # Dedicated control pool: the tick's snapshot must not queue behind a
+        # slow dashboard read for a connection.
+        with self._db.control_read_snapshot() as snap:
+            if run_schedule:
+                scheduling = self._scheduling_inputs(snap, now)
+                inputs.scheduling_context = scheduling.context
+                inputs.queued_federation = scheduling.queued_federation
+                inputs.expired_queued_federation = scheduling.expired_queued_federation
+            if run_reconcile and not direct_dispatch:
+                inputs.reconcile_request = self._worker_reconcile_request(snap)
+            if run_autoscale:
+                inputs.worker_status = self._worker_status(snap)
+            if scan_timeouts:
+                inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
 
         sched_result: ScheduleResult | None = None
         backend_pins: list[tuple[JobName, str]] = []
@@ -1074,74 +1111,48 @@ class Controller:
 
         self._refresh_backend_observation()
 
-    def _build_tick_inputs(
-        self,
-        *,
-        now: Timestamp,
-        run_schedule: bool,
-        run_reconcile: bool,
-        run_autoscale: bool,
-        scan_timeouts: bool,
-    ) -> _TickInputs:
-        """Assemble the due phases' controller-owned inputs.
+    def _direct_reconcile_request(self) -> DirectReconcileRequest:
+        drain = self._drain_dispatch_snapshot()
+        return DirectReconcileRequest(tasks_to_run=drain.tasks_to_run, running_tasks=drain.running_tasks)
 
-        A Kubernetes backend's reconcile request comes from the dispatch drain,
-        built first. The controller then reads its state in one snapshot: a
-        complete scheduling workspace and the execution-timeout rows.
-        """
-        inputs = _TickInputs()
+    def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
+        context = build_scheduling_context(
+            snap,
+            self._worker_health,
+            snap.caches[WorkerAttrsProjection],
+            self._config.user_budget_defaults,
+        )
+        queued: list[QueuedCandidate] = []
+        expired: list[JobName] = []
+        if self._config.peers:
+            queued = build_queued_candidates(snap)
+            expired = reads.expired_queued_handoffs(snap, now.epoch_ms())
+        return _SchedulingInputs(
+            context=context if context.pending_task_rows else None,
+            queued_federation=queued,
+            expired_queued_federation=expired,
+        )
 
-        direct_dispatch = BackendCapability.DIRECT_DISPATCH in self.backend.descriptor.capabilities
-        if run_reconcile and direct_dispatch:
-            drain = self._drain_dispatch_snapshot()
-            inputs.reconcile_request = DirectReconcileRequest(
-                tasks_to_run=drain.tasks_to_run,
-                running_tasks=drain.running_tasks,
-            )
-
-        # Dedicated control pool: the tick's snapshot must not queue behind a slow
-        # dashboard read for a connection.
-        with self._db.control_read_snapshot() as snap:
-            if run_schedule:
-                context = build_scheduling_context(
-                    snap,
-                    self._worker_health,
-                    snap.caches[WorkerAttrsProjection],
-                    self._config.user_budget_defaults,
-                )
-                if context.pending_task_rows:
-                    inputs.scheduling_context = context
-                if self._config.peers:
-                    inputs.queued_federation = build_queued_candidates(snap)
-                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
-            if run_reconcile and not direct_dispatch:
-                control = reads.load_control_snapshot(snap, self._worker_health, scan_timeouts=False)
-                templates: dict[JobName, job_pb2.RunTaskRequest | None] = {}
-                for row in control.reconcile_rows:
-                    if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
-                        continue
-                    if row.job_id not in templates:
-                        templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
-                worker_snapshot = reads.ControlSnapshot(
-                    worker_addresses=control.worker_addresses,
-                    reconcile_rows=control.reconcile_rows,
-                    timeout_rows=[],
-                    job_specs={job_id: spec for job_id, spec in templates.items() if spec is not None},
-                )
-                inputs.reconcile_request = WorkerFleetReconcileRequest(
-                    targets=[
-                        WorkerReconcileTarget(plan=plan, address=worker_snapshot.worker_addresses[plan.worker_id])
-                        for plan in plans_from_snapshot(worker_snapshot)
-                    ]
-                )
-            if run_autoscale:
-                inputs.worker_status = self._worker_status(snap)
-            # Execution-timeout finalization is global across worker-daemon and
-            # K8s backends. K8s gangs rely on it because they omit
-            # activeDeadlineSeconds.
-            if run_reconcile and scan_timeouts:
-                inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
-        return inputs
+    def _worker_reconcile_request(self, snap: Tx) -> WorkerFleetReconcileRequest:
+        control = reads.load_control_snapshot(snap, self._worker_health, scan_timeouts=False)
+        templates: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+        for row in control.reconcile_rows:
+            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            if row.job_id not in templates:
+                templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+        worker_snapshot = reads.ControlSnapshot(
+            worker_addresses=control.worker_addresses,
+            reconcile_rows=control.reconcile_rows,
+            timeout_rows=[],
+            job_specs={job_id: spec for job_id, spec in templates.items() if spec is not None},
+        )
+        return WorkerFleetReconcileRequest(
+            targets=[
+                WorkerReconcileTarget(plan=plan, address=worker_snapshot.worker_addresses[plan.worker_id])
+                for plan in plans_from_snapshot(worker_snapshot)
+            ]
+        )
 
     def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
         """Run the backend scheduler and identify newly local jobs to stamp."""
@@ -1184,20 +1195,12 @@ class Controller:
 
     def _refresh_backend_observation(self) -> None:
         """Publish a backend status/capacity snapshot from controller-owned facts."""
-        liveness = self._worker_health.all()
         with self._db.control_read_snapshot() as snap:
-            workers = reads.healthy_active_workers_with_attributes(
+            request = backend_observation_request(
                 snap,
                 self._worker_health,
                 snap.caches[WorkerAttrsProjection],
             )
-            usage = reads.resource_usage_by_worker(snap)
-            running = reads.running_tasks_by_worker(snap, set(liveness))
-        request = BackendObservationRequest(
-            workers=[worker_snapshot_from_row(worker, usage.get(worker.worker_id)) for worker in workers],
-            liveness=liveness,
-            running_tasks=running,
-        )
         self._backend_observation = self.backend.observe(request)
 
     def _commit_tick(
@@ -1312,12 +1315,12 @@ class Controller:
         access is serialized by ControllerDB._lock with multi-statement
         mutations wrapped in BEGIN IMMEDIATE transactions.
         """
-        inputs = self._build_tick_inputs(
-            now=Timestamp.now(),
-            run_schedule=True,
-            run_reconcile=False,
-            run_autoscale=False,
-            scan_timeouts=False,
+        with self._db.control_read_snapshot() as snap:
+            scheduling = self._scheduling_inputs(snap, Timestamp.now())
+        inputs = _TickInputs(
+            scheduling_context=scheduling.context,
+            queued_federation=scheduling.queued_federation,
+            expired_queued_federation=scheduling.expired_queued_federation,
         )
         context = inputs.scheduling_context
         if context is None:
@@ -1506,7 +1509,7 @@ class Controller:
         if not worker_ids:
             return
         for worker_id in worker_ids:
-            log_event("worker_failing", str(worker_id), trigger=reason)
+            log_event(_WORKER_FAILING_EVENT, str(worker_id), trigger=reason)
         failure = ops.worker.fail(
             self._db,
             worker_ids=[str(worker_id) for worker_id in worker_ids],
@@ -1526,7 +1529,7 @@ class Controller:
         siblings = [worker_id for worker_id in result.sibling_workers if worker_id not in removed_set]
         if siblings:
             for worker_id in siblings:
-                log_event("worker_failing", str(worker_id), trigger=_SLICE_SIBLING_TEARDOWN_REASON)
+                log_event(_WORKER_FAILING_EVENT, str(worker_id), trigger=_SLICE_SIBLING_TEARDOWN_REASON)
             ops.worker.fail(
                 self._db,
                 worker_ids=[str(worker_id) for worker_id in siblings],
@@ -1741,12 +1744,10 @@ class Controller:
 
     @property
     def backend_observation(self) -> BackendObservation:
-        """Latest provider status/capacity snapshot published on the control thread."""
         return self._backend_observation
 
     @property
     def worker_health(self) -> WorkerHealthTracker:
-        """Controller-owned liveness state used by worker resources and scheduling."""
         return self._worker_health
 
     @property

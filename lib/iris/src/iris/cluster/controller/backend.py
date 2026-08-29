@@ -335,6 +335,15 @@ class BackendObservation:
     observed_at: Timestamp = field(default_factory=Timestamp.now)
 
 
+@dataclass(frozen=True, slots=True)
+class JobFeasibilityRequest:
+    """Submitted workload shape for backend-specific capacity validation."""
+
+    constraints: list[Constraint]
+    replicas: int | None
+    resources: job_pb2.ResourceSpecProto
+
+
 def run_scheduling_decision(
     scheduler: Scheduler,
     request: ScheduleRequest,
@@ -510,13 +519,7 @@ class TaskBackend(Protocol):
         """Remove external capacity after the controller fences its workers."""
         ...
 
-    def job_feasibility(
-        self,
-        constraints: list[Constraint],
-        *,
-        replicas: int | None,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         """Return why a submitted shape can never run, or None if feasible."""
         ...
 

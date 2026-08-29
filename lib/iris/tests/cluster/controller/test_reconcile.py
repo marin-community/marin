@@ -28,6 +28,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    JobFeasibilityRequest,
     ReconcileObservation,
     ReconcileRequest,
     RemoveCapacityRequest,
@@ -667,7 +668,6 @@ def _worker_reconcile_request(state: ControllerTestState) -> WorkerFleetReconcil
 
 
 def _apply_provider_observation(
-    provider: RpcTaskBackend,
     state: ControllerTestState,
     observation: ReconcileObservation,
 ) -> ControllerEffects:
@@ -707,7 +707,7 @@ def test_reconcile_rpc_forwards_observations(state):
     )
     provider, _ = _provider_with_stub(stub)
     observation_result = provider.reconcile(_worker_reconcile_request(state))
-    effects = _apply_provider_observation(provider, state, observation_result)
+    effects = _apply_provider_observation(state, observation_result)
 
     assert len(stub.reconcile_calls) == 1
     assert stub.reconcile_calls[0].worker_id == _W1
@@ -753,7 +753,7 @@ def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(sta
     stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))
     provider, _ = _provider_with_stub(stub)
     observation = provider.reconcile(_worker_reconcile_request(state))
-    effects = _apply_provider_observation(provider, state, observation)
+    effects = _apply_provider_observation(state, observation)
 
     assert effects.tasks == {}
     assert effects.attempts == {}
@@ -779,7 +779,7 @@ def test_reconcile_matching_responder_id_resets_unreachable_counter(state):
     assert state._health.liveness(WorkerId(_W1)).consecutive_failures == 1
 
     observation = provider.reconcile(_worker_reconcile_request(state))
-    _apply_provider_observation(provider, state, observation)
+    _apply_provider_observation(state, observation)
 
     assert state._health.liveness(WorkerId(_W1)).consecutive_failures == 0
 
@@ -803,7 +803,7 @@ def test_reconcile_recycled_address_marks_target_worker_unreachable(state):
     )
     provider, _ = _provider_with_stub(stub)
     observation = provider.reconcile(_worker_reconcile_request(state))
-    effects = _apply_provider_observation(provider, state, observation)
+    effects = _apply_provider_observation(state, observation)
 
     assert effects.is_empty
     assert state._health.liveness(WorkerId(_W1)).consecutive_failures == 1
@@ -1389,7 +1389,7 @@ class _ScriptedProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
-    def job_feasibility(self, constraints, *, replicas, resources) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
     def exec_in_container(self, *_args, **_kwargs):
@@ -1465,7 +1465,7 @@ class _UnreachableProvider:
         siblings = [WorkerId(sibling) for dead in request.worker_ids for sibling in self.siblings.get(str(dead), [])]
         return RemoveCapacityResult(sibling_workers=siblings)
 
-    def job_feasibility(self, constraints, *, replicas, resources) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
     def get_process_status(self, *_args, **_kwargs):
@@ -1633,7 +1633,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================
 #
-# ``apply_reconcile`` (the batch verb) shares one Overlay overlay across
+# Batched observation application shares one Overlay across
 # every worker in a batch. When a coscheduled member's terminal update requeues
 # its sibling, the sibling's PENDING task state + PREEMPTED attempt state are
 # written into the overlay only. Reconcile guards that later read the raw
@@ -1743,8 +1743,8 @@ def _apply_batch(
 ):
     """Apply a multi-worker reconcile batch through the production verb.
 
-    ``results`` order is the per-worker processing order (``apply_reconcile``
-    iterates it in order), so it controls which worker is seen first.
+    ``results`` order is the per-worker processing order, so it controls which
+    worker is seen first.
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
     with state._db.transaction() as cur:
@@ -1794,7 +1794,7 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
 def test_coscheduled_rpc_failure_does_not_split_slice():
     """#2: an RPC failure must not fabricate WORKER_FAILED for a same-batch requeued sibling.
 
-    One batch through the production ``apply_reconcile`` verb: worker W0 succeeds
+    One batch through the production observation path: worker W0 succeeds
     reporting t0=WORKER_FAILED (with preemption budget, so t0 -> PENDING, which
     requeues sibling t1 to PENDING in the overlay), and worker W1's reconcile RPC
     fails. Processing W0 first means the RPC-failure synthesis for W1 runs after

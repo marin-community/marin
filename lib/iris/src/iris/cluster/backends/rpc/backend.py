@@ -20,7 +20,7 @@ from typing import Protocol, TypeVar
 from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
-from iris.cluster.constraints import Constraint, DeviceType
+from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.backend import (
@@ -32,6 +32,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryRequest,
     BackendRecoveryResult,
     DeviceCapacity,
+    JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
     ReconcileRequest,
@@ -320,16 +321,14 @@ class RpcTaskBackend:
             autoscaler_state=self.autoscaler.persistable_state(),
         )
 
-    def job_feasibility(
-        self,
-        constraints: list[Constraint],
-        *,
-        replicas: int | None,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> str | None:
+    def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:
             return None
-        return self.autoscaler.job_feasibility(constraints, replicas=replicas, resources=resources)
+        return self.autoscaler.job_feasibility(
+            request.constraints,
+            replicas=request.replicas,
+            resources=request.resources,
+        )
 
     def get_process_status(
         self,

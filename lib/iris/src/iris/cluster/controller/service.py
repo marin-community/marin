@@ -45,6 +45,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
     BackendCapability,
     BackendObservation,
+    JobFeasibilityRequest,
     ProviderError,
     TaskBackend,
     TaskTarget,
@@ -1904,9 +1905,11 @@ class ControllerServiceImpl:
         # example Kubernetes) cannot prove infeasibility and is treated as feasible.
         backend = self._controller.backend
         error = backend.job_feasibility(
-            constraints=constraints,
-            replicas=replicas,
-            resources=request.resources,
+            JobFeasibilityRequest(
+                constraints=constraints,
+                replicas=replicas,
+                resources=request.resources,
+            )
         )
         feasible = error is None
         feasibility_errors = [error] if error is not None else []
@@ -2596,7 +2599,7 @@ class ControllerServiceImpl:
         """List workers with their running task counts.
 
         Served directly from the workers table (cluster size is in the low
-        thousands at most), with liveness queried from the backend's tracker and
+        thousands at most), with liveness queried from the controller tracker and
         a single per-page running-task lookup.
         ``query.limit == 0`` disables paging (preserves CLI callers that fetch the
         whole roster); ``limit > 0`` is clamped to ``MAX_LIST_WORKERS_LIMIT``.

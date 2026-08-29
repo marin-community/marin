@@ -30,11 +30,11 @@ from iris.cluster.controller.backend import (
     BackendDescriptor,
     BackendKind,
     BackendObservation,
-    BackendObservationRequest,
     DeviceCapacity,
     DirectReconcileRequest,
 )
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
+from iris.cluster.controller.controller import backend_observation_request
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
@@ -192,17 +192,9 @@ def _worker_backend(
     return backend
 
 
-def _backend_observation_request(state: ControllerTestState) -> BackendObservationRequest:
-    liveness = state._health.all()
+def _backend_observation_request(state: ControllerTestState):
     with state._db.read_snapshot() as tx:
-        usage = reads.resource_usage_by_worker(tx)
-        workers = healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
-        running = reads.running_tasks_by_worker(tx, set(liveness))
-    return BackendObservationRequest(
-        workers=[worker_snapshot_from_row(worker, usage.get(worker.worker_id)) for worker in workers],
-        liveness=liveness,
-        running_tasks=running,
-    )
+        return backend_observation_request(tx, state._health, state._worker_attrs)
 
 
 def _publish_backend_observation(controller_mock, state: ControllerTestState) -> None:
@@ -1906,8 +1898,6 @@ def test_list_backends_returns_controller_backend_summary(state, scheduler, tmp_
 
 
 def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state, scheduler, tmp_path, log_client):
-    """ListBackends.detail.worker carries the backend's autoscaler groups plus the
-    health counts the backend authors from its own liveness tracker."""
     backend = _worker_backend(_status_autoscaler("tpu-v5e-us"))
     register_worker(state, "w-healthy-1", "10.0.0.1:8080", make_worker_metadata(), scale_group="tpu-v5e")
     register_worker(state, "w-healthy-2", "10.0.0.2:8080", make_worker_metadata(), scale_group="tpu-v5e")

@@ -1763,7 +1763,7 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_reconcile contends
+    """Reproduce the production tail when apply_reconcile_updates contends
     with provider-sync failure storms and other write RPCs.
     """
     plan_results = _build_reconcile_inputs(db)
@@ -2299,13 +2299,11 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. building the ``ControlSnapshot`` the backend reconciles against
-#        (flattening per-worker rows + job specs).
-#     3. ``RpcTaskBackend.reconcile(ControlSnapshot)`` (builds the per-worker
-#        plans via ``plans_from_snapshot``, then async fanout over Connect RPC
-#        to a single in-process fake worker that echoes observations back).
-#     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
-#        results in as a single batched apply).
+#     2. building the controller-owned ``ControlSnapshot`` intermediary.
+#     3. building the per-worker plans and ``WorkerFleetReconcileRequest``, then
+#        ``RpcTaskBackend.reconcile`` fanout over Connect RPC to a single
+#        in-process fake worker that echoes observations back.
+#     4. ``apply_reconcile_updates`` plus effect commit in one DB transaction.
 #
 # A single uvicorn-backed fake worker is mounted on localhost; every
 # ``worker_id`` in the DB resolves to that address, isolating the cost of the

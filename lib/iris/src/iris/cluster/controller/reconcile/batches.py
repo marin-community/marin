@@ -59,6 +59,7 @@ from iris.cluster.types import (
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
+_TASK_UPDATES_APPLIED_EVENT = "task_updates_applied"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +240,7 @@ class ReconcileState:
         cascaded_jobs = self._recompute_and_finalize(now_ms)
 
         if cascaded_jobs:
-            self.overlay.emit_log_event(LogEvent(action="task_updates_applied", entity_id="backend"))
+            self.overlay.emit_log_event(LogEvent(action=_TASK_UPDATES_APPLIED_EVENT, entity_id="backend"))
             for job_id in cascaded_jobs:
                 basis = self.overlay.job_basis(job_id)
                 assert basis is not None
@@ -247,7 +248,7 @@ class ReconcileState:
                     LogEvent(
                         action="job_terminated",
                         entity_id=job_id.to_wire(),
-                        trigger="task_updates_applied",
+                        trigger=_TASK_UPDATES_APPLIED_EVENT,
                         details=(("reason", _terminal_job_reason(self.overlay, job_id, basis.state)),),
                     )
                 )

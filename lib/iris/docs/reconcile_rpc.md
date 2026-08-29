@@ -27,38 +27,39 @@ routing is purely UID-based — there is no (task_id, attempt_id) fallback.
 ```mermaid
 sequenceDiagram
     participant Loop as Controller loop
-    participant Store as Worker store
+    participant DB as Controller DB
     participant Pure as reconcile/worker.py<br/>build_reconcile_plans()
     participant Prov as RpcTaskBackend<br/>reconcile()
     participant W as Worker
     participant Apply as Controller reconcile operation
     participant State as ReconcileState
 
-    Loop->>Prov: ReconcileRequest
-    Prov->>Store: reconcile snapshot
-    Prov->>Pure: ReconcileInputs (rows + job_specs)
-    Pure-->>Prov: list[WorkerReconcilePlan]
+    Loop->>DB: read workers + desired attempts + templates
+    Loop->>Pure: ReconcileInputs (rows + job_specs)
+    Pure-->>Loop: list[WorkerReconcilePlan]
+    Loop->>Prov: WorkerFleetReconcileRequest<br/>(plan + address targets)
     Prov->>W: Reconcile(ReconcileRequest)
     W-->>Prov: ReconcileResponse(observed, health)
     Prov-->>Loop: ReconcileObservation<br/>(exact task updates + health events)
     Loop->>Apply: apply_observation()
-    Apply->>Store: fresh transition snapshot
+    Apply->>DB: fresh transition snapshot
     Apply->>State: exact task updates
     State-->>Apply: transition effects
     Apply->>Apply: apply health events
     Apply-->>Loop: effects + reaped workers
-    Loop->>Prov: teardown(reaped workers), after commit
+    Loop->>Prov: remove_capacity(reaped workers), after commit
 ```
 
 ## Pure compute vs. transport
 
-`plans_from_snapshot`
-([`backend.py`](../src/iris/cluster/controller/backend.py)) snapshots DB
-rows and calls `build_reconcile_plans(inputs)`
+The controller loads worker rows and run templates, then `plans_from_snapshot`
+([`backend.py`](../src/iris/cluster/controller/backend.py)) calls
+`build_reconcile_plans(inputs)`
 ([`reconcile/worker.py`](../src/iris/cluster/controller/reconcile/worker.py))
 to produce one `WorkerReconcilePlan` per worker (the
-`ReconcileRequest` proto is built once inside the plan). The plans flow
-through `RpcTaskBackend.reconcile`
+`ReconcileRequest` proto is built once inside the plan). The controller pairs
+each plan with its worker address and passes the complete target list through
+`RpcTaskBackend.reconcile`
 ([`backends/rpc/backend.py`](../src/iris/cluster/backends/rpc/backend.py))
 which fans them out concurrently, capped by `self.parallelism`. The backend
 translates worker-protocol responses into the same `TaskUpdate` records returned

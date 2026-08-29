@@ -10,6 +10,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import select
 
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.ops.reconcile import apply_observation
 from iris.cluster.controller.ops.task import apply_reconcile_updates
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.effects import ControllerEffects
@@ -21,11 +22,7 @@ from iris.cluster.controller.reconcile.worker import (
     task_updates_from_result,
 )
 from iris.cluster.controller.schema import task_attempts_table
-from iris.cluster.controller.worker_health import (
-    WorkerHealthEvent,
-    WorkerHealthEventKind,
-    WorkerHealthTracker,
-)
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -108,7 +105,6 @@ def commit_observed_dispatch_updates(
     *,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Author and commit exact direct-provider observations."""
     effects = apply_reconcile_updates(CursorTransitionReader(cur), observations, now=now)
     commit_effects(cur, effects)
     return effects
@@ -146,9 +142,12 @@ def apply_task_observations(
                 )
             )
 
-    effects = apply_reconcile_updates(CursorTransitionReader(cur), observations, now=now)
-    commit_effects(cur, effects)
-    build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
-    if build_events:
-        health.apply(build_events, now_ms=now.epoch_ms())
-    return effects
+    application = apply_observation(
+        CursorTransitionReader(cur),
+        observations,
+        [],
+        worker_health=health,
+        now=now,
+    )
+    commit_effects(cur, application.effects)
+    return application.effects
