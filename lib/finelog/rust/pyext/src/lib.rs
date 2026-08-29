@@ -75,13 +75,13 @@ impl EmbeddedServer {
                 Store::new(
                     log_dir.map(PathBuf::from),
                     remote_log_dir,
-                    finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                    finelog::indices::cache::DEFAULT_INDEX_CACHE_MB,
                     finelog::store::ServeMode::Live,
                 )
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to open store: {e}")))?,
             );
-            store.recover_object_tables().await.map_err(|e| {
-                PyRuntimeError::new_err(format!("failed to recover object catalogs: {e}"))
+            store.recover_tables().await.map_err(|e| {
+                PyRuntimeError::new_err(format!("failed to recover tables: {e}"))
             })?;
             store.bootstrap_maintenance();
             // No policy → the private allow-localhost default (loopback only); a
