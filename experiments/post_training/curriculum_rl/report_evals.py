@@ -21,8 +21,7 @@ ARMS = ("naive", "thompson", "grade-uniform", "grade-adaptive", "grade-prior")
 @click.option("--evals", default="math500,gsm8k-0shot", show_default=True)
 def main(version: str, evals: str) -> None:
     for arm in ARMS:
-        root = StoragePath(f"{EVALS_ROOT}/curriculum-rl-{arm}/{evals}/{version}")
-        for child in root.glob("**/*.json"):
+        for child in StoragePath(f"{EVALS_ROOT}/curriculum-rl-{arm}/{evals}/{version}/**/*.json").glob():
             name = str(child)
             payload = json.loads(child.read_text())
             print(f"== {arm} {'/'.join(name.rsplit('/', 3)[-2:])}")
