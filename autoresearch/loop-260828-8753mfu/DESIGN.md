@@ -88,13 +88,17 @@ near-threshold results get more draws rather than a coin-flip call.
   control (bf16-noise band; 24k arms showed 1.29964-65 across four arms);
   `window_complete` must be true.
 - Noise model: only ONE NVL72 rack exists, so there is no placement variance
-  (user, 2026-08-29) — residual noise is neighbor jobs, clocks/thermals, and
-  run-to-run scheduling jitter. Iteration 0 sizes it empirically: >=3 control
-  draws; the keep bar is max(0.15 MFU, 3 x the measured control sd). KEEP
-  decisions still use interleaved control/treatment draws (the control also
-  re-verifies the kept stack), and near-threshold deltas get additional
-  draws instead of a call. Periodic re-control draws guard against slow
-  drift across the campaign.
+  (user-supplied fact, 2026-08-29; overrides the ±2pp cross-night figure,
+  which came from multi-rack clusters) — residual noise is neighbor jobs,
+  clocks/thermals, and run-to-run scheduling jitter. The decision statistic
+  is the DIFFERENCE OF RUN-MEAN MFU, with run-level sd estimated from the
+  >=3 iteration-0 control draws and refreshed by later controls; per-step
+  points within a run are autocorrelated and are never treated as
+  independent replicates. KEEP requires >=2 treatment draws and >=2
+  same-session control draws (bracketing), delta > max(0.15 MFU,
+  3 x sd̂_run); a single C/T pair never keeps. Near-threshold deltas get
+  additional draws instead of a call. Periodic re-control draws guard
+  against slow drift across the campaign.
 - Fidelity gate for keeps: paired-window comparison; the loss guard compares
   the FULL 15-step loss series against the paired control (max |delta|
   within the bf16-noise band), not just the last step — data is
@@ -119,8 +123,10 @@ anything breaking hero restore.
   confirms the `gpu_fa4_cute_wide` 128x64 kernel engaged on-rack — its
   first rack outing, and cross-night MFU deltas cannot confirm dispatch —
   and (b) refreshes the lever-sourcing profile (H1 folded in: no separate
-  profile arm). If the tail perturbs draw 2's scored window relative to
-  draws 1/3, drop draw 2 from the noise estimate.
+  profile arm). Draw 2 runs SCORE_MAX_STEP=28: the default early release at
+  +19 would cancel at 30019, before the 30021 trace (codex finding). If the
+  tail perturbs draw 2's scored window relative to draws 1/3, drop draw 2
+  from the noise estimate.
 - H1 profile refresh: FOLDED INTO H0 draw 2 (see above); prior profile
   (dk-hero, pre-offload) showed marshal 2.55 s as top lever and a dense-MLP
   leg that turned out to be architecture (2 shared experts + remat) — both
@@ -138,7 +144,10 @@ anything breaking hero restore.
   the window AND loss series within the control band; even then a cf keep
   is flagged for explicit user sign-off before hero promotion, and the
   prior loop note (2026-08-12: CF moves are frontier-walking) is quoted in
-  the decision.
+  the decision. NOTE (codex): the 15-step window cannot establish whole-run
+  loss equivalence for a dynamics-touching change; H4's in-window
+  measurement establishes the THROUGHPUT effect only, and any promotion
+  decision belongs to the user.
 - H5 overlap-limit re-titration: DEAD AS A FLAG ARM on this base —
   `offload_carry` force-sets overlap-limit 1 non-overridably and
   `_apply_hero_ep_runtime_defaults` silently strips conflicting

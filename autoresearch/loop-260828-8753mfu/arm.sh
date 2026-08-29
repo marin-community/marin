@@ -22,15 +22,29 @@ set -euo pipefail
 RID="${RID:?set RID}"
 VERSION="${VERSION:?set VERSION -- bump it per arm or the artifact layer reuses the last run}"
 
+# The watchdog addresses jobs at /mwittmann/...; make the submission land there no matter what
+# the caller's shell has. (-e below only sets the remote env.)
+export IRIS_USER=mwittmann
+
 LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$(cd "${LOOP_DIR}/../.." && pwd)}"
 
 # Iris bundles the working tree, not HEAD: uncommitted edits (including another session writing
-# to a shared checkout) would ship silently and break arm attribution. The loop dir itself is
-# exempt -- it accumulates logs between commits.
-if [ -z "${ALLOW_DIRTY:-}" ] && git -C "$REPO" status --porcelain | grep -v "autoresearch/" | grep -q .; then
+# to a shared checkout) would ship silently and break arm attribution. Only the loop dir's DATA
+# files (logs, tsv, review transcripts) are exempt; uncommitted protocol scripts count as dirty,
+# since arms.tsv records HEAD as the arm's provenance.
+dirty="$(git -C "$REPO" status --porcelain | grep -Ev "autoresearch/.*\.(log|out|txt|tsv)$" || true)"
+if [ -z "${ALLOW_DIRTY:-}" ] && [ -n "$dirty" ]; then
   echo "refusing to submit from a dirty tree (set ALLOW_DIRTY=1 to override):" >&2
-  git -C "$REPO" status --porcelain | grep -v "autoresearch/" >&2
+  echo "$dirty" >&2
+  exit 1
+fi
+
+# One RID/VERSION per submission, ever: a reused RID merges W&B histories, resurrects the
+# leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts.
+if [ -f "${LOOP_DIR}/arms.tsv" ] && awk -F'\t' -v rid="$RID" -v ver="$VERSION" \
+    'NR>1 && ($1==rid || $3==ver) {found=1} END {exit !found}' "${LOOP_DIR}/arms.tsv"; then
+  echo "RID ${RID} or VERSION ${VERSION} already appears in arms.tsv; pick fresh ones" >&2
   exit 1
 fi
 

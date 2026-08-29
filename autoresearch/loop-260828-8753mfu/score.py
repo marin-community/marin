@@ -15,7 +15,9 @@ usage: uv run --with wandb python score.py <run-id> [--lo 5] [--hi 19]
 
 import argparse
 import json
+import math
 import statistics
+import sys
 
 import wandb
 
@@ -37,6 +39,13 @@ def main() -> None:
         action="store_true",
         help="Read lo/hi as offsets from the run's first logged step. A restored run resumes at "
         "the checkpoint's step, so an absolute window would miss it entirely.",
+    )
+    parser.add_argument(
+        "--expect-min-first-step",
+        type=int,
+        default=30000,
+        help="Fail unless the run's first logged step is at least this. A restore that silently "
+        "fell back to scratch logs from step 1 and would otherwise score as a valid window.",
     )
     args = parser.parse_args()
 
@@ -93,7 +102,30 @@ def main() -> None:
         "loss_last": float(losses[-1][1]) if losses else None,
         "loss_last_step": losses[-1][0] if losses else None,
     }
+
+    # One enforced verdict instead of a pile of fields a tired reader can skim past. Anything
+    # that makes the window not the window the loop agreed to compare -- a scratch fallback, a
+    # hole in any guard series, a NaN -- fails the arm here, not downstream.
+    expected_points = hi - lo + 1
+    numeric = [x for x in (mfu + drops + [v for _, v in losses] + peaks) if x is not None]
+    problems = []
+    if first_step < args.expect_min_first_step:
+        problems.append(f"first_step {first_step} < {args.expect_min_first_step}: restore fell back to scratch")
+    if len(mfu) != expected_points:
+        problems.append(f"mfu series has {len(mfu)}/{expected_points} points")
+    if len(drops) != expected_points:
+        problems.append(f"drop series has {len(drops)}/{expected_points} points")
+    if len(losses) != expected_points:
+        problems.append(f"loss series has {len(losses)}/{expected_points} points")
+    if losses and losses[-1][0] != hi:
+        problems.append(f"last loss is from step {losses[-1][0]}, not window end {hi}")
+    if any(not math.isfinite(float(x)) for x in numeric):
+        problems.append("non-finite value in a scored series")
+    result["valid"] = not problems
+    result["problems"] = problems
     print(json.dumps(result, indent=2))
+    if problems:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

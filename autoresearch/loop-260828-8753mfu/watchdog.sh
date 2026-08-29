@@ -30,6 +30,9 @@ COMPILE_CEILING="${COMPILE_CEILING:-1800}"
 SCORE_MAX_STEP="${SCORE_MAX_STEP:-19}"
 POLL="${POLL:-20}"
 STEP_POLL_EVERY="${STEP_POLL_EVERY:-3}"
+# A campaign arm restores from step-30000; a first step below this means restore silently fell
+# back to scratch (or the wrong checkpoint) and the whole measurement is invalid.
+EXPECTED_MIN_FIRST_STEP="${EXPECTED_MIN_FIRST_STEP:-30000}"
 
 LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
@@ -53,6 +56,18 @@ cancel_arm() {  # cancel_arm <reason>
   # exactly how a 16-node child gets orphaned on the rack.
   ( cd "$REPO" && timeout 300 "${IRIS[@]}" job cancel "$TRAIN" 2>&1 | tail -2 )
   ( cd "$REPO" && timeout 300 "${IRIS[@]}" job cancel "$COORD" 2>&1 | tail -2 )
+  # A cancel that silently failed leaves a 16-node gang holding the rack while the supervisor
+  # submits the next arm. Verify the train job actually reached a terminal state; if it does not,
+  # say so loudly and exit nonzero so the supervisor stops instead of stacking arms.
+  for _ in 1 2 3 4 5 6; do
+    read -r vstate _ _ <<<"$(state_line_of "$TRAIN")" || true
+    case "${vstate:-gone}" in
+      succeeded|killed|cancelled|*failed|gone) return 0;;
+    esac
+    sleep 10
+  done
+  echo "WATCHDOG CANCEL-UNVERIFIED train=${vstate:-?} -- do NOT submit the next arm until the rack is confirmed free"
+  exit 2
 }
 
 state_line_of() {  # state_line_of <job path> -> "state failures preemptions" (empty if absent)
@@ -102,9 +117,11 @@ while :; do
         exit 0;;
     esac
   fi
-  if [ "${run_seen:--1}" -lt 0 ] && [ "${train_state:-}" = "running" ]; then
+  if [ "${run_seen:--1}" -lt 0 ] && [ "${first_step:--1}" -lt 0 ] && [ "${train_state:-}" = "running" ]; then
     # Iris can report a gang "running" while another job still holds the rack; the W&B run is
     # only created once distributed init actually completes, so gate the compile clock on it.
+    # The first_step guard keeps this from re-arming the longer compile deadline over an
+    # already-started step budget when the run-existence probe failed transiently earlier.
     probe="$(max_step)"
     if [ "${probe:--2}" -ge -1 ] 2>/dev/null; then
       run_seen=$now
@@ -133,6 +150,13 @@ while :; do
     # A restored arm resumes at the checkpoint's step, so progress is counted from the first step
     # this watch actually observed rather than from zero.
     if [ "${first_step:--1}" -lt 0 ] && [ "${steps:--1}" -ge 0 ] 2>/dev/null; then
+      if [ "$steps" -lt "$EXPECTED_MIN_FIRST_STEP" ]; then
+        # Restore silently fell back to scratch (or the wrong checkpoint): the run is logging
+        # steps below the checkpoint step. Nothing it measures is valid; kill it immediately.
+        cancel_arm "first logged step ${steps} < expected ${EXPECTED_MIN_FIRST_STEP} (restore fell back)"
+        echo "WATCHDOG wrong-first-step step=${steps} expected>=${EXPECTED_MIN_FIRST_STEP}"
+        exit 1
+      fi
       first_step="$steps"
       deadline=$(( now + STEP_BUDGET ))
       echo "$(date -u +%H:%M:%S) first observed step=${first_step}, step budget ${STEP_BUDGET}s starts now"

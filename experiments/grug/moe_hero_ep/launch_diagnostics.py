@@ -199,6 +199,11 @@ def build_diagnostic_run(
             num_train_steps=total_schedule_steps,
             master_param_mode=master_param_mode,
             load_checkpoint_path=restore_from,
+            # An explicit --restore-from must fail loud. The optional-resume default returns a
+            # fresh step-0 state when the path is wrong or unreadable, and a scratch run still
+            # reports a plausible MFU; True makes restore raise instead of reinitializing. The
+            # ladder launchers keep None on purpose (optional resume across retries).
+            load_checkpoint=True if restore_from else None,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
