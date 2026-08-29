@@ -56,6 +56,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.curriculum_rl.pool import (
+    MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
     QWEN3_REVISION,
     TRAIN_FILENAME,
@@ -177,6 +178,12 @@ FULL = ScalePreset(
 )
 
 SCALES = {preset.label: preset for preset in (SMOKE, FULL)}
+
+# The pool filter must keep every retained prompt under each preset's
+# max_input_length (request window minus generation budget), or retained rows
+# skip generation and fully skipped GRPO groups fail admission.
+for _preset in SCALES.values():
+    assert MAX_PROMPT_TOKENS <= _preset.request_window_tokens - _preset.max_new_tokens, _preset.label
 
 
 @dataclass(frozen=True)

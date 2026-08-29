@@ -48,12 +48,12 @@ MATH500_DATASET = "HuggingFaceH4/MATH-500"
 MATH500_REVISION = "6e4ed1a"
 
 GSM8K_ENV = "gsm8k"
-BOXED_ENV = "aime"
+ANSWER_LINE_ENV = "aime"
 
 GSM8K_INSTRUCTION = ' Let\'s think step by step and output the final answer after "####".'
 # The aime env verifies with the Minerva "Answer: ..." extraction (not \boxed),
 # so the instruction must elicit a final Answer line.
-BOXED_INSTRUCTION = " Please reason step by step, and end your response with a final line 'Answer: <answer>'."
+ANSWER_LINE_INSTRUCTION = " Please reason step by step, and end your response with a final line 'Answer: <answer>'."
 
 GSM8K_TRAIN_ROWS = 2000
 GSM8K_VALIDATION_ROWS = 256
@@ -84,11 +84,11 @@ class PoolBin:
 # Grades order bins easiest to hardest. MATH levels 1-2 sit in one bin because
 # level 1 alone has only 564 train rows.
 GSM8K_BIN = PoolBin("g0-gsm8k", grade=0, env_class=GSM8K_ENV)
-MATH_L12_BIN = PoolBin("g1-math-l12", grade=1, env_class=BOXED_ENV)
-MATH_L3_BIN = PoolBin("g2-math-l3", grade=2, env_class=BOXED_ENV)
-MATH_L4_BIN = PoolBin("g3-math-l4", grade=3, env_class=BOXED_ENV)
-MATH_L5_BIN = PoolBin("g4-math-l5", grade=4, env_class=BOXED_ENV)
-AIME_BIN = PoolBin("g5-aime", grade=5, env_class=BOXED_ENV)
+MATH_L12_BIN = PoolBin("g1-math-l12", grade=1, env_class=ANSWER_LINE_ENV)
+MATH_L3_BIN = PoolBin("g2-math-l3", grade=2, env_class=ANSWER_LINE_ENV)
+MATH_L4_BIN = PoolBin("g3-math-l4", grade=3, env_class=ANSWER_LINE_ENV)
+MATH_L5_BIN = PoolBin("g4-math-l5", grade=4, env_class=ANSWER_LINE_ENV)
+AIME_BIN = PoolBin("g5-aime", grade=5, env_class=ANSWER_LINE_ENV)
 MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 1": MATH_L12_BIN,
     "Level 2": MATH_L12_BIN,
@@ -96,9 +96,6 @@ MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 4": MATH_L4_BIN,
     "Level 5": MATH_L5_BIN,
 }
-POOL_BINS = (GSM8K_BIN, MATH_L12_BIN, MATH_L3_BIN, MATH_L4_BIN, MATH_L5_BIN, AIME_BIN)
-POOL_GRADE_COUNT = max(b.grade for b in POOL_BINS) + 1
-
 VALIDATION_GSM8K_SOURCE = "val-gsm8k"
 VALIDATION_MATH500_SOURCE = "val-math500"
 
@@ -137,7 +134,7 @@ def _pool_record(
     index: int,
     data_source: str | None = None,
 ) -> dict[str, object]:
-    instruction = GSM8K_INSTRUCTION if pool_bin.env_class == GSM8K_ENV else BOXED_INSTRUCTION
+    instruction = GSM8K_INSTRUCTION if pool_bin.env_class == GSM8K_ENV else ANSWER_LINE_INSTRUCTION
     source = data_source or pool_bin.name
     return {
         "data_source": source,
@@ -210,7 +207,7 @@ def _aime_records() -> list[dict[str, object]]:
 
 def _math500_records() -> list[dict[str, object]]:
     dataset = load_dataset(MATH500_DATASET, split="test", revision=MATH500_REVISION)
-    math500_bin = PoolBin(VALIDATION_MATH500_SOURCE, grade=2, env_class=BOXED_ENV)
+    math500_bin = PoolBin(VALIDATION_MATH500_SOURCE, grade=2, env_class=ANSWER_LINE_ENV)
     return [
         _pool_record(
             question=example["problem"], answer=example["answer"], pool_bin=math500_bin, split="test", index=index
