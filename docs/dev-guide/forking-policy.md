@@ -123,19 +123,15 @@ sibling package (`jax`, `jaxlib`, `jax-cuda13-plugin`) installs stock at the
 pin, and the wheel's `+marin.<sha>` local version still satisfies the stock
 `jax-cuda13-pjrt==` requirement.
 
-To refresh after a jax bump: rebase the fork's `main` onto the new base and set
-`jax_commit`/`jax_version` in `marin/release/config.json` in the same commit
-(the build rechecks the pairing and fails in seconds). The fork's
-`marin-pjrt.yaml` builds `main` into a candidate release; promote it with
-`marin-pjrt-promote.yaml`, which proves on a GB200 that the fork's patched
-behaviors are live and republishes the same bytes. Do not pin a wheel whose
-manifest's `validation` block is not `status: passed`: a patch can compile in
-and still be inert, and an inert patch passes ordinary correctness tests,
-including the e2e (`tests/cluster/grug/test_ragged_ep_check.py`,
-`cluster`-marked). A patch that adds another required behavior adds its own
-check to the fork's validation job. Then point the
-`jax-cuda13-pjrt` source URL in `lib/marin/pyproject.toml` at the promoted wheel
-and run `uv lock`.
+A refresh happens only after a jax bump; the step-by-step rebuild-and-re-pin
+procedure is the refresh-fork skill's `.agents/skills/refresh-fork/docs/xla.md`.
+The pin gate is
+policy: do not pin a wheel whose manifest's `validation` block is not
+`status: passed`. A patch can compile in and still be inert, and an inert patch
+passes ordinary correctness tests, including the e2e
+(`tests/cluster/grug/test_ragged_ep_check.py`, `cluster`-marked), so the
+promote job's validation proves the patched behaviors are live, and a patch
+that adds another required behavior adds its own check there.
 
 ## When to fork
 
