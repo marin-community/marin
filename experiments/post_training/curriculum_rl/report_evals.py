@@ -17,16 +17,16 @@ ARMS = ("naive", "thompson", "grade-uniform", "grade-adaptive", "grade-prior")
 
 
 @click.command(help=__doc__)
-@click.option("--version", default="2026.08.29", show_default=True)
-@click.option("--evals", default="math500,gsm8k-0shot", show_default=True)
-def main(version: str, evals: str) -> None:
-    del version, evals
+@click.option("--date-prefix", default="20260829", show_default=True, help="Eval batch date, bounds the bucket listing.")
+def main(date_prefix: str) -> None:
     for arm in ARMS:
-        pattern = f"{EVALS_ROOT}/2026*-curriculum-rl-{arm}-*/results/*/results_*.json"
+        # Layout: evals/<batch>-curriculum-rl-<arm>-<task>-<uid>/results/<task>/<model>/results_*.json
+        pattern = f"{EVALS_ROOT}/{date_prefix}-*-curriculum-rl-{arm}-*/results/*/*/results_*.json"
         for child in StoragePath(pattern).glob():
             payload = json.loads(child.read_text())
-            print(f"== {arm} {str(child).rsplit('/', 3)[-3]}")
-            print(json.dumps(payload.get("results", payload))[:600])
+            for task, metrics in payload.get("results", {}).items():
+                slim = {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+                print(f"== {arm} {task} {json.dumps(slim)}")
 
 
 if __name__ == "__main__":
