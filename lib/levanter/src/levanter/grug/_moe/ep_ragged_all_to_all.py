@@ -209,6 +209,157 @@ def _gather_dispatch_rows_bwd(
 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
 
 
+def _loop_local_zeros(rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."]) -> Float[Array, "rows H"]:
+    """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
+
+    ``ragged_all_to_all`` writes its result in place into the output-init operand. A literal
+    ``jnp.zeros`` init is a trace-time constant: it gets hoisted out of the layer scan (and
+    identical inits CSE together), so CopyInsertion must mint a fresh multi-GB device copy of
+    the pristine zeros into the a2a's output slot on every scan iteration. Deriving the zeros
+    from ``tie`` -- a per-site, per-iteration traced value -- keeps each init inside the loop
+    body and distinct from every other init, so it lowers to one write-only fill kernel whose
+    buffer the a2a updates directly.
+
+    ``tie`` must be a non-negative integer array (group or transfer sizes): ``min(tie[0], 0)``
+    is exactly zero at runtime but not foldable at compile time.
+    """
+    zero = jnp.minimum(tie.reshape(-1)[0], 0).astype(dtype)
+    return jax.lax.broadcast(zero, (rows, hidden_dim))
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def _dispatch_ragged_a2a(
+    capacity: int,
+    source_rows: int,
+    chunk_source: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> Float[Array, "C H"]:
+    """Dispatch-direction ``ragged_all_to_all`` into a freshly zeroed receiver buffer.
+
+    Owning the output-init here (instead of taking a caller-built ``jnp.zeros``) lets both the
+    primal and the transposed direction build their inits with `_loop_local_zeros`. jax's
+    built-in transpose rule inits the swapped a2a with plain zeros, which XLA hoists out of
+    the layer loop and re-copies every iteration; the custom vjp below is that same rule with
+    the init construction replaced. Zeros stay load-bearing: receiver rows no peer writes must
+    read 0 downstream, and dropped source rows must read a 0 cotangent in the backward.
+    """
+    del source_rows
+    output_init = _loop_local_zeros(capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes)
+    return jax.lax.ragged_all_to_all(
+        chunk_source, output_init, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+    )
+
+
+def _dispatch_ragged_a2a_fwd(
+    capacity: int,
+    source_rows: int,
+    chunk_source: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> tuple[Float[Array, "C H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+    result = _dispatch_ragged_a2a(
+        capacity, source_rows, chunk_source, input_offsets, send_sizes, output_offsets, recv_sizes
+    )
+    return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+
+
+def _dispatch_ragged_a2a_bwd(
+    capacity: int,
+    source_rows: int,
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangent: Float[Array, "C H"],
+) -> tuple[Float[Array, "TK H"], None, None, None, None]:
+    del capacity
+    input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+    # The transpose of a ragged all-to-all is the reverse ragged all-to-all: swap the send and
+    # recv roles and exchange the offset vectors across shards, exactly as jax's transpose rule
+    # does. Source rows that were clipped receive no cotangent and keep the init's zeros.
+    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    # Tie to this side's send_sizes, not recv_sizes: the return path's passthrough fill ties to
+    # its own send_sizes, which is the SAME tensor as this dispatch's recv_sizes, and two fills
+    # with identical shape and tie CSE back into one value with a destructive consumer --
+    # re-minting exactly the copy this construction removes.
+    init = _loop_local_zeros(source_rows, cotangent.shape[1], cotangent.dtype, send_sizes)
+    source_ct = jax.lax.ragged_all_to_all(
+        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+    )
+    return source_ct, None, None, None, None
+
+
+_dispatch_ragged_a2a.defvjp(_dispatch_ragged_a2a_fwd, _dispatch_ragged_a2a_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _return_ragged_a2a(
+    capacity: int,
+    out_dispatch: Float[Array, "C H"],
+    returned: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> Float[Array, "TK H"]:
+    """Return-direction ``ragged_all_to_all``: write expert outputs back over ``returned``.
+
+    Same construction as `_dispatch_ragged_a2a`: the primal is unchanged, and the custom vjp
+    replicates jax's transpose rule operation for operation, replacing only the transposed
+    a2a's zero init so it is built per-iteration instead of hoisted and copied.
+    """
+    del capacity
+    return jax.lax.ragged_all_to_all(
+        out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+    )
+
+
+def _return_ragged_a2a_fwd(
+    capacity: int,
+    out_dispatch: Float[Array, "C H"],
+    returned: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> tuple[Float[Array, "TK H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+    result = _return_ragged_a2a(
+        capacity, out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes
+    )
+    return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+
+
+def _return_ragged_a2a_bwd(
+    capacity: int,
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangent: Float[Array, "TK H"],
+) -> tuple[Float[Array, "C H"], Float[Array, "TK H"], None, None, None, None]:
+    input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    init = _loop_local_zeros(capacity, cotangent.shape[1], cotangent.dtype, recv_sizes)
+    out_dispatch_ct = jax.lax.ragged_all_to_all(
+        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+    )
+    # Rows this a2a overwrote took their value from ``out_dispatch``, so the pass-through
+    # cotangent to ``returned`` is zeroed on exactly the written intervals. This mirrors jax's
+    # transpose rule op for op (interval marks, cumsum, integer select_n) so the behavior is
+    # bit-identical, including on degenerate empty-group offset patterns.
+    interval_marks = (
+        jnp.zeros(cotangent.shape[0], jnp.int32).at[output_offsets_x].set(1).at[output_offsets_x + recv_sizes].add(-1)
+    )
+    written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
+    passthrough_zero = _loop_local_zeros(cotangent.shape[0], cotangent.shape[1], cotangent.dtype, send_sizes)
+    returned_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
+    return out_dispatch_ct, returned_ct, None, None, None, None
+
+
+_return_ragged_a2a.defvjp(_return_ragged_a2a_fwd, _return_ragged_a2a_bwd)
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -253,7 +404,10 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-    returned = jnp.zeros((assignments_per_shard, hidden_dim), dtype=x_local.dtype)  # [TK, H]
+    # Built per-iteration (not jnp.zeros) so the layer scan does not re-copy a hoisted
+    # constant into the in-place return a2a's output slot every step; see _loop_local_zeros.
+    # The zeros are load-bearing: rows no peer writes back must read 0 in the combine.
+    returned = _loop_local_zeros(assignments_per_shard, hidden_dim, x_local.dtype, group_sizes)  # [TK, H]
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -277,15 +431,14 @@ def _moe_mlp_ep_ragged_a2a_local(
             # But it does not increase the speed. The transport and the MLP compete for the
             # same SMs.
             chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
-            dispatch_out_shape = jnp.zeros((chunk_capacity, hidden_dim), dtype=x_local.dtype)  # [C, H]
             # Accepted rows are the prefix of each unclipped expert group and receiver offsets
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
             # directly: no sender compaction and no receiver-side permute.
-            x_dispatch = jax.lax.ragged_all_to_all(  # [C, H]
+            x_dispatch = _dispatch_ragged_a2a(  # [C, H]
+                chunk_capacity,
+                assignments_per_shard,
                 chunk_source,
-                dispatch_out_shape,
                 *dispatch_params,
-                axis_name="expert",
             )
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
@@ -307,11 +460,11 @@ def _moe_mlp_ep_ragged_a2a_local(
             # Chaining every chunk through one output buffer composes the disjoint writes;
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
-            returned = jax.lax.ragged_all_to_all(
+            returned = _return_ragged_a2a(
+                chunk_capacity,
                 out_dispatch,
                 returned,
                 *return_params,
-                axis_name="expert",
             )
             accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
 
