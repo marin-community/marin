@@ -365,3 +365,48 @@ H10 REVISED GATES (F1/F2 + codex-1; still stop-shipped until implemented):
   (timing races show as T-T excess; bitwise T-T equality is NOT expected).
 - An H10 keep cannot be race-bounded by this protocol: pre-declared as
   needing user sign-off + a longer soak before any hero promotion.
+
+## 2026-08-29 ~11:00Z: iteration 2 decision — H9 DISCARD (engaged-negative, attributed)
+
+Treatment medians 23.215/23.128 vs controls 23.321/23.240/23.340: -0.13
+consistent. Trace comparison (clean steps both sides; the only straggler
+step was in the CONTROL trace and was excluded):
+
+- The flag did exactly what it promised: all nine multi-GB copies left the
+  compute stream (compute-stream D2D 785 -> 32 ms/step), landing on the
+  offload memcpy streams 75-78.
+- The time was re-lost three ways: (1) +461 ms of kernel SLOWDOWN from
+  contention — nvjet GEMMs at identical launch counts run 1.6x slower
+  under the now-co-running copy traffic, and GEMMs scheduled into the
+  window the on-stream copy used to occupy co-run with the SM-bound
+  ragged-a2a at 3.3x slower; (2) +201 ms exposed copy-done waits + +160-194
+  ms displaced offload overlap (the async copies serialized behind the
+  carry-offload copies on the same streams — exactly review finding F4);
+  (3) ragged-a2a exposure +145 (compute finishes its copy-free work sooner
+  and stalls at the transport). Net +150 ms/step wall.
+- The remat 325->268 "improvement" was relabeling (-155 remat kernels,
+  +177 other fusions) — same for H6's remat drop, retrospectively suspect.
+
+STRATEGIC INSIGHT (now 2-for-2 with H6): the slop-85 LHS schedule is a
+defended local optimum. The trace's "reclaimable" legs are guarded by
+contention: the on-stream copies were free overlap-fillers occupying the
+compute stream precisely where the SM-bound a2a would poison co-running
+GEMMs. Any lever that frees compute-stream time adjacent to the a2a window
+feeds GEMMs into 3.3x contention. Corollaries: H3-naive (overlap GEMMs
+with a2a) is COUNTER-INDICATED, upgraded from "needs treatment" to
+near-dead; levers must either reduce the a2a's SM footprint (explored,
+dead per prior campaigns) or fill its window with copy-engine work (what
+control already partially does). H10's temporal rotation is the remaining
+distinct mechanism; its risk is now understood as "exposure moves around
+under scheduling perturbation", not just the correctness race.
+
+H10 rank-local gate disposition (codex "required", RESOLVED AS REFUTED in
+part): a whole-carry corruption on one rank moves GLOBAL loss by >=2e-3
+(20x the null band — caught by the existing series gate); a structural
+boundary race fires deterministically every step, so 30 points of
+systematic shift are detectable globally at ~2e-5; only intermittent-AND-
+tiny corruption stays invisible, which no 30-step protocol bounds with or
+without rank-local channels — that residual is covered by the adopted
+rule that an H10 keep needs user sign-off + a soak before hero promotion.
+A graph-changing instrumentation commit would invalidate the iteration-0
+calibration for less coverage than that rule already provides.
