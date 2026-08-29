@@ -1360,19 +1360,13 @@ def chunk(chunk_id: int, engine: Engine) -> Chunk:
 @api.get("/search-results/{search_result_id}", response_model=SearchResultIdentity)
 def search_result_identity(search_result_id: int, engine: Engine) -> SearchResultIdentity:
     with engine.connect() as conn:
-        row = conn.execute(
-            sqlalchemy.select(
-                schema.search_execution_results.c.id,
-                schema.search_execution_results.c.result_id,
-                schema.search_execution_results.c.domain,
-            ).where(schema.search_execution_results.c.id == search_result_id)
-        ).first()
-    if row is None:
+        result = stored_feedback_results(conn, {search_result_id}).get(search_result_id)
+    if result is None:
         raise HTTPException(404, f"no search result {search_result_id}")
     return SearchResultIdentity(
-        key=f"{row.domain}:{row.id}",
-        source_id=row.result_id,
-        domain=row.domain,
+        key=f"{result.domain}:{result.id}",
+        source_id=result.source_id,
+        domain=result.domain,
     )
 
 

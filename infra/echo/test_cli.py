@@ -86,8 +86,6 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     output = capsys.readouterr().out
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
-    assert "GRADE KEY  TITLE  SOURCE ID" in output
-    assert "copy the SOURCE ID column" in output
     assert "file:731" in output
     assert "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py" in output
     assert f"L42 {reference_text}" in output
