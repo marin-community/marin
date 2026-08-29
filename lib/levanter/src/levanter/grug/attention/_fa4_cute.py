@@ -283,6 +283,13 @@ def _fa4_cute_attention_forward_sharded(
 
 def _segmented_kernel_config(head_dim: int, *, wide_forward_tile: bool):
     arch = gpu_compute_capability()
+    if wide_forward_tile and not (arch // 10 == 10 and head_dim == 128):
+        # Refusing beats silently running the plain config: a tile A/B on such
+        # hardware would measure a no-op and report a false null.
+        raise ValueError(
+            f"gpu_fa4_cute_wide only engages on sm100 at head_dim=128, not sm{arch} at"
+            f" head_dim={head_dim}; select gpu_fa4_cute instead."
+        )
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in

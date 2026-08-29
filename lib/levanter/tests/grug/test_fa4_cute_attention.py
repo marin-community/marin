@@ -140,6 +140,15 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
     np.testing.assert_array_equal(valid, np.ones((2, 4), dtype=np.bool_))
 
 
+def test_the_wide_tile_refuses_hardware_where_it_cannot_engage(monkeypatch):
+    # Silently running the plain config would let a tile A/B measure a no-op
+    # and report a false null.
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 90)
+
+    with pytest.raises(ValueError, match="gpu_fa4_cute_wide only engages on sm100"):
+        fa4_cute._segmented_kernel_config(128, wide_forward_tile=True)
+
+
 def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
     def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
         del k, v, sm_scale, kernel_config

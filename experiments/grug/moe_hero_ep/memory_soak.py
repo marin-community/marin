@@ -151,8 +151,10 @@ def build_memory_soak_run(
         capacity_factor=_EP_CAPACITY_FACTOR,
         # FA4's packed-segment helper gives equivalent size-one mesh axes distinct explicit
         # shardings. Reference attention avoids that single-device-only mismatch; attention
-        # implementation does not participate in checkpoint host staging.
-        attention_implementation="reference" if devices == 1 else HERO_MODEL_CONFIG.attention_implementation,
+        # implementation does not participate in checkpoint host staging. The soak's shapes are
+        # all small, where the hero's wide forward tile is unmeasured, so multi-device soaks
+        # keep the plain FA4 name like the narrow ladder rungs.
+        attention_implementation="reference" if devices == 1 else "gpu_fa4_cute",
         moe_implementation=HERO_MODEL_CONFIG.moe_implementation,
         expert_chunks=HERO_MODEL_CONFIG.expert_chunks,
         seq_len=seq_len,
