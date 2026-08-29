@@ -99,6 +99,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e AWS_MAX_ATTEMPTS 25 -e AWS_RETRY_MODE adaptive \
   -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
   -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
+  -e XLA_PYTHON_CLIENT_MEM_FRACTION "${MEM_FRACTION:-0.75}" \
   -e TF_CPP_MIN_LOG_LEVEL 0 \
   -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1" \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
@@ -117,9 +118,9 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --version "${VERSION}" --run >"${LOOP_DIR}/${RID}-submit.log" 2>&1 \
   || { echo "submit FAILED, tail of ${RID}-submit.log:" >&2; tail -20 "${LOOP_DIR}/${RID}-submit.log" >&2; exit 1; }
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \
   "${MASTER_PARAMS}" "${SCHEDULE_STEPS}" "${ARM_TIMEOUT}" "${RESTORE_FROM:-none}" \
-  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" >> "${LOOP_DIR}/arms.tsv"
+  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" "${MEM_FRACTION:-0.75}" >> "${LOOP_DIR}/arms.tsv"
 
-echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none})"
+echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none}, memfrac: ${MEM_FRACTION:-0.75})"

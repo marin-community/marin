@@ -21611,3 +21611,174 @@ exec
 1964-  1964	    return absl::FailedPreconditionError(
 xla/pjrt/gpu/se_gpu_pjrt_client.cc
 
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "gh api 'search/code?q=set_device_memory_size+repo%3Amarin-community%2Fxla' --jq '.items[] | [.path,.html_url] | @tsv'; gh api 'search/code?q=device_memory_size%28%29+repo%3Amarin-community%2Fxla+path%3Axla%2Fpjrt' --jq '.items[] | [.path,.html_url] | @tsv'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 480ms:
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba autoresearch/loop-260828-8753mfu/watchdog.sh | sed -n '20,45p'; nl -ba autoresearch/loop-260828-8753mfu/watchdog.sh | sed -n '105,160p'; nl -ba autoresearch/loop-260828-8753mfu/LOGBOOK.md | sed -n '414,465p'; git status --short" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+    20	#
+    21	# State polls are cheap (one describe RPC), so they run every POLL=20s; the W&B step query is
+    22	# heavier and runs every third poll.
+    23	#
+    24	# usage: RID=<run-id> [STEP_BUDGET=900] [COMPILE_CEILING=1200] [SCORE_MAX_STEP=19] watchdog.sh
+    25	set -uo pipefail
+    26	
+    27	RID="${RID:?set RID}"
+    28	STEP_BUDGET="${STEP_BUDGET:-1200}"
+    29	COMPILE_CEILING="${COMPILE_CEILING:-1800}"
+    30	SCORE_MAX_STEP="${SCORE_MAX_STEP:-19}"
+    31	POLL="${POLL:-20}"
+    32	STEP_POLL_EVERY="${STEP_POLL_EVERY:-3}"
+    33	# A campaign arm restores from step-30000; a first step below this means restore silently fell
+    34	# back to scratch (or the wrong checkpoint) and the whole measurement is invalid.
+    35	EXPECTED_MIN_FIRST_STEP="${EXPECTED_MIN_FIRST_STEP:-30000}"
+    36	
+    37	LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    38	REPO="$(cd "${LOOP_DIR}/../.." && pwd)"
+    39	IRIS=(uv run iris --config lib/iris/config/marin.yaml)
+    40	COORD="/mwittmann/${RID}-coord"
+    41	TRAIN="${COORD}/grug-train-${RID}"
+    42	start=$(date +%s)
+    43	# A production submission may queue behind another job, so the compile ceiling starts when the
+    44	# train job is first observed running, not at submission. QUEUE_CEILING bounds the pending phase
+    45	# (iris reports a Kueue-gated gang as "running", so this is the only queue bound that works).
+   105	      fi
+   106	    fi
+   107	    exit 0
+   108	  fi
+   109	
+   110	  read -r train_state train_failures train_preemptions <<<"$(state_line_of "$TRAIN")" || true
+   111	  if [ -z "${train_state:-}" ]; then
+   112	    # No train job yet: the coordinator is either still dispatching or died before dispatch.
+   113	    read -r coord_state coord_failures coord_preemptions <<<"$(state_line_of "$COORD")" || true
+   114	    case "${coord_state:-}" in
+   115	      succeeded|killed|cancelled|*failed)
+   116	        cancel_arm "coordinator ${coord_state} before the train job existed"
+   117	        echo "WATCHDOG coord-terminal state=${coord_state} failures=${coord_failures:-?}"
+   118	        exit 0;;
+   119	    esac
+   120	  fi
+   121	  if [ "${run_seen:--1}" -lt 0 ] && [ "${first_step:--1}" -lt 0 ] && [ "${train_state:-}" = "running" ]; then
+   122	    # Iris can report a gang "running" while another job still holds the rack; the W&B run is
+   123	    # only created once distributed init actually completes, so gate the compile clock on it.
+   124	    # The first_step guard keeps this from re-arming the longer compile deadline over an
+   125	    # already-started step budget when the run-existence probe failed transiently earlier.
+   126	    probe="$(max_step)"
+   127	    if [ "${probe:--2}" -ge -1 ] 2>/dev/null; then
+   128	      run_seen=$now
+   129	      deadline=$(( now + COMPILE_CEILING ))
+   130	      echo "$(date -u +%H:%M:%S) gang up (wandb run exists), compile ceiling ${COMPILE_CEILING}s starts now"
+   131	    fi
+   132	  fi
+   133	  if [ "${train_preemptions:-0}" -gt 0 ] 2>/dev/null; then
+   134	    cancel_arm "train job preempted (preemptions=${train_preemptions})"
+   135	    echo "WATCHDOG preempted train=${train_state} preemptions=${train_preemptions} step=${steps}"
+   136	    exit 0
+   137	  fi
+   138	  if [ "${train_failures:-0}" -gt 0 ] 2>/dev/null; then
+   139	    cancel_arm "train task failed (failures=${train_failures})"
+   140	    echo "WATCHDOG task-failed train=${train_state} failures=${train_failures} step=${steps}"
+   141	    exit 0
+   142	  fi
+   143	  case "${train_state:-}" in
+   144	    succeeded|killed|cancelled|*failed)
+   145	      echo "WATCHDOG terminal train=${train_state} step=${steps}"; exit 0;;
+   146	  esac
+   147	
+   148	  if [ $(( tick % STEP_POLL_EVERY )) -eq 0 ]; then
+   149	    steps="$(max_step)"
+   150	    echo "$(date -u +%H:%M:%S) t=$(( now - start ))s train=${train_state:-none} step=${steps}"
+   151	    # A restored arm resumes at the checkpoint's step, so progress is counted from the first step
+   152	    # this watch actually observed rather than from zero.
+   153	    if [ "${first_step:--1}" -lt 0 ] && [ "${steps:--1}" -ge 0 ] 2>/dev/null; then
+   154	      if [ "$steps" -lt "$EXPECTED_MIN_FIRST_STEP" ]; then
+   155	        # Restore silently fell back to scratch (or the wrong checkpoint): the run is logging
+   156	        # steps below the checkpoint step. Nothing it measures is valid; kill it immediately.
+   157	        cancel_arm "first logged step ${steps} < expected ${EXPECTED_MIN_FIRST_STEP} (restore fell back)"
+   158	        echo "WATCHDOG wrong-first-step step=${steps} expected>=${EXPECTED_MIN_FIRST_STEP}"
+   159	        exit 1
+   160	      fi
+   414	## 2026-08-29 ~12:25Z: iteration 3 — H10 OOM-blocked; H10b rescue spec
+   415	
+   416	Both H10 draws died in the first jit_train_step execution with the same
+   417	NCCL alltoall CUDA OOM ('Cuda failure 2'), after the pipeliner engaged
+   418	(Pipelinable while: while.251.clone on all ranks). Deterministic, not
+   419	fragmentation. Memory anatomy (train.py:76-83): fraction 0.75 = 138.2 GiB
+   420	pool threshold, ~46 GiB outside, ~28.5 GiB held by NCCL/cuBLAS/context —
+   421	the pipelined program's extra first-execution demand exceeds the ~17.5 GiB
+   422	slack.
+   423	
+   424	H10b rescue spec (pending fable+codex review): XLA_PYTHON_CLIENT_MEM_FRACTION
+   425	0.75 -> 0.72 frees +5.5 GiB outside the pool (pool 132.7 still >> peak
+   426	116.6); arms = 2x T(pipelined @0.72) vs 2x C(plain @0.72) isolating the
+   427	pipelining, plus the C@0.72-vs-C@0.75 bridge telling the fraction's own
+   428	cost. MEM_FRACTION plumbed as an explicit arm.sh knob recorded in
+   429	arms.tsv. All H10 fidelity gates carry over (loss from +1, natural
+   430	completion, T-T comparison, keep needs user sign-off + soak).
+   431	
+   432	## 2026-08-29 ~13:00Z: H10b CANCELLED pre-rack (review + free log evidence)
+   433	
+   434	Fable review blocker F1 (mine the dead runs first) paid off at zero rack
+   435	cost: the OOM is inside ncclCuMemAlloc — NCCL's cuMem/window registration
+   436	path (MNNVL registers collective operand buffers; tensor-scale, GB per
+   437	instance) — with no allocation size logged; the pipelined program shows
+   438	+21 async-start instructions (296 vs control 275) and remat restructured
+   439	to 261/745-net (vs 325/1822). If peeling duplicated a2a operand buffers,
+   440	the extra registration demand is plausibly >> the 5.5 GiB a 0.75->0.72
+   441	fraction change frees. F2: the fraction also feeds the slop-derived
+   442	scheduler budget, so BOTH sides of an @0.72 comparison would run a
+   443	different program — the bridge is non-neutral by mechanism and H6's
+   444	calibration would not transfer. F3: cuda_async grows the pool past the
+   445	threshold for in-pool demand, and a T peak in (132.7, ~134] would sit on
+   446	the #8490 churn cliff and misscore as "pipelining is slow".
+   447	
+   448	DECISION: H10/H10b closed as OOM-BLOCKED (engaged, unmeasurable at any
+   449	defensible memory posture on this stack) — explicitly NOT disproven.
+   450	Revisit conditions: a compile-only memory estimate for the pipelined
+   451	program, or an XLA-side fix avoiding peeled-instance re-registration.
+   452	Priority note from review: arms stay at production per the user's
+   453	explicit 2026-08-29 exception (<1h runtime), superseding the older
+   454	interactive-only instruction.
+   455	
+   456	Iterations 1-3 pattern for the record: three engaged flag levers, all
+   457	negative or blocked — the slop-85/overlap-1/on-stream-copy schedule is a
+   458	defended local optimum. Campaign proceeds to the structural fork
+   459	(marin_ep transport port scoping in flight; XLA-patch lever as the
+   460	alternative).
+   461	
+   462	## 2026-08-29 ~13:15Z: structural fork decided — marin_ep DECLINED, T-H9-2 next
+   463	
+   464	marin_ep scoping (agent, full evidence in transcript): cannot run at EP64
+   465	on the pinned c9526e wheel (kMaxPeers=32, deterministic step-0
+ M autoresearch/loop-260828-8753mfu/review-codex-h10b.txt
+
+codex
+Verdict: block the four-draw H10b plan at the reviewed HEAD. The rescue remains plausible, but it is not currently runnable or cleanly interpretable.
+
+1. Blocker — `MEM_FRACTION` is not plumbed. The logbook says the knob is explicit and recorded ([LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:424)), but [arm.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:86) passes and records only `XLA_FLAGS`. The dispatcher forwards `XLA_*` variables that exist in the remote coordinator ([dispatch.py](/home/marin/projects/marin-mfu-loop/experiments/grug/dispatch.py:24)); the submitter’s ambient shell is not inherited. The trainer then retains its `0.75` default through `setdefault` ([train.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:196)). As written, C still runs at 0.75 and T repeats the 0.75 OOM.
+
+2. High — 0.72 genuinely gives NCCL more room, but 5.5 GiB is an unsized ladder. At 0.75 the failed run logged a 148,417,511,424-byte cuda-async reservation and a 49,473,912,832-byte collective ceiling. Pinned PJRT sets the default pool from `fraction × total` and the separate collective BFC limit from `(1−fraction) × total` ([PJRT construction](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1340-L1379), [collective construction](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1576-L1591)). Therefore 0.72 changes those limits to about 132.7 and 51.6 GiB, adding 5.53 GiB to the collective side. The dead logs expose no requested allocation size or `NCCL INFO`, however. `ncclCuMemAlloc` is a generic NCCL allocation site; it does not by itself prove window registration or tensor-sized duplicated operands.
+
+3. High — peeling can add static instances, but the available compile evidence does not bound them. The pinned pass peels a 48-iteration loop and clones instructions around the transformed while; cloned channel instructions can receive unique channel IDs ([CollectivePipeliner overview](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/service/collective_pipeliner.h#L38-L68), [channel handling](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/service/collective_pipeliner.cc#L743-L770)). The dead run shows one forward `MoveInfo` on `while.251.clone`, async starts rising 275→296, and remat changing 325/1822→261/745 ([LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:432)). None of those counts identifies cloned all-to-alls, communicator multiplicity, or workspace bytes. A single T@0.72 feasibility draw should precede the four scored draws; failure would make the controls unnecessary.
+
+4. High — treatment-only pool churn needs a predeclared classification. For `cuda_async`, the fraction is also the release threshold, and the pinned allocator preallocates that amount ([allocator source](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/stream_executor/gpu/gpu_cudamallocasync_allocator.cc#L175-L207)). CUDA may grow above the threshold, then try to release excess backing at the next synchronization ([NVIDIA documentation](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/stream-ordered-memory-allocation.html#physical-page-caching-behavior)). C’s 116.6 GiB peak does not bound T. If T exceeds 132.7 GiB, C@0.72 cannot subtract its treatment-only trim/regrowth cost; the result measures a fraction×pipelining interaction and may have #8490-style variance.
+
+5. Medium — 2C+2T is adequate only for a clear result. With `sd_run≈0.06`, the equal-sized group difference has SE ≈0.06, so the 0.18 bar is three SE. Power is only 50% when the true effect equals the bar; near-bar outcomes require more draws, as the existing rule already states ([DESIGN.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/DESIGN.md:109)). A quantitative bridge also needs a contemporaneous C@0.75 bracket; historical controls leave temporal drift in the estimate.
+
+No direct live-hero leak exists if 0.72 is passed only as an arm environment value. The under-one-hour condition remains satisfied only while [watchdog.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/watchdog.sh:24) is attached; [arm.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:68) alone permits an eight-hour coordinator lifetime.
+tokens used
+298,310
+Verdict: block the four-draw H10b plan at the reviewed HEAD. The rescue remains plausible, but it is not currently runnable or cleanly interpretable.
+
+1. Blocker — `MEM_FRACTION` is not plumbed. The logbook says the knob is explicit and recorded ([LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:424)), but [arm.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:86) passes and records only `XLA_FLAGS`. The dispatcher forwards `XLA_*` variables that exist in the remote coordinator ([dispatch.py](/home/marin/projects/marin-mfu-loop/experiments/grug/dispatch.py:24)); the submitter’s ambient shell is not inherited. The trainer then retains its `0.75` default through `setdefault` ([train.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:196)). As written, C still runs at 0.75 and T repeats the 0.75 OOM.
+
+2. High — 0.72 genuinely gives NCCL more room, but 5.5 GiB is an unsized ladder. At 0.75 the failed run logged a 148,417,511,424-byte cuda-async reservation and a 49,473,912,832-byte collective ceiling. Pinned PJRT sets the default pool from `fraction × total` and the separate collective BFC limit from `(1−fraction) × total` ([PJRT construction](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1340-L1379), [collective construction](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/pjrt/gpu/se_gpu_pjrt_client.cc#L1576-L1591)). Therefore 0.72 changes those limits to about 132.7 and 51.6 GiB, adding 5.53 GiB to the collective side. The dead logs expose no requested allocation size or `NCCL INFO`, however. `ncclCuMemAlloc` is a generic NCCL allocation site; it does not by itself prove window registration or tensor-sized duplicated operands.
+
+3. High — peeling can add static instances, but the available compile evidence does not bound them. The pinned pass peels a 48-iteration loop and clones instructions around the transformed while; cloned channel instructions can receive unique channel IDs ([CollectivePipeliner overview](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/service/collective_pipeliner.h#L38-L68), [channel handling](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/service/collective_pipeliner.cc#L743-L770)). The dead run shows one forward `MoveInfo` on `while.251.clone`, async starts rising 275→296, and remat changing 325/1822→261/745 ([LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:432)). None of those counts identifies cloned all-to-alls, communicator multiplicity, or workspace bytes. A single T@0.72 feasibility draw should precede the four scored draws; failure would make the controls unnecessary.
+
+4. High — treatment-only pool churn needs a predeclared classification. For `cuda_async`, the fraction is also the release threshold, and the pinned allocator preallocates that amount ([allocator source](https://github.com/marin-community/xla/blob/c9526e8c0272/xla/stream_executor/gpu/gpu_cudamallocasync_allocator.cc#L175-L207)). CUDA may grow above the threshold, then try to release excess backing at the next synchronization ([NVIDIA documentation](https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/stream-ordered-memory-allocation.html#physical-page-caching-behavior)). C’s 116.6 GiB peak does not bound T. If T exceeds 132.7 GiB, C@0.72 cannot subtract its treatment-only trim/regrowth cost; the result measures a fraction×pipelining interaction and may have #8490-style variance.
+
+5. Medium — 2C+2T is adequate only for a clear result. With `sd_run≈0.06`, the equal-sized group difference has SE ≈0.06, so the 0.18 bar is three SE. Power is only 50% when the true effect equals the bar; near-bar outcomes require more draws, as the existing rule already states ([DESIGN.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/DESIGN.md:109)). A quantitative bridge also needs a contemporaneous C@0.75 bracket; historical controls leave temporal drift in the estimate.
+
+No direct live-hero leak exists if 0.72 is passed only as an arm environment value. The under-one-hour condition remains satisfied only while [watchdog.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/watchdog.sh:24) is attached; [arm.sh](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:68) alone permits an eight-hour coordinator lifetime.
