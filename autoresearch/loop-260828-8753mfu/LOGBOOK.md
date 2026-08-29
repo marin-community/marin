@@ -836,3 +836,18 @@ Plan: disc-3 first (k=1 on fixed_pooled_wave_all_to_all — whole ragged
 path inert; finite sane loss => S2 implicated, NaN => S1/generic), then
 the canary checksum arm if needed. Note today's hero runs NEITHER keep,
 so no live risk exists now.
+
+## 2026-08-30 ~13:20Z: C5 dual review — smoke-gated GO; committed default-inert
+
+Both reviewers: the router-deletion claim was OVERSTATED (the router GEMM
+stays — combine-weights vjp pins it via the pre-renorm gathered logits;
+the softmax reduces were never in the recompute region). Honest effect
+~130-180 ms => +0.18-0.25 vs the 0.17 bar — marginal; the 2-step GPU
+smoke's trace diff decides whether the scored pair is bought. Codex
+verified default-off byte-identity independently (sha256 of 1.67MB CUDA
+HLO) incl. identical salted-fill/ragged operands — the minted names are
+provably inert unsaved. Comment corrected; committed 7228b5e066.
+Sequencing: S1/S2 discriminator retry first (rack), then the C5 smoke
+(NUM_STEPS=30002, finite-loss + overlay + peak ~114.3 + former-copy-
+family absence), then decide the pair. S2-quarantine: C5 arms' memory
+maps excluded from the S2 evidence set.
