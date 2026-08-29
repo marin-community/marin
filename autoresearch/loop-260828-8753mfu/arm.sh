@@ -57,7 +57,11 @@ if [ -f "${LOOP_DIR}/arms.tsv" ] && awk -F'\t' -v rid="$RID" -v ver="$VERSION" \
 fi
 
 PRIORITY="${PRIORITY:-production}"
-ARM_TIMEOUT="${ARM_TIMEOUT:-3500}"
+# Covers Kueue queue wait PLUS the run: same-band gangs queue FIFO behind whatever holds the
+# rack, and the coordinator's timeout clock runs while its child sits in the gate. Occupancy
+# after admission is intrinsically bounded by NUM_STEPS (~30 steps past restore); the watchdog
+# enforces the <1h-runtime rule from admission.
+ARM_TIMEOUT="${ARM_TIMEOUT:-28800}"
 NUM_STEPS="${NUM_STEPS:-30030}"
 TRAINING_DATA="${TRAINING_DATA:-mixture}"
 MASTER_PARAMS="${MASTER_PARAMS:-device}"

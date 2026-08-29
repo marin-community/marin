@@ -1,2 +1,3 @@
 # metric_direction: higher_is_better
 iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-08-29T07:05Z	3e4cb6da4c	-	-	-	-	crash	mfl-ctrl-a: all 16 tasks SchedulingGated behind muchanem mokcamp (16-node gang, whole rack); iris timeout 3500 expired in the Kueue gate, W&B run never created. Lesson: iris --timeout covers queue wait; size it for wait+run (occupancy is intrinsically bounded by NUM_STEPS). Hero is LIVE on its own 11 racks (normal condition; campaign uses the one leftover rack).

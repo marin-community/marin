@@ -67,10 +67,21 @@ near-threshold results get more draws rather than a coin-flip call.
   reused RID merges W&B histories (silent window mixing), reuses the
   leader-populated compile cache (the documented clique-init deadlock
   recipe), and can vacuously reuse the artifact layer.
-- Hero liveness: the live hero is NOT currently training (step-30000 is the
-  newest permanent checkpoint; no hero job in iris). Before each arm, check
-  the rack queue; if the hero ever reappears on this cluster, pause the
-  campaign and reassess priorities rather than contending with it.
+- Hero liveness (CORRECTED 2026-08-29): the hero IS live, training on its
+  own ~11 racks of cw-us-east-08a (177 pods, `iris job list` does not show
+  it — check pods/Kueue, not job-list greps). This is the normal operating
+  condition; the campaign uses the single leftover NVL72 rack and contends
+  only with other experiments (mokcamp, zack gangs) via same-band FIFO, no
+  preemption. Occupancy check before each arm: Kueue workloads + pods on
+  the 08a context, not `iris job list`.
+- TIMEOUT SIZING (lesson from the mfl-ctrl-a crash): iris `--timeout` on
+  the coordinator covers QUEUE WAIT plus run; a 3500s timeout dies in the
+  Kueue gate behind a one-hour occupant. Rack occupancy is intrinsically
+  bounded by NUM_STEPS=30030 (~30 steps past restore, <1h even with no
+  watchdog), so the <1h-runtime rule is enforced by the watchdog from
+  admission (compile ceiling starts at W&B-run existence) while ARM_TIMEOUT
+  is sized for the queue: default 28800 (8h) with watchdog
+  QUEUE_CEILING=25200 (7h) cancelling a still-gated gang first.
 - Rack etiquette: queue arms back-to-back while work is pending; do not
   submit anything if the loop is blocked >1h on analysis.
 - Timestamp bookkeeping (calibration): for each arm record W&B-run-created

@@ -41,8 +41,9 @@ COORD="/mwittmann/${RID}-coord"
 TRAIN="${COORD}/grug-train-${RID}"
 start=$(date +%s)
 # A production submission may queue behind another job, so the compile ceiling starts when the
-# train job is first observed running, not at submission. QUEUE_CEILING bounds the pending phase.
-QUEUE_CEILING="${QUEUE_CEILING:-10800}"
+# train job is first observed running, not at submission. QUEUE_CEILING bounds the pending phase
+# (iris reports a Kueue-gated gang as "running", so this is the only queue bound that works).
+QUEUE_CEILING="${QUEUE_CEILING:-25200}"
 deadline=$(( start + QUEUE_CEILING ))
 run_seen=-1
 first_step=-1
