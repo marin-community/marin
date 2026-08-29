@@ -226,8 +226,8 @@ def test_restore_raises_when_only_unreadable_checkpoints_present(tmp_path: Path)
         )
 
 
-def test_a_first_launch_with_no_checkpoints_starts_from_scratch(tmp_path: Path):
-    """The empty-root case the ladders hit on every first launch; it must not be an error."""
+def test_launch_with_no_checkpoints(tmp_path: Path):
+    """Launching with load_checkpoint_setting=None and no existing checkpoints starts training from scratch"""
 
     def fake_load(state, path, *, axis_mapping, mesh, allow_partial):
         raise FileNotFoundError(path)
