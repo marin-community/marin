@@ -23,6 +23,7 @@ MFU_KEY = "throughput/mfu"
 LOSS_KEY = "train/loss"
 DROP_KEY = "moe/drop_fraction"
 TOKENS_KEY = "throughput/tokens_per_second"
+PEAK_KEY = "memory/peak_gib"
 
 
 def main() -> None:
@@ -57,6 +58,7 @@ def main() -> None:
 
     mfu = series(MFU_KEY)
     drops = series(DROP_KEY)
+    peaks = series(PEAK_KEY)
     losses = [(s, by_step[s][LOSS_KEY]) for s in sorted(by_step) if lo <= s <= hi and LOSS_KEY in by_step[s]]
     tokens = series(TOKENS_KEY)
 
@@ -75,6 +77,10 @@ def main() -> None:
         "tokens_per_second_mean": round(statistics.fmean(tokens), 1) if tokens else None,
         # Drops are an outcome here, not only a guard: the whole point of the ragged transport is
         # moving tokens the pooled one clips, so a throughput win that costs drops is not a win.
+        # Engagement/confound telemetry: HloRematerialization flips on allocator-limit crossings
+        # (issue #8054's +9.08% artifact); a memory-moving arm whose peak did not move did not
+        # engage, and an MFU delta with a big peak move may be a remat-boundary crossing instead.
+        "peak_gib_max": round(max(peaks), 2) if peaks else None,
         "drop_fraction_max": max(drops) if drops else None,
         "drop_fraction_mean": round(statistics.fmean(drops), 6) if drops else None,
         # Guard-series completeness: a killed run can leave the last rows of less-frequent keys
