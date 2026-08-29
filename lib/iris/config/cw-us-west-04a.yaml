@@ -115,7 +115,7 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 user_budget_defaults:
-  budget_limit: 400000
+  budget_limit: 1000
   max_band: interactive
 
 scale_groups:
@@ -160,3 +160,16 @@ scale_groups:
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
+
+# Core Marin developers may use the full cluster at INTERACTIVE priority.
+user_budgets:
+  - user_ids:
+      - david.hall@openathena.ai
+      - mark.muchane@openathena.ai
+      - matt.wittmann@openathena.ai
+      - rafal.wojdyla@openathena.ai
+      - romain.yon@openathena.ai
+      - russell.power@openathena.ai
+      - will.held@openathena.ai
+    budget_limit: 0
+    max_band: PRIORITY_BAND_INTERACTIVE
