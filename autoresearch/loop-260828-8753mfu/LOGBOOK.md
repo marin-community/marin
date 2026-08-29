@@ -428,3 +428,33 @@ pipelining, plus the C@0.72-vs-C@0.75 bridge telling the fraction's own
 cost. MEM_FRACTION plumbed as an explicit arm.sh knob recorded in
 arms.tsv. All H10 fidelity gates carry over (loss from +1, natural
 completion, T-T comparison, keep needs user sign-off + soak).
+
+## 2026-08-29 ~13:00Z: H10b CANCELLED pre-rack (review + free log evidence)
+
+Fable review blocker F1 (mine the dead runs first) paid off at zero rack
+cost: the OOM is inside ncclCuMemAlloc — NCCL's cuMem/window registration
+path (MNNVL registers collective operand buffers; tensor-scale, GB per
+instance) — with no allocation size logged; the pipelined program shows
++21 async-start instructions (296 vs control 275) and remat restructured
+to 261/745-net (vs 325/1822). If peeling duplicated a2a operand buffers,
+the extra registration demand is plausibly >> the 5.5 GiB a 0.75->0.72
+fraction change frees. F2: the fraction also feeds the slop-derived
+scheduler budget, so BOTH sides of an @0.72 comparison would run a
+different program — the bridge is non-neutral by mechanism and H6's
+calibration would not transfer. F3: cuda_async grows the pool past the
+threshold for in-pool demand, and a T peak in (132.7, ~134] would sit on
+the #8490 churn cliff and misscore as "pipelining is slow".
+
+DECISION: H10/H10b closed as OOM-BLOCKED (engaged, unmeasurable at any
+defensible memory posture on this stack) — explicitly NOT disproven.
+Revisit conditions: a compile-only memory estimate for the pipelined
+program, or an XLA-side fix avoiding peeled-instance re-registration.
+Priority note from review: arms stay at production per the user's
+explicit 2026-08-29 exception (<1h runtime), superseding the older
+interactive-only instruction.
+
+Iterations 1-3 pattern for the record: three engaged flag levers, all
+negative or blocked — the slop-85/overlap-1/on-stream-copy schedule is a
+defended local optimum. Campaign proceeds to the structural fork
+(marin_ep transport port scoping in flight; XLA-patch lever as the
+alternative).
