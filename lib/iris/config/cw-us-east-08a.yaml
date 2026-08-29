@@ -186,7 +186,7 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 user_budget_defaults:
-  budget_limit: 1000
+  budget_limit: 5680
   max_band: interactive
 
 scale_groups:
@@ -253,7 +253,6 @@ user_budgets:
       - zack
     budget_limit: 128000
     max_band: PRIORITY_BAND_INTERACTIVE
-  # Core Marin developers may use the full cluster at INTERACTIVE priority.
   - user_ids:
       - david.hall@openathena.ai
       - mark.muchane@openathena.ai
