@@ -521,3 +521,20 @@ steps max 9.1e-5 / median 1.2e-5 (C-C levels); drops identical 3.3e-5.
 
 Bracketing control mfl-ctrl-e submitted from the pre-change tree
 (REPO-override worktree at 5324007f19). KEEP decision on its return.
+
+## 2026-08-29 ~16:50Z: ITERATION 4 — T-H9-2 KEPT (+0.41)
+
+mfl-ctrl-e (pre-change tree) median 23.337 confirms the bracket. Treatment
+23.680/23.779 vs controls 23.240/23.321/23.337/23.340/23.384: +0.41
+median, ~8x sd̂. First keep of the campaign; stack now ~23.73. The
+mechanism lesson generalizes: the defended-equilibrium levers (moving
+work) all lost; DELETING work won. Hot-swap safe for the live hero
+(code-only, checkpoint-compatible, loss series at C-C level, drops
+identical) — hero adoption is the user's call; PR prep queued as a
+campaign deliverable.
+
+Follow-ups now live: (a) new-stack lever table from xprof-h92 (analysis
+delegated); (b) H10 revisit at 0.75 ON THE NEW STACK — the deleted
+hoisted consts freed ~5 GB resident, which may clear the ncclCuMemAlloc
+OOM that blocked pipelined host offloading (cheap feasibility probe);
+(c) upstream JAX report for the inherited empty-group transpose-mask bug.
