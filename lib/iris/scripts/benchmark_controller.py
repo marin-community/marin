@@ -51,27 +51,11 @@ import uvicorn
 import yaml
 from connectrpc.request import RequestContext
 from iris.cluster.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.backend import (
-    AutoscaleRequest,
-    AutoscaleResult,
-    BackendCapability,
-    BackendRuntime,
-    ReconcileRequest,
-    ReconcileResult,
-    ScheduleInput,
-    ScheduleRequest,
-    ScheduleResult,
-    TaskBackend,
-    assemble_scheduling_context,
-    plans_from_snapshot,
-    run_scheduling_decision,
-)
-from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
+from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _CONTROLLER_KEEPALIVE,
@@ -97,7 +81,10 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcileResult,
     build_reconcile_plans,
 )
-from iris.cluster.controller.scheduling.policy import build_scheduling_context, compute_demand_entries
+from iris.cluster.controller.scheduling.policy import (
+    build_scheduling_context,
+    compute_demand_entries,
+)
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
@@ -114,13 +101,14 @@ from iris.cluster.controller.service import (
     _worker_roster,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
+from iris.testing.controller import FakeProvider, worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
 from iris.testing.transitions import CursorTransitionReader
 from iris.version import client_revision_date
@@ -162,99 +150,6 @@ def _marin_remote_state_dir() -> str:
 # ---------------------------------------------------------------------------
 # RPC harness: real Controller(dry_run=True) + Connect sync client
 # ---------------------------------------------------------------------------
-
-
-class _FakeProvider:
-    """Minimal worker-daemon TaskBackend that satisfies Controller's wiring
-    without making real cluster calls. Mirrors
-    tests/cluster/controller/conftest.py:FakeProvider.
-
-    Used in combination with ``dry_run=True`` so the polling loop's reconcile
-    short-circuits before it would ever call the provider — but we still need a
-    real provider object to satisfy the constructor's type contract.
-    """
-
-    name = "worker"
-    capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    autoscaler = None
-
-    def __init__(self) -> None:
-        self._scheduler = Scheduler()
-        self._store: BackendWorkerStore | None = None
-        self.health: WorkerHealthTracker = WorkerHealthTracker()
-        self.advertised: dict[str, set[str]] = {}
-        self._pending_dead: list[WorkerId] = []
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
-    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        assert self._store is not None
-        context = assemble_scheduling_context(self._store.scheduling_inputs(), request)
-        return run_scheduling_decision(
-            self._scheduler,
-            ScheduleInput(
-                context=context,
-                max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
-                trace=request.trace,
-            ),
-        )
-
-    def get_process_status(self, target, request):
-        raise RuntimeError("fake provider")
-
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = DbBackendWorkerStore(
-            db=runtime.db,
-            owns_scale_group=runtime.owns_scale_group,
-            health=self.health,
-            defaults=runtime.budget_defaults,
-            autoscale=self.autoscale,
-        )
-
-    def seed_liveness(self) -> None:
-        assert self._store is not None
-        worker_ids = self._store.owned_worker_ids()
-        if worker_ids:
-            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
-
-    def set_log_sink(self, *args, **kwargs):
-        pass
-
-    def profile_task(self, target, request, timeout_ms):
-        raise RuntimeError("fake provider")
-
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        # Same projection the test-suite FakeProvider returns. Only exercised if
-        # someone disables dry_run on the harness.
-        assert self._store is not None
-        snapshot = self._store.reconcile_snapshot()
-        plans = plans_from_snapshot(snapshot)
-        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
-        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        now = Timestamp.now()
-        effects = apply_reconcile(self._store, worker_results, now=now)
-        events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
-        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
-
-    def run_teardown(self) -> None:
-        dead = self._pending_dead
-        self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None
-        self._store.reap_workers(dead_workers, reason=reason)
-
-    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
-        return AutoscaleResult()
-
-    def close(self):
-        pass
 
 
 class RpcHarness:
@@ -1262,8 +1157,14 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # SchedulingContext carries plain data built eagerly, so it is safe to use after
     # the snapshot closes.
     sched = Scheduler()
+    defaults = UserBudgetDefaults()
     with db.read_snapshot() as _sched_snap:
-        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults())
+        demand_ctx = build_scheduling_context(
+            _sched_snap,
+            health,
+            _NoAttrs(),
+            defaults,
+        )
 
     def _demand():
         compute_demand_entries(demand_ctx, sched)
@@ -2369,13 +2270,8 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         host=config.host,
         worker_token=None,
     )
-    controller = Controller(
-        config=config,
-        backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
-        log_stack=log_stack,
-        db=db,
-        threads=threads,
-    )
+    controller = Controller(config=config, log_stack=log_stack, db=db, threads=threads)
+    controller.register_backend(FakeProvider())
     controller.start()
     try:
         _wait_for_server_start(
@@ -2763,7 +2659,7 @@ class _PrebuiltWorkerSource:
     def reconcile_snapshot(self) -> ControlSnapshot:
         return self.snapshot
 
-    def scheduling_inputs(self):
+    def worker_snapshots(self):
         raise NotImplementedError
 
     def worker_status(self):
@@ -2900,7 +2796,11 @@ def _run_reconcile_scenario(
             print(f"  build:                       {build_s * 1000:.0f} ms")
 
             stub_factory = RpcWorkerStubFactory()
-            provider = RpcTaskBackend(stub_factory=stub_factory, parallelism=parallelism)
+            provider = RpcTaskBackend(
+                descriptor=worker_backend_descriptor(),
+                stub_factory=stub_factory,
+                parallelism=parallelism,
+            )
             try:
                 compute_ms, total_bytes = _measure_compute_only(state, n_iters=n_iters)
                 per_worker_avg = total_bytes / max(1, len(state.worker_ids))

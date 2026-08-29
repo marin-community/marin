@@ -10,7 +10,6 @@ from finelog.client import LogClient
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -21,6 +20,7 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import MockController, make_test_entrypoint
 from iris.testing.controller_state import ControllerTestState
+from iris.testing.k8s import k8s_backend_descriptor
 
 # ---------------------------------------------------------------------------
 # Constraint builders
@@ -114,6 +114,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     k8s_provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=PodConfig(
             namespace="default",
@@ -127,8 +128,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
     ctrl = MockController()
-    ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
-    ctrl.provider = k8s_provider
+    ctrl.backend = k8s_provider
 
     service = ControllerServiceImpl(
         controller=ctrl,
@@ -147,10 +147,9 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     state = ControllerTestState(db, health=health)
 
     ctrl = MockController()
-    ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     # Share the harness tracker so the service registers into and reads liveness
     # through the same object this harness's ControllerTestState exposes.
-    ctrl.provider.health = health
+    ctrl.backend.health = health
 
     service = ControllerServiceImpl(
         controller=ctrl,

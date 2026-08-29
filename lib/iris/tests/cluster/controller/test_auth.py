@@ -30,7 +30,6 @@ from iris.cluster.controller.auth import (
     request_auth_policy,
     require_persistent_signing_key,
 )
-from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     _UNAUTHENTICATED_RPCS,
     ControllerDashboard,
@@ -39,9 +38,9 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc import job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.testing.controller import worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
@@ -84,10 +83,9 @@ def _make_service(db, log_client, auth=None):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
-    controller_mock.last_scheduling_context = None
-    controller_mock.autoscaler = None
-    controller_mock.provider = Mock()
-    controller_mock.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    controller_mock.backend = Mock()
+    controller_mock.backend.autoscaler = None
+    controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
@@ -118,12 +116,9 @@ def state(db, tmp_path):
 def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.autoscaler = None
-    worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    controller_mock.provider = Mock(capabilities=worker_caps)
-    controller_mock.provider.name = "worker"
-    controller_mock.capabilities = worker_caps
-    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    controller_mock.backend = Mock()
+    controller_mock.backend.autoscaler = None
+    controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -644,6 +639,26 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
     result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("ListJobs"))
     assert result == "ok"
     assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
+
+
+def test_dashboard_role_can_list_registered_job_resources(service):
+    policy = RequestAuthPolicy.enforcing(
+        verifier=MockVerifier({}),
+        iap_assertion_verifier=_StubAssertionVerifier(),
+    )
+    dashboard = ControllerDashboard(service, auth_provider="iap", auth_policy=policy)
+
+    response = TestClient(dashboard.app).post(
+        "/iris.resource.ResourceService/List",
+        json={
+            "resourceType": "job",
+            "input": {"@type": "type.googleapis.com/iris.cluster.Controller.ListJobsRequest"},
+        },
+        headers={"x-goog-iap-jwt-assertion": "signed.assertion.jwt"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"page": {"totalCount": "0", "hasMore": False}}
 
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():

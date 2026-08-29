@@ -155,6 +155,30 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     assert len(units) <= max_concurrent
 
 
+def test_loom_pr_review_launcher_never_executes_pull_request_code() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-review.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    trigger = workflow.get("on", workflow.get(True))
+    job = workflow["jobs"]["review"]
+
+    assert set(trigger) == {"pull_request_target"}
+    assert job["permissions"] == {"contents": "read", "id-token": "write"}
+    checkout, launch = job["steps"]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert "head.repo.full_name == github.repository" in job["if"]
+
+
+def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
+    action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
+    action = yaml.safe_load(action_path.read_text())
+    launch_script = action["runs"]["steps"][0]["run"]
+
+    assert '"$LOOM_URL/api/runs/create"' in launch_script
+
+
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
     canonical = "us-central1-docker.pkg.dev/example/loom/loom@sha256:" + "a" * 64
     tagged = "us-central1-docker.pkg.dev/example/loom/loom:latest@sha256:" + "a" * 64

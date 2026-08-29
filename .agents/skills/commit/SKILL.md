@@ -105,10 +105,12 @@ Push to the main repository unless direct access is unavailable or the user
 asks for a fork:
 
 ```bash
-gh pr create --title "<title>" --body-file "<body-file>" --label agent-generated
+gh pr create --title "<title>" --body-file "<body-file>" \
+  --label agent-generated --label agentic-lint
 ```
 
 - Always add the `agent-generated` label.
+- Add `agentic-lint` only after step 6 ran and every finding was fixed or answered.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
 

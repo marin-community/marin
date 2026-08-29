@@ -1,15 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""In-memory worker liveness, owned by the controller and folded from backend-observed events.
+"""In-memory worker liveness folded from backend-observed events.
 
-The backend never decides a worker is dead. Each reconcile tick it *observes*
-its own I/O outcomes and emits :class:`WorkerHealthEvent`s; the controller folds
-them through the single :meth:`WorkerHealthTracker.apply` site, which accumulates
-the per-worker counters and applies the termination thresholds. ``apply`` is the
-sole liveness-accounting mutation site. The only other writes are lifecycle:
-startup seeding + worker registration (``heartbeat``/``register``) and removal
-(``forget``/``forget_many``).
+Each worker-daemon backend currently owns one tracker for its scale groups. A
+reconcile tick classifies its I/O outcomes as :class:`WorkerHealthEvent`s and
+folds them through :meth:`WorkerHealthTracker.apply`, which accumulates counters
+and applies termination thresholds. The controller reaches the tracker through
+the registered backend for scheduling and worker RPCs. ``apply`` is the sole
+liveness-accounting mutation site; the other writes are startup seeding, worker
+registration, and removal.
 
 Per-worker signals:
 

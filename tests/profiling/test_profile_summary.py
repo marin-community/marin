@@ -16,7 +16,7 @@ from marin.profiling.ingest import summarize_profile_artifact, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
-from marin.profiling.trace_summary import trace_quality_warnings
+from marin.profiling.trace_summary import BreakdownMode, trace_quality_warnings
 from marin.profiling.xplane import (
     XPROF_TABLE_TOOLS,
     _xspace_message_class,
@@ -98,7 +98,7 @@ def test_semantic_family_share_is_bounded_with_global_breakdown(tmp_path: Path) 
     trace_path = tmp_path / "global_breakdown_trace.json.gz"
     _write_trace(trace_path, step_durations=[100, 110, 120, 130, 140, 150], softmax_duration=60)
 
-    summary = summarize_trace(trace_path, warmup_steps=2, hot_op_limit=10, breakdown_mode="exclusive_global")
+    summary = summarize_trace(trace_path, warmup_steps=2, hot_op_limit=10, breakdown_mode=BreakdownMode.EXCLUSIVE_GLOBAL)
     assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
     assert summary.semantic_families
     assert all(0.0 <= family.share_of_total <= 1.0 for family in summary.semantic_families)
@@ -123,7 +123,7 @@ def test_global_stall_uses_compute_window_gaps(tmp_path: Path) -> None:
     with gzip.open(trace_path, "wt", encoding="utf-8") as handle:
         json.dump(payload, handle)
 
-    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=20, breakdown_mode="exclusive_global")
+    summary = summarize_trace(trace_path, warmup_steps=0, hot_op_limit=20, breakdown_mode=BreakdownMode.EXCLUSIVE_GLOBAL)
     breakdown = summary.time_breakdown
     assert breakdown.duration_basis == "exclusive_duration_global_timeline"
     assert breakdown.total_duration == 100.0
@@ -520,7 +520,9 @@ def test_xplane_summary_honors_breakdown_mode(tmp_path: Path, monkeypatch) -> No
     xplane_path = tmp_path / "profile.xplane.pb"
     _write_xplane(xplane_path)
 
-    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10, breakdown_mode="exclusive_global")
+    summary = summarize_xplane(
+        xplane_path, warmup_steps=0, hot_op_limit=10, breakdown_mode=BreakdownMode.EXCLUSIVE_GLOBAL
+    )
 
     assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
 

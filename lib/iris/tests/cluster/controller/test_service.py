@@ -10,14 +10,12 @@ State changes are verified via RPC calls rather than internal state inspection.
 import concurrent.futures
 import time
 from datetime import date, timedelta
-from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
-    BACKEND_CONSTRAINT_KEY,
     Constraint,
     ConstraintOp,
     WellKnownAttribute,
@@ -37,7 +35,7 @@ from iris.cluster.controller.service import (
     ControllerServiceImpl,
 )
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_job_request,
@@ -144,94 +142,6 @@ def test_launch_job_returns_job_id(service):
     )
     assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
-
-
-class _FeasibilityAutoscaler:
-    """Autoscaler stub whose job_feasibility returns a fixed verdict."""
-
-    def __init__(self, error: str | None):
-        self._error = error
-
-    def job_feasibility(self, constraints, replicas=None, resources=None) -> str | None:
-        return self._error
-
-
-def test_launch_job_feasible_on_non_first_backend(service):
-    """A job the first backend's autoscaler rejects still launches when a later
-    backend can host it — feasibility is the OR across every backend."""
-    rejecting = Mock()
-    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    admitting = Mock()
-    admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
-
-    response = service.launch_job(make_job_request("multi-backend-ok"), None)
-
-    assert response.job_id == JobName.root("test-user", "multi-backend-ok").to_wire()
-
-
-def test_launch_job_rejected_when_all_backends_infeasible(service):
-    """Submit fails fast only when every backend's autoscaler rejects the shape."""
-    gcp = Mock()
-    gcp.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    cw = Mock()
-    cw.autoscaler = _FeasibilityAutoscaler("region us-east5 has no h100 pool")
-    service._controller.backends = {"gcp": gcp, "cw": cw}
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(make_job_request("multi-backend-bad"), None)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_launch_job_pinned_backend_checks_only_that_backend(service):
-    """A job pinned with --backend is checked only against the pinned backend: it
-    fails fast when that backend rejects, even if another backend is feasible."""
-    rejecting = Mock()
-    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    admitting = Mock()
-    admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
-
-    request = make_job_request("pinned-bad")
-    request.constraints.append(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp").to_proto())
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_profile_worker_routes_to_worker_backend(service, state):
-    """ProfileTask on /system/worker/<id> dispatches to the worker's backend
-    (resolved from its scale group), not the representative backend."""
-    with state._db.transaction() as cur:
-        ops.worker.register(
-            cur,
-            worker_id=WorkerId("w-cw"),
-            address="w-cw:8080",
-            metadata=make_worker_metadata(),
-            ts=Timestamp.now(),
-            health=state._health,
-            scale_group="cw-h100",
-        )
-    cw = Mock()
-    cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
-    # This mock backend only routes the profile dispatch; the worker's liveness is
-    # registered into the default backend's tracker above, so cw owns no tracker.
-    cw.health = None
-    service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
-    service._controller.scale_group_to_backend = {"cw-h100": "cw"}
-
-    resp = service.profile_task(
-        job_pb2.ProfileTaskRequest(
-            target="/system/worker/w-cw",
-            duration_seconds=1,
-            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
-        ),
-        None,
-    )
-
-    # The profile bytes could only have come from the cw backend's provider.
-    assert resp.profile_data == b"cw-profile"
 
 
 def test_get_job_status_reports_parent_job_id(service):
@@ -1158,6 +1068,43 @@ def test_get_job_status_reports_task_summary_counts(service):
     assert response.job.task_count == 3
     assert response.job.task_state_counts == {"pending": 3}
     assert response.job.completed_count == 0
+
+
+def test_attempt_reads_preserve_retry_history(service, state):
+    job_id = JobName.root("test-user", "attempt-history")
+    service.launch_job(make_job_request(job_id.to_wire(), max_retries_preemption=1), None)
+    task_id = _query_tasks_with_attempts(state, job_id)[0].task_id
+    first_worker = WorkerId("attempt-worker-0")
+    second_worker = WorkerId("attempt-worker-1")
+    _register_worker(state, first_worker)
+    _register_worker(state, second_worker)
+    _assign_and_transition(state, task_id, first_worker, job_pb2.TASK_STATE_RUNNING)
+
+    with state._db.transaction() as cur:
+        finalize(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, task_id, "capacity reclaimed")],
+            now=Timestamp.now(),
+        )
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=second_worker)], health=state._health)
+
+    selector = job_pb2.TaskAttemptSelector(task_id=task_id.to_wire())
+    attempts = service.list_attempts(selector, None)
+    first = service.get_attempt(
+        job_pb2.TaskAttemptSelector(task_id=task_id.to_wire(), attempt_id=0),
+        None,
+    )
+    current = service.get_attempt(
+        job_pb2.TaskAttemptSelector(task_id=task_id.to_wire(), attempt_id=1),
+        None,
+    )
+
+    assert [attempt.attempt_id for attempt in attempts.attempts] == [0, 1]
+    assert first.state == job_pb2.TASK_STATE_PREEMPTED
+    assert first.worker_id == str(first_worker)
+    assert current.state == job_pb2.TASK_STATE_ASSIGNED
+    assert current.worker_id == str(second_worker)
 
 
 # =============================================================================

@@ -13,7 +13,7 @@ Four append-only namespaces under ``codehealth.autolint``:
 - ``pr_review_outcomes`` — one row per PR, rolling up the two above.
 
 Re-running the aggregator appends a fresh row per PR to both comment tables, so
-a reader must take the highest ``seq`` per natural key. ``review.py`` exposes
+a reader must take the highest ``seq`` per natural key. ``review_quality.py`` exposes
 that as ``LATEST_HUMAN_COMMENTS_SQL`` and ``LATEST_PR_OUTCOMES_SQL``.
 
 Every row type declares a ``key_column``. With none declared the server looks

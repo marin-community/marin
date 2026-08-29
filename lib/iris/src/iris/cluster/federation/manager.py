@@ -29,7 +29,7 @@ from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.federation.availability import (
     AVAILABILITY_METRIC_VERSION,
     BackendAvailability,
@@ -454,12 +454,11 @@ class FederationManager:
 
     def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer
-        matches workers, not the parent's ``backend``/``cluster`` pins)."""
+        federation attribution, and the cluster directive stripped."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
         handoff.CopyFrom(spec.request)
         handoff.name = spec.local_job_id.to_wire()
-        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
+        kept = [c for c in spec.request.constraints if c.key != CLUSTER_CONSTRAINT_KEY]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
         handoff.federation.CopyFrom(

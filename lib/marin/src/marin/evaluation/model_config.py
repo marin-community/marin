@@ -65,9 +65,9 @@ class ServeConfig:
     """Model-server behavior independent of scheduler placement.
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
-    inference settings. The remaining typed vLLM fields map onto ``vllm serve`` flags through
-    :func:`serve_config_vllm_args`; ``vllm_extra_args`` is the escape hatch for flags without a typed
-    field and wins when it names the same option.
+    inference settings. The remaining typed vLLM fields map onto command-line flags or process
+    settings. The two ``vllm_*`` boolean process settings apply to GPU workers. ``vllm_extra_args``
+    is the escape hatch for flags without a typed field and wins when it names the same option.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -84,6 +84,8 @@ class ServeConfig:
     limit_mm_per_prompt: str | None = None
     tool_call_parser: str | None = None
     reasoning_parser: str | None = None
+    vllm_batch_invariant: bool | None = None
+    vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...] = ()
     chat_template: str | None = None
     auto_overrides: bool = True
@@ -146,8 +148,9 @@ def serve_config_vllm_args(serve: ServeConfig) -> tuple[str, ...]:
     already present there, so a hand-tuned value is never duplicated. ``tensor_parallel_size``,
     ``max_model_len``, ``max_num_batched_tokens``, ``max_num_seqs``, ``chat_template``, and
     ``auto_overrides`` are consumed by serving configuration or lowering rather than rendered as
-    extra flags. ``--trust-remote-code`` is not rendered here: the native server forces it on for
-    every evaluated model.
+    extra flags. ``vllm_batch_invariant`` and ``vllm_use_flashinfer_sampler`` become GPU-worker
+    process settings. ``--trust-remote-code`` is not rendered here: the native server forces it on
+    for every evaluated model.
     """
     explicit = tuple(serve.vllm_extra_args)
     derived: list[str] = []

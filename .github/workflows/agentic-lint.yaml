@@ -1,0 +1,29 @@
+name: Agentic lint policy
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize, labeled, unlabeled]
+
+jobs:
+  agentic-lint:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require the agentic lint label
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          case "$AUTHOR" in
+            "dependabot[bot]"|"marin-external-runtime-updater[bot]")
+              echo "Automated dependency PRs do not use the agent commit workflow."
+              exit 0
+              ;;
+          esac
+          if jq -e 'index("agentic-lint") != null' <<< "$LABELS" >/dev/null; then
+            echo "The agentic-lint label records completion of the local agentic review."
+            exit 0
+          fi
+          echo "::error::Run the commit workflow's agentic review, then add the agentic-lint label."
+          exit 1
