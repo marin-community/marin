@@ -86,7 +86,10 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     output = capsys.readouterr().out
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
+    assert "GRADE KEY  TITLE  SOURCE ID" in output
+    assert "copy the SOURCE ID column" in output
     assert "file:731" in output
+    assert "file:marin-community/marin@main:lib/iris/src/iris/scheduler.py" in output
     assert f"L42 {reference_text}" in output
     assert output.count("File scope: marin-community/marin") == 1
 
@@ -229,6 +232,33 @@ def test_get_fetches_full_detail_by_search_result_id(monkeypatch):
     args.func(args)
 
     assert calls == [("GET", "/repository-files/marin-community/marin@main:lib/iris/OPS.md", {})]
+
+
+def test_get_resolves_numeric_file_search_key_to_source_id(monkeypatch, capsys):
+    calls = []
+    source_id = "file:marin-community/marin@main:infra/echo/README.md"
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        if path == "/search-results/20849":
+            return {"key": "file:20849", "source_id": source_id, "domain": "file"}
+        return {
+            "id": source_id,
+            "title": "Echo",
+            "subtitle": "marin-community/marin · infra/echo/README.md · main@abc123",
+            "url": "https://github.com/marin-community/marin/blob/abc123/infra/echo/README.md",
+            "text": "# Echo",
+        }
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    args = cli.build_parser().parse_args(["get", "file:20849"])
+    args.func(args)
+
+    assert calls == [
+        ("GET", "/search-results/20849", {}),
+        ("GET", "/repository-files/marin-community/marin@main:infra/echo/README.md", {}),
+    ]
+    assert capsys.readouterr().out.startswith(f"[{source_id}] Echo\n")
 
 
 def test_get_rejects_legacy_path_only_file_id():
