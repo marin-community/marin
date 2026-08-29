@@ -120,15 +120,11 @@ struct Args {
     telemetry_migration_mode: TelemetryMigrationMode,
 }
 
-/// Terminate the standalone server on the first panic after reporting it.
-///
-/// Tokio normally contains task panics as `JoinError`s. That is unsafe for this
-/// process because a panic while a store mutex is held poisons the mutex while
-/// leaving the HTTP server alive; later requests then repeat the poison panic.
-/// Aborting lets the process supervisor restart over the durable store instead.
-/// Keep this binary-only: the `finelog` library is also embedded in Iris through
-/// PyO3, where aborting would terminate the host controller.
+/// Abort the standalone server after reporting any Rust panic.
 fn install_abort_on_panic_hook() {
+    // Tokio contains task panics as JoinErrors, which can leave poisoned store
+    // mutexes in a live process. Keep this hook in the binary so the PyO3 host
+    // does not inherit an abort-on-panic policy.
     let report = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
         report(panic);
