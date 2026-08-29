@@ -98,12 +98,17 @@ class SourceLayout:
 
 @dataclass(frozen=True)
 class OperatingPolicy:
-    """Buffering, durability, cache, and query-lifetime policy."""
+    """Buffering, durability, cache, query-lifetime, and rollback policy."""
 
     l0_mode: L0Mode = L0Mode.OBJECT_STORE
     max_buffer_bytes: int = 0
     max_flush_age_ms: int = 0
     max_query_time_ms: int = 0
+    """How long one in-flight query may hold a pinned snapshot."""
+    rollback_window_ms: int = 0
+    """How long the prior definition stays activatable after this one is
+    activated, and how long its retired objects are retained. Independent of
+    ``max_query_time_ms``. Zero takes the server default."""
 
     def to_proto(self, local_cache: StoragePolicy) -> stats_pb2.OperatingPolicy:
         return stats_pb2.OperatingPolicy(
@@ -113,6 +118,7 @@ class OperatingPolicy:
             max_buffer_bytes=self.max_buffer_bytes,
             max_flush_age_ms=self.max_flush_age_ms,
             max_query_time_ms=self.max_query_time_ms,
+            rollback_window_ms=self.rollback_window_ms,
         )
 
 

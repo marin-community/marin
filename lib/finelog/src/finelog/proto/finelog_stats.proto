@@ -187,6 +187,10 @@ message OperatingPolicy {
   uint64 max_buffer_bytes = 4;
   uint64 max_flush_age_ms = 5;
   uint64 max_query_time_ms = 6;
+  // How long the prior definition stays activatable after an activation, and
+  // how long that definition's retired objects are retained. Independent of
+  // max_query_time_ms, which only bounds one in-flight query.
+  uint64 rollback_window_ms = 7;
 }
 
 // Complete immutable policy for one logical table version.
@@ -292,6 +296,7 @@ message NamespaceCatalog {
   // Set by the revision that deletes the table. A tombstoned state is durable
   // history; it is never a live table.
   bool tombstoned = 14;
+  uint64 rollback_window_ms = 15;
 }
 
 message CatalogHead {

@@ -26,7 +26,8 @@ use crate::store::object_store::ObjectId;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_json, schema_to_json, Schema};
 use crate::store::table_spec::{
-    canonical_json_bytes, migration_phase_for_state, table_spec_from_json,
+    canonical_json_bytes, classify_definition_change, migration_phase_for_state,
+    rollback_window_ms, table_spec_from_json, DefinitionChange,
 };
 use crate::store::table_state::{ArtifactReferences, SegmentDescriptor, TableRevision};
 use crate::store::types::{NamespaceStats, SegmentRow};
@@ -502,22 +503,40 @@ impl Catalog {
                 )
                 .map_err(sqlite_err)?;
         }
+        // A published state whose version-0 import has already activated proves
+        // the table's history lives in objects, so recovery re-establishes the
+        // adoption block even when the local catalog was lost. A block already
+        // recorded locally survives, because `excluded` never lowers it.
+        let imported_from_version_zero = snapshot.migration.as_option().is_some_and(|migration| {
+            migration.from_version.unwrap_or(0) == 0
+                && matches!(
+                    migration.phase.and_then(|phase| phase.as_known()),
+                    Some(
+                        MigrationPhase::MIGRATION_PHASE_OBSERVING
+                            | MigrationPhase::MIGRATION_PHASE_RETIRED
+                    )
+                )
+        });
         transaction
             .execute(
                 "INSERT INTO table_heads
                     (namespace, catalog_generation, active_table_spec_version,
-                     desired_table_spec_version)
-                 VALUES (?1, ?2, ?3, ?4)
+                     desired_table_spec_version, filesystem_adoption_disabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(namespace) DO UPDATE SET
                     catalog_generation = excluded.catalog_generation,
                     active_table_spec_version = excluded.active_table_spec_version,
-                    desired_table_spec_version = excluded.desired_table_spec_version",
+                    desired_table_spec_version = excluded.desired_table_spec_version,
+                    filesystem_adoption_disabled = MAX(
+                        table_heads.filesystem_adoption_disabled,
+                        excluded.filesystem_adoption_disabled)",
                 rusqlite::params![
                     namespace,
                     remote_generation as i64,
                     snapshot.active_table_spec_version.unwrap_or(0) as i64,
                     (snapshot.desired_table_spec_version.unwrap_or(0) > 0)
                         .then_some(snapshot.desired_table_spec_version.unwrap_or(0) as i64),
+                    imported_from_version_zero,
                 ],
             )
             .map_err(sqlite_err)?;
@@ -602,12 +621,17 @@ impl Catalog {
         Ok(())
     }
 
+    /// Check that `spec` is a legal next definition for `namespace` without
+    /// committing anything, so registration rejects an impossible version
+    /// before it builds an engine.
     pub fn validate_table_spec_registration(
         &self,
         namespace: &str,
-        version: u64,
+        spec: &ProtoTableSpec,
         expected_hash: &[u8; 32],
+        has_rows: bool,
     ) -> Result<(), StatsError> {
+        let version = spec.version.unwrap_or(0);
         let version_i64 = i64::try_from(version).map_err(|_| {
             StatsError::SchemaValidation(format!(
                 "table_spec.version {version} exceeds the supported range"
@@ -657,6 +681,7 @@ impl Catalog {
                 "table_spec version {version} rejected; expected {expected}"
             )));
         }
+        classify_definition_change(status.active.as_ref(), spec, has_rows)?;
         Ok(())
     }
 
@@ -716,10 +741,13 @@ impl Catalog {
             )));
         }
 
-        // Every version owns a complete immutable policy. Existing rows must be
-        // reassigned through the resumable migration before the query pointer
-        // advances, even when the source layout is byte-compatible.
-        let migrate = has_rows;
+        // A metadata-only change activates in this commit. A physical rewrite
+        // over rows that already exist records the pending transition instead,
+        // and background maintenance backfills and activates it.
+        let migrate = matches!(
+            classify_definition_change(status.active.as_ref(), spec, has_rows)?,
+            DefinitionChange::CompatibleRewrite
+        );
         let next_generation = status.catalog_generation + 1;
         let active_version = status.active_version();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
@@ -775,6 +803,17 @@ impl Catalog {
                     rusqlite::params![namespace, active_version as i64],
                 )
                 .map_err(sqlite_err)?;
+            // A metadata-only change leaves every object's physical layout
+            // valid, so the same commit that activates the new version carries
+            // the existing segments onto it. Nothing is rewritten and nothing
+            // leaves the query view.
+            transaction
+                .execute(
+                    "UPDATE object_segments SET table_spec_version = ?3
+                     WHERE namespace = ?1 AND table_spec_version = ?2",
+                    rusqlite::params![namespace, active_version as i64, version_i64],
+                )
+                .map_err(sqlite_err)?;
         }
         transaction
             .execute(
@@ -810,12 +849,13 @@ impl Catalog {
         }
         let active = status.active_version();
         let next_generation = status.catalog_generation + 1;
+        // The window the prior definition stays rollbackable for is the new
+        // definition's own rollback window, not its query-time bound.
         let observation_ms = status
             .desired
             .as_ref()
-            .and_then(|spec| spec.operating_policy.as_option())
-            .and_then(|policy| policy.max_query_time_ms)
-            .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
+            .map(rollback_window_ms)
+            .unwrap_or(crate::store::table_spec::DEFAULT_ROLLBACK_WINDOW_MS);
         let activated_at_ms = now_ms();
         let observation_deadline_ms =
             activated_at_ms.saturating_add(i64::try_from(observation_ms).unwrap_or(i64::MAX));
@@ -1072,15 +1112,36 @@ impl Catalog {
                 ],
             )
             .map_err(sqlite_err)?;
+        // Retiring a version-0 source completes the table's legacy import. Its
+        // history now lives in immutable objects the table state references, so
+        // the directory it was imported from is no longer a load source.
         transaction
             .execute(
-                "UPDATE table_heads SET catalog_generation = catalog_generation + 1
+                "UPDATE table_heads SET catalog_generation = catalog_generation + 1,
+                    filesystem_adoption_disabled =
+                        CASE WHEN ?2 THEN 1 ELSE filesystem_adoption_disabled END
                  WHERE namespace = ?1",
-                [namespace],
+                rusqlite::params![namespace, from_version == 0],
             )
             .map_err(sqlite_err)?;
         transaction.commit().map_err(sqlite_err)?;
         table_spec_status_in(&inner.conn, namespace)
+    }
+
+    /// Whether `namespace` has completed its version-0 import and must no
+    /// longer be rebuilt from the parquet files on disk.
+    pub fn filesystem_adoption_disabled(&self, namespace: &str) -> Result<bool, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        let disabled: Option<bool> = inner
+            .conn
+            .query_row(
+                "SELECT filesystem_adoption_disabled FROM table_heads WHERE namespace = ?1",
+                [namespace],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_err)?;
+        Ok(disabled.unwrap_or(false))
     }
 
     pub fn retained_table_specs(&self, namespace: &str) -> Result<Vec<ProtoTableSpec>, StatsError> {

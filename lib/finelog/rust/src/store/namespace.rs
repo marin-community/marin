@@ -21,17 +21,16 @@
 //! freshly allocated seq under the lock, and never writes parquet.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{Array, Int64Array, RecordBatch, StringArray};
-use arrow::compute::{cast, concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
+use arrow::compute::{cast, lexsort_to_indices, take, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use sha2::{Digest, Sha256};
 use tokio::sync::{watch, Notify, RwLock};
 
@@ -46,7 +45,9 @@ use crate::maintenance::scheduler::FlushDemand;
 use crate::maintenance::{
     MaintenanceLimits, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, REWRITE_LAYOUT_BUDGET,
 };
-use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
+use crate::partition_policy::{
+    segment_path, select_rows, PartitionedBatches, PhysicalPartitionPolicy, SegmentPartition,
+};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::{
     partition_field, ColumnType, L0Mode, MigrationPhase, SourceLayout, TableMigrationStatus,
@@ -55,9 +56,8 @@ use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     read_segment_projected, run_job_with_partition_policy, CompactionExecution, CompactionLayout,
-    PlannedSwap,
+    OutputPolicy, PlannedSwap,
 };
-use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::object_store::{ObjectId, ObjectPrefix, ObjectStore};
 use crate::store::policy::StoragePolicy;
@@ -74,8 +74,8 @@ use crate::store::segment::{
 };
 use crate::store::table::query_view::{plan_visible_segments, SegmentObjectMap};
 use crate::store::table::{
-    local_artifacts, object_segment_is_query_visible, MaintenanceLease, TableController,
-    WrittenObject,
+    file_sha256, local_artifacts, object_segment_is_query_visible, MaintenanceLease,
+    TableController, WrittenObject,
 };
 use crate::store::table_state::{
     ArtifactReferences, CommitError, LocalArtifacts, SegmentDescriptor, SourceBinding,
@@ -328,6 +328,7 @@ struct TableRuntimePolicy {
     max_buffer_bytes: i64,
     max_flush_age: Duration,
     max_query_time_ms: u64,
+    rollback_window_ms: u64,
     target_object_bytes: i64,
     source_layout: Option<SourceLayout>,
 }
@@ -340,6 +341,7 @@ impl Default for TableRuntimePolicy {
             max_buffer_bytes: SEGMENT_TARGET_BYTES,
             max_flush_age: DEFAULT_FLUSH_INTERVAL,
             max_query_time_ms: crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS,
+            rollback_window_ms: crate::store::table_spec::DEFAULT_ROLLBACK_WINDOW_MS,
             target_object_bytes: crate::store::table_spec::DEFAULT_TARGET_OBJECT_BYTES as i64,
             source_layout: None,
         }
@@ -373,9 +375,8 @@ impl TableRuntimePolicy {
                     .max_flush_age_ms
                     .unwrap_or(DEFAULT_FLUSH_INTERVAL.as_millis() as u64),
             ),
-            max_query_time_ms: operating
-                .max_query_time_ms
-                .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS),
+            max_query_time_ms: crate::store::table_spec::max_query_time_ms(spec),
+            rollback_window_ms: crate::store::table_spec::rollback_window_ms(spec),
             target_object_bytes: spec
                 .source_layout
                 .as_option()
@@ -541,64 +542,130 @@ fn batch_seq_bounds(batch: &RecordBatch) -> Result<(i64, i64), StatsError> {
     Ok((min, max))
 }
 
-fn decode_migration_source(
-    bytes: Bytes,
-    target_schema: &SchemaRef,
-) -> Result<RecordBatch, StatsError> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
-        .map_err(|error| StatsError::Internal(format!("open migration Parquet: {error}")))?;
-    let reader = builder.build().map_err(|error| {
-        StatsError::Internal(format!("build migration Parquet reader: {error}"))
-    })?;
-    let batches = reader
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| StatsError::Internal(format!("decode migration Parquet: {error}")))?;
-    if batches.is_empty() {
-        return Err(StatsError::SchemaValidation(
-            "migration source Parquet contains no record batches".to_string(),
-        ));
+/// Directory fan-out for a migration rewrite's staged partition outputs. The
+/// uploaded objects are content-addressed, so this only keeps one source's
+/// staged files from colliding.
+const MIGRATION_PARTITION_DIRECTORIES: u32 = 64;
+
+/// Stable identity of one migration source, so a rewrite that is interrupted
+/// after its objects upload but before its checkpoint commits is recognized and
+/// not applied twice.
+///
+/// It binds the source's content to the exact rows it covers: an object-backed
+/// source is already named by its content SHA-256, and a version-0 file is
+/// hashed where it lies.
+async fn migration_source_id(
+    row: &SegmentRow,
+    object_record: Option<&ObjectSegmentRecord>,
+    localized: &Path,
+) -> Result<String, StatsError> {
+    let mut digest = Sha256::new();
+    match object_record {
+        Some(record) => {
+            digest.update(
+                record
+                    .source
+                    .object_id
+                    .as_deref()
+                    .unwrap_or(&row.path)
+                    .as_bytes(),
+            );
+            digest.update(record.source.sha256.as_deref().unwrap_or_default());
+        }
+        None => {
+            digest.update(row.path.as_bytes());
+            let path = localized.to_path_buf();
+            let content: [u8; 32] = tokio::task::spawn_blocking(move || file_sha256(&path))
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("migration source hash task panicked: {error}"))
+                })??;
+            digest.update(content);
+        }
     }
-    let batches = batches
-        .iter()
-        .map(|batch| project_to_schema(batch, target_schema))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            StatsError::SchemaValidation(format!("align migration source schema: {error}"))
-        })?;
-    concat_batches(target_schema, &batches)
-        .map_err(|error| StatsError::Internal(format!("merge migration Parquet batches: {error}")))
+    digest.update(row.min_seq.to_be_bytes());
+    digest.update(row.max_seq.to_be_bytes());
+    digest.update(row.row_count.to_be_bytes());
+    Ok(full_hex(&digest.finalize().into()))
 }
 
-struct EncodedMigrationSegment {
-    partition: Option<SegmentPartition>,
-    batch: RecordBatch,
-    parquet: Vec<u8>,
-    min_seq: i64,
-    max_seq: i64,
+/// The physical partitioning one table specification's source layout declares.
+///
+/// The compaction executor asks for partitions through this trait, so a
+/// migration into a changed partition spec splits its rewritten rows exactly the
+/// way the ingest path splits a freshly sealed buffer.
+#[derive(Debug)]
+struct SourceLayoutPartitions {
+    spec_id: u32,
+    layout: SourceLayout,
 }
 
-fn encode_migration_segments(
-    bytes: Bytes,
-    target_schema: &SchemaRef,
-    source_layout: Option<&SourceLayout>,
-    max_row_group_rows: usize,
-) -> Result<Vec<EncodedMigrationSegment>, StatsError> {
-    let decoded = decode_migration_source(bytes, target_schema)?;
-    let sorted = sorted_object_batch(&decoded, source_layout)?;
-    partition_object_batch(&sorted, source_layout)?
-        .into_iter()
-        .map(|(partition, batch)| {
-            let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
-            let parquet = write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
-            Ok(EncodedMigrationSegment {
-                partition,
-                batch,
-                parquet,
-                min_seq,
-                max_seq,
-            })
+impl SourceLayoutPartitions {
+    /// `None` when `layout` declares no partitioning, in which case a rewrite
+    /// produces one unpartitioned output per source.
+    fn new(layout: &SourceLayout) -> Option<Self> {
+        let partition = layout.partition.as_option()?;
+        if partition.fields.is_empty() {
+            return None;
+        }
+        let spec_id = u32::try_from(partition.spec_id.unwrap_or(0)).ok()?;
+        Some(Self {
+            spec_id,
+            layout: layout.clone(),
         })
-        .collect()
+    }
+}
+
+impl PhysicalPartitionPolicy for SourceLayoutPartitions {
+    fn is_current_partition(&self, partition: &SegmentPartition) -> bool {
+        partition.spec_id == self.spec_id
+    }
+
+    fn partition_batches(
+        &self,
+        batches: &[RecordBatch],
+    ) -> Result<Vec<PartitionedBatches>, StatsError> {
+        let mut outputs: BTreeMap<SegmentPartition, Vec<RecordBatch>> = BTreeMap::new();
+        for batch in batches {
+            for (partition, split) in partition_object_batch(batch, Some(&self.layout))? {
+                let partition = partition.ok_or_else(|| {
+                    StatsError::Internal(
+                        "partitioned source layout produced an unpartitioned split".to_string(),
+                    )
+                })?;
+                outputs.entry(partition).or_default().push(split);
+            }
+        }
+        Ok(outputs
+            .into_iter()
+            .map(|(partition, batches)| PartitionedBatches { partition, batches })
+            .collect())
+    }
+
+    fn partitions_for_exact_values(
+        &self,
+        _exact_values: &HashMap<String, Vec<String>>,
+    ) -> Option<BTreeSet<SegmentPartition>> {
+        // Query pruning uses the namespace's own registered policy. A migration
+        // rewrite never prunes, so this policy claims nothing.
+        None
+    }
+
+    fn segment_directory(&self, partition: &SegmentPartition) -> PathBuf {
+        let mut digest = Sha256::new();
+        for (field, value) in &partition.values {
+            digest.update(field.as_bytes());
+            digest.update([0]);
+            digest.update(value.as_bytes());
+            digest.update([0]);
+        }
+        let bucket = u32::from_be_bytes(
+            digest.finalize()[..4]
+                .try_into()
+                .expect("sha256 prefix is four bytes"),
+        ) % MIGRATION_PARTITION_DIRECTORIES;
+        Path::new("partition").join(format!("{bucket:02}"))
+    }
 }
 
 /// A single namespace's write engine, disk-backed or in-memory.
@@ -996,15 +1063,6 @@ impl Namespace {
         Ok(())
     }
 
-    async fn migration_source_bytes(
-        &self,
-        _namespace_dir: &Path,
-        row: &SegmentRow,
-        object_record: Option<&ObjectSegmentRecord>,
-    ) -> Result<Bytes, StatsError> {
-        self.controller.source_bytes(row, object_record).await
-    }
-
     pub(crate) fn activate_query_version(&self, version: u64) -> Result<(), StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let rollback_alias = status.migration.as_ref().and_then(|migration| {
@@ -1135,13 +1193,22 @@ impl Namespace {
             .await
     }
 
+    /// Rewrite the source version's remaining segments into the target layout.
+    ///
+    /// Every source below the durable fence is rewritten exactly once, keyed by
+    /// a deterministic `migration_source_id` so an interrupted tick resumes
+    /// without duplicating rows. Rows written after the fence are already in the
+    /// target layout and are referenced from both query views until activation.
+    ///
+    /// Returns true while the migration still owns the table's maintenance
+    /// cycle.
     async fn backfill_table_spec_migration(
         &self,
         status: &TableSpecStatus,
         migration: &TableMigrationStatus,
     ) -> Result<bool, StatsError> {
         let _migration_guard = self.object_flush_lock.lock().await;
-        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
+        let table_dir = self.data_dir.clone().ok_or_else(|| {
             StatsError::Internal(format!(
                 "migration for {:?} requires a disk-backed cache",
                 self.name
@@ -1177,103 +1244,30 @@ impl Namespace {
             .as_ref()
             .and_then(|spec| spec.source_layout.as_option())
             .cloned();
-        let max_row_group_rows = target_layout
-            .as_ref()
-            .and_then(|layout| layout.max_row_group_rows)
-            .map(|rows| rows as usize)
-            .unwrap_or(self.max_row_group_rows);
         let mut processed = 0;
         for row in &pending {
             if processed >= TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK {
                 break;
             }
-            let bytes = self
-                .migration_source_bytes(namespace_dir, row, object_records.get(&row.path))
-                .await?;
-            let source_sha256: [u8; 32] = Sha256::digest(&bytes).into();
-            let source_identity = object_records
-                .get(&row.path)
-                .and_then(|record| record.source.object_id.as_deref())
-                .unwrap_or(&row.path);
-            let mut source_id_digest = Sha256::new();
-            source_id_digest.update(source_identity.as_bytes());
-            source_id_digest.update(source_sha256);
-            source_id_digest.update(row.min_seq.to_be_bytes());
-            source_id_digest.update(row.max_seq.to_be_bytes());
-            source_id_digest.update(row.row_count.to_be_bytes());
-            let migration_source_id = full_hex(&source_id_digest.finalize().into());
+            let record = object_records.get(&row.path);
+            let localized = self.controller.localize_source(row, record).await?;
+            let migration_source_id = migration_source_id(row, record, &localized).await?;
             if covered.contains(&migration_source_id) {
                 continue;
             }
-            let bytes_for_rewrite = bytes.clone();
-            let layout_for_rewrite = target_layout.clone();
-            let arrow_schema = Arc::clone(&self.arrow_schema);
-            let rewritten = tokio::task::spawn_blocking(move || {
-                encode_migration_segments(
-                    bytes_for_rewrite,
-                    &arrow_schema,
-                    layout_for_rewrite.as_ref(),
-                    max_row_group_rows,
+            let staging = CompactionStaging::create(&table_dir)?;
+            let outcome = self
+                .rewrite_migration_source(
+                    &staging,
+                    row,
+                    &localized,
+                    target_layout.as_ref(),
+                    to_version,
+                    &migration_source_id,
                 )
-            })
-            .await
-            .map_err(|error| {
-                StatsError::Internal(format!("migration rewrite task panicked: {error}"))
-            })??;
-            let rewritten_rows = rewritten
-                .iter()
-                .map(|segment| segment.batch.num_rows() as i64)
-                .sum::<i64>();
-            if rewritten_rows != row.row_count {
-                return Err(StatsError::Internal(format!(
-                    "migration source {} rewrote {} rows as {rewritten_rows}",
-                    row.path, row.row_count
-                )));
-            }
-            let mut migrated = Vec::with_capacity(rewritten.len());
-            for EncodedMigrationSegment {
-                partition,
-                batch,
-                parquet,
-                min_seq,
-                max_seq,
-            } in rewritten
-            {
-                let stored = self.controller.write_parquet(Bytes::from(parquet)).await?;
-                let (min_key_value, max_key_value) = self.key_bounds(&batch);
-                migrated.push(SegmentDescriptor {
-                    row: SegmentRow {
-                        namespace: row.namespace.clone(),
-                        path: stored.path.to_string_lossy().into_owned(),
-                        level: row.level,
-                        min_seq,
-                        max_seq,
-                        row_count: batch.num_rows() as i64,
-                        byte_size: stored.byte_size,
-                        created_at_ms: row.created_at_ms,
-                        min_key_value: min_key_value.map(|value| value.to_string()),
-                        max_key_value: max_key_value.map(|value| value.to_string()),
-                        partition,
-                        location: SegmentLocation::Both,
-                    },
-                    source: stored.source,
-                    // A migration output is rewritten from its source; index
-                    // backfill supplies its artifacts.
-                    artifacts: ArtifactReferences::default(),
-                });
-            }
-            let source_rows = row.row_count;
-            self.controller
-                .commit(|| {
-                    let revision = self.catalog.commit_migration_segments(
-                        &migrated,
-                        to_version,
-                        &migration_source_id,
-                        source_rows,
-                    )?;
-                    Ok((revision, ()))
-                })
-                .await?;
+                .await;
+            drop(staging);
+            outcome?;
             covered.insert(migration_source_id);
             processed += 1;
         }
@@ -1300,6 +1294,118 @@ impl Namespace {
         debug_assert_eq!(verified.phase, MigrationPhase::MIGRATION_PHASE_VERIFY);
         self.activate_verified_table_spec().await?;
         Ok(true)
+    }
+
+    /// Rewrite one migration source into the target layout and checkpoint it.
+    ///
+    /// This is the ordinary object-compaction path with a single input and a
+    /// forced rewrite: the executor decodes under the merge memory ceiling and
+    /// writes into bounded local staging, the outputs upload as immutable
+    /// objects with their derived artifacts, and one controller commit records
+    /// them against the source they cover. There is no migration-specific write
+    /// path.
+    async fn rewrite_migration_source(
+        &self,
+        staging: &CompactionStaging,
+        row: &SegmentRow,
+        localized: &Path,
+        target_layout: Option<&SourceLayout>,
+        to_version: u64,
+        migration_source_id: &str,
+    ) -> Result<(), StatsError> {
+        let job = CompactionJob {
+            inputs: vec![SegmentRow {
+                path: localized.to_string_lossy().into_owned(),
+                ..row.clone()
+            }],
+            output_level: row.level,
+            output_min_seq: row.min_seq,
+        };
+        let index_config = self.segment_index_config();
+        let arrow_schema = Arc::clone(&self.arrow_schema);
+        let sort_columns = target_layout
+            .map(|layout| layout.sort_columns.clone())
+            .filter(|columns| !columns.is_empty())
+            .unwrap_or_else(|| self.sort_columns.clone());
+        let key_column = self.key_column.clone();
+        let max_row_group_rows = target_layout
+            .and_then(|layout| layout.max_row_group_rows)
+            .map(|rows| rows as usize)
+            .unwrap_or(self.max_row_group_rows);
+        let max_merge_arrow_bytes = self.compaction_config.max_merge_arrow_bytes;
+        let partitions = target_layout.and_then(SourceLayoutPartitions::new);
+        let key_bounds = self.input_key_bounds(&row.path);
+        let staging_dir = staging.path().to_path_buf();
+        let swap = tokio::task::spawn_blocking(move || {
+            run_job_with_partition_policy(
+                &job,
+                &staging_dir,
+                &arrow_schema,
+                CompactionExecution {
+                    layout: CompactionLayout {
+                        sort_columns: &sort_columns,
+                        key_column: &key_column,
+                        max_row_group_rows,
+                    },
+                    index_config: &index_config,
+                    partition_policy: partitions
+                        .as_ref()
+                        .map(|policy| policy as &dyn PhysicalPartitionPolicy),
+                    max_merge_arrow_bytes,
+                    output: OutputPolicy::AlwaysRewrite,
+                },
+                |_| key_bounds,
+            )
+        })
+        .await
+        .map_err(|error| {
+            StatsError::Internal(format!("migration rewrite task panicked: {error}"))
+        })??;
+
+        let rewritten_rows: i64 = swap.added.iter().map(|segment| segment.row_count).sum();
+        if rewritten_rows != row.row_count {
+            return Err(StatsError::Internal(format!(
+                "migration source {} rewrote {} rows as {rewritten_rows}",
+                row.path, row.row_count
+            )));
+        }
+        let mut migrated = Vec::with_capacity(swap.added.len());
+        for staged in swap.added {
+            let staged_path = PathBuf::from(&staged.path);
+            let stored = self
+                .controller
+                .write_staged_object("objects", "parquet", &staged_path)
+                .await?;
+            let (references, local) = self
+                .publish_segment_artifacts(&staged_path, &stored)
+                .await?;
+            let segment = LocalSegment {
+                path: stored.path.to_string_lossy().into_owned(),
+                size_bytes: stored.byte_size,
+                location: SegmentLocation::Both,
+                created_at_ms: row.created_at_ms,
+                artifacts: local,
+                ..staged
+            };
+            migrated.push(SegmentDescriptor {
+                row: segment_to_row(&self.name, &segment),
+                source: stored.source,
+                artifacts: references,
+            });
+        }
+        let source_rows = row.row_count;
+        self.controller
+            .commit(|| {
+                let revision = self.catalog.commit_migration_segments(
+                    &migrated,
+                    to_version,
+                    migration_source_id,
+                    source_rows,
+                )?;
+                Ok((revision, ()))
+            })
+            .await?;
+        Ok(())
     }
 
     /// Compact one planner-issued run of immutable objects and commit the
@@ -1433,6 +1539,7 @@ impl Namespace {
                     index_config: &index_config,
                     partition_policy: None,
                     max_merge_arrow_bytes,
+                    output: OutputPolicy::PromoteWhenUnchanged,
                 },
                 |path| key_bounds.get(path).copied().unwrap_or((None, None)),
             )
@@ -2671,6 +2778,7 @@ impl Namespace {
                 index_config: &index_config,
                 partition_policy: physical_partition_policy_for(&self.name),
                 max_merge_arrow_bytes: self.compaction_config.max_merge_arrow_bytes,
+                output: OutputPolicy::PromoteWhenUnchanged,
             },
             |path| self.input_key_bounds(path),
         )?;
@@ -3497,7 +3605,14 @@ impl Namespace {
         if !should_run {
             return Ok(());
         }
-        let catalog_retention_ms = self.runtime_policy().max_query_time_ms;
+        // Retired objects answer two independent readers: a query holding a
+        // pinned snapshot, and a rollback to the definition they belong to.
+        // Collection waits for whichever window is longer.
+        let policy = self.runtime_policy();
+        let catalog_retention_ms = crate::store::table_spec::retired_object_retention_ms(
+            policy.max_query_time_ms,
+            policy.rollback_window_ms,
+        );
         let orphan_grace_ms = u64::try_from(OBJECT_ORPHAN_GRACE.as_millis()).unwrap_or(u64::MAX);
         let removed = self
             .controller
@@ -4119,6 +4234,7 @@ mod tests {
 
     use arrow::array::{Float64Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::*;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
@@ -5359,7 +5475,6 @@ mod tests {
 
     #[tokio::test]
     async fn layout_rewrite_updates_the_local_segment_without_re_uploading() {
-        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
         use parquet::file::properties::WriterProperties;
 

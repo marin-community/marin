@@ -544,6 +544,7 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
             max_buffer_bytes=64 * 1024 * 1024,
             max_flush_age_ms=5_000,
             max_query_time_ms=600_000,
+            rollback_window_ms=86_400_000,
         ),
     )
     policy = StoragePolicy(max_bytes=1024)
@@ -563,6 +564,9 @@ def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clien
         assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
         assert registered.operating_policy.local_cache.max_bytes == 1024
         assert registered.operating_policy.remote_retention.retain_forever
+        # The rollback window travels independently of the query bound.
+        assert registered.operating_policy.max_query_time_ms == 600_000
+        assert registered.operating_policy.rollback_window_ms == 86_400_000
     finally:
         client.close()
 

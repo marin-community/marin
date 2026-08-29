@@ -790,8 +790,9 @@ impl Store {
         if let Some(table_spec) = table_spec {
             self.catalog.validate_table_spec_registration(
                 name,
-                table_spec.spec.version.unwrap_or(0),
+                &table_spec.spec,
                 &table_spec.hash,
+                self.catalog.aggregate_namespace_stats(name)?.row_count > 0,
             )?;
             let declared_schema = stored_form(table_spec.schema.clone());
             let prospective_schema = match self.catalog.get_live(name) {
@@ -1417,6 +1418,12 @@ mod tests {
         )
     }
 
+    /// The same columns under an explicit ordering key, so a registration can
+    /// attempt the key change online migration refuses.
+    fn worker_schema_keyed_on(key: &str) -> Schema {
+        Schema::new(worker_schema().columns, key)
+    }
+
     fn mem_store() -> Store {
         Store::new(
             None,
@@ -1446,6 +1453,48 @@ mod tests {
                     ..Default::default()
                 }),
                 max_query_time_ms: (max_query_time_ms > 0).then_some(max_query_time_ms),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+    }
+
+    /// The same logical schema under a different physical object size: a
+    /// compatible rewrite that changes no schema and so needs no engine rebuild.
+    fn retargeted_object_backed_spec(version: u64) -> ValidatedTableSpec {
+        object_layout_spec(
+            version,
+            SourceLayout {
+                target_object_bytes: Some(8 * 1024 * 1024),
+                ..Default::default()
+            },
+            0,
+            0,
+        )
+    }
+
+    fn object_layout_spec(
+        version: u64,
+        source_layout: SourceLayout,
+        max_query_time_ms: u64,
+        rollback_window_ms: u64,
+    ) -> ValidatedTableSpec {
+        let schema = worker_schema();
+        let spec = TableSpec {
+            version: Some(version),
+            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
+            source_layout: MessageField::some(source_layout),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+                remote_retention: MessageField::some(RemoteRetentionPolicy {
+                    retain_forever: Some(true),
+                    ..Default::default()
+                }),
+                max_query_time_ms: (max_query_time_ms > 0).then_some(max_query_time_ms),
+                rollback_window_ms: (rollback_window_ms > 0).then_some(rollback_window_ms),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1704,7 +1753,7 @@ mod tests {
             ..
         } = published_object_table("unpublished_local_revision").await;
         let unpublished = store
-            .register_versioned_table("iris.worker", object_backed_spec(2))
+            .register_versioned_table("iris.worker", partitioned_object_backed_spec(2))
             .unwrap();
         assert_eq!(unpublished.table_spec_status.desired_version(), 2);
 
@@ -1904,9 +1953,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn next_version_with_the_same_layout_preserves_existing_rows() {
-        let data_dir = crate::test_support::unique_dir("same_layout_upgrade_data");
-        let remote_dir = crate::test_support::unique_dir("same_layout_upgrade_remote");
+    async fn a_layout_change_backfills_existing_rows_then_retires_the_source() {
+        let data_dir = crate::test_support::unique_dir("layout_upgrade_data");
+        let remote_dir = crate::test_support::unique_dir("layout_upgrade_remote");
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
@@ -1940,7 +1989,7 @@ mod tests {
         }
 
         let registration = store
-            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(2, 100))
+            .register_versioned_table("iris.worker", retargeted_object_backed_spec(2))
             .unwrap();
         assert_eq!(registration.table_spec_status.active_version(), 1);
         assert_eq!(registration.table_spec_status.desired_version(), 2);
@@ -2133,6 +2182,355 @@ mod tests {
         assert!(!cleaned_records[0].migration_backfill);
         let cleaned_paths = store.query_snapshot("iris.worker").unwrap().paths;
         assert_eq!(cleaned_paths.len(), 2);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A definition version that changes no physical layout is not a migration:
+    /// it activates in the registration's own state commit, and the objects the
+    /// prior version wrote answer queries under the new version unchanged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_metadata_only_version_activates_in_one_commit() {
+        let data_dir = crate::test_support::unique_dir("metadata_only_activation_data");
+        let remote_dir = crate::test_support::unique_dir("metadata_only_activation_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["existing"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let before = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(before.len(), 1);
+        let generation_before = store
+            .table_spec_status("iris.worker")
+            .unwrap()
+            .catalog_generation;
+
+        // Same layout, different operating policy.
+        let registration = store
+            .register_versioned_table(
+                "iris.worker",
+                object_layout_spec(2, SourceLayout::default(), 30_000, 0),
+            )
+            .unwrap();
+        assert_eq!(registration.table_spec_status.active_version(), 2);
+        assert_eq!(registration.table_spec_status.desired_version(), 0);
+        assert!(registration.table_spec_status.migration.is_none());
+        assert_eq!(
+            registration.table_spec_status.catalog_generation,
+            generation_before + 1
+        );
+
+        // The existing objects moved onto the new version in that same commit,
+        // so nothing was rewritten and nothing left the query view.
+        assert!(store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .iter()
+            .all(|segment| segment.table_spec_version == 2));
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, before);
+        assert_eq!(scan_table(&store, "iris.worker").await, 1);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A logical change no online migration can express is refused at
+    /// registration rather than recorded as a transition.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_incompatible_logical_change_is_rejected() {
+        let data_dir = crate::test_support::unique_dir("incompatible_change_data");
+        let remote_dir = crate::test_support::unique_dir("incompatible_change_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["existing"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        let rekeyed = worker_schema_keyed_on("mem_bytes");
+        let spec = TableSpec {
+            version: Some(2),
+            logical_schema: MessageField::some(schema_to_proto_owned(&rekeyed)),
+            operating_policy: MessageField::some(OperatingPolicy {
+                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+                remote_retention: MessageField::some(RemoteRetentionPolicy {
+                    retain_forever: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        let validated =
+            ValidatedTableSpec::from_view(&view, &rekeyed, &StoragePolicy::default()).unwrap();
+        let error = match store.register_versioned_table("iris.worker", validated) {
+            Ok(_) => panic!("an incompatible key change must not register"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+
+        // The rejected version left no transition behind.
+        let status = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(status.active_version(), 1);
+        assert_eq!(status.desired_version(), 0);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// The rollback window is not the query bound. A definition that promises a
+    /// 50 ms query lifetime and a one-hour rollback window keeps the version it
+    /// replaced activatable, and its objects retained, long after every query
+    /// that could have pinned them has expired.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_long_rollback_window_outlives_a_short_query_bound() {
+        let data_dir = crate::test_support::unique_dir("rollback_window_data");
+        let remote_dir = crate::test_support::unique_dir("rollback_window_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table(
+                "iris.worker",
+                object_layout_spec(1, SourceLayout::default(), 50, 3_600_000),
+            )
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["existing"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let source_paths = store.query_snapshot("iris.worker").unwrap().paths;
+
+        store
+            .register_versioned_table(
+                "iris.worker",
+                object_layout_spec(
+                    2,
+                    SourceLayout {
+                        target_object_bytes: Some(8 * 1024 * 1024),
+                        ..Default::default()
+                    },
+                    50,
+                    3_600_000,
+                ),
+            )
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let activated = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(activated.active_version(), 2);
+        assert_eq!(
+            activated.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        let deadline = activated
+            .migration
+            .as_ref()
+            .and_then(|migration| migration.observation_deadline_ms)
+            .unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!(deadline > now_ms + 60_000, "deadline {deadline}");
+
+        // Every query the 50 ms bound admits has expired, and the source version
+        // is still there.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let observing = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(
+            observing.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        assert!(store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .iter()
+            .any(|segment| segment.table_spec_version == 1));
+        for path in &source_paths {
+            assert!(
+                Path::new(path).exists(),
+                "retired object {path} was collected"
+            );
+        }
+
+        // Within that window the prior definition is still activatable.
+        let rolled_back = store.abort_table_migration("iris.worker").await.unwrap();
+        assert_eq!(rolled_back.active_version(), 1);
+        assert_eq!(
+            store.query_snapshot("iris.worker").unwrap().paths,
+            source_paths
+        );
+        assert_eq!(scan_table(&store, "iris.worker").await, 1);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// Filesystem adoption is a one-time bootstrap input. Once a table's
+    /// version-0 history has been imported and retired, a rescan of its
+    /// directory contributes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_retired_version_zero_import_disables_filesystem_adoption() {
+        let data_dir = crate::test_support::unique_dir("version_zero_import_data");
+        let remote_dir = crate::test_support::unique_dir("version_zero_import_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, last_seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", last_seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let legacy_paths = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(legacy_paths.len(), 1);
+
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        assert!(!store
+            .catalog
+            .filesystem_adoption_disabled("iris.worker")
+            .unwrap());
+
+        store
+            .catalog
+            .expire_migration_observation("iris.worker")
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let retired = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(
+            retired.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
+        );
+        assert!(store
+            .catalog
+            .filesystem_adoption_disabled("iris.worker")
+            .unwrap());
+
+        // The imported history now lives in objects, and a full rescan of the
+        // directory the legacy parquet still sits in adds nothing back.
+        let imported = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(imported.len(), 1);
+        assert_local_content_object(&data_dir, &imported[0]);
+        assert!(Path::new(&legacy_paths[0]).exists());
+        crate::store::adopt::adopt_store_from_disk(&data_dir, &store.catalog).unwrap();
+        let after_rescan: Vec<String> = store
+            .catalog
+            .list_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|row| row.path)
+            .collect();
+        assert_eq!(after_rescan, imported);
+        assert_eq!(scan_table(&store, "iris.worker").await, 1);
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();

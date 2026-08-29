@@ -38,8 +38,8 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_DIR, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{
-    local_artifacts, object_segment_is_query_visible, MaintenanceLease, ObjectPersistence,
-    TableController, WrittenObject,
+    file_sha256, local_artifacts, object_segment_is_query_visible, MaintenanceLease,
+    ObjectPersistence, TableController, WrittenObject,
 };
 
 /// Bounded budget for stopping and joining a table's background tasks during a
@@ -79,7 +79,10 @@ pub struct TableManager {
     /// - legacy compaction (`commit_swap`) and eviction, which unlink or rename
     ///   the very files a snapshot named;
     /// - `DropTable`, which deletes a table's directory;
-    /// - the version-0 legacy import path, which is on the same file-based view.
+    /// - a table still importing its version-0 history, whose query view is the
+    ///   set of files on disk until that import activates. Activation moves it
+    ///   onto the snapshot path, and retirement removes the imported files from
+    ///   the catalog entirely.
     ///
     /// Object-backed reads still take the READ side because a single query
     /// registers every live table, legacy ones included. The lock is deleted

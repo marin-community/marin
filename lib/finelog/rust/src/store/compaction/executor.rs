@@ -81,12 +81,27 @@ pub struct CompactionLayout<'a> {
     pub max_row_group_rows: usize,
 }
 
+/// Whether an input may reach the output without being decoded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OutputPolicy {
+    /// A lone input whose partition already matches the policy is promoted by
+    /// rename, and an unreadable run head is promoted or dropped so a corrupt
+    /// file cannot wedge a level.
+    PromoteWhenUnchanged,
+    /// Every input is decoded and rewritten under the requested layout, and an
+    /// unreadable input fails the job. A definition migration uses this: an
+    /// object that reaches the target version without being rewritten would
+    /// carry the source layout under the target's name.
+    AlwaysRewrite,
+}
+
 #[derive(Clone, Copy)]
 pub struct CompactionExecution<'a> {
     pub layout: CompactionLayout<'a>,
     pub index_config: &'a SegmentIndexConfig,
     pub partition_policy: Option<&'a dyn PhysicalPartitionPolicy>,
     pub max_merge_arrow_bytes: i64,
+    pub output: OutputPolicy,
 }
 
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
@@ -116,6 +131,7 @@ fn run_job(
         index_config,
         partition_policy: None,
         max_merge_arrow_bytes,
+        output: OutputPolicy::PromoteWhenUnchanged,
     };
     run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
 }
@@ -136,7 +152,10 @@ pub fn run_job_with_partition_policy(
             .as_ref()
             .is_none_or(|partition| !policy.is_current_partition(partition))
     });
-    if job.inputs.len() == 1 && !needs_repartition {
+    if job.inputs.len() == 1
+        && !needs_repartition
+        && execution.output == OutputPolicy::PromoteWhenUnchanged
+    {
         apply_level_bump(
             &job.inputs[0],
             job.output_level,
@@ -255,6 +274,7 @@ fn apply_merge(
         .first()
         .and_then(|segment| segment.partition.clone());
     let sort_cols = sort_col_indices(arrow_schema, execution.layout.sort_columns);
+    let must_rewrite = needs_repartition || execution.output == OutputPolicy::AlwaysRewrite;
 
     // Read each input's row-group batches, project onto the namespace schema
     // (additive null-fill), then SORT each batch and feed it to the k-way merge
@@ -292,6 +312,9 @@ fn apply_merge(
         let raw = match read_segment_batches(Path::new(&inp.path)) {
             Ok(raw) => raw,
             Err(e) => {
+                if must_rewrite {
+                    return Err(e);
+                }
                 if consumed.is_empty() {
                     tracing::warn!(
                         path = %inp.path,
@@ -340,7 +363,7 @@ fn apply_merge(
     // One input has nothing to merge with — whether it busted the ceiling alone
     // or merely left no room for the next input. Promote it by rename instead,
     // so it costs no merge memory and its level still advances.
-    if consumed.len() == 1 && !needs_repartition {
+    if consumed.len() == 1 && !must_rewrite {
         drop(projected);
         return apply_level_bump(
             consumed[0],
@@ -366,6 +389,10 @@ fn apply_merge(
             .into_iter()
             .map(|output| (Some(output.partition), output.batches))
             .collect()
+    } else if must_rewrite && execution.partition_policy.is_none() {
+        // The requested layout declares no partitioning, so the rewrite drops
+        // whatever partition its source carried.
+        vec![(None, merged)]
     } else {
         vec![(job_partition, merged)]
     };

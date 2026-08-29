@@ -148,13 +148,13 @@ pub fn namespace_catalog(
         })
         .collect();
     let desired_version = status.desired_version();
-    let max_query_time_ms = status
-        .active
-        .as_ref()
-        .or(status.desired.as_ref())
-        .and_then(|spec| spec.operating_policy.as_option())
-        .and_then(|policy| policy.max_query_time_ms)
+    let effective_spec = status.active.as_ref().or(status.desired.as_ref());
+    let max_query_time_ms = effective_spec
+        .map(crate::store::table_spec::max_query_time_ms)
         .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS);
+    let rollback_window_ms = effective_spec
+        .map(crate::store::table_spec::rollback_window_ms)
+        .unwrap_or(crate::store::table_spec::DEFAULT_ROLLBACK_WINDOW_MS);
     Ok(NamespaceCatalog {
         format_version: Some(TABLE_STATE_FORMAT_VERSION),
         namespace: Some(namespace.to_string()),
@@ -166,6 +166,7 @@ pub fn namespace_catalog(
         version_segments,
         migration: status.migration.into(),
         max_query_time_ms: Some(max_query_time_ms),
+        rollback_window_ms: Some(rollback_window_ms),
         forward_cursors: catalog.forward_cursors(namespace)?,
         direct_query_segments,
         direct_query_high_water: Some(direct_query_high_water),

@@ -543,43 +543,24 @@ impl TableController {
         objects.store.local_path(&reference).await
     }
 
-    /// Read the bytes a migration rewrites, from whichever layout holds them.
-    pub async fn source_bytes(
+    /// The local file holding the rows a migration rewrites.
+    ///
+    /// An object-backed source resolves by exact reference. A version-0 source
+    /// is the Parquet file the table's own directory holds; when only the legacy
+    /// object layout still has it, its bytes are restored to that path first so
+    /// the compaction executor reads it like any other input.
+    pub async fn localize_source(
         &self,
         row: &SegmentRow,
         object_record: Option<&ObjectSegmentRecord>,
-    ) -> Result<Bytes, StatsError> {
+    ) -> Result<PathBuf, StatsError> {
         let objects = self.require_objects()?;
         if let Some(record) = object_record {
-            let reference = ObjectReference::try_from(&record.source)?;
-            reference.id.table_relative(&self.table).ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object migration source {:?} belongs to another table",
-                    reference.id.as_str()
-                ))
-            })?;
-            let object = objects.store.read(&reference.id).await?.ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "object migration source {:?} is missing for {:?}",
-                    reference.id.as_str(),
-                    self.table
-                ))
-            })?;
-            if object.version.content_sha256 != reference.version.content_sha256 {
-                return Err(StatsError::Internal(format!(
-                    "object migration source {:?} failed SHA-256 validation",
-                    reference.id.as_str()
-                )));
-            }
-            return Ok(object.bytes);
+            return self.localize(&record.source).await;
         }
-        if Path::new(&row.path).exists() {
-            return tokio::fs::read(&row.path)
-                .await
-                .map(Bytes::from)
-                .map_err(|error| {
-                    StatsError::Internal(format!("read migration source {}: {error}", row.path))
-                });
+        let path = PathBuf::from(&row.path);
+        if path.exists() {
+            return Ok(path);
         }
         let key = segment_relative_key(&objects.table_dir, &row.path).ok_or_else(|| {
             StatsError::Internal(format!(
@@ -588,17 +569,33 @@ impl TableController {
                 objects.table_dir.display()
             ))
         })?;
-        objects
+        let object = objects
             .legacy_store
             .read(&ObjectId::table(&self.table, &key)?)
             .await?
-            .map(|object| object.bytes)
             .ok_or_else(|| {
                 StatsError::Internal(format!(
                     "legacy migration source {key:?} is missing for {:?}",
                     self.table
                 ))
-            })
+            })?;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                StatsError::Internal(format!(
+                    "create legacy migration source directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        tokio::fs::write(&path, &object.bytes)
+            .await
+            .map_err(|error| {
+                StatsError::Internal(format!(
+                    "restore legacy migration source {}: {error}",
+                    path.display()
+                ))
+            })?;
+        Ok(path)
     }
 
     /// Collect whatever the object store's own retention allows.
@@ -880,7 +877,7 @@ async fn file_byte_stream(path: &Path) -> Result<ObjectByteStream, StatsError> {
 }
 
 /// Content SHA-256 of a staged file, read in bounded chunks.
-fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
+pub fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
     let mut file = std::fs::File::open(path).map_err(|error| {
         StatsError::Internal(format!("open {} for hashing: {error}", path.display()))
     })?;

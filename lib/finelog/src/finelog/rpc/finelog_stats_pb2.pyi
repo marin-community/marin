@@ -201,20 +201,22 @@ class RemoteRetentionPolicy(_message.Message):
     def __init__(self, retain_forever: _Optional[bool] = ...) -> None: ...
 
 class OperatingPolicy(_message.Message):
-    __slots__ = ("l0_mode", "local_cache", "remote_retention", "max_buffer_bytes", "max_flush_age_ms", "max_query_time_ms")
+    __slots__ = ("l0_mode", "local_cache", "remote_retention", "max_buffer_bytes", "max_flush_age_ms", "max_query_time_ms", "rollback_window_ms")
     L0_MODE_FIELD_NUMBER: _ClassVar[int]
     LOCAL_CACHE_FIELD_NUMBER: _ClassVar[int]
     REMOTE_RETENTION_FIELD_NUMBER: _ClassVar[int]
     MAX_BUFFER_BYTES_FIELD_NUMBER: _ClassVar[int]
     MAX_FLUSH_AGE_MS_FIELD_NUMBER: _ClassVar[int]
     MAX_QUERY_TIME_MS_FIELD_NUMBER: _ClassVar[int]
+    ROLLBACK_WINDOW_MS_FIELD_NUMBER: _ClassVar[int]
     l0_mode: L0Mode
     local_cache: StoragePolicy
     remote_retention: RemoteRetentionPolicy
     max_buffer_bytes: int
     max_flush_age_ms: int
     max_query_time_ms: int
-    def __init__(self, l0_mode: _Optional[_Union[L0Mode, str]] = ..., local_cache: _Optional[_Union[StoragePolicy, _Mapping]] = ..., remote_retention: _Optional[_Union[RemoteRetentionPolicy, _Mapping]] = ..., max_buffer_bytes: _Optional[int] = ..., max_flush_age_ms: _Optional[int] = ..., max_query_time_ms: _Optional[int] = ...) -> None: ...
+    rollback_window_ms: int
+    def __init__(self, l0_mode: _Optional[_Union[L0Mode, str]] = ..., local_cache: _Optional[_Union[StoragePolicy, _Mapping]] = ..., remote_retention: _Optional[_Union[RemoteRetentionPolicy, _Mapping]] = ..., max_buffer_bytes: _Optional[int] = ..., max_flush_age_ms: _Optional[int] = ..., max_query_time_ms: _Optional[int] = ..., rollback_window_ms: _Optional[int] = ...) -> None: ...
 
 class TableSpec(_message.Message):
     __slots__ = ("version", "logical_schema", "source_layout", "artifact_policy", "operating_policy")
@@ -245,7 +247,7 @@ class ObjectRef(_message.Message):
     def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ..., sha256: _Optional[bytes] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
-    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill")
+    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill", "index_bundle", "projections", "source_segment_uuid")
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
@@ -262,6 +264,9 @@ class CatalogSegment(_message.Message):
     MIGRATION_SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
     MIGRATION_SOURCE_ROWS_FIELD_NUMBER: _ClassVar[int]
     MIGRATION_BACKFILL_FIELD_NUMBER: _ClassVar[int]
+    INDEX_BUNDLE_FIELD_NUMBER: _ClassVar[int]
+    PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_SEGMENT_UUID_FIELD_NUMBER: _ClassVar[int]
     segment_id: str
     source: ObjectRef
     level: int
@@ -278,7 +283,18 @@ class CatalogSegment(_message.Message):
     migration_source_id: str
     migration_source_rows: int
     migration_backfill: bool
-    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., table_spec_version: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ...) -> None: ...
+    index_bundle: ObjectRef
+    projections: _containers.RepeatedCompositeFieldContainer[ProjectionArtifact]
+    source_segment_uuid: str
+    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., table_spec_version: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ..., index_bundle: _Optional[_Union[ObjectRef, _Mapping]] = ..., projections: _Optional[_Iterable[_Union[ProjectionArtifact, _Mapping]]] = ..., source_segment_uuid: _Optional[str] = ...) -> None: ...
+
+class ProjectionArtifact(_message.Message):
+    __slots__ = ("name", "object")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    OBJECT_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    object: ObjectRef
+    def __init__(self, name: _Optional[str] = ..., object: _Optional[_Union[ObjectRef, _Mapping]] = ...) -> None: ...
 
 class TableVersionSegments(_message.Message):
     __slots__ = ("table_spec_version", "live_segments", "retired_segments")
@@ -321,7 +337,7 @@ class ForwardCursor(_message.Message):
     def __init__(self, target: _Optional[str] = ..., cursor: _Optional[int] = ...) -> None: ...
 
 class NamespaceCatalog(_message.Message):
-    __slots__ = ("format_version", "namespace", "catalog_generation", "active_table_spec_version", "desired_table_spec_version", "retained_table_specs", "persisted_high_water", "version_segments", "migration", "max_query_time_ms", "forward_cursors", "direct_query_segments", "direct_query_high_water")
+    __slots__ = ("format_version", "namespace", "catalog_generation", "active_table_spec_version", "desired_table_spec_version", "retained_table_specs", "persisted_high_water", "version_segments", "migration", "max_query_time_ms", "forward_cursors", "direct_query_segments", "direct_query_high_water", "tombstoned", "rollback_window_ms")
     FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
@@ -335,6 +351,8 @@ class NamespaceCatalog(_message.Message):
     FORWARD_CURSORS_FIELD_NUMBER: _ClassVar[int]
     DIRECT_QUERY_SEGMENTS_FIELD_NUMBER: _ClassVar[int]
     DIRECT_QUERY_HIGH_WATER_FIELD_NUMBER: _ClassVar[int]
+    TOMBSTONED_FIELD_NUMBER: _ClassVar[int]
+    ROLLBACK_WINDOW_MS_FIELD_NUMBER: _ClassVar[int]
     format_version: int
     namespace: str
     catalog_generation: int
@@ -348,23 +366,27 @@ class NamespaceCatalog(_message.Message):
     forward_cursors: _containers.RepeatedCompositeFieldContainer[ForwardCursor]
     direct_query_segments: _containers.RepeatedCompositeFieldContainer[CatalogSegment]
     direct_query_high_water: int
-    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., desired_table_spec_version: _Optional[int] = ..., retained_table_specs: _Optional[_Iterable[_Union[TableSpec, _Mapping]]] = ..., persisted_high_water: _Optional[int] = ..., version_segments: _Optional[_Iterable[_Union[TableVersionSegments, _Mapping]]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., max_query_time_ms: _Optional[int] = ..., forward_cursors: _Optional[_Iterable[_Union[ForwardCursor, _Mapping]]] = ..., direct_query_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., direct_query_high_water: _Optional[int] = ...) -> None: ...
+    tombstoned: bool
+    rollback_window_ms: int
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., desired_table_spec_version: _Optional[int] = ..., retained_table_specs: _Optional[_Iterable[_Union[TableSpec, _Mapping]]] = ..., persisted_high_water: _Optional[int] = ..., version_segments: _Optional[_Iterable[_Union[TableVersionSegments, _Mapping]]] = ..., migration: _Optional[_Union[TableMigrationStatus, _Mapping]] = ..., max_query_time_ms: _Optional[int] = ..., forward_cursors: _Optional[_Iterable[_Union[ForwardCursor, _Mapping]]] = ..., direct_query_segments: _Optional[_Iterable[_Union[CatalogSegment, _Mapping]]] = ..., direct_query_high_water: _Optional[int] = ..., tombstoned: _Optional[bool] = ..., rollback_window_ms: _Optional[int] = ...) -> None: ...
 
 class CatalogHead(_message.Message):
-    __slots__ = ("format_version", "namespace", "writer_epoch", "catalog_generation", "active_table_spec_version", "catalog")
+    __slots__ = ("format_version", "namespace", "writer_epoch", "catalog_generation", "active_table_spec_version", "catalog", "tombstoned")
     FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     WRITER_EPOCH_FIELD_NUMBER: _ClassVar[int]
     CATALOG_GENERATION_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_TABLE_SPEC_VERSION_FIELD_NUMBER: _ClassVar[int]
     CATALOG_FIELD_NUMBER: _ClassVar[int]
+    TOMBSTONED_FIELD_NUMBER: _ClassVar[int]
     format_version: int
     namespace: str
     writer_epoch: int
     catalog_generation: int
     active_table_spec_version: int
     catalog: ObjectRef
-    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., writer_epoch: _Optional[int] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., catalog: _Optional[_Union[ObjectRef, _Mapping]] = ...) -> None: ...
+    tombstoned: bool
+    def __init__(self, format_version: _Optional[int] = ..., namespace: _Optional[str] = ..., writer_epoch: _Optional[int] = ..., catalog_generation: _Optional[int] = ..., active_table_spec_version: _Optional[int] = ..., catalog: _Optional[_Union[ObjectRef, _Mapping]] = ..., tombstoned: _Optional[bool] = ...) -> None: ...
 
 class RegisterTableRequest(_message.Message):
     __slots__ = ("namespace", "schema", "storage_policy", "table_spec")

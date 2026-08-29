@@ -18,6 +18,123 @@ use crate::store::segment::MAX_ROW_GROUP_ROWS;
 pub const DEFAULT_TARGET_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_QUERY_TIME_MS: u64 = 10 * 60 * 1_000;
 
+/// How long a newly activated definition stays rollbackable, and how long the
+/// definition it replaced keeps its retired objects, when a specification does
+/// not state a window of its own.
+pub const DEFAULT_ROLLBACK_WINDOW_MS: u64 = 60 * 60 * 1_000;
+
+/// How a newly registered definition version differs from the active one.
+///
+/// The classification decides the registration's durable effect: whether the
+/// new version becomes active immediately or first has to move the table's
+/// existing rows into its physical layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefinitionChange {
+    /// Nothing in the physical layout changed, or the table holds no rows to
+    /// move. The new version activates in the registration's own state commit.
+    MetadataOnly,
+    /// The physical layout changed over rows that already exist. Registration
+    /// records a pending transition that background maintenance backfills and
+    /// activates.
+    CompatibleRewrite,
+}
+
+/// Classify `next` against the currently active definition.
+///
+/// `active` is `None` for a table's first versioned definition; a table that
+/// already holds rows under it is on version 0 and its history is imported
+/// through the same rewrite as any other layout change.
+///
+/// A change that no online migration can express — a different ordering key, or
+/// a logical schema that existing rows cannot be read under — is rejected here
+/// rather than recorded as a transition. Only additive schema changes are
+/// query-compatible: an object written under the old definition must still
+/// answer queries planned against the new one.
+pub fn classify_definition_change(
+    active: Option<&ProtoTableSpec>,
+    next: &ProtoTableSpec,
+    has_rows: bool,
+) -> Result<DefinitionChange, StatsError> {
+    let Some(active) = active else {
+        // Version 0 has no recorded definition, so there is nothing to compare
+        // against. Its history still has to be rewritten into version 1's
+        // layout before that version can answer queries.
+        return Ok(if has_rows {
+            DefinitionChange::CompatibleRewrite
+        } else {
+            DefinitionChange::MetadataOnly
+        });
+    };
+    check_logical_compatibility(active, next)?;
+    if !has_rows || active.source_layout == next.source_layout {
+        return Ok(DefinitionChange::MetadataOnly);
+    }
+    Ok(DefinitionChange::CompatibleRewrite)
+}
+
+/// Reject a logical schema change that existing objects cannot serve.
+fn check_logical_compatibility(
+    active: &ProtoTableSpec,
+    next: &ProtoTableSpec,
+) -> Result<(), StatsError> {
+    let (Some(active_schema), Some(next_schema)) = (
+        active.logical_schema.as_option(),
+        next.logical_schema.as_option(),
+    ) else {
+        return Err(StatsError::SchemaValidation(
+            "table_spec.logical_schema is required on both definition versions".to_string(),
+        ));
+    };
+    let active_key = active_schema.key_column.as_deref().unwrap_or("");
+    let next_key = next_schema.key_column.as_deref().unwrap_or("");
+    if active_key != next_key {
+        return Err(StatsError::SchemaConflict(format!(
+            "table_spec key column {active_key:?} cannot change to {next_key:?}; \
+             an incompatible logical change is not migratable online"
+        )));
+    }
+    for active_column in &active_schema.columns {
+        let name = active_column.name.as_deref().unwrap_or("");
+        let Some(next_column) = next_schema
+            .columns
+            .iter()
+            .find(|column| column.name.as_deref().unwrap_or("") == name)
+        else {
+            return Err(StatsError::SchemaConflict(format!(
+                "table_spec drops column {name:?}; an incompatible logical change is not \
+                 migratable online"
+            )));
+        };
+        if active_column.r#type != next_column.r#type {
+            return Err(StatsError::SchemaConflict(format!(
+                "table_spec changes the type of column {name:?}; an incompatible logical change \
+                 is not migratable online"
+            )));
+        }
+        if active_column.nullable.unwrap_or(false) && !next_column.nullable.unwrap_or(false) {
+            return Err(StatsError::SchemaConflict(format!(
+                "table_spec makes nullable column {name:?} required; an incompatible logical \
+                 change is not migratable online"
+            )));
+        }
+    }
+    // A column the new definition adds must be readable as null on every object
+    // written before it existed.
+    for next_column in &next_schema.columns {
+        let name = next_column.name.as_deref().unwrap_or("");
+        let is_new = !active_schema
+            .columns
+            .iter()
+            .any(|column| column.name.as_deref().unwrap_or("") == name);
+        if is_new && !next_column.nullable.unwrap_or(false) {
+            return Err(StatsError::SchemaConflict(format!(
+                "table_spec adds required column {name:?}; existing rows cannot supply it"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct ValidatedTableSpec {
     pub spec: ProtoTableSpec,
@@ -306,7 +423,37 @@ fn normalize_operating_policy(
     if policy.max_query_time_ms.unwrap_or(0) == 0 {
         policy.max_query_time_ms = Some(DEFAULT_MAX_QUERY_TIME_MS);
     }
+    if policy.rollback_window_ms.unwrap_or(0) == 0 {
+        policy.rollback_window_ms = Some(DEFAULT_ROLLBACK_WINDOW_MS);
+    }
     Ok((cache_policy, l0_mode))
+}
+
+pub fn max_query_time_ms(spec: &ProtoTableSpec) -> u64 {
+    spec.operating_policy
+        .as_option()
+        .and_then(|policy| policy.max_query_time_ms)
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_QUERY_TIME_MS)
+}
+
+pub fn rollback_window_ms(spec: &ProtoTableSpec) -> u64 {
+    spec.operating_policy
+        .as_option()
+        .and_then(|policy| policy.rollback_window_ms)
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_ROLLBACK_WINDOW_MS)
+}
+
+/// How long a state a table has superseded, and the objects only that state
+/// references, must survive.
+///
+/// Retired objects serve two independent readers: an in-flight query holding a
+/// pinned snapshot, bounded by `max_query_time_ms`, and a rollback to the prior
+/// definition, bounded by `rollback_window_ms`. Retention is the longer of the
+/// two, so shortening the query bound never shortens the rollback window.
+pub fn retired_object_retention_ms(max_query_time_ms: u64, rollback_window_ms: u64) -> u64 {
+    max_query_time_ms.max(rollback_window_ms)
 }
 
 pub fn migration_phase_for_state(
@@ -410,6 +557,159 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, StatsError::SchemaValidation(_)));
+    }
+
+    fn spec_for(version: u64, schema: &Schema, layout: SourceLayout) -> ProtoTableSpec {
+        let spec = ProtoTableSpec {
+            version: Some(version),
+            logical_schema: MessageField::some(schema_to_proto_owned(schema)),
+            source_layout: MessageField::some(layout),
+            ..Default::default()
+        };
+        let encoded = spec.encode_to_vec();
+        let view = TableSpecView::decode_view(&encoded).unwrap();
+        ValidatedTableSpec::from_view(&view, schema, &StoragePolicy::default())
+            .unwrap()
+            .spec
+    }
+
+    #[test]
+    fn an_unchanged_layout_is_metadata_only_even_over_existing_rows() {
+        let active = spec_for(1, &schema(), SourceLayout::default());
+        let mut next = spec_for(2, &schema(), SourceLayout::default());
+        next.operating_policy
+            .get_or_insert_default()
+            .max_query_time_ms = Some(30_000);
+        assert_eq!(
+            classify_definition_change(Some(&active), &next, true).unwrap(),
+            DefinitionChange::MetadataOnly
+        );
+    }
+
+    #[test]
+    fn a_layout_change_over_existing_rows_is_a_compatible_rewrite() {
+        let active = spec_for(1, &schema(), SourceLayout::default());
+        let next = spec_for(
+            2,
+            &schema(),
+            SourceLayout {
+                target_object_bytes: Some(8 * 1024 * 1024),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            classify_definition_change(Some(&active), &next, true).unwrap(),
+            DefinitionChange::CompatibleRewrite
+        );
+        // An empty table has nothing to rewrite.
+        assert_eq!(
+            classify_definition_change(Some(&active), &next, false).unwrap(),
+            DefinitionChange::MetadataOnly
+        );
+    }
+
+    #[test]
+    fn version_zero_history_converts_through_the_same_rewrite() {
+        let next = spec_for(1, &schema(), SourceLayout::default());
+        assert_eq!(
+            classify_definition_change(None, &next, true).unwrap(),
+            DefinitionChange::CompatibleRewrite
+        );
+        assert_eq!(
+            classify_definition_change(None, &next, false).unwrap(),
+            DefinitionChange::MetadataOnly
+        );
+    }
+
+    #[test]
+    fn incompatible_logical_changes_are_rejected() {
+        let active = spec_for(1, &schema(), SourceLayout::default());
+
+        let rekeyed = Schema::new(schema().columns, "worker_id");
+        let error = classify_definition_change(
+            Some(&active),
+            &spec_for(2, &rekeyed, SourceLayout::default()),
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+
+        let dropped = Schema::new(
+            vec![Column::new(
+                "timestamp_ms",
+                ColumnType::COLUMN_TYPE_INT64,
+                false,
+            )],
+            "timestamp_ms",
+        );
+        let error = classify_definition_change(
+            Some(&active),
+            &spec_for(2, &dropped, SourceLayout::default()),
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+
+        let retyped = Schema::new(
+            vec![
+                Column::new("worker_id", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "timestamp_ms",
+        );
+        let error = classify_definition_change(
+            Some(&active),
+            &spec_for(2, &retyped, SourceLayout::default()),
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+
+        let required_addition = Schema::new(
+            vec![
+                Column::new("worker_id", ColumnType::COLUMN_TYPE_STRING, false)
+                    .with_trigram_index(),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("region", ColumnType::COLUMN_TYPE_STRING, false),
+            ],
+            "timestamp_ms",
+        );
+        let error = classify_definition_change(
+            Some(&active),
+            &spec_for(2, &required_addition, SourceLayout::default()),
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(error, StatsError::SchemaConflict(_)), "{error}");
+    }
+
+    #[test]
+    fn a_nullable_column_may_be_added() {
+        let active = spec_for(1, &schema(), SourceLayout::default());
+        let extended = Schema::new(
+            vec![
+                Column::new("worker_id", ColumnType::COLUMN_TYPE_STRING, false)
+                    .with_trigram_index(),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("region", ColumnType::COLUMN_TYPE_STRING, true),
+            ],
+            "timestamp_ms",
+        );
+        assert_eq!(
+            classify_definition_change(
+                Some(&active),
+                &spec_for(2, &extended, SourceLayout::default()),
+                true
+            )
+            .unwrap(),
+            DefinitionChange::MetadataOnly
+        );
+    }
+
+    #[test]
+    fn retired_object_retention_takes_the_longer_window() {
+        assert_eq!(retired_object_retention_ms(50, 3_600_000), 3_600_000);
+        assert_eq!(retired_object_retention_ms(3_600_000, 50), 3_600_000);
     }
 
     #[test]

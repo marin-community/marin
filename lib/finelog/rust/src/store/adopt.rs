@@ -419,6 +419,18 @@ fn adopt_one_namespace_dir(
 ) -> Result<bool, StatsError> {
     let is_log = namespace == LOG_NAMESPACE_NAME;
 
+    // Adoption is a one-time bootstrap input. Once a table's version-0 history
+    // has been imported into immutable objects and activated, its liveness comes
+    // from the table state alone, and the parquet files left in its directory
+    // are no longer a load source.
+    if catalog.filesystem_adoption_disabled(namespace)? {
+        tracing::debug!(
+            namespace,
+            "adopt: table completed its version-0 import; skipping filesystem adoption"
+        );
+        return Ok(false);
+    }
+
     let schema = match recover_schema_from_segments(ns_dir) {
         Some(s) => s,
         None => {
