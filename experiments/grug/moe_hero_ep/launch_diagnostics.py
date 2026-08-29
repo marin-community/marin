@@ -45,6 +45,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     with_transport_remat_mode,
 )
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.pjrt_sideload import pjrt_wheel_install_script
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugEvalConfig,
@@ -64,6 +65,7 @@ def build_diagnostic_run(
     *,
     run_id: str,
     restore_from: str | None = None,
+    pjrt_wheel: str | None = None,
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
@@ -284,6 +286,7 @@ def build_diagnostic_run(
             ),
             stop_after_steps=num_steps,
             processes_per_task=processes_per_task,
+            worker_setup_scripts=((pjrt_wheel_install_script(pjrt_wheel),) if pjrt_wheel is not None else ()),
         )
 
     return ArtifactStep(
@@ -467,10 +470,17 @@ def build_diagnostic_run(
     default=None,
     help="Initialize from another run's checkpoint directory, read-only.",
 )
+@click.option(
+    "--pjrt-wheel",
+    default=None,
+    help="fsspec URL of a self-built jax-cuda13-pjrt wheel (or a directory holding one); workers "
+    "reinstall exactly that package before the task starts.",
+)
 @build_options
 def main(
     run_id: str,
     restore_from: str | None,
+    pjrt_wheel: str | None,
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
@@ -498,6 +508,7 @@ def main(
     return build_diagnostic_run(
         run_id=run_id,
         restore_from=restore_from,
+        pjrt_wheel=pjrt_wheel,
         dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
