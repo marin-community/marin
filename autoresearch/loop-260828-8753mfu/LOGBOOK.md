@@ -756,3 +756,30 @@ restore templates) must be answered in review. Latent footgun for the
 eventual PR: an optimizer harness calling update() outside set_mesh
 silently retraces onto the replicated fallback — hardening = derive the
 mesh from the param sharding or assert non-empty.
+
+## 2026-08-30 ~06:20Z: H11 attribution (CTAS=1 trace vs kept-stack trace)
+
+Grid confirmed in kernel_details: 1216 -> 152 CTAs, same block/regs/
+launch count. Ledger (ms/step, clean means): wall -485; nvjet contention
+recovery -398 (256x192 under-a2a stretch collapses 3.0x -> 1.21x;
+256x256 3.2x -> 1.2x); small compute-stream copies recovered (copy.731
+2855us -> 9us, -137). Givebacks: a2a busy +131 (only +6.6% from 8x fewer
+CTAs — link-bound at this message size, several legs FASTER), exposed
+a2a +128, quack grouped GEMMs now under the longer a2a window +189,
+AG/RS exposure +76, remat pool +45. Grid-credible core ~-300 ms/step =
+the scored +0.40.
+
+TRACE-PAIR CAVEAT RESOLVED: the agent flagged module differences
+(copy.746/748 absent, +288 remat kernels, AG mix) as "the cap
+participating in compile" — actually the baseline trace (xprof-h92 =
+mfl-h92-b) predates the SALT commit while the treatment is salted; the
+module delta is the salt fix, not the cap. The SCORED +0.40 is clean
+(both sides salted, same wheel). The -55 copy.746/748 line in the trace
+ledger belongs to the salt (consistent with its predicted sub-noise
++0.04).
+
+47928 ANSWER (empirical): the fixed 8/SM grid buys 6.6% a2a latency for
+~535 ms/step of critical-path compute under overlap — over-provisioned
+~8x for overlapped MoE training; recommended deployment default here is
+152 (1/SM); upstream-worthy fix is a tunable/occupancy-aware per-SM
+factor (report only with user permission).
