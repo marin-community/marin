@@ -569,6 +569,20 @@ impl Store {
         if local_revision == remote_revision {
             return Ok(false);
         }
+        if state.active_table_spec_version.unwrap_or(0) == 0
+            && state.desired_table_spec_version.unwrap_or(0) == 0
+        {
+            // An aborted first migration commits a revision whose active and
+            // desired versions are both the legacy version 0 and retains no
+            // TableSpec. The legacy path is the table's authority; the durable
+            // state carries only the claimed fence.
+            tracing::info!(
+                namespace,
+                remote_revision,
+                "durable table state selects the legacy version; no object projection to rebuild"
+            );
+            return Ok(false);
+        }
         let schema_spec = state
             .retained_table_specs
             .iter()
@@ -2992,6 +3006,73 @@ mod tests {
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_aborted_migration_head_does_not_block_cold_recovery() {
+        let data_dir = crate::test_support::unique_dir("aborted_head_cold_data");
+        let remote_dir = crate::test_support::unique_dir("aborted_head_cold_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        store.abort_table_migration("iris.worker").await.unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+
+        // A server with an empty local store must boot from a remote layout
+        // that still holds the aborted table's durable state.
+        let cold_data_dir = crate::test_support::unique_dir("aborted_head_cold_target");
+        let recovered = Store::new(
+            Some(cold_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
+        )
+        .unwrap();
+        recovered.bootstrap_maintenance();
+        assert_eq!(recovered.recover_tables().await.unwrap(), 0);
+        // The aborted table's authority is the legacy path, which the object
+        // layout does not carry: the cold server neither recovers nor fails it,
+        // and the retained head does not block re-creating the table.
+        let missing = recovered.table_spec_status("iris.worker").unwrap_err();
+        assert!(matches!(missing, StatsError::NamespaceNotFound(_)));
+        recovered
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        recovered.write_rows("iris.worker", &ipc, None).unwrap();
+
+        recovered.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(cold_data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
