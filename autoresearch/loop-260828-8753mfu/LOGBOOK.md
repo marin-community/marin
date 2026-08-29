@@ -557,3 +557,33 @@ exposed half; H10's target, now ~+0.95 MFU potential, copy-engine-based
 so NO contention tax (probe mfl-h10n-a on the rack now); (3) NEW: cap the
 a2a dk SM footprint (CTA cap/priority) to reclaim the +550 ms contention
 without re-exposing the a2a; (4) T-H9-2b residual copies ~137 ms.
+
+## 2026-08-29 ~18:40Z: lever #3 investigation — a2a dk SM footprint (H11)
+
+Mechanism fully identified (agent, all file:line at the pinned fork rev):
+DeviceKernelCtaCount = 8 x core_count (ragged_all_to_all_thunk.h:198-201,
+min 8, threads 128) -> 1184 CTAs on GB200 = 8 resident CTAs x 148 SMs,
+64 regs/thread via __launch_bounds__(128,8) = the ENTIRE sm_100 register
+file, held for the whole op INCLUDING barrier spins. This is the +550
+ms/step GEMM contention. No env var, no debug option reaches the grid
+(exhaustively enumerated); TF_CPP_VMODULE=ragged_all_to_all_thunk=3
+prints the live cta_count.
+
+H11 = one-header patch: env-gated multiplier XLA_RAGGED_A2A_DK_CTAS_PER_SM
+(1..8, DEFAULT 8 = today's behavior) in DeviceKernelCtaCount; all
+consumers (launch, barrier/signal registration) route through the one
+function so consistency is automatic; kernel is grid-size-agnostic
+(balanced ranges + strided GIN loop, regular launch, no cooperative
+assumptions). Default-identity means the rebuilt wheel is bit-comparable
+for every existing arm — only env-carrying arms diverge. BDP estimate:
+4/SM marginal-OK for the copy phase; the barrier-spin share shrinks
+linearly at zero bandwidth cost. Requires one jax-cuda13-pjrt rebuild
+(~3.5h) on the marin-community/xla fork + release + pin swap.
+No-rebuild alternatives all dominated: one-shot and NCCL-fallback paths
+lose ~0.5 MFU on prior same-night data (host marshalling per chunk-op);
+stream-priority flip risks re-exposing the a2a; MPS/green contexts
+inapplicable.
+
+GATE: pushing a branch/release to marin-community/xla is an
+external-repo write -> per standing instruction, needs user approval.
+Patch + review will be prepared so the build can start on a word.
