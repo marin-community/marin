@@ -618,9 +618,12 @@ impl TableController {
     /// The local file holding the rows a migration rewrites.
     ///
     /// An object-backed source resolves by exact reference. A version-0 source
-    /// is the Parquet file the table's own directory holds; when only the legacy
-    /// object layout still has it, its bytes are restored to that path first so
-    /// the compaction executor reads it like any other input.
+    /// is the Parquet file the table's own directory holds. Callers select
+    /// sources the catalog reports as locally present, so the archive read below
+    /// repairs a torn eviction — the file was unlinked but the catalog row still
+    /// claims it, and the rows it holds are still query-visible and owed a
+    /// rewrite. A segment the catalog itself reports as archived is never a
+    /// migration source and never reaches this path.
     pub async fn localize_source(
         &self,
         row: &SegmentRow,

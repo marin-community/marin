@@ -100,7 +100,6 @@ struct MigrationStatusRow {
 
 struct MigrationCheckpoint {
     to_version: i64,
-    rows_total: i64,
     phase: String,
 }
 
@@ -384,6 +383,42 @@ fn remove_segments_in(
         .map_err(sqlite_err)?;
     }
     Ok(())
+}
+
+/// The rows a migration out of `from_version` is responsible for rewriting.
+///
+/// A migration rewrites the rows the table serves, and reads them from where
+/// the table already reads them. An object-backed source qualifies whatever its
+/// cache location says, because it resolves by object reference and the object
+/// store fetches it. A legacy source qualifies only while the catalog says a
+/// local copy exists: once it has been evicted to `REMOTE` its bytes survive
+/// only in the legacy GCS archive, which a migration never reads, rewrites, or
+/// moves. Such a segment is already outside the live query view, stays in the
+/// archive for history queries, and belongs to neither the frozen total nor the
+/// backfill universe.
+///
+/// `fence_seq` bounds the universe to rows that predate the transition; rows
+/// above it are written in the target layout already.
+fn migratable_source_rows_in(
+    conn: &Connection,
+    namespace: &str,
+    from_version: i64,
+    fence_seq: i64,
+) -> Result<i64, StatsError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(segments.row_count), 0) FROM segments
+         LEFT JOIN object_segments
+           ON object_segments.namespace = segments.namespace
+          AND object_segments.path = segments.path
+         WHERE segments.namespace = ?1
+           AND segments.max_seq <= ?2
+           AND CASE WHEN object_segments.path IS NULL
+                    THEN ?3 = 0 AND segments.location <> 'REMOTE'
+                    ELSE object_segments.table_spec_version = ?3 END",
+        rusqlite::params![namespace, fence_seq, from_version],
+        |row| row.get(0),
+    )
+    .map_err(sqlite_err)
 }
 
 impl Catalog {
@@ -685,6 +720,24 @@ impl Catalog {
         Ok(())
     }
 
+    /// Record `spec` as the namespace's next definition version.
+    ///
+    /// A metadata-only change activates in this commit. A physical rewrite over
+    /// existing rows records a pending transition instead, frozen against two
+    /// numbers:
+    ///
+    /// - `fence_seq` is `MAX(max_seq)` over every segment, archive-only ones
+    ///   included. It separates rows the backfill owes from rows later writes
+    ///   produce directly in the target layout. Counting a segment the backfill
+    ///   will not touch can only raise the fence, which classifies more rows as
+    ///   pre-fence — the safe direction, since a pre-fence row that no longer
+    ///   exists locally is simply not a source. A fence below a genuine source's
+    ///   `max_seq` would be the unsafe direction: that source would be treated
+    ///   as already migrated.
+    /// - `rows_total` is the backfill universe, which counts only the rows the
+    ///   migration can rewrite (see [`migratable_source_rows_in`]). Archived
+    ///   rows are excluded, so a table whose history was long ago evicted to the
+    ///   legacy archive still reaches an activatable total.
     pub fn register_table_spec(
         &self,
         namespace: &str,
@@ -765,14 +818,19 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         if migrate {
-            let (rows_total, fence_seq): (i64, i64) = transaction
+            let fence_seq: i64 = transaction
                 .query_row(
-                    "SELECT COALESCE(SUM(row_count), 0), COALESCE(MAX(max_seq), 0)
-                     FROM segments WHERE namespace = ?1",
+                    "SELECT COALESCE(MAX(max_seq), 0) FROM segments WHERE namespace = ?1",
                     [namespace],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .map_err(sqlite_err)?;
+            let rows_total = migratable_source_rows_in(
+                &transaction,
+                namespace,
+                active_version as i64,
+                fence_seq,
+            )?;
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO table_migrations
@@ -1030,6 +1088,54 @@ impl Catalog {
         table_spec_status_in(&inner.conn, namespace)
     }
 
+    /// Restate the pending migration's row total as the universe it can still
+    /// rewrite.
+    ///
+    /// The universe shrinks whenever a source leaves it: a legacy segment
+    /// evicted to the archive after registration is no longer rewritable, and a
+    /// total that kept counting it would report a migration as perpetually
+    /// unfinished. Restating is idempotent — a repeated tick, or a tick after a
+    /// crash, derives the same total from the same rows — where deducting per
+    /// skip would compound. The total never drops below the progress already
+    /// made, so a source rewritten and then evicted leaves the pair coherent.
+    ///
+    /// This is progress reporting. It moves no segment and publishes no state,
+    /// so it does not advance the catalog generation, and whether a backfill is
+    /// finished is decided by its sources rather than by these counters.
+    pub fn refresh_migration_rows_total(&self, namespace: &str) -> Result<(), StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let (from_version, fence_seq, rows_completed): (i64, i64, i64) = transaction
+            .query_row(
+                "SELECT from_version, fence_seq, rows_completed FROM table_migrations
+                 WHERE namespace = ?1",
+                [namespace],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(sqlite_err)?;
+        let rows_total =
+            migratable_source_rows_in(&transaction, namespace, from_version, fence_seq)?
+                .max(rows_completed);
+        transaction
+            .execute(
+                "UPDATE table_migrations SET rows_total = ?2 WHERE namespace = ?1",
+                rusqlite::params![namespace, rows_total],
+            )
+            .map_err(sqlite_err)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    /// Drop the transition's source rows and close the rollback window.
+    ///
+    /// A version-0 import retires every pre-fence legacy catalog row, including
+    /// the archive-only ones the backfill skipped. Retirement is a catalog
+    /// operation: it deletes no file, local or remote, so an archived segment
+    /// keeps its bytes in the legacy archive exactly as a retired local
+    /// segment's uploaded copy does. `finelog gcs-query` reads that archive by
+    /// listing it, so archived history stays queryable with or without a
+    /// catalog row, while the imported table stops carrying rows it can no
+    /// longer serve or rewrite.
     pub fn retire_observed_migration(
         &self,
         namespace: &str,
@@ -1324,14 +1430,12 @@ impl Catalog {
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
         let migration: MigrationCheckpoint = transaction
             .query_row(
-                "SELECT to_version, rows_total, phase FROM table_migrations
-                 WHERE namespace = ?1",
+                "SELECT to_version, phase FROM table_migrations WHERE namespace = ?1",
                 [namespace],
                 |result| {
                     Ok(MigrationCheckpoint {
                         to_version: result.get(0)?,
-                        rows_total: result.get(1)?,
-                        phase: result.get(2)?,
+                        phase: result.get(1)?,
                     })
                 },
             )
@@ -1385,13 +1489,19 @@ impl Catalog {
                 )
                 .map_err(sqlite_err)?;
         }
+        // The total is the universe as it was last measured, so progress can
+        // pass it: a source rewritten before an eviction removed it from that
+        // universe is done, and the total rises to say so rather than rejecting
+        // the checkpoint. Committing one source twice is prevented by its
+        // content-addressed outputs, whose insert above conflicts.
         let changed = transaction
             .execute(
                 "UPDATE table_migrations
                  SET phase = ?2,
                      rows_completed = rows_completed + ?3,
+                     rows_total = MAX(rows_total, rows_completed + ?3),
                      phase_updated_at_ms = ?4
-                 WHERE namespace = ?1 AND rows_completed + ?3 <= rows_total",
+                 WHERE namespace = ?1",
                 rusqlite::params![
                     namespace,
                     migration_phase_str(MigrationPhase::MIGRATION_PHASE_BACKFILL),
@@ -1402,8 +1512,7 @@ impl Catalog {
             .map_err(sqlite_err)?;
         if changed != 1 {
             return Err(StatsError::SchemaConflict(format!(
-                "migration progress for {:?} exceeds its frozen row total {}",
-                namespace, migration.rows_total
+                "migration for {namespace:?} has no progress row to checkpoint"
             )));
         }
         transaction

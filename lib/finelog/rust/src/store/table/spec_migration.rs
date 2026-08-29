@@ -235,6 +235,25 @@ async fn activate(migration: &SpecMigration<'_>) -> Result<TableSpecStatus, Stat
 }
 
 /// Rewrite the source version's remaining segments into the target layout.
+///
+/// The universe is the pre-fence segments of the source version whose bytes the
+/// table can still read: object-backed sources by reference, legacy sources
+/// while a local copy exists. A legacy segment the catalog reports as `REMOTE`
+/// lives only in the legacy archive, which a migration never reads, rewrites, or
+/// moves, so it is not a source — including one already evicted at registration
+/// and one evicted between registration and the tick that would have reached it.
+/// Skipping it costs the migrated table nothing that was queryable: an archived
+/// segment is outside the live query view either way, and its bytes stay in the
+/// archive for history queries.
+///
+/// The backfill is finished when a tick has examined every source and found
+/// each one already rewritten, which is decided by the sources themselves
+/// rather than by a row count: the universe shrinks under it, so a total frozen
+/// at registration would name rows no source can supply and never be reached.
+/// Checkpoints stay durable and exact: a source is rewritten once, identified
+/// by content, so an interrupted tick resumes without re-rewriting or
+/// double-counting, and each tick restates the reported row total against the
+/// universe that is actually left.
 async fn backfill(
     migration: &SpecMigration<'_>,
     status: &TableSpecStatus,
@@ -261,7 +280,7 @@ async fn backfill(
         .iter()
         .filter(|row| row.max_seq <= fence_seq)
         .filter(|row| match object_records.get(&row.path) {
-            None => from_version == 0,
+            None => from_version == 0 && row.location != SegmentLocation::Remote,
             Some(record) => record.table_spec_version == from_version,
         })
         .cloned()
@@ -273,8 +292,10 @@ async fn backfill(
         .and_then(|spec| spec.source_layout.as_option())
         .cloned();
     let mut processed = 0;
+    let mut unexamined = false;
     for row in &sources {
         if processed >= SEGMENTS_PER_TICK {
+            unexamined = true;
             break;
         }
         let record = object_records.get(&row.path);
@@ -300,20 +321,19 @@ async fn backfill(
         processed += 1;
     }
 
-    let status = migration.catalog.table_spec_status(table)?;
-    let progress = status
-        .migration
-        .as_ref()
-        .ok_or_else(|| StatsError::Internal(format!("migration for {table:?} disappeared")))?;
-    if progress.rows_completed != progress.rows_total {
+    migration.catalog.refresh_migration_rows_total(table)?;
+    if unexamined {
         return Ok(true);
     }
+    // A transition whose universe held no source at all never checkpointed, so
+    // it is still in the phase registration left it in.
+    let backfilled = migration.catalog.table_spec_status(table)?.phase;
     let verified = migration
         .controller
         .commit(|| {
             let verified = migration.catalog.update_migration_phase(
                 table,
-                MigrationPhase::MIGRATION_PHASE_BACKFILL,
+                backfilled,
                 MigrationPhase::MIGRATION_PHASE_VERIFY,
             )?;
             Ok((TableRevision::new(verified.catalog_generation), verified))
@@ -503,40 +523,6 @@ impl TargetPartitions {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The point of the counter is to separate a transition that retries from
-    /// one that cannot proceed, so only an unchanging error escalates and any
-    /// progress clears the verdict.
-    #[test]
-    fn only_an_unchanging_error_reports_a_transition_blocked() {
-        let mut block = MigrationBlock::default();
-        for _ in 0..BLOCKED_FAILURE_THRESHOLD - 1 {
-            block.record_failure("object read timed out");
-            assert_eq!(block.blocked_error(), None);
-        }
-        block.record_failure("object read timed out");
-        assert_eq!(block.blocked_error(), Some("object read timed out"));
-
-        block.record_failure("a different failure");
-        assert_eq!(
-            block.blocked_error(),
-            None,
-            "a new error is a fresh problem, not a continuation"
-        );
-
-        for _ in 1..BLOCKED_FAILURE_THRESHOLD {
-            block.record_failure("a different failure");
-        }
-        assert_eq!(block.blocked_error(), Some("a different failure"));
-
-        block.clear();
-        assert_eq!(block.blocked_error(), None);
-    }
-}
-
 impl PhysicalPartitionPolicy for TargetPartitions {
     fn is_current_partition(&self, partition: &SegmentPartition) -> bool {
         partition.spec_id == self.spec_id
@@ -586,5 +572,39 @@ impl PhysicalPartitionPolicy for TargetPartitions {
                 .expect("sha256 prefix is four bytes"),
         ) % PARTITION_DIRECTORIES;
         Path::new("partition").join(format!("{bucket:02}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The point of the counter is to separate a transition that retries from
+    /// one that cannot proceed, so only an unchanging error escalates and any
+    /// progress clears the verdict.
+    #[test]
+    fn only_an_unchanging_error_reports_a_transition_blocked() {
+        let mut block = MigrationBlock::default();
+        for _ in 0..BLOCKED_FAILURE_THRESHOLD - 1 {
+            block.record_failure("object read timed out");
+            assert_eq!(block.blocked_error(), None);
+        }
+        block.record_failure("object read timed out");
+        assert_eq!(block.blocked_error(), Some("object read timed out"));
+
+        block.record_failure("a different failure");
+        assert_eq!(
+            block.blocked_error(),
+            None,
+            "a new error is a fresh problem, not a continuation"
+        );
+
+        for _ in 1..BLOCKED_FAILURE_THRESHOLD {
+            block.record_failure("a different failure");
+        }
+        assert_eq!(block.blocked_error(), Some("a different failure"));
+
+        block.clear();
+        assert_eq!(block.blocked_error(), None);
     }
 }

@@ -75,9 +75,10 @@ fn writer_epoch() -> Result<u64, StatsError> {
     Ok(nanos ^ u64::from(std::process::id()))
 }
 
-/// A decorator applied to the object store the composition root builds, so a
-/// caller can observe or interfere with every object operation the store makes.
-/// Production composes no decorator.
+/// A decorator applied to each object store the composition root builds — the
+/// cached object store and the legacy archive alike — so a caller can observe or
+/// interfere with every object operation the store makes. Production composes no
+/// decorator.
 pub type ObjectStoreInterposer =
     Arc<dyn Fn(Arc<dyn ObjectStore>) -> Arc<dyn ObjectStore> + Send + Sync>;
 
@@ -332,7 +333,11 @@ impl Store {
         let legacy_object_store = provider
             .as_ref()
             .map(LegacyObjectStore::new)
-            .map(|store| Arc::new(store) as Arc<dyn ObjectStore>);
+            .map(|store| Arc::new(store) as Arc<dyn ObjectStore>)
+            .map(|store| match &interpose {
+                Some(interpose) => interpose(store),
+                None => store,
+            });
         let object_store = match (&provider, &data_dir) {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
@@ -1468,6 +1473,11 @@ mod tests {
         schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
         CoveringProjection,
     };
+    use crate::store::table::maintenance::{self, TableWork};
+    use crate::store::types::SegmentLocation;
+    use crate::test_support::{
+        FaultAction, FaultInjectingObjectStore, ObjectFault, ObjectOp, ObjectPattern,
+    };
     fn worker_schema() -> Schema {
         Schema::new(
             vec![
@@ -1504,6 +1514,7 @@ mod tests {
         source_layout: SourceLayout,
         max_query_time_ms: u64,
         rollback_window_ms: u64,
+        cache_policy: StoragePolicy,
     }
 
     impl ObjectSpec {
@@ -1514,7 +1525,15 @@ mod tests {
                 source_layout: SourceLayout::default(),
                 max_query_time_ms: 0,
                 rollback_window_ms: 0,
+                cache_policy: StoragePolicy::default(),
             }
+        }
+
+        /// The local-cache policy the spec declares, which a registration
+        /// requires to match the policy the table is already registered with.
+        fn cache_policy(mut self, cache_policy: StoragePolicy) -> Self {
+            self.cache_policy = cache_policy;
+            self
         }
 
         fn schema(mut self, schema: Schema) -> Self {
@@ -1558,7 +1577,7 @@ mod tests {
             };
             let encoded = spec.encode_to_vec();
             let view = TableSpecView::decode_view(&encoded).unwrap();
-            ValidatedTableSpec::from_view(&view, &self.schema, &StoragePolicy::default()).unwrap()
+            ValidatedTableSpec::from_view(&view, &self.schema, &self.cache_policy).unwrap()
         }
     }
 
@@ -2572,6 +2591,354 @@ mod tests {
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A legacy table lived in long enough that its oldest segments exist only
+    /// in the legacy archive. Every object operation its store performs passes
+    /// through a recorder, so a test can assert what an import did and did not
+    /// read.
+    struct ArchivedLegacyTable {
+        store: Store,
+        data_dir: PathBuf,
+        remote_dir: PathBuf,
+        objects: Arc<std::sync::Mutex<Vec<Arc<FaultInjectingObjectStore>>>>,
+        /// The evicted segment: a `REMOTE` catalog row with no local file,
+        /// whose only copy is the archive object named by `archived_segment`.
+        archived_path: String,
+        archived_segment: String,
+        local_paths: Vec<String>,
+    }
+
+    impl ArchivedLegacyTable {
+        /// Every object key any of the store's object stores has been asked for
+        /// since the last [`Self::forget_object_calls`].
+        fn object_keys(&self) -> Vec<String> {
+            self.objects
+                .lock()
+                .unwrap()
+                .iter()
+                .flat_map(|store| store.calls())
+                .map(|call| call.key)
+                .collect()
+        }
+
+        fn forget_object_calls(&self) {
+            for store in self.objects.lock().unwrap().iter() {
+                store.clear_calls();
+            }
+        }
+
+        /// Fail any read of the archived segment, so a migration that reaches
+        /// for archived bytes fails its tick rather than silently succeeding.
+        fn refuse_archive_reads(&self) {
+            for store in self.objects.lock().unwrap().iter() {
+                store.arm(
+                    ObjectFault::new(
+                        ObjectOp::Read,
+                        ObjectPattern::Contains(self.archived_segment.clone()),
+                        FaultAction::Fail(StatsError::Internal(
+                            "a migration must not read the legacy archive".to_string(),
+                        )),
+                    )
+                    .forever(),
+                );
+            }
+        }
+
+        fn cleanup(self) {
+            std::fs::remove_dir_all(self.data_dir).ok();
+            std::fs::remove_dir_all(self.remote_dir).ok();
+        }
+    }
+
+    /// The retention the archived-legacy fixture registers its table with: one
+    /// local segment, and an age bound the fixture leaves slack under.
+    fn archived_retention() -> StoragePolicy {
+        StoragePolicy {
+            max_segments: Some(1),
+            max_age_seconds: Some(60),
+            ..Default::default()
+        }
+    }
+
+    /// The object-backed definition a version-0 table imports into.
+    fn imported_spec() -> ValidatedTableSpec {
+        ObjectSpec::new(1)
+            .cache_policy(archived_retention())
+            .validated()
+    }
+
+    /// Append one row to the legacy table and drive it to an uploaded L1
+    /// segment, applying whatever retention the table was registered with.
+    async fn write_legacy_row(store: &Store, worker: &str, mem_bytes: i64) {
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![worker])),
+                Arc::new(Int64Array::from(vec![mem_bytes])),
+                Arc::new(Int64Array::from(vec![mem_bytes])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store.maintain_namespace("iris.worker", true).await.unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+    }
+
+    fn segment_rows(store: &Store) -> Vec<crate::store::types::SegmentRow> {
+        store.list_segments("iris.worker").unwrap()
+    }
+
+    /// Build a legacy table holding `rows` rows, retained one segment at a time
+    /// so that every segment but the newest has been uploaded to the archive and
+    /// evicted. Maintenance is driven by hand throughout, so eviction happens
+    /// where the test says it does.
+    async fn archived_legacy_table(tag: &str, rows: &[&str]) -> ArchivedLegacyTable {
+        let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+        let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+        let objects: Arc<std::sync::Mutex<Vec<Arc<FaultInjectingObjectStore>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&objects);
+        let store = Store::new_with_interposed_objects(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+            Arc::new(move |inner| {
+                let recorder = FaultInjectingObjectStore::new(inner);
+                captured.lock().unwrap().push(Arc::clone(&recorder));
+                recorder as Arc<dyn ObjectStore>
+            }),
+        )
+        .unwrap();
+        store
+            .register_table("iris.worker", worker_schema(), archived_retention())
+            .unwrap();
+        for (index, worker) in rows.iter().enumerate() {
+            write_legacy_row(&store, worker, 128 + index as i64).await;
+        }
+
+        let catalog_rows = segment_rows(&store);
+        let archived: Vec<_> = catalog_rows
+            .iter()
+            .filter(|row| row.location == SegmentLocation::Remote)
+            .collect();
+        assert_eq!(
+            archived.len(),
+            rows.len() - 1,
+            "retention leaves one local segment and archives the rest: {catalog_rows:?}"
+        );
+        let archived_path = archived[0].path.clone();
+        assert!(
+            !Path::new(&archived_path).exists(),
+            "an archived segment has no local file"
+        );
+        ArchivedLegacyTable {
+            archived_segment: crate::store::types::basename(&archived_path),
+            archived_path,
+            local_paths: catalog_rows
+                .iter()
+                .filter(|row| row.location != SegmentLocation::Remote)
+                .map(|row| row.path.clone())
+                .collect(),
+            store,
+            data_dir,
+            remote_dir,
+            objects,
+        }
+    }
+
+    /// The archive files the legacy table left in the bucket.
+    fn archived_objects(remote_dir: &Path) -> Vec<String> {
+        crate::store::table::test_tables::remote_files(remote_dir, "iris.worker")
+    }
+
+    /// A table whose oldest history was evicted to the legacy archive imports
+    /// what it still holds locally. The archive is not a migration source: its
+    /// objects are never read, its bytes are never restored, and the rows they
+    /// hold — already outside the live query view — are not counted in the
+    /// import's row total, so the import reaches an activation instead of
+    /// waiting forever for rows no source can supply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_version_zero_import_skips_archive_only_segments() {
+        let table = archived_legacy_table("import_skips_archive", &["archived", "live"]).await;
+        let store = &table.store;
+        // The archived segment's row is already unserved: excluding it from the
+        // import changes nothing a query can observe.
+        assert_eq!(scan_table(store, "iris.worker").await, 1);
+
+        table.forget_object_calls();
+        table.refuse_archive_reads();
+        let registration = store
+            .register_versioned_table("iris.worker", imported_spec())
+            .unwrap();
+        let pending = registration.table_spec_status.migration.unwrap();
+        assert_eq!(
+            pending.rows_total,
+            Some(1),
+            "the import owes only the rows it still holds locally"
+        );
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let activated = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(activated.active_version(), 1);
+        assert_eq!(
+            activated.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        let progress = activated.migration.clone().unwrap();
+        assert_eq!(
+            (progress.rows_completed, progress.rows_total),
+            (Some(1), Some(1)),
+            "the locally held row is migrated and the archived row is not owed"
+        );
+
+        let touched: Vec<_> = table
+            .object_keys()
+            .into_iter()
+            .filter(|key| key.contains(&table.archived_segment))
+            .collect();
+        assert!(
+            touched.is_empty(),
+            "the import asked the object store for archived bytes: {touched:?}"
+        );
+        assert!(
+            !Path::new(&table.archived_path).exists(),
+            "the import restored an archived segment to local disk"
+        );
+        assert!(
+            archived_objects(&table.remote_dir).contains(&table.archived_segment),
+            "the archived segment keeps its object"
+        );
+
+        // Every locally held row is now served from an imported object.
+        assert_eq!(scan_table(store, "iris.worker").await, 1);
+        let imported = store.query_snapshot("iris.worker").unwrap().paths;
+        assert_eq!(imported.len(), 1);
+        assert_local_content_object(&table.data_dir, &imported[0]);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        table.cleanup();
+    }
+
+    /// A source can leave the import's universe after registration: an eviction
+    /// unlinks its local file and collapses its catalog row to `REMOTE`, which
+    /// makes it archive-only like any other. The import skips it on the tick
+    /// that would have rewritten it and still completes, because what it owes is
+    /// decided by the sources that remain rather than by a total frozen at
+    /// registration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_source_evicted_after_registration_is_skipped_and_the_import_completes() {
+        let table = archived_legacy_table("import_skips_evicted", &["archived", "live"]).await;
+        let store = &table.store;
+        let registration = store
+            .register_versioned_table("iris.worker", imported_spec())
+            .unwrap();
+        assert_eq!(
+            registration.table_spec_status.migration.unwrap().rows_total,
+            Some(1)
+        );
+
+        // Retention ages the last local source out before the backfill reaches
+        // it: its bytes are in the archive and its rows have left the query
+        // view, exactly like the segment evicted before registration.
+        store
+            .backdate_segment(
+                "iris.worker",
+                &crate::store::types::basename(&table.local_paths[0]),
+                1,
+            )
+            .unwrap();
+        let runtime = store.tables.require("iris.worker").unwrap();
+        maintenance::run(&runtime, TableWork::Eviction)
+            .await
+            .unwrap();
+        assert!(!Path::new(&table.local_paths[0]).exists());
+        assert!(segment_rows(store)
+            .iter()
+            .all(|row| row.location == SegmentLocation::Remote));
+        table.refuse_archive_reads();
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let activated = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(activated.active_version(), 1);
+        assert_eq!(
+            activated.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        let progress = activated.migration.unwrap();
+        assert_eq!(
+            (progress.rows_completed, progress.rows_total),
+            (Some(0), Some(0)),
+            "a universe emptied by eviction is reachable, not permanently owed"
+        );
+        assert_eq!(
+            archived_objects(&table.remote_dir).len(),
+            2,
+            "both archived segments keep their objects"
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
+        table.cleanup();
+    }
+
+    /// Retirement is a catalog operation. It drops every pre-fence legacy row,
+    /// the archive-only ones included, and deletes no file: the archived objects
+    /// stay in the bucket where `finelog gcs-query` finds them by listing, just
+    /// as the uploaded copies of the retired local segments do.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retiring_a_version_zero_import_keeps_the_archive() {
+        let table = archived_legacy_table("import_retires_archive", &["archived", "live"]).await;
+        let store = &table.store;
+        store
+            .register_versioned_table("iris.worker", imported_spec())
+            .unwrap();
+        table.refuse_archive_reads();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let archived_before = archived_objects(&table.remote_dir);
+
+        store
+            .catalog
+            .expire_migration_observation("iris.worker")
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let retired = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(
+            retired.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_RETIRED
+        );
+
+        let rows = segment_rows(store);
+        assert!(
+            rows.iter().all(|row| row.path != table.archived_path),
+            "retirement drops the archive-only row with the rest of the legacy rows"
+        );
+        assert_eq!(
+            archived_objects(&table.remote_dir),
+            archived_before,
+            "retirement deletes no archive object"
+        );
+        assert_eq!(scan_table(store, "iris.worker").await, 1);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        table.cleanup();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
