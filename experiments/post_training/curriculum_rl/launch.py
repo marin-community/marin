@@ -319,7 +319,10 @@ def build_arm(
             memory="128GB",
             disk="2TB",
             priority="interactive",
-            max_retries=3,
+            # vLLM engine startup can race on torch TCPStore ports when eight
+            # single-GPU engines start on one node; those failures are transient
+            # and resume from the latest checkpoint, so keep a wide budget.
+            max_retries=6,
             wandb_entity="marin-community",
         ),
     )
