@@ -410,3 +410,21 @@ without rank-local channels — that residual is covered by the adopted
 rule that an H10 keep needs user sign-off + a soak before hero promotion.
 A graph-changing instrumentation commit would invalidate the iteration-0
 calibration for less coverage than that rule already provides.
+
+## 2026-08-29 ~12:25Z: iteration 3 — H10 OOM-blocked; H10b rescue spec
+
+Both H10 draws died in the first jit_train_step execution with the same
+NCCL alltoall CUDA OOM ('Cuda failure 2'), after the pipeliner engaged
+(Pipelinable while: while.251.clone on all ranks). Deterministic, not
+fragmentation. Memory anatomy (train.py:76-83): fraction 0.75 = 138.2 GiB
+pool threshold, ~46 GiB outside, ~28.5 GiB held by NCCL/cuBLAS/context —
+the pipelined program's extra first-execution demand exceeds the ~17.5 GiB
+slack.
+
+H10b rescue spec (pending fable+codex review): XLA_PYTHON_CLIENT_MEM_FRACTION
+0.75 -> 0.72 frees +5.5 GiB outside the pool (pool 132.7 still >> peak
+116.6); arms = 2x T(pipelined @0.72) vs 2x C(plain @0.72) isolating the
+pipelining, plus the C@0.72-vs-C@0.75 bridge telling the fraction's own
+cost. MEM_FRACTION plumbed as an explicit arm.sh knob recorded in
+arms.tsv. All H10 fidelity gates carry over (loss from +1, natural
+completion, T-T comparison, keep needs user sign-off + soak).

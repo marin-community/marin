@@ -1,0 +1,17 @@
+10:38:40 t=0s train=none step=-2
+10:39:47 t=67s train=running step=-2
+10:40:32 gang up (wandb run exists), compile ceiling 1800s starts now
+10:40:54 t=136s train=running step=-1
+10:42:00 t=201s train=running step=-1
+10:43:05 t=266s train=running step=-1
+10:44:10 t=331s train=running step=-1
+10:45:15 t=396s train=running step=-1
+10:46:20 t=461s train=running step=-1
+10:47:25 t=526s train=running step=-1
+10:48:30 t=592s train=running step=-1
+10:49:13 cancelling /mwittmann/mfl-h10po-a2-coord: train task failed (failures=1)
+Cancelled jobs:
+  /mwittmann/mfl-h10po-a2-coord/grug-train-mfl-h10po-a2
+Cancelled jobs:
+  /mwittmann/mfl-h10po-a2-coord
+WATCHDOG task-failed train=worker_failed failures=1 step=-1
