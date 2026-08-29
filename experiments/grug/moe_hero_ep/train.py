@@ -285,6 +285,11 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # With offload_opt_state, keep the first N 4D expert momentum shards on device instead of
+    # pinned host. Each costs its own HBM (10.87 GiB at d6144 EP64) and saves its two per-step
+    # host round-trip copies in the optimizer tail. 0 offloads everything, as before.
+    # See `_opt_state_offload_mask` for which leaves "first N" names and why that is stable.
+    opt_state_resident_expert_leaves: int = 0
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
@@ -687,6 +692,53 @@ def _tree_to_memory_kind(tree, memory_kind: str):
     return jax.tree.map(_move, tree)
 
 
+def _opt_state_offload_mask(opt_state, resident_expert_leaves: int):
+    """Boolean tree over ``opt_state``: True where an offloaded leaf moves to pinned host.
+
+    The first ``resident_expert_leaves`` 4D leaves stay on device. Rank 4 identifies the
+    stacked expert momentum shards exactly: the expert matrices are the model's only 4D
+    parameters (scan stacking prepends a layer axis to the per-layer ``(experts, in, out)``
+    weights), so their optimizer moments are the only 4D optimizer leaves; every other
+    moment is 3D or smaller. ``jax.tree.flatten`` orders leaves by dataclass/NamedTuple
+    field declaration order and sorted dict keys, both fixed by the code alone, so
+    "first k" names the same shards on every process, step, and restart. For the hero
+    MuonH state that order is the ``MoEExpertMlp`` field order: ``w_gate``, ``w_up``,
+    ``w_down``.
+    """
+    paths_and_leaves, treedef = jax.tree_util.tree_flatten_with_path(opt_state)
+    leaves = [leaf for _, leaf in paths_and_leaves]
+    expert_indices = [index for index, leaf in enumerate(leaves) if getattr(leaf, "ndim", None) == 4]
+    if not 0 <= resident_expert_leaves <= len(expert_indices):
+        raise ValueError(
+            f"opt_state_resident_expert_leaves={resident_expert_leaves} must lie in "
+            f"[0, {len(expert_indices)}]: the optimizer state has {len(expert_indices)} 4D expert leaves."
+        )
+    if resident_expert_leaves:
+        # Fail closed on structure drift: residency is meaningful only while the 4D leaves are
+        # exactly the three muonh expert momentum shards in field order. A new 4D accumulator or
+        # model field would silently redirect which shard stays resident otherwise.
+        expert_path_names = ["/".join(str(k) for k in paths_and_leaves[i][0]) for i in expert_indices]
+        expected = ("w_gate", "w_up", "w_down")
+        tails = tuple(name.rsplit("/", 1)[-1].strip("'.[]") for name in expert_path_names)
+        if len(tails) != len(expected) or tuple(tails) != expected:
+            raise ValueError(
+                "opt_state 4D-leaf structure drifted: expected exactly the muonh expert momentum "
+                f"shards {expected} in field order, found {expert_path_names}. Re-derive the "
+                "residency selection before trusting resident_expert_leaves."
+            )
+    resident = set(expert_indices[:resident_expert_leaves])
+    return jax.tree.unflatten(treedef, [index not in resident for index in range(len(leaves))])
+
+
+def _opt_state_to_memory_kind(opt_state, memory_kind: str, offload_mask):
+    """Move the True-masked optimizer leaves to ``memory_kind``; resident leaves pass through."""
+    return jax.tree.map(
+        lambda leaf, offload: _tree_to_memory_kind(leaf, memory_kind) if offload else leaf,
+        opt_state,
+        offload_mask,
+    )
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -695,8 +747,11 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
+    opt_state_resident_expert_leaves: int = 0,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
+    if opt_state_resident_expert_leaves and not offload_opt_state:
+        raise ValueError("opt_state_resident_expert_leaves requires offload_opt_state=True")
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
     if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
@@ -709,7 +764,8 @@ def initial_state(
         master_params = None
         opt_state = optimizer.init(params)
     if offload_opt_state:
-        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+        offload_mask = _opt_state_offload_mask(opt_state, opt_state_resident_expert_leaves)
+        opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host", offload_mask)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
@@ -810,8 +866,11 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    opt_state_resident_expert_leaves: int = 0,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
+    if opt_state_resident_expert_leaves and not offload_opt_state:
+        raise ValueError("opt_state_resident_expert_leaves requires offload_opt_state=True")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -834,7 +893,15 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        if offload_opt_state:
+            # Resident leaves already live on device; skipping them here and below is what keeps
+            # them out of the per-step host round-trip. `optimizer.update` preserves the state
+            # structure, so the input mask names the same leaves in the updated state.
+            opt_offload_mask = _opt_state_offload_mask(state.opt_state, opt_state_resident_expert_leaves)
+            opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device", opt_offload_mask)
+        else:
+            opt_offload_mask = None
+            opt_state_in = state.opt_state
         if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
             if state.master_params is None:
                 raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
@@ -877,7 +944,7 @@ def _make_train_step(
             )
 
         if offload_opt_state:
-            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+            opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host", opt_offload_mask)
 
         next_state = dataclasses.replace(
             state,
@@ -927,6 +994,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
+        opt_state_resident_expert_leaves=config.trainer.opt_state_resident_expert_leaves,
         master_param_mode=config.trainer.master_param_mode,
     )
 
@@ -963,6 +1031,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
+                opt_state_resident_expert_leaves=config.trainer.opt_state_resident_expert_leaves,
                 master_param_mode=config.trainer.master_param_mode,
             )
 

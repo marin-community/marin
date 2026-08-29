@@ -77,6 +77,7 @@ def build_diagnostic_run(
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    opt_resident_leaves: int = 0,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -177,6 +178,7 @@ def build_diagnostic_run(
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
+        opt_state_resident_expert_leaves=opt_resident_leaves,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -379,6 +381,17 @@ def build_diagnostic_run(
     help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
 )
 @click.option(
+    "--opt-resident-leaves",
+    type=click.IntRange(min=0, max=3),
+    default=0,
+    show_default=True,
+    help=(
+        "Keep the first N of the offloaded 4D expert momentum shards on device instead of pinned "
+        "host (each is 10.87 GiB of HBM at d6144 EP64 and saves its two per-step host copies). "
+        "0 offloads all optimizer state, the previous behavior."
+    ),
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
@@ -493,6 +506,7 @@ def main(
     latent_dim: int | None,
     moe_implementation: str | None,
     master_params: str,
+    opt_resident_leaves: int,
     processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -521,6 +535,7 @@ def main(
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
         master_param_mode=MasterParamMode(master_params),
+        opt_resident_leaves=opt_resident_leaves,
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
