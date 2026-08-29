@@ -868,3 +868,32 @@ C3' is dead both ways: donated corrupts; excluded is safe but -0.35
 (exclusion copies + canary + relocation costs exceed the deleted host
 round-trips). The instrument (ResidentDonation + canary) stays in the
 tree, default-inert, as reusable corruption forensics.
+
+## 2026-08-31 ~00:10Z: C6 DESK-KILLED by the honesty gate; two new deletion candidates
+
+C6's ~390 ms premise failed kernel-level verification at zero rack cost:
+"quantize/pack 146ms" is a PHANTOM (no such kernels; it was the
+loop_convert family's 3-step total misread as per-step — actual ~62
+ms/step of model-wide dtype casts); "router/topk/sort 111ms" is half
+remat-recompute of the [T,E] top-k sort (C5 territory, already ruled
+marginal) and the dispatch's own [TK] argsort costs ~10us; "sonic gather
+135ms" IS the already-fused combine kernel. The dispatch side is one
+HBM-speed gather feeding the a2a directly — the pass C6 would have fused
+does not exist. Honest fusible ceiling ~58 ms.
+
+NEW CANDIDATES from the verification (deletion class, both in the a2a
+backward machinery -> dual review + GPU smoke mandatory):
+- C10 dead-select deletion ~104 ms (+0.15): chunk-0's return-a2a
+  backward emits a [TK,H] passthrough select with ZERO consumers
+  (jaxpr-proven, scratchpad c6_dead_select.py); trace confirms both
+  copies execute (loop_select_fusion_12_remat2, 208 ms family). Fix: a
+  first-chunk return-a2a variant owning its zero init whose vjp omits
+  the passthrough — deletes provably dead compute, bitwise-safe by
+  construction.
+- C11 barrier-pinned recompute ~84 ms (+0.12): the dispatch gather +
+  fill re-run in backward remat though their only consumer (the a2a)
+  never re-executes; pinned by optimization_barrier re-emitted under
+  remat.
+Plan: implement both behind separate knobs, review together, smoke,
+run STACKED (+0.27 expected, above bar), back-ablate on keep per the
+interaction rule.
