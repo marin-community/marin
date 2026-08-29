@@ -4,6 +4,7 @@
 """Cross-aggregate rules for coscheduled task peers."""
 
 from collections.abc import Sequence
+from typing import Protocol
 
 from rigging.timing import Timestamp
 
@@ -17,6 +18,16 @@ from iris.cluster.controller.task_state import (
 from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+
+
+class CoscheduledSibling(Protocol):
+    """Task fields required by a coscheduled peer cascade."""
+
+    @property
+    def task_id(self) -> JobName: ...
+
+    @property
+    def current_attempt_id(self) -> int: ...
 
 
 def find_coscheduled_siblings(
@@ -34,6 +45,31 @@ def find_coscheduled_siblings(
         states=ACTIVE_TASK_STATES,
         exclude=exclude_task_id,
     )
+
+
+def find_coscheduled_requeue_siblings(
+    state: Overlay,
+    job_id: JobName,
+    exclude_task_id: JobName,
+) -> Sequence[CoscheduledSibling]:
+    """Find siblings that must return to PENDING for an atomic gang restart.
+
+    A succeeded sibling may have exited because another gang member vanished.
+    Its task result is therefore provisional until the whole coscheduled job
+    completes. Include those siblings so a retriable peer failure can revive
+    their tasks without rewriting the succeeded attempt.
+    """
+    active_siblings = state.active_tasks_for_job(
+        job_id,
+        states=ACTIVE_TASK_STATES,
+        exclude=exclude_task_id,
+    )
+    succeeded_siblings = state.task_details_for_job(
+        job_id,
+        states={job_pb2.TASK_STATE_SUCCEEDED},
+        exclude=exclude_task_id,
+    )
+    return (*active_siblings, *succeeded_siblings)
 
 
 def terminate_coscheduled_siblings(
@@ -78,18 +114,16 @@ def terminate_coscheduled_siblings(
 
 def requeue_coscheduled_siblings(
     state: Overlay,
-    siblings: Sequence[ActiveTaskRow],
+    siblings: Sequence[CoscheduledSibling],
     failed_task_id: JobName,
     now_ms: int,
 ) -> None:
     """Bounce coscheduled siblings to PENDING so the job re-coschedules atomically.
 
-    The bounced attempt is stamped ``COSCHED_FAILED``, not ``PREEMPTED``: an
-    atomic gang restart is not the sibling's own preemption, so its budget must
-    stay honest. Since the retry counters are derived from attempt state, a
-    ``PREEMPTED`` stamp here would spuriously charge the sibling; ``COSCHED_FAILED``
-    (terminal, excluded from the preemption states) both records the true cause
-    and keeps the derived ``preemption_count`` at zero.
+    An active sibling's attempt is stamped ``COSCHED_FAILED``, not ``PREEMPTED``:
+    an atomic gang restart is not the sibling's own preemption, so its budget
+    stays unchanged. A succeeded attempt is already terminal and remains
+    ``SUCCEEDED`` in the attempt history while its task returns to ``PENDING``.
     """
     error = f"Coscheduled sibling {failed_task_id.to_wire()} bounced for atomic re-scheduling"
 

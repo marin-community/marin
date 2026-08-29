@@ -7,6 +7,7 @@ A narrow record-bag threaded through the per-update kernel.
 """
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import TypeVar
 
 from rigging.timing import Timestamp
@@ -26,7 +27,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TransitionSnapshot,
     pick_earliest_task_error,
 )
-from iris.cluster.controller.task_state import ActiveTaskRow
+from iris.cluster.controller.task_state import ActiveTaskRow, TaskDetailRow
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -212,6 +213,28 @@ class Overlay:
                 )
             out.append(row)
         return out
+
+    def task_details_for_job(
+        self,
+        job_id: JobName,
+        *,
+        exclude: JobName | None = None,
+        states: Iterable[int],
+    ) -> list[TaskDetailRow]:
+        """Return task details for ``job_id`` filtered through the prospective overlay."""
+        state_set = frozenset(int(state) for state in states)
+        rows: list[TaskDetailRow] = []
+        for histogram_row in self._snapshot.all_tasks_by_job.get(job_id, ()):
+            if exclude is not None and histogram_row.task_id == exclude:
+                continue
+            row = self._snapshot.tasks.get(histogram_row.task_id)
+            if row is None:
+                continue
+            effective_state = self.task_state(row.task_id)
+            if effective_state not in state_set:
+                continue
+            rows.append(row if effective_state == row.state else replace(row, state=effective_state))
+        return rows
 
     def job_descendants(self, job_id: JobName) -> list[JobName]:
         desc = self._snapshot.job_descendants.get(job_id)

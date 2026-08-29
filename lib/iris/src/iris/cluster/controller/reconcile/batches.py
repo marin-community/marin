@@ -188,10 +188,11 @@ def _cascade_to_peers(overlay: Overlay, outcome: task.TransitionOutcome, now_ms:
     """Coscheduled-sibling cascade for one transition. No job recompute."""
     if not outcome.cascade_to_peers:
         return
-    siblings = peers.find_coscheduled_siblings(overlay, outcome.job_id, outcome.task_id)
     if outcome.new_task_state in FAILURE_TASK_STATES:
+        siblings = peers.find_coscheduled_siblings(overlay, outcome.job_id, outcome.task_id)
         peers.terminate_coscheduled_siblings(overlay, siblings, outcome.task_id, now_ms)
     else:
+        siblings = peers.find_coscheduled_requeue_siblings(overlay, outcome.job_id, outcome.task_id)
         peers.requeue_coscheduled_siblings(overlay, siblings, outcome.task_id, now_ms)
 
 

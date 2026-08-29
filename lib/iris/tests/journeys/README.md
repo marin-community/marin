@@ -2,9 +2,11 @@
 
 Iris journeys cover chronological behavior across the real controller, service,
 SQLite persistence, scheduling, reconciliation, federation, and checkpoint code.
-Only execution processes, provider transports, peer transport, and time are
-faked. `JourneyWorld` checks Attempt history, terminal-state monotonicity, live
-Attempt uniqueness, Job counts, and duplicate launches after every control tick.
+`ScriptedTaskBackend` replaces external task execution and provider transport;
+the peer client and clock are also fakes. `JourneyWorld` checks terminal Attempt
+history, live Attempt uniqueness, Job counts, and duplicate launches after every
+control tick. A succeeded Task in a coscheduled job may return to pending when a
+sibling retries; its succeeded Attempt remains terminal.
 
 The source catalog evaluated all 2,496 pytest families at
 `1373230331f63a0a388a7b9944b48672ad844cdc`. The full catalog and rationale are

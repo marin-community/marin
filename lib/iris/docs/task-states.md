@@ -4,9 +4,10 @@ This document describes the `TaskState` enum, the state machine governing task
 lifecycle, retry semantics, and how states appear in the dashboard.
 
 A **task** is the unit of execution in Iris. Each job expands into one or more
-tasks (controlled by `replicas`). Tasks are independently scheduled, retried,
-and tracked. Job state is derived from task state counts -- there is no
-independent job state machine.
+tasks (controlled by `replicas`). Tasks are independently tracked. Iris places
+all tasks in a coscheduled job together. A retriable failure or preemption
+returns the whole gang to `PENDING`. Job state is derived from task state counts
+-- there is no independent job state machine.
 
 ## State Diagram
 
@@ -133,7 +134,10 @@ Reported by the worker via Reconcile after the user command starts executing
 
 Reported by the worker via Reconcile when the task process exits with code 0.
 The controller sets `exit_code=0`, `finished_at`, and marks the task terminal.
-No retry logic applies.
+For a regular job, no retry logic applies. For a coscheduled job, the success is
+provisional until every task succeeds. If a sibling retries after a preemption
+or failure, the controller returns the succeeded task to `PENDING`; its
+successful attempt remains unchanged in the attempt history.
 
 ### FAILED
 
@@ -182,10 +186,12 @@ Retry evaluation uses the preemption budget:
 3. If exhausted: `EXCEEDED_RETRY_LIMIT` -- task stays in `WORKER_FAILED`
    and is terminal.
 
-**Coscheduled jobs**: When a task in a coscheduled (gang-scheduled) job fails
-terminally, `_terminate_coscheduled_siblings` transitions all running siblings
-to `COSCHED_FAILED` (always terminal — see below). This prevents other hosts
-from hanging on collective operations.
+**Coscheduled jobs**: A retriable task failure returns every sibling to
+`PENDING`, including siblings that already exited 0, so the next attempt can
+schedule the complete gang. The succeeded attempt remains `SUCCEEDED`; only the
+Task returns to `PENDING`. A terminal failure transitions running siblings to
+`COSCHED_FAILED` (always terminal — see below). This prevents other hosts from
+hanging on collective operations.
 
 ### PREEMPTED
 
@@ -215,13 +221,10 @@ Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
      `PREEMPTED` (terminal). Both the attempt and the task are `PREEMPTED`.
 
 `PREEMPTED` is in both `TERMINAL_TASK_STATES` and `FAILURE_TASK_STATES`.
-When a coscheduled task becomes terminally `PREEMPTED`, the job state is
-recomputed. If all tasks in the job are terminal, the batches.py
-`_finalize_terminal_job` orchestrator
-kills any remaining non-terminal tasks and cascades to child jobs. Note that
-unlike `WORKER_FAILED` reported via Reconcile, PREEMPT decisions do not
-directly cascade coscheduled siblings — the cascade only occurs through job
-finalization.
+A retriable preemption returns the triggering task and every coscheduled sibling
+to `PENDING`. A terminal preemption transitions active siblings to
+`COSCHED_FAILED`, recomputes the job state, and cascades to child jobs according
+to the job preemption policy.
 
 ### UNSCHEDULABLE
 
@@ -275,35 +278,40 @@ Iris maintains two independent retry budgets per task:
 ### What counts toward job failure
 
 Only `TASK_STATE_FAILED` counts toward the job's `max_task_failures` threshold.
-Worker failures and preemptions do not count. This means a job can survive
-unlimited preemptions as long as the per-task preemption budget is not
-exhausted. `TASK_STATE_PREEMPTED` and `TASK_STATE_WORKER_FAILED` are grouped
-together for job state derivation: if all tasks are terminal and any are in
-one of these states, the job becomes `JOB_STATE_WORKER_FAILED`.
+Worker failures and preemptions do not count. There is no additional job-wide
+preemption limit; each task is governed by its own preemption budget.
+`TASK_STATE_PREEMPTED` and `TASK_STATE_WORKER_FAILED` are grouped together for
+job state derivation: if all tasks are terminal and any are in one of these
+states, the job becomes `JOB_STATE_WORKER_FAILED`.
 
-### States that are never retried
+### When retries stop
 
-- `SUCCEEDED`: task completed successfully
+- `SUCCEEDED`: never retried because of its own result; a coscheduled sibling's retry can return the task to `PENDING`
 - `KILLED`: explicit termination by user or cascade
 - `UNSCHEDULABLE`: scheduling timeout expired
-- `PREEMPTED`: only when preemption budget is exhausted (otherwise retried as `PENDING`)
+- `COSCHED_FAILED`: a sibling reached a terminal failure
+- `FAILED`: failure budget exhausted
+- `WORKER_FAILED` or `PREEMPTED`: preemption budget exhausted
 
 ## Terminal State Summary
 
-A task is considered finished (`is_finished() == True`) when:
+The controller's task-finished predicate returns true when:
 
 | State | Condition |
 |---|---|
-| `SUCCEEDED` | Always finished |
+| `SUCCEEDED` | Always finished in the current state |
 | `KILLED` | Always finished |
 | `UNSCHEDULABLE` | Always finished |
 | `FAILED` | Finished when `failure_count > max_retries_failure` |
 | `WORKER_FAILED` | Finished when `preemption_count > max_retries_preemption` |
 | `PREEMPTED` | Finished when `preemption_count > max_retries_preemption` |
+| `COSCHED_FAILED` | Always finished |
 
 The distinction matters: a task in `FAILED` state with retry budget remaining
-is in a terminal state at the attempt level but is not finished at the task
-level. `can_be_scheduled()` returns `True` for such tasks.
+is terminal at the attempt level but is not finished at the task level. Iris
+returns the Task to `PENDING`, which makes it eligible for scheduling.
+A later coscheduled sibling retry can similarly transition a finished
+`SUCCEEDED` Task back to `PENDING`.
 
 ## Dashboard Display
 

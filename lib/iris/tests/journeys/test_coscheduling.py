@@ -37,3 +37,27 @@ def test_coscheduled_job_when_one_task_retries_restarts_the_whole_gang(journey):
     journey.succeed_all(job)
     journey.settle()
     assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_coscheduled_job_when_workers_succeed_before_head_preemption_restarts_the_whole_gang(journey):
+    job = journey.submit(
+        "coscheduled-preempted-head",
+        tasks=4,
+        preemption_retries=1,
+        coscheduled=True,
+    )
+    journey.settle()
+
+    journey.succeed(job[1])
+    journey.succeed(job[2])
+    journey.settle()
+    journey.preempt(job[0])
+    journey.settle()
+
+    tasks = journey.tasks(job)
+    assert [task.state for task in tasks] == [job_pb2.TASK_STATE_RUNNING] * 4
+    assert all(len(journey.task(job[index]).attempts) == 2 for index in range(4))
+    assert [attempt.state for attempt in journey.task(job[1]).attempts] == [
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_RUNNING,
+    ]

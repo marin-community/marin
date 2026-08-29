@@ -87,7 +87,7 @@ class JourneyWorld:
         self._jobs: dict[str, JobRef] = {}
         self._checkpoint_jobs: dict[str, frozenset[str]] = {}
         self._task_history: dict[str, tuple[tuple[int, int], ...]] = {}
-        self._terminal_tasks: set[str] = set()
+        self._terminal_tasks: dict[str, int] = {}
         self._prior_backend_events: list[BackendEvent] = []
         self._prior_backend_calls: list[tuple[str, str]] = []
         self.trace: list[str] = []
@@ -167,7 +167,9 @@ class JourneyWorld:
             if any(task_id.startswith(f"{job_id}/") for job_id in retained)
         }
         self._terminal_tasks = {
-            task_id for task_id in self._terminal_tasks if any(task_id.startswith(f"{job_id}/") for job_id in retained)
+            task_id: state
+            for task_id, state in self._terminal_tasks.items()
+            if any(task_id.startswith(f"{job_id}/") for job_id in retained)
         }
         db = ControllerDB(db_dir=self._db_dir)
         self.controller, self.backend = self._build_controller(db)
@@ -542,10 +544,18 @@ class JourneyWorld:
                     raise AssertionError(f"multiple live Attempts for {task.task_id}: {self.timeline}")
                 if task.state in terminal_states and any(attempt.state in active_states for attempt in detail.attempts):
                     raise AssertionError(f"terminal Task retained a live Attempt: {task.task_id}: {self.timeline}")
-                if task.task_id in self._terminal_tasks and task.state not in terminal_states:
+                previous_terminal_state = self._terminal_tasks.get(task.task_id)
+                succeeded_coscheduled_task_restarted = (
+                    job.coscheduled and previous_terminal_state == job_pb2.TASK_STATE_SUCCEEDED
+                )
+                if (
+                    previous_terminal_state is not None
+                    and task.state not in terminal_states
+                    and not succeeded_coscheduled_task_restarted
+                ):
                     raise AssertionError(f"terminal Task revived: {task.task_id}: {self.timeline}")
                 if task.state in terminal_states:
-                    self._terminal_tasks.add(task.task_id)
+                    self._terminal_tasks[task.task_id] = task.state
                 state_name = job_pb2.TaskState.Name(task.state).removeprefix("TASK_STATE_").lower()
                 counts[state_name] = counts.get(state_name, 0) + 1
             if dict(status.task_state_counts) != counts:
