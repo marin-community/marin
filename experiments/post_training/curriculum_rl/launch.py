@@ -89,7 +89,14 @@ SUPPORTED_SAMPLERS = frozenset({SamplerKind.NAIVE})
 
 # The launcher auto-defaults trainer.hf_hub_repo_id to laion/<job_name>, and the
 # export job then needs create access to that org. Exports stay in object storage.
-BASE_OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
+# enable_thinking goes through a ++ override because the config flattener emits
+# bare keys and hydra rejects new children under the empty chat_template_kwargs.
+# Thinking mode ate the whole generation budget at 0.6B (85% truncation in the
+# smoke run); every arm trains and rolls out in non-thinking mode.
+BASE_OVERRIDES = (
+    "++trainer.hf_hub_repo_id=null",
+    "++generator.chat_template_kwargs.enable_thinking=false",
+)
 
 
 def sampler_overrides(sampler: SamplerKind) -> tuple[str, ...]:
@@ -265,10 +272,6 @@ generator:
   weight_sync_backend: nccl
   async_engine: true
   batched: false
-  # Thinking mode eats the whole generation budget at 0.6B (85% truncation in
-  # the smoke run); every arm trains and evaluates in non-thinking mode.
-  chat_template_kwargs:
-    enable_thinking: false
   sampling_params:
     temperature: 1.0
     top_p: 1.0
