@@ -27,14 +27,13 @@ from iris.cluster.controller.schema import (
     jobs_table,
     local_tasks,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, COSCHEDULED_REQUEUE_TASK_STATES
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     AttemptUid,
     JobName,
     WorkerId,
 )
-from iris.rpc import job_pb2
 
 
 class TransitionReader(Protocol):
@@ -324,18 +323,18 @@ def load_closed_snapshot(
     job_descendants = _load_descendants_multi(cur, job_set)
     job_configs = _build_job_configs(cur, job_set)
     all_tasks_by_job = _load_all_tasks_for_jobs(cur, job_set)
-    succeeded_coscheduled_task_ids = {
+    requeueable_coscheduled_task_ids = {
         row.task_id
         for job_id, rows in all_tasks_by_job.items()
         if job_configs[job_id].has_coscheduling
         for row in rows
-        if row.state == job_pb2.TASK_STATE_SUCCEEDED
+        if row.state in COSCHEDULED_REQUEUE_TASK_STATES
     }
-    missing_succeeded_task_ids = succeeded_coscheduled_task_ids - tasks.keys()
-    succeeded_tasks = reads.bulk_get_task_detail(cur, list(missing_succeeded_task_ids))
-    tasks.update(succeeded_tasks)
-    succeeded_attempt_keys = [(task_id, task.current_attempt_id) for task_id, task in succeeded_tasks.items()]
-    attempts.update(reads.bulk_get_attempts(cur, succeeded_attempt_keys))
+    missing_requeueable_task_ids = requeueable_coscheduled_task_ids - tasks.keys()
+    requeueable_tasks = reads.bulk_get_task_detail(cur, list(missing_requeueable_task_ids))
+    tasks.update(requeueable_tasks)
+    requeueable_attempt_keys = [(task_id, task.current_attempt_id) for task_id, task in requeueable_tasks.items()]
+    attempts.update(reads.bulk_get_attempts(cur, requeueable_attempt_keys))
     job_state_basis = _bulk_load_job_state_basis(cur, job_set, all_tasks_by_job)
     active_tasks_by_job = reads.list_active_tasks_for_jobs(cur, job_set, states=NON_TERMINAL_TASK_STATES)
 

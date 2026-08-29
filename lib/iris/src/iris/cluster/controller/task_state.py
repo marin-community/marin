@@ -19,6 +19,11 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Terminal task states that become provisional when a coscheduled peer retries.
+# Snapshot loading and peer selection must share this predicate so the closed
+# reconciliation snapshot contains every task the cascade can requeue.
+COSCHEDULED_REQUEUE_TASK_STATES: frozenset[int] = frozenset({job_pb2.TASK_STATE_SUCCEEDED})
+
 # Subset of ACTIVE that excludes ASSIGNED — i.e. tasks already on a worker.
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {

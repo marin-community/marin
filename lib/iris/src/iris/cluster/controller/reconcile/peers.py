@@ -13,6 +13,7 @@ from iris.cluster.controller.reconcile.overlay import Overlay
 from iris.cluster.controller.reconcile.task import merge_task_termination
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
+    COSCHEDULED_REQUEUE_TASK_STATES,
     ActiveTaskRow,
 )
 from iris.cluster.stats.tables import TaskEventSeverity
@@ -60,12 +61,12 @@ def find_coscheduled_requeue_siblings(
     their tasks without rewriting the succeeded attempt.
     """
     active_siblings = find_coscheduled_siblings(state, job_id, exclude_task_id)
-    succeeded_siblings = state.task_details_for_job(
+    requeueable_terminal_siblings = state.task_details_for_job(
         job_id,
-        states={job_pb2.TASK_STATE_SUCCEEDED},
+        states=COSCHEDULED_REQUEUE_TASK_STATES,
         exclude=exclude_task_id,
     )
-    return (*active_siblings, *succeeded_siblings)
+    return (*active_siblings, *requeueable_terminal_siblings)
 
 
 def terminate_coscheduled_siblings(
