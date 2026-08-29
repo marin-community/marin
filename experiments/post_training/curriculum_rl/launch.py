@@ -87,9 +87,14 @@ class SamplerKind(StrEnum):
 SUPPORTED_SAMPLERS = frozenset({SamplerKind.NAIVE})
 
 
+# The launcher auto-defaults trainer.hf_hub_repo_id to laion/<job_name>, and the
+# export job then needs create access to that org. Exports stay in object storage.
+BASE_OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
+
+
 def sampler_overrides(sampler: SamplerKind) -> tuple[str, ...]:
     if sampler is SamplerKind.NAIVE:
-        return ()
+        return BASE_OVERRIDES
     raise NotImplementedError(
         f"Sampler {sampler} needs the MarinSkyRL curriculum branch; the current pin only supports uniform shuffle."
     )
