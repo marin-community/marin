@@ -1,0 +1,42 @@
+Env-gated CTA cap for the ragged-all-to-all device kernel (H11).
+Base: marin-community/xla @ c9526e8c02727f1e1e2c631e2b50c53b8839fb92
+(the revision the campaign's pinned jax_cuda13_pjrt-0.11.1+marin.c9526e8c0272
+wheel is built from). Default behavior is bit-identical to that wheel; the
+knob engages only when XLA_RAGGED_A2A_DK_CTAS_PER_SM is set to 1..7 in the
+task environment.
+
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+@@
++#include <cstdlib>
++
+@@
+   // barrier/signal slots reserved when creating the device communicator (the
+   // kernel indexes its cooperative barrier by blockIdx.x, so registration
+   // must cover the launched grid). All ranks launch the same grid, which the
+   // cross-rank cooperative barriers require: every CTA must be resident
+   // simultaneously, so the size is kGridSmMultiplier CTAs of 128 threads per
+   // SM. Callers pass the SM count from
+   // se::DeviceDescription::core_count(); all participating ranks are expected
+   // to be homogeneous so every rank arrives at the same value.
++  //
++  // XLA_RAGGED_A2A_DK_CTAS_PER_SM (1..kGridSmMultiplier, default
++  // kGridSmMultiplier) caps the per-SM CTA count so the kernel's resident
++  // register/thread footprint can be traded against copy bandwidth: the
++  // balanced copy is grid-size-agnostic (per-CTA element ranges and the GIN
++  // put loop both derive from the launched grid), a regular (non-cooperative)
++  // launch keeps a smaller grid trivially resident, and every barrier/signal
++  // registration below routes through this same function, so launch and
++  // registration stay consistent. The value must be identical on all ranks.
+   static int32_t DeviceKernelCtaCount(int core_count) {
+-    return std::max<int32_t>(kGridSmMultiplier * core_count,
++    static const int32_t multiplier = [] {
++      const char* env = std::getenv("XLA_RAGGED_A2A_DK_CTAS_PER_SM");
++      const int parsed = env == nullptr ? 0 : std::atoi(env);
++      return (parsed >= 1 && parsed <= kGridSmMultiplier)
++                 ? parsed
++                 : kGridSmMultiplier;
++    }();
++    return std::max<int32_t>(multiplier * core_count,
+                              kMinDeviceKernelCtaCount);
+   }
