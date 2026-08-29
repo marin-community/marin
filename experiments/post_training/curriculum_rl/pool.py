@@ -225,10 +225,10 @@ def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str
     kept = []
     dropped: Counter[str] = Counter()
     for record in records:
-        tokens = tokenizer.apply_chat_template(
-            record["prompt"], add_generation_prompt=True, tokenize=True, enable_thinking=False
+        encoded = tokenizer.apply_chat_template(
+            record["prompt"], add_generation_prompt=True, tokenize=True, return_dict=True, enable_thinking=False
         )
-        if len(tokens) > MAX_PROMPT_TOKENS:
+        if len(encoded["input_ids"]) > MAX_PROMPT_TOKENS:
             dropped[str(record["data_source"])] += 1
         else:
             kept.append(record)
