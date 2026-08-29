@@ -27,7 +27,9 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
-_FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
+# TF_CPP_* control XLA's C++ logging; measurement harnesses forward them to read compile-time
+# scheduler/remat evidence (memory limits, remat counts) out of the task logs.
+_FORWARDED_ENV_NAMES = ("LD_PRELOAD", "TF_CPP_MIN_LOG_LEVEL", "TF_CPP_VMODULE")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 

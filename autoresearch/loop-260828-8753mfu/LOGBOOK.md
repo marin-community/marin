@@ -98,3 +98,84 @@ verified: step-30000 (manifest.json present).
 Both reviews addressed; campaign cleared for rack. Iteration 0 next:
 mfl-ctrl-a/b/c serialized control draws, draw b with SCORE_MAX_STEP=28 +
 PROFILE_STEPS=3 at 30021.
+
+## H6 arm spec (iteration 1 candidate, pending its own review)
+
+Treatment: `ARM_XLA_FLAGS="--xla_gpu_memory_limit_slop_factor=90"`, everything
+else identical to control; env-only (no commit), recorded in arms.tsv extra
+column. Mechanism: raises the scheduler/remat temp-arena cap from 113.6 GiB
+(85) to ~120.2 GiB (90, at the documented pool-free-space bound); the 85
+calibration predates the carry offload (peak now ~116.5 GiB, was ~138) and
+train.py's own comment says the smaller arena makes HloRematerialization
+recompute more of the step.
+
+Draws: one T at slop90; if delta > bar candidate, a second T draw; controls
+bracket from iteration-0 draws plus a fresh control after (the keep rule's
+>=2C/>=2T). Ladder: OOM at 90 -> 88; green+gain at 90 -> consider 92 with the
+explicit caveat that arena 122.9 GiB exceeds the documented 120.2 bound and
+must survive a fresh-mapping against ~17 GiB physical outside the pool.
+
+Engagement check: memory/peak_gib (scored as peak_gib_max) must RISE vs
+control. MFU moved but peak did not -> not engaged, inspect task-log XLA_FLAGS
+echo before concluding anything. Failure modes: named first-step NCCL alloc
+abort or BFC OOM (cheap crash, ladder down).
+
+Confounds pre-declared: (a) remat disengaging when peak crosses the allocator
+boundary is the DESIRED mechanism here, not an artifact (#8054's trap inverted)
+— but drops and the paired loss series must stay clean; (b) cuda_async
+MEM_FRACTION is a RELEASE threshold (#8490): if the higher peak crosses it,
+the pool unmaps every step and the arm gets slower with high step-time
+variance — watch mfu_stdev, and treat a high-variance slowdown as
+threshold-crossing, not as "slop raise is bad".
+
+## H6 review dispositions (fable + codex, 2026-08-29; transcripts: review-codex-h6.txt)
+
+Both reviewers verified the flag path end-to-end (arm.sh -> coordinator ->
+XLA_ forwarding -> explicit-wins dedupe in _apply_hero_ep_runtime_defaults ->
+exactly one slop token =90 reaches the task; last-occurrence-wins in XLA's
+parser if ever duplicated). Both BLOCKED the spec as written. Revised spec:
+
+- ENGAGEMENT REDEFINED (codex blocker 1 / fable F2): slop sets a scheduler
+  and remat LIMIT, not an allocation; peak_bytes_in_use can stay flat under
+  genuine engagement and can rise for unrelated reasons (rank-0 lifetime
+  high-water incl. restore/migration transients). New scheme:
+  (1) config engagement — the flag present exactly once in the task env
+  (verified by local pre-flight of _apply_hero_ep_runtime_defaults + task
+  log); (2) mechanism evidence — compile-time remat/scheduler logs:
+  dispatch.py now forwards TF_CPP_MIN_LOG_LEVEL/TF_CPP_VMODULE and every arm
+  runs TF_CPP_MIN_LOG_LEVEL=0 TF_CPP_VMODULE=hlo_rematerialization=1, so
+  control and treatment logs carry the LHS limit line and remat stats.
+  peak_gib demoted to supporting telemetry.
+- OUTCOME SPACE PRE-DECLARED (fable F2a): {flag confirmed, remat/LHS logs
+  unchanged, peak flat, MFU flat} = DEAD-ON-THIS-STACK (a legitimate
+  conclusion, not instrumentation failure). BINDING PRE-CHECK: iteration-0
+  control logs are read FIRST — if control shows zero remat and LHS usage
+  well under the 113.6 limit, H6 closes as not-binding WITHOUT a treatment
+  arm.
+- MECHANISM LANGUAGE CORRECTED (fable F4): conclusions say "limit raise"
+  (feeds both LHS and HloRematerialization), not specifically "less remat";
+  post-offload actual temps (~98 GiB) sit far under both 113.6 and 120.2,
+  so an OOM at 90 is UNLIKELY and the 92-rung "exceeds the bound" caveat is
+  probably vacuous; any OOM gets diagnosed from the failed allocation size.
+- TREATMENT RECORDED (codex 2 / fable F1): arms.tsv gained an xla_flags
+  column (backfilled for mfl-ctrl-a), the submit echo prints it, and arm.sh
+  refuses a nonempty ARM_XLA_FLAGS without TREATMENT=1 — a leaked env var
+  can no longer contaminate a control silently.
+- FAILURE CLASSIFICATION (codex 5 / fable F3): any H6-arm failure requires a
+  task-log read before classification — BFC/CUDA/NCCL alloc signature ->
+  ladder (88); anything else -> invalid/resubmit. A compile-ceiling kill on
+  a treatment draw is checked against the control's compile time before
+  being read as anything; if the treatment legitimately compiles slower,
+  resubmit at interactive priority with a raised ceiling (production stays
+  under 1h).
+- FIDELITY TOLERANCE (codex 3 / fable F5): DESIGN now calibrates the
+  pointwise loss null band and a drops tolerance from iteration-0
+  control-control pairs; gate on median + calibrated max; small exceedance
+  -> extra draw/investigation, not auto-kill.
+- Verified fine by reviewers: no duplicate-flag hazard; per-RID compile
+  cache isolates the 85-compiled executable; max_retries_failure=0 means no
+  silent in-job retry; overlap-limit stays force-pinned under the
+  treatment; MEM_FRACTION release-threshold confound pre-declaration sound.
+
+H6 cleared for rack CONDITIONED on the binding pre-check from iteration-0
+control logs (which now carry remat/LHS evidence for free).

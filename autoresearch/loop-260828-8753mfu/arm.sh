@@ -40,6 +40,14 @@ if [ -z "${ALLOW_DIRTY:-}" ] && [ -n "$dirty" ]; then
   exit 1
 fi
 
+# A flag-based treatment must be deliberate: an ARM_XLA_FLAGS value leaking from the supervisor
+# shell into a "control" draw silently runs the treatment and records nothing -- the null delta
+# then reads as "dead lever". Controls run with TREATMENT unset and ARM_XLA_FLAGS empty.
+if [ -n "${ARM_XLA_FLAGS:-}" ] && [ -z "${TREATMENT:-}" ]; then
+  echo "ARM_XLA_FLAGS is set but TREATMENT=1 is not; refusing (is this a contaminated control?)" >&2
+  exit 1
+fi
+
 # One RID/VERSION per submission, ever: a reused RID merges W&B histories, resurrects the
 # leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts.
 if [ -f "${LOOP_DIR}/arms.tsv" ] && awk -F'\t' -v rid="$RID" -v ver="$VERSION" \
@@ -78,6 +86,8 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e AWS_MAX_ATTEMPTS 25 -e AWS_RETRY_MODE adaptive \
   -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
   -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
+  -e TF_CPP_MIN_LOG_LEVEL 0 \
+  -e TF_CPP_VMODULE "hlo_rematerialization=1" \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
      --run-id "${RID}" \
      --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
@@ -94,9 +104,9 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --version "${VERSION}" --run >"${LOOP_DIR}/${RID}-submit.log" 2>&1 \
   || { echo "submit FAILED, tail of ${RID}-submit.log:" >&2; tail -20 "${LOOP_DIR}/${RID}-submit.log" >&2; exit 1; }
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \
   "${MASTER_PARAMS}" "${SCHEDULE_STEPS}" "${ARM_TIMEOUT}" "${RESTORE_FROM:-none}" \
-  "${EXTRA_LAUNCH_ARGS:-none}" >> "${LOOP_DIR}/arms.tsv"
+  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" >> "${LOOP_DIR}/arms.tsv"
 
-echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none})"
+echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none})"

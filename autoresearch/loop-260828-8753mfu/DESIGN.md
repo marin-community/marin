@@ -99,12 +99,20 @@ near-threshold results get more draws rather than a coin-flip call.
   3 x sd̂_run); a single C/T pair never keeps. Near-threshold deltas get
   additional draws instead of a call. Periodic re-control draws guard
   against slow drift across the campaign.
-- Fidelity gate for keeps: paired-window comparison; the loss guard compares
-  the FULL 15-step loss series against the paired control (max |delta|
-  within the bf16-noise band), not just the last step — data is
-  deterministic at a fixed restore step so the series pair pointwise. Any
-  keep that changes numerics beyond scheduling/layout gets flagged and needs
-  explicit reasoning about why the trajectory is unchanged.
+- Fidelity gate for keeps: paired-window comparison of the FULL 15-step loss
+  series (data is deterministic at a fixed restore step so series pair
+  pointwise). The tolerance is CALIBRATED, not assumed: the iteration-0
+  control-vs-control pointwise deltas define the null band for this exact
+  30k protocol (the 24k figures are a different protocol). Gate on the
+  median pointwise delta plus the calibrated max (median-not-max
+  discriminates bf16 reduction noise from a real bug — prior campaign
+  lesson); drops get a tolerance from the same control pairs rather than a
+  raw "not worse" coin flip. A small exceedance triggers another paired
+  draw or a numerical investigation, NOT an automatic kill; non-finite
+  loss, materially changed drops, or a deviation beyond the control
+  envelope is a hard fail. Any keep that changes numerics beyond
+  scheduling/layout gets flagged and needs explicit reasoning about why
+  the trajectory is unchanged.
 
 ## Iteration accounting
 
