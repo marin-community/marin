@@ -210,6 +210,19 @@ impl TableController {
                 || self.head_published.load(Ordering::SeqCst))
     }
 
+    /// The sequence high-water mark of the claimed durable state, or 0 when no
+    /// state is claimed. It can exceed the max seq in the published segments (a
+    /// legacy import excludes archive-only rows; retirement deletes legacy
+    /// rows), so the allocator must seed past it.
+    pub fn claimed_high_water(&self) -> i64 {
+        self.selected
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|selected| selected.catalog.persisted_high_water)
+            .unwrap_or(0)
+    }
+
     /// Re-read the table's specification and cache whether it selects
     /// object-store L0, returning the status the read produced.
     ///

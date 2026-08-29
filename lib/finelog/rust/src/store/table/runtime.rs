@@ -144,11 +144,13 @@ impl TableRuntime {
                         .map(|row| row.max_seq)
                         .max()
                         .unwrap_or(-1);
-                    (
-                        crate::store::adopt::recover_next_seq(&rows),
-                        VecDeque::new(),
-                        max_persisted,
-                    )
+                    // The claimed state's high-water mark can exceed the max
+                    // seq in its published segments (a legacy import excludes
+                    // archive-only rows; retirement deletes legacy rows), and
+                    // reissuing a sequence number breaks seq checkpointing.
+                    let next_seq = crate::store::adopt::recover_next_seq(&rows)
+                        .max(controller.claimed_high_water() + 1);
+                    (next_seq, VecDeque::new(), max_persisted)
                 }
                 (Some(dir), false) => {
                     create_table_dir(dir)?;
