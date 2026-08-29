@@ -49,7 +49,9 @@ GSM8K_ENV = "gsm8k"
 BOXED_ENV = "aime"
 
 GSM8K_INSTRUCTION = ' Let\'s think step by step and output the final answer after "####".'
-BOXED_INSTRUCTION = " Please reason step by step, and put your final answer within \\boxed{}."
+# The aime env verifies with the Minerva "Answer: ..." extraction (not \boxed),
+# so the instruction must elicit a final Answer line.
+BOXED_INSTRUCTION = " Please reason step by step, and end your response with a final line 'Answer: <answer>'."
 
 GSM8K_TRAIN_ROWS = 2000
 GSM8K_VALIDATION_ROWS = 256
@@ -131,7 +133,10 @@ def _pool_record(
         "data_source": source,
         "prompt": [{"role": "user", "content": f"{question}{instruction}"}],
         "env_class": pool_bin.env_class,
+        # The gsm8k env reads reward_spec.ground_truth; the aime env reads
+        # reward_model.ground_truth. Every row carries both.
         "reward_spec": {"method": "rule", "ground_truth": answer},
+        "reward_model": {"ground_truth": answer},
         "extra_info": {
             "data_source": source,
             "grade": pool_bin.grade,
