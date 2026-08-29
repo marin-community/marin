@@ -15,12 +15,12 @@ use buffa::MessageField;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
+use crate::indices::group_extrema::GroupExtremaConfig;
 use crate::proto::finelog::stats::{
     Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType,
     CoveringProjection as ProtoCoveringProjection, GroupedExtrema as ProtoGroupedExtrema,
     Schema as ProtoSchema, SchemaView,
 };
-use crate::store::group_extrema::GroupExtremaConfig;
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
 pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
@@ -51,7 +51,7 @@ pub const MIN_CONFIGURED_ROW_GROUP_ROWS: u32 = 16_384;
 pub const MAX_CONFIGURED_ROW_GROUP_ROWS: u32 = 1_048_576;
 
 /// User-facing column index policy. It compiles into the closed planner-facing
-/// [`crate::store::segment_index::IndexSpec`] family.
+/// [`crate::indices::IndexSpec`] family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
     /// Span-granular trigram substring section in each segment's `.fidx` bundle.

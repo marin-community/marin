@@ -24,10 +24,10 @@ use arrow::compute::filter_record_batch;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use serde::{Deserialize, Serialize};
 
+use crate::indices::trigram::ByteReader;
 use crate::store::schema::CoveringProjection;
 use crate::store::segment::parquet_writer_properties;
 use crate::store::string_column::StringColumn;
-use crate::store::trigram::ByteReader;
 
 const MAGIC: &[u8; 4] = b"FLEQ";
 const VERSION: u8 = 2;

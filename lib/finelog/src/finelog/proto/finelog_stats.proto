@@ -225,6 +225,19 @@ message CatalogSegment {
   string migration_source_id = 14;
   int64 migration_source_rows = 15;
   bool migration_backfill = 16;
+  // Exact references to this segment's derived artifacts. Membership is by
+  // reference: an artifact belongs to this segment because it is named here,
+  // never because a file sits beside the source Parquet.
+  ObjectRef index_bundle = 17;
+  repeated ProjectionArtifact projections = 18;
+  // Parquet footer UUID the artifacts bind to, rendered as text.
+  string source_segment_uuid = 19;
+}
+
+// One external covering-projection Parquet object.
+message ProjectionArtifact {
+  string name = 1;
+  ObjectRef object = 2;
 }
 
 message TableVersionSegments {

@@ -10,6 +10,8 @@ mod init;
 mod migration_deadline;
 #[path = "0002_object_tables.rs"]
 mod object_tables;
+#[path = "0004_segment_artifacts.rs"]
+mod segment_artifacts;
 #[path = "0001_segment_partitions.rs"]
 mod segment_partitions;
 
@@ -20,6 +22,7 @@ const MIGRATIONS: &[(i64, &str, ApplyMigration)] = &[
     (1, "segment_partitions", segment_partitions::apply),
     (2, "object_tables", object_tables::apply),
     (3, "migration_deadline", migration_deadline::apply),
+    (4, "segment_artifacts", segment_artifacts::apply),
 ];
 
 fn sqlite_error(error: rusqlite::Error) -> StatsError {
@@ -89,6 +92,9 @@ fn bootstrap_preledger(conn: &mut Connection) -> Result<(), StatsError> {
             record_migration(&transaction, 2, "object_tables")?;
             if column_exists(&transaction, "table_migrations", "observation_deadline_ms")? {
                 record_migration(&transaction, 3, "migration_deadline")?;
+                if column_exists(&transaction, "object_segments", "artifacts_json")? {
+                    record_migration(&transaction, 4, "segment_artifacts")?;
+                }
             }
         }
     }
@@ -150,7 +156,7 @@ mod tests {
     fn fresh_database_runs_every_migration() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4]);
         assert!(column_exists(&conn, "segments", "partition_json").unwrap());
         assert!(table_exists(&conn, "object_segments").unwrap());
     }
@@ -160,7 +166,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         init::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4]);
         assert!(column_exists(&conn, "segments", "partition_json").unwrap());
     }
 
@@ -170,7 +176,7 @@ mod tests {
         init::apply(&conn).unwrap();
         segment_partitions::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4]);
         assert!(table_exists(&conn, "object_segments").unwrap());
     }
 
@@ -181,8 +187,9 @@ mod tests {
         segment_partitions::apply(&conn).unwrap();
         object_tables::apply(&conn).unwrap();
         migrate(&mut conn).unwrap();
-        assert_eq!(applied(&conn), vec![0, 1, 2, 3]);
+        assert_eq!(applied(&conn), vec![0, 1, 2, 3, 4]);
         assert!(column_exists(&conn, "table_migrations", "observation_deadline_ms").unwrap());
+        assert!(column_exists(&conn, "object_segments", "artifacts_json").unwrap());
     }
 
     #[test]

@@ -24,7 +24,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
+use futures::StreamExt;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
@@ -32,11 +34,13 @@ use crate::proto::finelog::stats::ObjectRef;
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
-use crate::store::object_store::{ObjectId, ObjectReference, ObjectStore};
+use crate::store::object_store::{
+    ObjectByteStream, ObjectId, ObjectReference, ObjectStore, ObjectVersion,
+};
 use crate::store::segment::segment_bounds;
 use crate::store::table_state::{
-    resolve_publication, CommitError, CommitToken, Committed, TableRevision, TableSnapshot,
-    TableState, WriterFence,
+    resolve_publication, ArtifactReferences, CommitError, CommitToken, Committed, LocalArtifacts,
+    TableRevision, TableSnapshot, TableState, WriterFence,
 };
 use crate::store::types::{segment_relative_key, LocalSegment, SegmentLocation, SegmentRow};
 
@@ -91,6 +95,9 @@ enum ControllerCommand {
 }
 
 const COMMAND_QUEUE_DEPTH: usize = 32;
+
+/// Chunk size an artifact or compaction output streams to the object store in.
+const UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct TableController {
     table: String,
@@ -179,6 +186,11 @@ impl TableController {
     /// Follow this table's published state.
     pub fn watch_snapshot(&self) -> watch::Receiver<Option<Arc<TableSnapshot>>> {
         self.snapshot.subscribe()
+    }
+
+    /// The object store holding this table's immutable data and artifacts.
+    pub fn object_store(&self) -> Option<&Arc<dyn ObjectStore>> {
+        self.objects.as_ref().map(|objects| &objects.store)
     }
 
     pub fn legacy_store(&self) -> Option<Arc<dyn ObjectStore>> {
@@ -464,16 +476,57 @@ impl TableController {
         let path = objects.store.local_path(&reference).await?;
         Ok(WrittenObject {
             path,
-            source: ObjectRef {
-                object_id: Some(id.as_str().to_string()),
-                provider_version: version.provider_version,
-                etag: version.e_tag,
-                byte_size: Some(version.byte_size),
-                sha256: Some(version.content_sha256.to_vec()),
-                ..Default::default()
-            },
+            source: object_ref(&id, &version),
             byte_size: i64::try_from(version.byte_size).unwrap_or(i64::MAX),
         })
+    }
+
+    /// Upload a staged local file as an immutable content-addressed object.
+    ///
+    /// `kind` selects the object prefix (`objects`, `indices`, `projections`)
+    /// and `extension` its suffix. The bytes stream from the file rather than
+    /// being buffered whole, so a compaction output never sits in RAM twice.
+    pub async fn write_staged_object(
+        &self,
+        kind: &str,
+        extension: &str,
+        staged: &Path,
+    ) -> Result<WrittenObject, StatsError> {
+        let objects = self.require_objects()?;
+        let sha256 = file_sha256(staged)?;
+        let id = ObjectId::table(
+            &self.table,
+            &format!("{kind}/{}.{extension}", full_hex(&sha256)),
+        )?;
+        let version = objects
+            .store
+            .write_stream(&id, file_byte_stream(staged).await?)
+            .await?;
+        let reference = ObjectReference {
+            id: id.clone(),
+            version: version.clone(),
+        };
+        let path = objects.store.local_path(&reference).await?;
+        Ok(WrittenObject {
+            path,
+            source: object_ref(&id, &version),
+            byte_size: i64::try_from(version.byte_size).unwrap_or(i64::MAX),
+        })
+    }
+
+    /// Return the verified local file for one immutable object this table
+    /// references. The reference, not adjacency to any other file, decides which
+    /// bytes the caller reads.
+    pub async fn localize(&self, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
+        let objects = self.require_objects()?;
+        let reference = ObjectReference::try_from(reference)?;
+        reference.id.table_relative(&self.table).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "object {:?} belongs to another table",
+                reference.id.as_str()
+            ))
+        })?;
+        objects.store.local_path(&reference).await
     }
 
     /// Read the bytes a migration rewrites, from whichever layout holds them.
@@ -602,6 +655,7 @@ impl TableController {
                 max_key_value,
                 partition: row.partition.clone(),
                 location: SegmentLocation::Both,
+                artifacts: local_artifacts(objects.store.as_ref(), &record.artifacts)?,
             });
             self.catalog
                 .set_location(&self.table, &record.path, SegmentLocation::Both)?;
@@ -813,6 +867,89 @@ pub fn object_segment_is_query_visible(
                 && migration.to_version == Some(record.table_spec_version)
                 && !record.migration_backfill
         }))
+}
+
+/// Resolve the local files one object-backed segment's artifact references
+/// name.
+///
+/// Each path comes from the artifact object's own identity, so an empty cache
+/// resolves the same filenames a warm one does without consulting the local
+/// directory.
+pub fn local_artifacts(
+    store: &dyn ObjectStore,
+    references: &ArtifactReferences,
+) -> Result<LocalArtifacts, StatsError> {
+    let mut local = LocalArtifacts {
+        binding: references.binding.clone(),
+        ..Default::default()
+    };
+    if let Some(bundle) = references.bundle.as_ref() {
+        local.bundle = Some(planned_path(store, bundle)?);
+    }
+    for (name, object) in &references.projections {
+        local
+            .projections
+            .insert(name.clone(), planned_path(store, object)?);
+    }
+    Ok(local)
+}
+
+fn planned_path(store: &dyn ObjectStore, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
+    let id =
+        ObjectId::parse(reference.object_id.as_deref().ok_or_else(|| {
+            StatsError::Internal("artifact reference has no object ID".to_string())
+        })?)?;
+    store.planned_local_path(&id)
+}
+
+fn object_ref(id: &ObjectId, version: &ObjectVersion) -> ObjectRef {
+    ObjectRef {
+        object_id: Some(id.as_str().to_string()),
+        provider_version: version.provider_version.clone(),
+        etag: version.e_tag.clone(),
+        byte_size: Some(version.byte_size),
+        sha256: Some(version.content_sha256.to_vec()),
+        ..Default::default()
+    }
+}
+
+/// Stream a staged file in bounded chunks, so an upload never holds the whole
+/// object in RAM.
+async fn file_byte_stream(path: &Path) -> Result<ObjectByteStream, StatsError> {
+    let file = tokio::fs::File::open(path).await.map_err(|error| {
+        StatsError::Internal(format!("open staged object {}: {error}", path.display()))
+    })?;
+    Ok(futures::stream::try_unfold(file, |mut file| async move {
+        let mut chunk = vec![0_u8; UPLOAD_CHUNK_BYTES];
+        let mut filled = 0;
+        while filled < chunk.len() {
+            let read = file
+                .read(&mut chunk[filled..])
+                .await
+                .map_err(|error| StatsError::Internal(format!("read staged object: {error}")))?;
+            if read == 0 {
+                break;
+            }
+            filled += read;
+        }
+        if filled == 0 {
+            return Ok(None);
+        }
+        chunk.truncate(filled);
+        Ok(Some((Bytes::from(chunk), file)))
+    })
+    .boxed())
+}
+
+/// Content SHA-256 of a staged file, read in bounded chunks.
+fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        StatsError::Internal(format!("open {} for hashing: {error}", path.display()))
+    })?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|error| StatsError::Internal(format!("hash {}: {error}", path.display())))?;
+    Ok(hasher.finalize().into())
 }
 
 fn full_hex(bytes: &[u8; 32]) -> String {

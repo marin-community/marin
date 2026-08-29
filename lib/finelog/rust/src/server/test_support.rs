@@ -106,7 +106,7 @@ pub fn disk_store(tag: &str) -> Arc<Store> {
         Store::new(
             Some(unique_dir(tag)),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),

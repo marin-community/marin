@@ -14,7 +14,6 @@ pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
 pub mod group_extrema;
-pub mod index_cache;
 pub mod optimizer;
 pub(crate) mod predicate;
 pub mod provider;
@@ -449,7 +448,8 @@ pub async fn run_query_over(
                 provider.name.clone(),
                 exact_aggregate::AggregateSource {
                     segment_paths: provider.provider.segment_paths().to_vec(),
-                    index_cache: Arc::clone(provider.provider.index_cache()),
+                    indices: Arc::clone(provider.provider.indices()),
+                    artifacts: Arc::clone(provider.provider.segment_artifacts()),
                     schema: provider.provider.schema(),
                 },
             )
@@ -826,12 +826,7 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(
-            schema,
-            &paths,
-            crate::query::index_cache::test_index_cache(),
-        )
-        .unwrap();
+        let provider = NamespaceProvider::build_with_local_artifacts(schema, &paths).unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -931,13 +926,9 @@ mod tests {
             let mut preds =
                 build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
             add_cluster_filter(&mut preds.where_parts, cluster);
-            NamespaceProvider::build(
-                Arc::clone(&full),
-                &paths,
-                crate::query::index_cache::test_index_cache(),
-            )
-            .map(|provider| (provider, preds))
-            .unwrap()
+            NamespaceProvider::build_with_local_artifacts(Arc::clone(&full), &paths)
+                .map(|provider| (provider, preds))
+                .unwrap()
         };
         let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
             rows.sort_by(|a, b| a.key.cmp(&b.key));

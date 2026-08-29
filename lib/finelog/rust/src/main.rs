@@ -11,9 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
+use finelog::indices::cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::migrations::telemetry_v1::ensure_dual_write_fence;
 use finelog::query::configure_query_runtime;
-use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,

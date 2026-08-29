@@ -23,13 +23,13 @@ use buffa::{Message, MessageView};
 use clap::ValueEnum;
 
 use crate::errors::StatsError;
+use crate::indices::IndexRegistry;
 use crate::ingestion_policy::IngestionBatchSource;
 use crate::policies::{
     physical_partition_policy_for, schema_for_namespace, segment_indexes_enabled_for,
     storage_policy_for, PolicyRegistry,
 };
 use crate::proto::finelog::stats::{ColumnType, L0Mode, SchemaView};
-use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::object_state_store::ObjectTableStateStore;
@@ -149,7 +149,8 @@ pub struct NamespaceSnapshot {
     pub key_bounds: BTreeMap<String, (i64, i64)>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
-    pub index_cache: Arc<IndexCache>,
+    pub indices: Arc<IndexRegistry>,
+    pub artifacts: crate::indices::SegmentArtifacts,
 }
 
 /// What a store may do to what it opened.
@@ -1098,9 +1099,10 @@ impl Store {
             let provider = NamespaceProvider::build(
                 arrow_schema,
                 &segments.paths,
-                Arc::clone(self.tables.index_cache()),
+                Arc::clone(self.tables.indices()),
             )
             .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
+            .with_segment_artifacts(segments.artifacts)
             .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
             .with_exact_postings_policy(exact_postings_policy)
             .with_segment_key_bounds(key_column, segments.key_bounds)
@@ -1133,12 +1135,13 @@ impl Store {
             key_bounds: segments.key_bounds,
             partitions: segments.partitions,
             min_seq: segments.min_seq,
-            index_cache: Arc::clone(self.tables.index_cache()),
+            indices: Arc::clone(self.tables.indices()),
+            artifacts: segments.artifacts,
         })
     }
 
-    pub fn index_cache(&self) -> &Arc<IndexCache> {
-        self.tables.index_cache()
+    pub fn indices(&self) -> &Arc<IndexRegistry> {
+        self.tables.indices()
     }
 
     /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
@@ -1394,7 +1397,7 @@ mod tests {
         Store::new(
             None,
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Live,
         )
         .unwrap()
@@ -1502,7 +1505,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1670,7 +1673,7 @@ mod tests {
         let reopened = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1733,7 +1736,7 @@ mod tests {
         let reopened = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1772,7 +1775,7 @@ mod tests {
         let replacement = Store::new(
             Some(replacement_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1821,7 +1824,7 @@ mod tests {
         let recovered_store = Store::new(
             Some(empty_data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1878,7 +1881,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -1932,10 +1935,7 @@ mod tests {
 
         // Observation permits compaction, but its output must remain marked as
         // backfill so a rollback can discard it in favor of version 1.
-        store
-            .maintain_namespace("iris.worker", false)
-            .await
-            .unwrap();
+        store.maintain_namespace("iris.worker", true).await.unwrap();
         let compacted = store
             .catalog
             .object_segments("iris.worker")
@@ -2005,7 +2005,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2115,7 +2115,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2168,7 +2168,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2233,7 +2233,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2289,7 +2289,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2318,13 +2318,31 @@ mod tests {
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 2);
         let before = store.publish_object_catalog("iris.worker").await.unwrap();
         assert!(before.state().catalog().direct_query_segments.is_empty());
-        store
-            .maintain_namespace("iris.worker", false)
-            .await
-            .unwrap();
-        let paths = store.query_snapshot("iris.worker").unwrap().paths;
+        store.maintain_namespace("iris.worker", true).await.unwrap();
+        let snapshot = store.query_snapshot("iris.worker").unwrap();
+        let paths = snapshot.paths.clone();
         assert_eq!(paths.len(), 1);
         assert_local_content_object(&data_dir, &paths[0]);
+
+        // The compacted segment advertises its derived artifacts as content-addressed
+        // objects of their own, not as files named after the output Parquet.
+        let artifacts = snapshot
+            .artifacts
+            .get(&paths[0])
+            .expect("the compacted segment carries artifact references");
+        let bundle = artifacts
+            .bundle
+            .as_ref()
+            .expect("compaction indexes its L1 output");
+        assert!(bundle.exists());
+        assert_ne!(
+            bundle.as_path(),
+            crate::indices::format::bundle_path(Path::new(&paths[0])).as_path()
+        );
+        assert!(bundle.starts_with(data_dir.join("_finelog/tables/iris.worker/indices")));
+        let bundle_name = bundle.file_name().and_then(|name| name.to_str()).unwrap();
+        let bundle_hash = bundle_name.strip_suffix(".fidx").unwrap();
+        assert_eq!(bundle_hash.len(), 64);
         let after = store.publish_object_catalog("iris.worker").await.unwrap();
         assert_eq!(
             after.state().catalog().catalog_generation,
@@ -2359,7 +2377,7 @@ mod tests {
         let store = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2800,7 +2818,7 @@ mod tests {
             Store::new(
                 Some(data_dir.clone()),
                 remote_dir.to_string_lossy().into_owned(),
-                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
                 ServeMode::Shadow,
             )
             .unwrap(),
@@ -2853,7 +2871,7 @@ mod tests {
         let recovered = Store::new(
             Some(recovered_data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2870,7 +2888,7 @@ mod tests {
         let reopened = Store::new(
             Some(data_dir.clone()),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Shadow,
         )
         .unwrap();
@@ -2934,7 +2952,7 @@ mod tests {
         let store = Store::new(
             Some(dir.clone()),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             ServeMode::Live,
         )
         .unwrap();
@@ -2975,7 +2993,7 @@ mod tests {
             let store = Store::new(
                 Some(dir.clone()),
                 String::new(),
-                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
                 mode,
             )
             .unwrap();

@@ -74,6 +74,9 @@ pub struct LocalSegment {
     pub max_key_value: Option<i64>,
     pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
+    /// The local files this segment's advertised artifacts resolve to. Empty
+    /// until an index build commits them.
+    pub artifacts: crate::store::table_state::LocalArtifacts,
 }
 
 /// Aggregate counters for one namespace's persisted segments.

@@ -36,12 +36,17 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
+use crate::indices::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
+use crate::indices::projection::{covering_projection_paths, covering_projection_staging_paths};
+use crate::indices::{
+    legacy_artifact_paths, local_sidecar_artifacts, needs_rebuild as segment_index_needs_rebuild,
+    remove_if_exists, IndexBuildRequest, IndexRegistry, SegmentArtifacts, SegmentIndexConfig,
+};
 use crate::partition_policy::{segment_path, select_rows, SegmentPartition};
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::proto::finelog::stats::{
     partition_field, ColumnType, L0Mode, MigrationPhase, SourceLayout, TableMigrationStatus,
 };
-use crate::query::index_cache::IndexCache;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
@@ -50,8 +55,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::merge::project_to_schema;
 use crate::store::compaction::planner::{build_job, plan};
-use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
-use crate::store::object_store::{ObjectId, ObjectPrefix};
+use crate::store::object_store::{ObjectId, ObjectPrefix, ObjectStore};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::schema::{
@@ -60,17 +64,18 @@ use crate::store::schema::{
 #[cfg(test)]
 use crate::store::segment::write_segment_to_dir;
 use crate::store::segment::{
-    discover_files, discover_segments, read_segment_footer, segment_layout_is_current,
+    discover_files, discover_segments, read_segment_footer, segment_id, segment_layout_is_current,
     stage_rewritten_segment, write_segment_to_dir_with_max_row_group_rows,
     write_segment_with_max_row_group_rows, MAX_ROW_GROUP_ROWS,
 };
-use crate::store::segment_index::{
-    covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
-    needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
-    SegmentIndexConfig, SegmentIndexWrite,
+use crate::store::table::{
+    local_artifacts, object_segment_is_query_visible, MaintenanceLease, TableController,
+    WrittenObject,
 };
-use crate::store::table::{object_segment_is_query_visible, TableController};
-use crate::store::table_state::{SegmentDescriptor, TableRevision};
+use crate::store::table_state::{
+    ArtifactReferences, CommitError, LocalArtifacts, SegmentDescriptor, SourceBinding,
+    TableRevision,
+};
 use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
@@ -80,12 +85,9 @@ use crate::store::types::{
 fn remove_index_artifacts(parquet_path: &str) {
     let parquet = Path::new(parquet_path);
     let mut artifacts = vec![
+        (crate::indices::format::bundle_path(parquet), "index bundle"),
         (
-            crate::store::index_bundle::bundle_path(parquet),
-            "index bundle",
-        ),
-        (
-            crate::store::index_bundle::staging_path(parquet),
+            crate::indices::format::staging_path(parquet),
             "staged index bundle",
         ),
     ];
@@ -117,6 +119,101 @@ fn remove_index_artifacts(parquet_path: &str) {
     }
 }
 
+/// The local files one segment's artifacts resolve to.
+///
+/// An object-backed segment resolves each path from the object identity its
+/// table state names, so an empty reference set means the segment advertises no
+/// artifacts. A version-0 segment has no references at all; its sidecars come
+/// from the local layout it was written with, and stop being consulted once the
+/// table is imported to object storage.
+fn segment_artifacts(
+    store: Option<&dyn ObjectStore>,
+    record: Option<&ObjectSegmentRecord>,
+    parquet: &Path,
+) -> Result<LocalArtifacts, StatsError> {
+    let Some(record) = record else {
+        return Ok(local_sidecar_artifacts(parquet));
+    };
+    let store = store.ok_or_else(|| {
+        StatsError::Internal(format!(
+            "object segment {} has no object store to resolve artifacts",
+            parquet.display()
+        ))
+    })?;
+    local_artifacts(store, &record.artifacts)
+}
+
+/// One job promoting every L0 segment in `rows` to L1.
+///
+/// The leveled policy only promotes a run that meets its byte or fanout target.
+/// A caller that needs L0 stabilized now — a forced maintenance cycle — asks for
+/// this instead.
+fn l0_promotion_job(rows: &[SegmentRow]) -> Option<CompactionJob> {
+    let mut inputs: Vec<SegmentRow> = rows.iter().filter(|row| row.level == 0).cloned().collect();
+    if inputs.is_empty() {
+        return None;
+    }
+    inputs.sort_by_key(|row| row.min_seq);
+    let output_min_seq = inputs
+        .iter()
+        .map(|row| row.min_seq)
+        .min()
+        .expect("a non-empty run has a minimum seq");
+    Some(CompactionJob {
+        inputs,
+        output_level: 1,
+        output_min_seq,
+    })
+}
+
+/// Whether a leased commit lost a real conflict rather than hitting a transient
+/// failure.
+///
+/// A conflict means the replacement can never apply: an input was retired, the
+/// definition version moved, or another writer owns the table. Its outputs are
+/// already immutable objects, so abandoning them leaves them unreferenced and
+/// collectible instead of failing the table.
+fn is_lease_conflict(error: &CommitError) -> bool {
+    matches!(
+        error,
+        CommitError::Fenced(_) | CommitError::NotCommitted(StatsError::SchemaConflict(_))
+    )
+}
+
+/// A private directory one compaction stages its outputs and artifacts in.
+///
+/// The executor writes ordinary local Parquet plus its derived artifacts here;
+/// each is uploaded as an immutable object and the directory is removed. Nothing
+/// in the query view ever points at a staged file.
+struct CompactionStaging {
+    path: PathBuf,
+}
+
+impl CompactionStaging {
+    fn create(table_dir: &Path) -> Result<Self, StatsError> {
+        let path = table_dir.join(format!("{COMPACTION_STAGING_DIR}/{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).map_err(|error| {
+            StatsError::Internal(format!(
+                "create compaction staging directory {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for CompactionStaging {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            tracing::warn!(path = %self.path.display(), %error, "failed to remove compaction staging directory");
+        }
+    }
+}
+
 /// Why one sealed buffer did not reach a published table revision.
 enum SealedCommit {
     /// Nothing was committed. The sealed rows return to the RAM buffer.
@@ -127,8 +224,8 @@ enum SealedCommit {
 }
 
 fn fixed_index_artifacts_exist(parquet_path: &Path) -> bool {
-    crate::store::index_bundle::bundle_path(parquet_path).exists()
-        || crate::store::index_bundle::staging_path(parquet_path).exists()
+    crate::indices::format::bundle_path(parquet_path).exists()
+        || crate::indices::format::staging_path(parquet_path).exists()
         || legacy_artifact_paths(parquet_path)
             .into_iter()
             .any(|path| path.exists())
@@ -199,6 +296,9 @@ const PHYSICAL_LAYOUT_MIGRATION_RETRY_INTERVAL: Duration = Duration::from_millis
 /// Source objects copied per maintenance tick while a TableSpec transition is active.
 const TABLE_SPEC_MIGRATION_SEGMENTS_PER_TICK: usize = 4;
 const NULL_PARTITION_VALUE: &str = "__HIVE_DEFAULT_PARTITION__";
+/// Table-relative directory compaction stages its outputs in before upload.
+const COMPACTION_STAGING_DIR: &str = "_compaction";
+
 const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const OBJECT_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -594,10 +694,10 @@ pub struct Namespace {
     /// long after there is nothing left to rewrite. A path's layout only ever
     /// changes because this pass changed it.
     current_layouts: Mutex<HashSet<String>>,
-    index_cache: Arc<IndexCache>,
+    indices: Arc<IndexRegistry>,
     /// Shared by every namespace in this store so historical projection builds
     /// cannot saturate the process with concurrent scans and compression.
-    index_backfill_slot: Arc<Mutex<()>>,
+    index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
     /// Shared by every namespace in this store so only one two-worker physical
     /// migration wave runs at a time.
     physical_layout_migration_slot: Arc<Mutex<()>>,
@@ -689,6 +789,9 @@ pub struct SegmentSnapshot {
     pub key_bounds: BTreeMap<String, (i64, i64)>,
     pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
+    /// What each snapshotted segment advertises, so a scan opens artifacts by
+    /// reference instead of probing for files beside the Parquet.
+    pub artifacts: SegmentArtifacts,
 }
 
 impl Namespace {
@@ -711,8 +814,8 @@ impl Namespace {
         data_dir: Option<PathBuf>,
         catalog: Arc<Catalog>,
         query_visibility: Arc<RwLock<()>>,
-        index_cache: Arc<IndexCache>,
-        index_backfill_slot: Arc<Mutex<()>>,
+        indices: Arc<IndexRegistry>,
+        index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
         physical_layout_migration_slot: Arc<Mutex<()>>,
         controller: Arc<TableController>,
         storage_policy: StoragePolicy,
@@ -756,7 +859,13 @@ impl Namespace {
                 std::fs::create_dir_all(dir).map_err(|e| {
                     StatsError::Internal(format!("create namespace dir {}: {e}", dir.display()))
                 })?;
-                let adopted = adopt_local_segments(dir, Some(&key_column), &catalog, name)?;
+                let adopted = adopt_local_segments(
+                    dir,
+                    Some(&key_column),
+                    &catalog,
+                    name,
+                    controller.object_store().map(Arc::as_ref),
+                )?;
                 // Seed next_seq past every segment the catalog knows about, not
                 // just on-disk footers. A segment evicted to remote has its local
                 // parquet unlinked, so a footer-only scan under-counts and would
@@ -818,7 +927,7 @@ impl Namespace {
             task_handles: Mutex::new(Vec::new()),
             index_backfill_skips: Mutex::new(IndexBackfillSkips::default()),
             current_layouts: Mutex::new(HashSet::new()),
-            index_cache,
+            indices,
             index_backfill_slot,
             physical_layout_migration_slot,
         });
@@ -946,6 +1055,11 @@ impl Namespace {
             if !visible || !Path::new(&row.path).exists() {
                 continue;
             }
+            let artifacts = segment_artifacts(
+                self.controller.object_store().map(Arc::as_ref),
+                object_records.get(&row.path),
+                Path::new(&row.path),
+            )?;
             segments.push_back(LocalSegment {
                 path: row.path,
                 size_bytes: row.byte_size,
@@ -958,6 +1072,7 @@ impl Namespace {
                 max_key_value: row.max_key_value.and_then(|value| value.parse().ok()),
                 partition: row.partition,
                 location: row.location,
+                artifacts,
             });
         }
         segments
@@ -1163,6 +1278,9 @@ impl Namespace {
                         location: SegmentLocation::Both,
                     },
                     source: stored.source,
+                    // A migration output is rewritten from its source; index
+                    // backfill supplies its artifacts.
+                    artifacts: ArtifactReferences::default(),
                 });
             }
             let source_rows = row.row_count;
@@ -1205,17 +1323,31 @@ impl Namespace {
         Ok(true)
     }
 
-    /// Compact one same-partition group through immutable object replacement.
+    /// Compact one planner-issued run of immutable objects and commit the
+    /// replacement under a maintenance lease.
     ///
-    /// Returns `true` when a group was replaced and `false` when no group is
-    /// currently eligible.
-    async fn object_compaction_step(&self) -> Result<bool, StatsError> {
+    /// This runs the same executor as a local table: inputs are localized by
+    /// exact reference, decoded under the merge memory ceiling one input at a
+    /// time, and written to bounded local staging. The object-native part is at
+    /// the ends — inputs arrive through `ObjectStore::local_path`, and outputs
+    /// plus their derived artifacts are uploaded as immutable objects and
+    /// advertised in the same commit that retires the inputs.
+    ///
+    /// Returns `true` when a run was replaced and `false` when nothing is
+    /// eligible. A commit that loses a real conflict leaves its uploaded
+    /// outputs unreferenced and returns `false`: the table keeps running and
+    /// object GC collects them after the orphan grace.
+    async fn object_compaction_step(&self, force_compact_l0: bool) -> Result<bool, StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let active_version = status.active_version();
         if active_version == 0 {
             return Ok(false);
         }
-        let policy = self.runtime_policy();
+        let Some(table_dir) = self.data_dir.clone() else {
+            return Err(StatsError::Internal(
+                "object-backed compaction requires local table state".to_string(),
+            ));
+        };
         let object_records: HashMap<_, _> = self
             .catalog
             .object_segments(&self.name)?
@@ -1223,150 +1355,317 @@ impl Namespace {
             .filter(|record| record.table_spec_version == active_version)
             .map(|record| (record.path.clone(), record))
             .collect();
-        let mut groups = BTreeMap::<(Option<SegmentPartition>, bool), Vec<SegmentRow>>::new();
+        // A backfilled run and an ordinary run are separate compaction streams:
+        // a checkpointed migration output must not be merged with a segment the
+        // migration has not accounted for.
+        let mut rows_by_class: BTreeMap<bool, Vec<SegmentRow>> = BTreeMap::new();
         for row in self.catalog.list_segments(&self.name)? {
             if let Some(record) = object_records.get(&row.path) {
-                groups
-                    .entry((row.partition.clone(), record.migration_backfill))
+                rows_by_class
+                    .entry(record.migration_backfill)
                     .or_default()
                     .push(row);
             }
         }
-        let compressed_budget = policy
-            .target_object_bytes
-            .min(
-                self.compaction_config
-                    .max_merge_arrow_bytes
-                    .saturating_div(32),
-            )
-            .max(1);
-        let mut selected = None;
-        for ((_, migration_backfill), rows) in &mut groups {
-            rows.sort_by_key(|row| row.min_seq);
-            for start in 0..rows.len() {
-                let mut bytes = 0_i64;
-                let mut inputs = Vec::new();
-                for row in rows.iter().skip(start) {
-                    let next = bytes.saturating_add(row.byte_size.max(0));
-                    if next > compressed_budget
-                        || inputs.len() >= self.compaction_config.max_segments_per_level
-                    {
-                        break;
-                    }
-                    bytes = next;
-                    inputs.push(row.clone());
-                }
-                if inputs.len() >= 2 {
-                    selected = Some((inputs, *migration_backfill));
-                    break;
-                }
-            }
-            if selected.is_some() {
-                break;
-            }
-        }
-        let Some((inputs, migration_backfill)) = selected else {
+        let config = self.object_compaction_config();
+        let Some((migration_backfill, job)) =
+            rows_by_class.into_iter().find_map(|(backfill, rows)| {
+                plan(&config, &rows)
+                    .or_else(|| force_compact_l0.then(|| l0_promotion_job(&rows)).flatten())
+                    .map(|job| (backfill, job))
+            })
+        else {
             return Ok(false);
         };
-        let namespace_dir = self.data_dir.as_deref().ok_or_else(|| {
-            StatsError::Internal("object-backed compaction requires local table state".to_string())
-        })?;
-        // The lease pins the definition version and the exact inputs. Merging and
-        // encoding then run outside the controller; only the replacement commit
-        // is serialized against concurrent flushes and cursor advances.
+
+        // The lease pins the definition version and the exact inputs. Merging,
+        // encoding, and uploading then run outside the controller; only the
+        // replacement commit is serialized against concurrent flushes.
         let lease = self
             .controller
-            .begin_compaction(inputs.iter().map(|row| row.path.clone()).collect())?;
-        let mut input_bytes = Vec::with_capacity(inputs.len());
-        for row in &inputs {
-            let record = object_records.get(&row.path).ok_or_else(|| {
-                StatsError::Internal(format!("object compaction lost input {}", row.path))
+            .begin_compaction(job.inputs.iter().map(|row| row.path.clone()).collect())?;
+        for input in &job.inputs {
+            let record = object_records.get(&input.path).ok_or_else(|| {
+                StatsError::Internal(format!("object compaction lost input {}", input.path))
             })?;
-            input_bytes.push(
-                self.migration_source_bytes(namespace_dir, row, Some(record))
-                    .await?,
-            );
+            let localized = self.controller.localize(&record.source).await?;
+            if localized != Path::new(&input.path) {
+                return Err(StatsError::Internal(format!(
+                    "object {} localized to {} rather than its catalog path",
+                    input.path,
+                    localized.display()
+                )));
+            }
         }
-        let source_layout = policy.source_layout.clone();
+
+        let staging = CompactionStaging::create(&table_dir)?;
+        let outcome = self
+            .run_object_compaction(&staging, &job, &lease, active_version, migration_backfill)
+            .await;
+        drop(staging);
+        outcome
+    }
+
+    /// The leveled policy for an object-backed table.
+    ///
+    /// The table specification declares the object size it wants, so every
+    /// level promotes at that byte target rather than the process-wide default.
+    fn object_compaction_config(&self) -> CompactionConfig {
+        let target = self.runtime_policy().target_object_bytes;
+        CompactionConfig {
+            level_targets: vec![target; self.compaction_config.level_targets.len()],
+            ..self.compaction_config.clone()
+        }
+    }
+
+    /// Execute one object compaction inside `staging` and commit its result.
+    async fn run_object_compaction(
+        &self,
+        staging: &CompactionStaging,
+        job: &CompactionJob,
+        lease: &MaintenanceLease,
+        active_version: u64,
+        migration_backfill: bool,
+    ) -> Result<bool, StatsError> {
+        let index_config = self.segment_index_config();
         let arrow_schema = Arc::clone(&self.arrow_schema);
-        let max_row_group_rows = source_layout
-            .as_ref()
-            .and_then(|layout| layout.max_row_group_rows)
-            .map(|rows| rows as usize)
-            .unwrap_or(self.max_row_group_rows);
-        let rewritten = tokio::task::spawn_blocking(move || {
-            let decoded = input_bytes
-                .into_iter()
-                .map(|bytes| decode_migration_source(bytes, &arrow_schema))
-                .collect::<Result<Vec<_>, _>>()?;
-            let merged = concat_batches(&arrow_schema, &decoded).map_err(|error| {
-                StatsError::Internal(format!("merge object compaction batches: {error}"))
-            })?;
-            let sorted = sorted_object_batch(&merged, source_layout.as_ref())?;
-            partition_object_batch(&sorted, source_layout.as_ref())?
-                .into_iter()
-                .map(|(partition, batch)| {
-                    let (min_seq, max_seq) = batch_seq_bounds(&batch)?;
-                    let parquet =
-                        write_segment_with_max_row_group_rows(&batch, max_row_group_rows)?;
-                    Ok((partition, batch, parquet, min_seq, max_seq))
-                })
-                .collect::<Result<Vec<_>, StatsError>>()
+        let sort_columns = self.sort_columns.clone();
+        let key_column = self.key_column.clone();
+        let max_row_group_rows = self.max_row_group_rows;
+        let max_merge_arrow_bytes = self.compaction_config.max_merge_arrow_bytes;
+        let key_bounds: HashMap<String, (Option<i64>, Option<i64>)> = job
+            .inputs
+            .iter()
+            .map(|row| (row.path.clone(), self.input_key_bounds(&row.path)))
+            .collect();
+        let job_for_run = job.clone();
+        let staging_dir = staging.path().to_path_buf();
+        let swap = tokio::task::spawn_blocking(move || {
+            run_job_with_partition_policy(
+                &job_for_run,
+                &staging_dir,
+                &arrow_schema,
+                CompactionExecution {
+                    layout: CompactionLayout {
+                        sort_columns: &sort_columns,
+                        key_column: &key_column,
+                        max_row_group_rows,
+                    },
+                    index_config: &index_config,
+                    partition_policy: None,
+                    max_merge_arrow_bytes,
+                },
+                |path| key_bounds.get(path).copied().unwrap_or((None, None)),
+            )
         })
         .await
         .map_err(|error| {
             StatsError::Internal(format!("object compaction task panicked: {error}"))
         })??;
-        let input_rows = inputs.iter().map(|row| row.row_count).sum::<i64>();
-        let output_rows = rewritten
-            .iter()
-            .map(|(_, batch, _, _, _)| batch.num_rows() as i64)
-            .sum::<i64>();
-        if input_rows != output_rows {
-            return Err(StatsError::Internal(format!(
-                "object compaction rewrote {input_rows} rows as {output_rows}"
-            )));
+
+        // A single-input run is a level promotion. An immutable object is never
+        // renamed, so the promotion re-advertises the same source and artifacts
+        // at the higher level instead of rewriting anything.
+        if swap.bump_rename.is_some() {
+            return self
+                .commit_object_level_bump(
+                    &swap.removed,
+                    swap.added,
+                    lease,
+                    active_version,
+                    migration_backfill,
+                )
+                .await;
         }
-        let output_level = inputs
-            .iter()
-            .map(|row| row.level)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
-        let mut output_segments = Vec::with_capacity(rewritten.len());
-        let mut outputs = Vec::with_capacity(rewritten.len());
-        for (partition, batch, parquet, min_seq, max_seq) in rewritten {
-            let stored = self.controller.write_parquet(Bytes::from(parquet)).await?;
-            let (min_key_value, max_key_value) = self.key_bounds(&batch);
+        if swap.added.is_empty() {
+            tracing::warn!(
+                namespace = %self.name,
+                dropped = ?swap.removed,
+                "object compaction found no readable input; leaving the run for the next tick"
+            );
+            return Ok(false);
+        }
+
+        let mut outputs = Vec::with_capacity(swap.added.len());
+        let mut published = Vec::with_capacity(swap.added.len());
+        for staged in swap.added {
+            let staged_path = PathBuf::from(&staged.path);
+            let stored = self
+                .controller
+                .write_staged_object("objects", "parquet", &staged_path)
+                .await?;
+            let (references, local) = self
+                .publish_segment_artifacts(&staged_path, &stored)
+                .await?;
             let segment = LocalSegment {
                 path: stored.path.to_string_lossy().into_owned(),
                 size_bytes: stored.byte_size,
-                level: output_level,
-                min_seq,
-                max_seq,
-                row_count: batch.num_rows() as i64,
-                created_at_ms: now_ms(),
-                min_key_value,
-                max_key_value,
-                partition,
                 location: SegmentLocation::Both,
+                artifacts: local,
+                ..staged
             };
             outputs.push(SegmentDescriptor {
                 row: segment_to_row(&self.name, &segment),
                 source: stored.source,
+                artifacts: references,
             });
-            output_segments.push(segment);
+            published.push(segment);
         }
-        let removed_paths = lease.inputs().to_vec();
-        let added_paths = output_segments
-            .iter()
-            .map(|segment| segment.path.clone())
-            .collect::<Vec<_>>();
-        // The replacement owns the inputs once it commits, so the local view
-        // follows the committed rows even when HEAD publication is unresolved.
+        self.commit_object_replacement(
+            &swap.removed,
+            outputs,
+            published,
+            lease,
+            active_version,
+            migration_backfill,
+        )
+        .await
+    }
+
+    /// Upload the artifacts the executor built beside `staged` and return both
+    /// their durable references and the local files those references resolve to.
+    ///
+    /// An artifact that fails to upload is omitted: the source segment commits
+    /// without it and index backfill supplies it later.
+    async fn publish_segment_artifacts(
+        &self,
+        staged: &Path,
+        stored: &WrittenObject,
+    ) -> Result<(ArtifactReferences, LocalArtifacts), StatsError> {
+        let built = local_sidecar_artifacts(staged);
+        if built.is_empty() {
+            return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
+        }
+        let binding = SourceBinding {
+            segment_uuid: segment_id(&stored.path).map(|id| id.to_string()),
+            row_count: built.binding.row_count,
+        };
+        let mut references = ArtifactReferences {
+            binding: binding.clone(),
+            ..Default::default()
+        };
+        let mut local = LocalArtifacts {
+            binding,
+            ..Default::default()
+        };
+        for (name, path) in &built.projections {
+            match self
+                .controller
+                .write_staged_object("projections", "parquet", path)
+                .await
+            {
+                Ok(uploaded) => {
+                    references.projections.insert(name.clone(), uploaded.source);
+                    local.projections.insert(name.clone(), uploaded.path);
+                }
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, projection = %name, %error, "covering projection upload failed; committing without it");
+                    return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
+                }
+            }
+        }
+        let Some(bundle) = built.bundle.as_ref() else {
+            return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
+        };
+        match self
+            .controller
+            .write_staged_object("indices", "fidx", bundle)
+            .await
+        {
+            Ok(uploaded) => {
+                references.bundle = Some(uploaded.source);
+                local.bundle = Some(uploaded.path);
+                Ok((references, local))
+            }
+            Err(error) => {
+                tracing::warn!(namespace = %self.name, %error, "index bundle upload failed; committing the segment without it");
+                Ok((ArtifactReferences::default(), LocalArtifacts::default()))
+            }
+        }
+    }
+
+    /// Promote a single input to the next level without rewriting its object.
+    async fn commit_object_level_bump(
+        &self,
+        removed: &[String],
+        added: Vec<LocalSegment>,
+        lease: &MaintenanceLease,
+        active_version: u64,
+        migration_backfill: bool,
+    ) -> Result<bool, StatsError> {
+        let records: HashMap<_, _> = self
+            .catalog
+            .object_segments(&self.name)?
+            .into_iter()
+            .map(|record| (record.path.clone(), record))
+            .collect();
+        let mut outputs = Vec::with_capacity(added.len());
+        let mut published = Vec::with_capacity(added.len());
+        for (staged, input) in added.into_iter().zip(removed) {
+            let record = records
+                .get(input)
+                .ok_or_else(|| StatsError::Internal(format!("level bump lost input {input}")))?;
+            let existing = self
+                .inner
+                .lock()
+                .unwrap()
+                .local_segments
+                .iter()
+                .find(|segment| &segment.path == input)
+                .map(|segment| segment.artifacts.clone())
+                .unwrap_or_default();
+            let segment = LocalSegment {
+                path: input.clone(),
+                artifacts: existing,
+                ..staged
+            };
+            outputs.push(SegmentDescriptor {
+                row: segment_to_row(&self.name, &segment),
+                source: record.source.clone(),
+                artifacts: record.artifacts.clone(),
+            });
+            published.push(segment);
+        }
+        self.commit_object_replacement(
+            removed,
+            outputs,
+            published,
+            lease,
+            active_version,
+            migration_backfill,
+        )
+        .await
+    }
+
+    /// Commit one leased replacement and swap the local query view.
+    ///
+    /// The controller rebases the replacement onto whatever state is current.
+    /// A conflict — a retired input, a moved definition version, or a fenced
+    /// writer — abandons the outputs rather than failing the table.
+    async fn commit_object_replacement(
+        &self,
+        removed: &[String],
+        outputs: Vec<SegmentDescriptor>,
+        published: Vec<LocalSegment>,
+        lease: &MaintenanceLease,
+        active_version: u64,
+        migration_backfill: bool,
+    ) -> Result<bool, StatsError> {
+        let removed_paths = removed.to_vec();
         let committed = match self
             .controller
-            .commit_maintenance(&lease, || {
+            .commit_maintenance(lease, || {
+                let live: HashSet<String> = self
+                    .catalog
+                    .object_segments(&self.name)?
+                    .into_iter()
+                    .map(|record| record.path)
+                    .collect();
+                if let Some(retired) = removed_paths.iter().find(|path| !live.contains(*path)) {
+                    return Err(StatsError::SchemaConflict(format!(
+                        "compaction input {retired} is no longer live"
+                    )));
+                }
                 let revision = self.catalog.replace_object_segments(
                     &self.name,
                     &removed_paths,
@@ -1378,32 +1677,44 @@ impl Namespace {
             })
             .await
         {
+            Ok(committed) => Some(committed.token.revision()),
+            Err(error) if is_lease_conflict(&error) => {
+                tracing::info!(
+                    namespace = %self.name,
+                    inputs = removed_paths.len(),
+                    outputs = published.len(),
+                    %error,
+                    "compaction lease lost a real conflict; abandoning the uploaded outputs"
+                );
+                return Ok(false);
+            }
             Err(error) if !error.is_committed() => return Err(error.into()),
-            outcome => outcome,
+            // Durable locally but not published; the maintenance loop owes HEAD
+            // that revision. The local view still follows the committed rows.
+            Err(error) => {
+                tracing::warn!(namespace = %self.name, %error, "compaction commit awaits publication");
+                None
+            }
         };
         let _visibility_guard = self.query_visibility.write().await;
-        let removed: HashSet<_> = removed_paths.iter().collect();
+        let retired: HashSet<&String> = removed_paths.iter().collect();
         let mut inner = self.inner.lock().unwrap();
         inner
             .local_segments
-            .retain(|segment| !removed.contains(&segment.path));
-        inner.local_segments.extend(output_segments);
+            .retain(|segment| !retired.contains(&segment.path));
+        inner.local_segments.extend(published.iter().cloned());
         inner
             .local_segments
             .make_contiguous()
             .sort_by_key(|segment| segment.min_seq);
         debug_assert_unique_paths(&inner.local_segments);
         drop(inner);
-        for path in &removed_paths {
-            remove_index_artifacts(path);
-        }
-        let committed = committed?;
         tracing::info!(
             namespace = %self.name,
             inputs = removed_paths.len(),
-            outputs = added_paths.len(),
-            rows = input_rows,
-            catalog_generation = committed.token.revision().get(),
+            outputs = published.len(),
+            rows = published.iter().map(|segment| segment.row_count).sum::<i64>(),
+            catalog_generation = committed.map(|revision| revision.get()),
             "object-backed compaction committed"
         );
         Ok(true)
@@ -1463,6 +1774,12 @@ impl Namespace {
                 .filter_map(|segment| Some((segment.path.clone(), segment.partition.clone()?)))
                 .collect(),
             min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
+            artifacts: inner
+                .local_segments
+                .iter()
+                .filter(|segment| !segment.artifacts.is_empty())
+                .map(|segment| (segment.path.clone(), segment.artifacts.clone()))
+                .collect(),
         }
     }
 
@@ -1783,10 +2100,13 @@ impl Namespace {
                 max_key_value: max_key,
                 partition,
                 location: SegmentLocation::Both,
+                artifacts: LocalArtifacts::default(),
             };
             descriptors.push(SegmentDescriptor {
                 row: segment_to_row(&self.name, &segment),
                 source: stored.source,
+                // L0 is unindexed: a flush advertises no derived artifacts.
+                artifacts: ArtifactReferences::default(),
             });
             segments.push(segment);
         }
@@ -1847,6 +2167,7 @@ impl Namespace {
             max_key_value: max_key,
             partition: None,
             location: SegmentLocation::Local,
+            artifacts: LocalArtifacts::default(),
         };
         let row = segment_to_row(&self.name, &seg);
         // Persist the catalog row BEFORE committing the in-RAM flush: the file is
@@ -2398,8 +2719,8 @@ impl Namespace {
                 remove_orphaned_index_artifact(&self.name, &legacy, "legacy index");
             }
             let (bundle_from, bundle_to) = (
-                crate::store::index_bundle::bundle_path(from),
-                crate::store::index_bundle::bundle_path(to),
+                crate::indices::format::bundle_path(from),
+                crate::indices::format::bundle_path(to),
             );
             if bundle_from.exists() {
                 if let Err(error) = std::fs::rename(&bundle_from, &bundle_to) {
@@ -2717,12 +3038,14 @@ impl Namespace {
 
     // ----- segment index backfill ---------------------------------------
 
-    /// Rebuild complete segment-index bundles for up to `max` local L>=1 files.
+    /// Rebuild complete segment-index artifacts for up to `max` L>=1 segments.
     ///
-    /// All methods share one projected source read. The bundle is published
-    /// after every external projection, so a racing query sees either the old
-    /// complete policy or the new complete policy.
-    fn backfill_missing_index_bundles(&self, max: usize) -> usize {
+    /// All methods share one projected source read. For a local table the
+    /// segment records the local files the build produced. For an object-backed
+    /// table each artifact becomes an immutable object and its references are
+    /// added to the table state in a new revision: adjacency to a filename is
+    /// never what makes an artifact live.
+    async fn backfill_index_artifacts(&self, max: usize) -> usize {
         if self.data_dir.is_none() || max == 0 {
             return 0;
         }
@@ -2733,70 +3056,50 @@ impl Namespace {
         let Ok(_slot) = self.index_backfill_slot.try_lock() else {
             return 0;
         };
-        let segments: Vec<LocalSegment> = self
-            .inner
-            .lock()
-            .unwrap()
-            .local_segments
-            .iter()
-            .cloned()
-            .collect();
-        let fingerprint = format!("{:?}", config.policy_fingerprint());
-        let candidates = {
-            let mut skips = self.index_backfill_skips.lock().unwrap();
-            let live: HashSet<&str> = segments
-                .iter()
-                .map(|segment| segment.path.as_str())
-                .collect();
-            skips.reconcile(&[fingerprint.as_str()], &live);
-            let mut candidates = segments
-                .iter()
-                .filter(|segment| !skips.paths.contains(&segment.path))
-                .filter(|segment| {
-                    segment.level >= 1
-                        && self.layout_is_current(&segment.path)
-                        && segment_index_needs_rebuild(
-                            Path::new(&segment.path),
-                            segment.row_count,
-                            &config,
-                        )
-                })
-                .collect::<Vec<_>>();
-            candidates.sort_by_key(|segment| Reverse(segment.max_seq));
-            candidates
-                .into_iter()
-                .take(max)
-                .map(|segment| BackfillCandidate {
-                    path: segment.path.clone(),
-                    expected_rows: segment.row_count,
-                })
-                .collect::<Vec<_>>()
-        };
-        let projection = config.input_columns();
+        let candidates = self.index_backfill_candidates(&config, max);
         let mut built = 0;
         for candidate in candidates {
-            let path = Path::new(&candidate.path);
-            let batches = match read_segment_projected(path, Some(&projection)) {
-                Ok(batches) => batches,
+            let path = PathBuf::from(&candidate.path);
+            let indices = Arc::clone(&self.indices);
+            let build_config = config.clone();
+            let build_path = path.clone();
+            let artifacts = match tokio::task::spawn_blocking(move || {
+                let projection = build_config.input_columns();
+                let batches = read_segment_projected(&build_path, Some(&projection))?;
+                indices
+                    .build(IndexBuildRequest {
+                        source: &build_path,
+                        batches: &batches,
+                        config: &build_config,
+                    })
+                    .map_err(|error| StatsError::Internal(format!("build segment index: {error}")))
+            })
+            .await
+            {
+                Ok(Ok(artifacts)) => artifacts,
+                Ok(Err(error)) => {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill build failed");
+                    continue;
+                }
                 Err(error) => {
-                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill read failed");
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill task panicked");
                     continue;
                 }
             };
-            match write_segment_index(path, &batches, &config) {
-                Ok(SegmentIndexWrite::Written) => {
-                    self.index_cache
-                        .invalidate(&crate::store::index_bundle::bundle_path(path));
-                    built += 1;
-                    tracing::debug!(namespace = %self.name, path = %candidate.path, "backfilled segment index bundle");
-                }
-                Ok(SegmentIndexWrite::NotApplicable) => {}
-                Err(error) => {
-                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill write failed");
+            if !artifacts.is_empty() {
+                if let Err(error) = self.commit_backfilled_artifacts(&candidate.path).await {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill commit failed");
                     continue;
                 }
+                built += 1;
+                tracing::debug!(namespace = %self.name, path = %candidate.path, "backfilled segment index artifacts");
             }
-            if segment_index_needs_rebuild(path, candidate.expected_rows, &config) {
+            if segment_index_needs_rebuild(
+                &path,
+                candidate.expected_rows,
+                &local_sidecar_artifacts(&path),
+                &config,
+            ) {
                 tracing::debug!(namespace = %self.name, path = %candidate.path, "segment cannot satisfy the current index policy; not retrying");
                 self.index_backfill_skips
                     .lock()
@@ -2806,6 +3109,113 @@ impl Namespace {
             }
         }
         built
+    }
+
+    /// The oldest-first segments whose artifacts do not satisfy `config`.
+    fn index_backfill_candidates(
+        &self,
+        config: &SegmentIndexConfig,
+        max: usize,
+    ) -> Vec<BackfillCandidate> {
+        let segments: Vec<LocalSegment> = self
+            .inner
+            .lock()
+            .unwrap()
+            .local_segments
+            .iter()
+            .cloned()
+            .collect();
+        let fingerprint = format!("{:?}", config.policy_fingerprint());
+        let mut skips = self.index_backfill_skips.lock().unwrap();
+        let live: HashSet<&str> = segments
+            .iter()
+            .map(|segment| segment.path.as_str())
+            .collect();
+        skips.reconcile(&[fingerprint.as_str()], &live);
+        let mut candidates = segments
+            .iter()
+            .filter(|segment| !skips.paths.contains(&segment.path))
+            .filter(|segment| {
+                segment.level >= 1
+                    && self.layout_is_current(&segment.path)
+                    && segment_index_needs_rebuild(
+                        Path::new(&segment.path),
+                        segment.row_count,
+                        &segment.artifacts,
+                        config,
+                    )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|segment| Reverse(segment.max_seq));
+        candidates
+            .into_iter()
+            .take(max)
+            .map(|segment| BackfillCandidate {
+                path: segment.path.clone(),
+                expected_rows: segment.row_count,
+            })
+            .collect()
+    }
+
+    /// Publish the artifacts just built beside `path` and make them live.
+    ///
+    /// A local table records the files on its segment. An object-backed table
+    /// uploads them and commits the references as a new table revision, so a
+    /// reader on a cold cache finds them from state rather than from the local
+    /// directory.
+    async fn commit_backfilled_artifacts(&self, path: &str) -> Result<(), StatsError> {
+        let staged = PathBuf::from(path);
+        if !self.controller.is_object_backed() {
+            let local = local_sidecar_artifacts(&staged);
+            if let Some(bundle) = local.bundle.as_ref() {
+                self.indices.invalidate(bundle);
+            }
+            self.set_segment_artifacts(path, local);
+            return Ok(());
+        }
+        let record = self
+            .catalog
+            .object_segments(&self.name)?
+            .into_iter()
+            .find(|record| record.path == path)
+            .ok_or_else(|| {
+                StatsError::Internal(format!("index backfill lost object segment {path}"))
+            })?;
+        let stored = WrittenObject {
+            path: staged.clone(),
+            source: record.source.clone(),
+            byte_size: 0,
+        };
+        let (references, local) = self.publish_segment_artifacts(&staged, &stored).await?;
+        if references.is_empty() {
+            return Ok(());
+        }
+        let owned_path = path.to_string();
+        self.controller
+            .commit(|| {
+                let revision =
+                    self.catalog
+                        .set_segment_artifacts(&self.name, &owned_path, &references)?;
+                Ok((revision, ()))
+            })
+            .await?;
+        if let Some(bundle) = local.bundle.as_ref() {
+            self.indices.invalidate(bundle);
+        }
+        self.set_segment_artifacts(path, local);
+        Ok(())
+    }
+
+    /// Point `path`'s query view at the artifacts its references resolve to.
+    fn set_segment_artifacts(&self, path: &str, artifacts: LocalArtifacts) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(segment) = inner
+            .local_segments
+            .iter_mut()
+            .find(|segment| segment.path == path)
+        {
+            segment.artifacts = artifacts;
+        }
     }
 
     /// Remove derived index files from a namespace whose policy disables them.
@@ -2853,8 +3263,10 @@ impl Namespace {
             if fixed_index_artifacts_exist(Path::new(&path)) {
                 continue;
             }
-            self.index_cache
-                .invalidate(&crate::store::index_bundle::bundle_path(Path::new(&path)));
+            if let Some(bundle) = local_sidecar_artifacts(Path::new(&path)).bundle.as_ref() {
+                self.indices.invalidate(bundle);
+            }
+            self.set_segment_artifacts(&path, LocalArtifacts::default());
             self.index_backfill_skips.lock().unwrap().paths.insert(path);
             cleaned += 1;
         }
@@ -2869,9 +3281,9 @@ impl Namespace {
     }
 
     /// Maintain one bounded index batch and return the bundle count changed.
-    fn maintain_index_artifacts(&self) -> usize {
+    async fn maintain_index_artifacts(&self) -> usize {
         if segment_indexes_enabled_for(&self.name) {
-            self.backfill_missing_index_bundles(INDEX_BUNDLES_PER_TICK)
+            self.backfill_index_artifacts(INDEX_BUNDLES_PER_TICK).await
         } else {
             self.cleanup_disabled_index_bundles(INDEX_BUNDLES_PER_TICK)
         }
@@ -3004,15 +3416,10 @@ impl Namespace {
         }
         if self.runtime_policy().object_backed() {
             self.publish_owed_object_catalog().await?;
-            self.object_compaction_step().await?;
+            self.object_compaction_step(force_compact_l0).await?;
             self.controller.gc_objects().await?;
             self.gc_published_catalog().await?;
-            let namespace = Arc::clone(self);
-            tokio::task::spawn_blocking(move || namespace.maintain_index_artifacts())
-                .await
-                .map_err(|error| {
-                    StatsError::Internal(format!("maintenance object index task panicked: {error}"))
-                })?;
+            self.maintain_index_artifacts().await;
             return Ok(());
         }
 
@@ -3068,12 +3475,7 @@ impl Namespace {
         // Maintain derived indexes last and in bounded batches. Namespaces with
         // an active policy backfill missing bundles; namespaces whose managed
         // policy disables indexes remove stale bundles left by older binaries.
-        let ns = Arc::clone(self);
-        tokio::task::spawn_blocking(move || ns.maintain_index_artifacts())
-            .await
-            .map_err(|e| {
-                StatsError::Internal(format!("maintenance backfill task panicked: {e}"))
-            })?;
+        self.maintain_index_artifacts().await;
 
         // Re-encode segments still on an older physical layout (blocking parquet
         // read + write). Also lowest-priority and bounded: the terminal level is
@@ -3430,6 +3832,7 @@ fn adopt_local_segments(
     key_column: Option<&str>,
     catalog: &Catalog,
     namespace: &str,
+    objects: Option<&dyn ObjectStore>,
 ) -> Result<VecDeque<LocalSegment>, StatsError> {
     let started = Instant::now();
     let mut segs: Vec<LocalSegment> = Vec::new();
@@ -3522,6 +3925,7 @@ fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location,
+            artifacts: segment_artifacts(objects, object_records.get(&row.path), local_path)?,
         });
     }
 
@@ -3575,6 +3979,9 @@ fn adopt_local_segments(
             max_key_value: meta.max_key_value,
             partition: meta.partition,
             location: SegmentLocation::Local,
+            // A file with no catalog row is not object-backed, so its sidecars
+            // come from the local layout.
+            artifacts: local_sidecar_artifacts(path),
         });
     }
 
@@ -3794,8 +4201,8 @@ mod tests {
             data_dir,
             Arc::clone(&catalog),
             Arc::new(RwLock::new(())),
-            crate::query::index_cache::test_index_cache(),
-            Arc::new(Mutex::new(())),
+            crate::indices::test_index_registry(),
+            Arc::new(tokio::sync::Mutex::new(())),
             Arc::new(Mutex::new(())),
             TableController::start(
                 name.to_string(),
@@ -3857,8 +4264,8 @@ mod tests {
             data_dir,
             catalog,
             Arc::new(RwLock::new(())),
-            crate::query::index_cache::test_index_cache(),
-            Arc::new(Mutex::new(())),
+            crate::indices::test_index_registry(),
+            Arc::new(tokio::sync::Mutex::new(())),
             Arc::new(Mutex::new(())),
             controller,
             policy,
@@ -4001,11 +4408,11 @@ mod tests {
         let segments = discover_segments(&ns_dir);
         assert_eq!(segments.len(), 2);
         for segment in &segments {
-            std::fs::write(crate::store::index_bundle::bundle_path(segment), b"stale").unwrap();
+            std::fs::write(crate::indices::format::bundle_path(segment), b"stale").unwrap();
         }
         let legacy = legacy_artifact_paths(&segments[0])[0].clone();
         std::fs::write(&legacy, b"stale").unwrap();
-        let projection = crate::store::exact::named_projection_path(&segments[0], "legacy");
+        let projection = crate::indices::exact::named_projection_path(&segments[0], "legacy");
         std::fs::write(&projection, b"stale").unwrap();
         ns.shutdown(Duration::from_secs(10)).await;
 
@@ -4019,7 +4426,7 @@ mod tests {
         assert_eq!(
             segments
                 .iter()
-                .filter(|segment| crate::store::index_bundle::bundle_path(segment).exists())
+                .filter(|segment| crate::indices::format::bundle_path(segment).exists())
                 .count(),
             1
         );
@@ -4033,7 +4440,7 @@ mod tests {
         );
         reopened.run_maintenance(false).await.unwrap();
         for segment in &segments {
-            assert!(!crate::store::index_bundle::bundle_path(segment).exists());
+            assert!(!crate::indices::format::bundle_path(segment).exists());
         }
         assert!(!legacy.exists());
         assert!(!projection.exists());
@@ -4161,7 +4568,7 @@ mod tests {
                 >= 1
             {
                 assert!(path.starts_with(ns_dir.join("run_id")));
-                assert!(!crate::store::index_bundle::bundle_path(&path).exists());
+                assert!(!crate::indices::format::bundle_path(&path).exists());
             }
         }
         std::fs::remove_dir_all(&dir).ok();
@@ -4415,7 +4822,8 @@ mod tests {
         let l0_new = write_seg(&ns_dir, 0, 5, 2);
 
         let deque =
-            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task").unwrap();
+            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task", None)
+                .unwrap();
         let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
 
         assert!(has(&l1), "the merge output is adopted");
@@ -4453,7 +4861,8 @@ mod tests {
         let orphan = write_seg(&ns_dir, 0, 1, 2);
 
         let deque =
-            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task").unwrap();
+            adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task", None)
+                .unwrap();
         let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
         assert!(
             has(&orphan),
@@ -4535,7 +4944,7 @@ mod tests {
         assert!(ns.segment_index_config().indexes.iter().any(|index| {
             matches!(
                 index,
-                crate::store::segment_index::IndexSpec::AdaptiveValueCounts { column }
+                crate::indices::IndexSpec::AdaptiveValueCounts { column }
                     if column == "data"
             )
         }));
@@ -4571,11 +4980,11 @@ mod tests {
             .any(|index| {
                 matches!(
                     index,
-                    crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { .. }
+                    crate::indices::IndexSpec::AdaptiveGroupExtrema { .. }
                 )
             }));
 
-        let config = crate::store::group_extrema::GroupExtremaConfig::new(
+        let config = crate::indices::group_extrema::GroupExtremaConfig::new(
             "service",
             "resource_attributes_json",
             "job_id",
@@ -4590,7 +4999,7 @@ mod tests {
         assert!(declared.segment_index_config().indexes.iter().any(|index| {
             matches!(
                 index,
-                crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { config }
+                crate::indices::IndexSpec::AdaptiveGroupExtrema { config }
                     if config.filter_column == "service"
                         && config.json_column == "resource_attributes_json"
                         && config.json_key == "job_id"
@@ -4642,7 +5051,7 @@ mod tests {
 
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "two L0 merged into one L1");
-        let bundle = crate::store::index_bundle::bundle_path(&segs[0]);
+        let bundle = crate::indices::format::bundle_path(&segs[0]);
         assert!(bundle.exists(), "the merge wrote an index bundle");
 
         // Simulate a segment compaction never indexed (single-input bump, or one
@@ -4651,10 +5060,10 @@ mod tests {
         assert!(!bundle.exists());
 
         // The backfill rebuilds exactly the one missing bundle, then idles.
-        assert_eq!(ns.backfill_missing_index_bundles(10), 1);
+        assert_eq!(ns.backfill_index_artifacts(10).await, 1);
         assert!(bundle.exists(), "backfill rebuilt the bundle");
         assert_eq!(
-            ns.backfill_missing_index_bundles(10),
+            ns.backfill_index_artifacts(10).await,
             0,
             "nothing left to do"
         );
@@ -4684,17 +5093,18 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with("seg_L1_"));
-        let bundle = crate::store::index_bundle::bundle_path(&segments[0]);
-        let projection = crate::store::exact::named_projection_path(&segments[0], "matching-lines");
+        let bundle = crate::indices::format::bundle_path(&segments[0]);
+        let projection =
+            crate::indices::exact::named_projection_path(&segments[0], "matching-lines");
         assert!(bundle.exists());
         assert!(projection.exists());
         std::fs::remove_file(&projection).unwrap();
 
-        assert_eq!(ns.backfill_missing_index_bundles(10), 1);
+        assert_eq!(ns.backfill_index_artifacts(10).await, 1);
         assert!(projection.exists());
-        assert_eq!(ns.backfill_missing_index_bundles(10), 0);
+        assert_eq!(ns.backfill_index_artifacts(10).await, 0);
 
-        assert!(crate::store::index_bundle::bundle_path(&segments[0]).exists());
+        assert!(crate::indices::format::bundle_path(&segments[0]).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -4719,9 +5129,9 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with("seg_L0_"));
-        assert!(!crate::store::index_bundle::bundle_path(&segments[0]).exists());
+        assert!(!crate::indices::format::bundle_path(&segments[0]).exists());
         assert!(
-            !crate::store::exact::named_projection_path(&segments[0], "matching-lines").exists()
+            !crate::indices::exact::named_projection_path(&segments[0], "matching-lines").exists()
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -4747,7 +5157,7 @@ mod tests {
             .unwrap();
         ns.run_maintenance(true).await.unwrap();
 
-        assert_eq!(ns.backfill_missing_index_bundles(10), 0);
+        assert_eq!(ns.backfill_index_artifacts(10).await, 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -4780,7 +5190,7 @@ mod tests {
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "two L0 merged into one L1");
         assert!(
-            crate::store::index_bundle::bundle_path(&segs[0]).exists(),
+            crate::indices::format::bundle_path(&segs[0]).exists(),
             "the original string columns receive adaptive counts"
         );
         before.shutdown(Duration::from_secs(10)).await;
@@ -4797,7 +5207,7 @@ mod tests {
         );
 
         assert_eq!(
-            after.backfill_missing_index_bundles(10),
+            after.backfill_index_artifacts(10).await,
             1,
             "available adaptive sections are rebuilt once"
         );

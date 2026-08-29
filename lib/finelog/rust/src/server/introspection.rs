@@ -22,19 +22,19 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::indices::format::SectionKind;
+use crate::indices::projection::parse_projection_reference;
+use crate::indices::trigram::SIDECAR_SPAN_ROWS;
+use crate::indices::{
+    parse_group_extrema_config, parse_trigram_coverage, IndexRegistry, SegmentArtifacts,
+};
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
 use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
-use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
     TARGET_ROW_GROUP_BYTES,
 };
-use crate::store::segment_index::parse_trigram_coverage;
-use crate::store::segment_index::{
-    parse_group_extrema_config, parse_projection_reference, projection_path,
-};
-use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
 
@@ -267,8 +267,8 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
     let started = process_started();
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
-    let corruption = store.index_cache().corruption_counts();
-    let aggregate = store.index_cache().aggregate_stats();
+    let corruption = store.indices().cache().corruption_counts();
+    let aggregate = store.indices().cache().aggregate_stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -317,13 +317,15 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
 /// which is the normal state of a `REMOTE` segment after eviction.
 fn physical_info(
     path: &str,
-    index_cache: &crate::query::index_cache::IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> Option<PhysicalInfo> {
     let path = Path::new(path);
     let physical = segment_physical(path).ok()?;
-    let (source_id, rows) = segment_id_and_row_group_rows(path)?;
-    let index_bundle = index_cache
-        .get_header(path, source_id, rows.iter().sum::<usize>() as u64)
+    let (source_id, _) = segment_id_and_row_group_rows(path)?;
+    let index_bundle = indices
+        .open_segment(path, artifacts)
+        .map(|opened| opened.header)
         .map(|header| {
             let sections = header
                 .sections
@@ -364,9 +366,9 @@ fn physical_info(
                     };
                     let available = if section.kind == SectionKind::CoveringProjection {
                         reference.as_ref().is_some_and(|reference| {
-                            let projection = projection_path(path, reference);
-                            std::fs::metadata(&projection)
-                                .ok()
+                            indices
+                                .projection_file(path, artifacts, &reference.descriptor.name)
+                                .and_then(|projection| std::fs::metadata(projection).ok())
                                 .is_some_and(|metadata| metadata.len() == reference.file_bytes)
                         })
                     } else {
@@ -411,11 +413,12 @@ fn physical_info(
 fn to_segment_info(
     row: SegmentRow,
     physical: bool,
-    index_cache: &crate::query::index_cache::IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> SegmentInfo {
     SegmentInfo {
         physical: physical
-            .then(|| physical_info(&row.path, index_cache))
+            .then(|| physical_info(&row.path, indices, artifacts))
             .flatten(),
         path: basename(&row.path),
         level: row.level,
@@ -436,13 +439,19 @@ async fn get_segments(
 ) -> impl IntoResponse {
     let store = Arc::clone(&state.store);
     let namespace = q.namespace.clone();
-    let index_cache = Arc::clone(store.index_cache());
+    let indices = Arc::clone(store.indices());
     // Footer reads are blocking file I/O, and a large namespace has hundreds of
     // them, so the whole listing runs off the async runtime.
     let listed = tokio::task::spawn_blocking(move || {
+        // A segment's artifacts come from the query snapshot that advertises
+        // them, so the admin view reports exactly what a scan would open.
+        let artifacts = store
+            .query_snapshot(&q.namespace)
+            .map(|snapshot| snapshot.artifacts)
+            .unwrap_or_default();
         store.list_segments(&q.namespace).map(|rows| {
             rows.into_iter()
-                .map(|row| to_segment_info(row, q.physical, &index_cache))
+                .map(|row| to_segment_info(row, q.physical, &indices, &artifacts))
                 .collect::<Vec<_>>()
         })
     })

@@ -433,7 +433,7 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
         Store::new(
             Some(unique_dir("telemetry-process-zero-projection")),
             String::new(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Shadow,
         )
         .unwrap(),
@@ -597,7 +597,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         Store::new(
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
             crate::store::ServeMode::Live,
         )
         .unwrap(),

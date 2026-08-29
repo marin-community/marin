@@ -12,6 +12,11 @@
 //! committed locally but not published is repaired by publishing that same
 //! revision again, never by undoing the local commit.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
 use crate::store::catalog::state_store::{BackendToken, StoredTableState};
@@ -180,11 +185,69 @@ impl TableSnapshot {
     }
 }
 
-/// One immutable data object and the catalog row that references it.
+/// One immutable data object, the catalog row that references it, and the
+/// derived artifacts it advertises.
 #[derive(Clone, Debug)]
 pub struct SegmentDescriptor {
     pub row: SegmentRow,
     pub source: ObjectRef,
+    pub artifacts: ArtifactReferences,
+}
+
+/// Exact references to one segment's derived index artifacts.
+///
+/// Membership is by reference. An artifact belongs to a segment because the
+/// segment names it, never because a file sits beside the segment's Parquet.
+/// `binding` carries the identity the FIDX container itself records — the
+/// Parquet footer UUID and row count — so a reader rejects an artifact bound to
+/// a different physical segment even when both resolve to the same filename.
+///
+/// This is the durable form: object identities only. The local files those
+/// objects resolve to are [`LocalArtifacts`], derived at read time from the
+/// object store.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactReferences {
+    pub binding: SourceBinding,
+    /// The FIDX bundle object, absent when the segment has none.
+    pub bundle: Option<ObjectRef>,
+    /// External covering-projection Parquet objects the bundle describes, keyed
+    /// by projection name.
+    pub projections: BTreeMap<String, ObjectRef>,
+}
+
+impl ArtifactReferences {
+    pub fn is_empty(&self) -> bool {
+        self.bundle.is_none() && self.projections.is_empty()
+    }
+}
+
+/// The physical segment a set of artifacts is bound to.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceBinding {
+    /// Parquet footer UUID, rendered as text. Absent for a segment whose footer
+    /// carries none.
+    pub segment_uuid: Option<String>,
+    pub row_count: i64,
+}
+
+/// The local files one segment's artifacts resolve to.
+///
+/// A query holds these, never a rule for deriving them. An object-backed
+/// segment resolves each path from its object identity; a legacy table's
+/// sidecars are recorded once when the segment is adopted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalArtifacts {
+    pub binding: SourceBinding,
+    pub bundle: Option<PathBuf>,
+    pub projections: BTreeMap<String, PathBuf>,
+}
+
+impl LocalArtifacts {
+    pub fn is_empty(&self) -> bool {
+        self.bundle.is_none() && self.projections.is_empty()
+    }
 }
 
 /// Why a durable state transition did not complete.

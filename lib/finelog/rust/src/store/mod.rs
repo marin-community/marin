@@ -8,9 +8,6 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
-pub mod exact;
-pub mod group_extrema;
-pub mod index_bundle;
 pub mod ipc;
 pub mod log_read;
 pub mod namespace;
@@ -20,12 +17,10 @@ pub mod policy;
 pub mod ram_buffer;
 pub mod schema;
 pub mod segment;
-pub mod segment_index;
 pub(crate) mod string_column;
 pub mod table;
 pub mod table_spec;
 pub mod table_state;
-pub mod trigram;
 // The orchestration module is named `store`; the re-export below gives callers
 // `finelog::store::Store` without the extra path.
 #[allow(clippy::module_inception)]

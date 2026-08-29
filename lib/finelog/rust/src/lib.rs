@@ -5,6 +5,7 @@ pub mod proto {
 }
 
 pub mod errors;
+pub mod indices;
 pub(crate) mod ingestion_policy;
 pub(crate) mod json;
 pub(crate) mod levanter_metrics_policy;

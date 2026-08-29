@@ -24,7 +24,8 @@ use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 
 use crate::errors::StatsError;
-use crate::query::index_cache::IndexCache;
+use crate::indices::cache::IndexCache;
+use crate::indices::IndexRegistry;
 use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::Catalog;
 use crate::store::namespace::Namespace;
@@ -35,8 +36,8 @@ use crate::store::store::{ServeMode, LOG_NAMESPACE_DIR, LOG_NAMESPACE_NAME};
 use crate::store::table_state::{TableSnapshot, WriterFence};
 
 pub use controller::{
-    object_segment_is_query_visible, MaintenanceLease, ObjectPersistence, TableController,
-    WrittenObject,
+    local_artifacts, object_segment_is_query_visible, MaintenanceLease, ObjectPersistence,
+    TableController, WrittenObject,
 };
 
 /// Bounded budget for stopping and joining a table's background tasks during a
@@ -81,8 +82,8 @@ pub struct TableManager {
     /// write-preference is safer here — it cannot starve compaction/eviction
     /// under a steady query stream.
     query_visibility: Arc<RwLock<()>>,
-    index_cache: Arc<IndexCache>,
-    index_backfill_slot: Arc<Mutex<()>>,
+    indices: Arc<IndexRegistry>,
+    index_backfill_slot: Arc<tokio::sync::Mutex<()>>,
     physical_layout_migration_slot: Arc<Mutex<()>>,
 }
 
@@ -110,8 +111,10 @@ impl TableManager {
             controllers: Mutex::new(HashMap::new()),
             registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(RwLock::new(())),
-            index_cache: Arc::new(IndexCache::new(index_cache_mb)),
-            index_backfill_slot: Arc::new(Mutex::new(())),
+            indices: Arc::new(IndexRegistry::new(Arc::new(IndexCache::new(
+                index_cache_mb,
+            )))),
+            index_backfill_slot: Arc::new(tokio::sync::Mutex::new(())),
             physical_layout_migration_slot: Arc::new(Mutex::new(())),
         })
     }
@@ -120,8 +123,8 @@ impl TableManager {
         &self.query_visibility
     }
 
-    pub fn index_cache(&self) -> &Arc<IndexCache> {
-        &self.index_cache
+    pub fn indices(&self) -> &Arc<IndexRegistry> {
+        &self.indices
     }
 
     /// The on-disk subdirectory for `name`, without validating it. Callers hold
@@ -258,7 +261,7 @@ impl TableManager {
             table_dir,
             Arc::clone(&self.catalog),
             Arc::clone(&self.query_visibility),
-            Arc::clone(&self.index_cache),
+            Arc::clone(&self.indices),
             Arc::clone(&self.index_backfill_slot),
             Arc::clone(&self.physical_layout_migration_slot),
             self.controller(name),
@@ -551,7 +554,7 @@ mod tests {
             Some(Arc::new(LegacyObjectStore::new(&provider))),
             Some(Arc::clone(&state_store) as Arc<dyn TableStateStore>),
             WriterFence::new(11),
-            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
         );
         manager
             .register(TABLE, worker_schema(), StoragePolicy::default())

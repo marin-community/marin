@@ -31,6 +31,7 @@ use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::arrow::ProjectionMask;
 
 use crate::errors::StatsError;
+use crate::indices::{local_sidecar_artifacts, write_segment_index, SegmentIndexConfig};
 use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
@@ -39,7 +40,7 @@ use crate::store::compaction::merge::{
 use crate::store::segment::{
     read_segment_footer, segment_bounds, segment_writer_properties_with_partition,
 };
-use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
+use crate::store::table_state::LocalArtifacts;
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -203,6 +204,8 @@ fn apply_level_bump(
         max_key_value: max_key,
         partition: old.partition.clone(),
         location: SegmentLocation::Local,
+        // The commit resolves the artifacts that survive the promotion rename.
+        artifacts: LocalArtifacts::default(),
     };
     Ok(PlannedSwap {
         removed: vec![old.path.clone()],
@@ -430,6 +433,7 @@ fn apply_merge(
             max_key_value: metadata.max_key_value,
             partition: metadata.partition,
             location: SegmentLocation::Local,
+            artifacts: local_sidecar_artifacts(&merged_path),
         });
     }
     Ok(PlannedSwap {
@@ -549,13 +553,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
-    use crate::store::exact::ExactIndexConfig;
-    use crate::store::index_bundle::{self, SectionKind};
+    use crate::indices::exact::ExactIndexConfig;
+    use crate::indices::format::{self, SectionKind};
+    use crate::indices::projection::{parse_projection_reference, projection_path};
+    use crate::indices::read_exact_section;
     use crate::store::schema::CoveringProjection;
     use crate::store::segment::{
         read_segment_footer, segment_row_group_rows, write_segment_to_dir, MAX_ROW_GROUP_ROWS,
     };
-    use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -745,8 +750,8 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
-        let bundle = index_bundle::bundle_path(&out);
-        let header = index_bundle::read_header(&bundle).unwrap();
+        let bundle = format::bundle_path(&out);
+        let header = format::read_header(&bundle).unwrap();
         let exact = read_exact_section(&bundle, &header, SectionKind::ValueCounts).unwrap();
         assert_eq!(
             exact.columns["worker_id"].counts.as_ref().unwrap()[&Some("c".to_string())],
@@ -756,7 +761,7 @@ mod tests {
             parse_projection_reference(&header.section("projection:worker-c").unwrap().coverage)
                 .unwrap();
         assert_eq!(reference.descriptor.row_count, 1);
-        assert!(crate::store::segment_index::projection_path(&out, &reference).exists());
+        assert!(projection_path(&out, &reference).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1323,7 +1328,7 @@ mod tests {
             write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
         let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
         // These direct test fixtures have no derived bundle.
-        assert!(!index_bundle::bundle_path(&p1).exists());
+        assert!(!format::bundle_path(&p1).exists());
 
         let job = CompactionJob {
             inputs: vec![
@@ -1346,14 +1351,13 @@ mod tests {
 
         // The merged output carries a trigram section whose mask prunes correctly.
         let out = PathBuf::from(&added_seg(&swap).path);
-        let bundle = index_bundle::bundle_path(&out);
+        let bundle = format::bundle_path(&out);
         assert!(bundle.exists(), "merge output must have an index bundle");
-        let header = index_bundle::read_header(&bundle).unwrap();
+        let header = format::read_header(&bundle).unwrap();
         let section = header.section("trigram:data").unwrap();
-        let coverage =
-            crate::store::segment_index::parse_trigram_coverage(&section.coverage).unwrap();
-        let index = crate::store::trigram::parse_column(
-            &index_bundle::read_section(&bundle, &header, "trigram:data").unwrap(),
+        let coverage = crate::indices::parse_trigram_coverage(&section.coverage).unwrap();
+        let index = crate::indices::trigram::parse_column(
+            &format::read_section(&bundle, &header, "trigram:data").unwrap(),
             coverage.span_count,
         )
         .unwrap();
@@ -1376,8 +1380,8 @@ mod tests {
         // writer chose. Both sides chunk independently of how the written batches
         // are split, so lock that with input batches whose boundaries straddle a
         // span boundary (10k|10k|10005 over a 16384 stride).
+        use crate::indices::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
         use crate::store::segment::segment_row_group_rows;
-        use crate::store::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
 
         let dir = tempdir("tgm_align");
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
