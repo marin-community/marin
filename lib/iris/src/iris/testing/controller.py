@@ -5,7 +5,6 @@
 
 import shutil
 import tempfile
-import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -48,19 +47,22 @@ from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendDescriptor,
     BackendKind,
-    BackendRuntime,
-    DeviceCapacity,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
     ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
     TaskTarget,
-    plans_from_snapshot,
+    WorkerFleetReconcileRequest,
     run_scheduling_decision,
 )
-from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -81,7 +83,6 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import (
-    DEFAULT_UNREACHABLE_GRACE,
     WorkerHealthEvent,
     WorkerHealthEventKind,
     WorkerHealthTracker,
@@ -101,7 +102,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
     ControllerTestState,
@@ -130,89 +131,58 @@ def worker_backend_descriptor(
     )
 
 
-def store_from_runtime(
-    runtime: BackendRuntime,
-    health: WorkerHealthTracker,
-    autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
-) -> DbBackendWorkerStore:
-    """Build a fake's worker store from the controller runtime + its own tracker
-    and ``autoscale`` — the worker-daemon fakes' shared mirror of
-    ``RpcTaskBackend.bind_runtime``."""
-    return DbBackendWorkerStore(
-        db=runtime.db,
-        health=health,
-        autoscale=autoscale,
-    )
-
-
 class FakeProvider:
     """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
-    autoscaler = None
-
-    def __init__(
-        self,
-        descriptor: BackendDescriptor | None = None,
-        unreachable_grace: Duration = DEFAULT_UNREACHABLE_GRACE,
-    ) -> None:
+    def __init__(self, descriptor: BackendDescriptor | None = None) -> None:
         self.descriptor = descriptor or worker_backend_descriptor()
         # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
         # through ``schedule`` now, so the fake must run the real pipeline for
         # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
-        # Attached by the controller for reconcile, status, and teardown.
-        self._store: BackendWorkerStore | None = None
-        # This backend's own liveness tracker (the controller builds its worker
-        # store over this same object), mirroring RpcTaskBackend.
-        self.health: WorkerHealthTracker = WorkerHealthTracker(unreachable_grace=unreachable_grace)
+
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
 
     def runtime_image(self, requested_image: str) -> str:
         return requested_image
 
-    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
-        return None
-
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        return controller_pb2.Controller.BackendStatus(
-            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=self.autoscaler_status())
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation(
+            status=controller_pb2.Controller.BackendStatus(
+                worker=controller_pb2.Controller.WorkerFleetDetail(
+                    total_worker_count=len(request.liveness),
+                    healthy_worker_count=sum(1 for liveness in request.liveness.values() if liveness.healthy),
+                )
+            )
         )
-
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        return vm_pb2.AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_scheduling_decision(self._scheduler, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
-        # Mirror RpcTaskBackend: source the snapshot, build plans, report every
-        # reached worker healthy with no observations (these tests drive task
+        # Mirror RpcTaskBackend: report every supplied worker plan healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs), then
         # return the same neutral observations as the real backend.
-        assert self._store is not None, "FakeProvider.reconcile called before worker store attached"
-        snapshot = self._store.reconcile_snapshot()
-        plans = plans_from_snapshot(snapshot)
-        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
+        if not isinstance(request, WorkerFleetReconcileRequest):
+            raise ValueError("FakeProvider requires WorkerFleetReconcileRequest")
+        events = [WorkerHealthEvent(target.plan.worker_id, WorkerHealthEventKind.REACHED) for target in request.targets]
         return ReconcileObservation(worker_health_events=events)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None, "FakeProvider.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        assert self._store is not None, "FakeProvider.prune_dead_workers called before worker store attached"
-        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
-
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
-
-    def seed_liveness(self) -> None:
-        assert self._store is not None, "FakeProvider.seed_liveness called before worker store attached"
-        worker_ids = self._store.worker_ids()
-        if worker_ids:
-            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
+    def job_feasibility(
+        self,
+        constraints: list[Constraint],
+        *,
+        replicas: int | None,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> str | None:
+        return None
 
     def get_process_status(
         self,
@@ -241,14 +211,6 @@ class FakeProvider:
         pass
 
 
-def worker_backend_for_prune(state: ControllerTestState) -> FakeProvider:
-    """A worker backend bound to ``state`` for pruning behavior tests."""
-    provider = FakeProvider()
-    provider.health = state._health
-    provider.bind_runtime(BackendRuntime(db=state._db))
-    return provider
-
-
 class MockController:
     """Mock that implements the ControllerProtocol surface used by ControllerServiceImpl."""
 
@@ -260,18 +222,15 @@ class MockController:
         self.last_scheduling_context = None
         self.backend = Mock()
         self.backend.descriptor = worker_backend_descriptor()
-        # A bare Mock would auto-create a truthy .autoscaler; the backend
-        # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
-        self.backend.autoscaler = None
+        self.backend.job_feasibility.return_value = None
         self.backend.runtime_image.return_value = ""
-        # The backend owns its liveness tracker. Tests that inspect a specific
-        # ``state._health`` point this at that tracker.
-        self.backend.health = WorkerHealthTracker()
+        self.worker_health = WorkerHealthTracker()
+        self.backend_observation = BackendObservation()
         # Zero-peer federation: route_submit returns local, ListPeers is empty.
         self.federation = FederationManager([], threads=get_thread_container())
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
-        return self.backend.health.all() if self.backend.health is not None else {}
+        return self.worker_health.all()
 
     def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
         return self.all_liveness().get(worker_id, WorkerLiveness())
@@ -284,11 +243,9 @@ def make_mock_controller() -> MockController:
 def make_controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """Build a controller service with a fresh DB, log service, and mock controller.
 
-    The service registers workers into and reads liveness through the controller's
-    backend, so point the mock backend's tracker at this state's ``_health`` so
-    writes and reads land on the same object the test inspects.
+    Worker registration and reads share the controller-owned tracker.
     """
-    mock_controller.backend.health = state._health
+    mock_controller.worker_health = state._health
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -362,7 +319,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
             host=config.host,
             worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
         )
-        backend = provider if provider is not None else FakeProvider(unreachable_grace=config.worker_unreachable_grace)
+        backend = provider if provider is not None else FakeProvider()
         controller = Controller(
             config=config,
             log_stack=log_stack,

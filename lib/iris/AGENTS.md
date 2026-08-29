@@ -129,37 +129,37 @@ inheritance, and the Docker gotcha (setup runs in a separate container, so
 ### The TaskBackend contract
 
 A `TaskBackend` (`controller/backend.py`) is the control-plane driver for ONE
-cluster. It implements one uniform set of phase methods — `schedule` (pure
-placement decision), `reconcile` (backend I/O: task observations + per-worker
-health events), `autoscale` (provision, or tear down dead workers' slices +
-healthy siblings) — plus the on-demand one-offs (`get_process_status`,
-`profile_task`, `exec_in_container`). Each phase returns its own frozen result
-type: `ScheduleResult`, `ReconcileObservation`, `AutoscaleResult`. Composition creates
-an empty controller and calls `controller.register_backend(backend)` exactly once
-before `start()`. A second registration is invalid; federation composes distinct
-clusters. `BackendDescriptor` is the source for backend ID, kind, advertised
-attributes, and scale groups.
+cluster. It implements explicit phase methods: `initialize`, `schedule`,
+`reconcile`, `observe`, `autoscale`, and `remove_capacity`, plus exact on-demand
+I/O (`get_process_status`, `profile_task`, `exec_in_container`). Composition
+creates an empty controller and calls `controller.register_backend(backend)`
+exactly once before `start()`. A second registration is invalid; federation
+composes distinct clusters. `BackendDescriptor` is the source for backend ID,
+kind, capabilities, advertised attributes, and scale groups.
 
-The controller builds each `ScheduleRequest` completely from one read snapshot:
-workers, pending tasks, running attempts, and the per-user budget.
-`TaskBackend.schedule` is therefore DB-less and performs a pure decision. The
-worker backend binds `DbBackendWorkerStore` through `BackendRuntime` for its
-worker roster, reconciliation plans, and autoscaler state.
+The controller owns Iris persistence and in-memory worker liveness. It builds
+complete phase requests from controller snapshots: scheduling facts, exact
+desired attempts and worker addresses, status/capacity facts, residual demand,
+and recovery checkpoints. Backends never receive a database, transaction,
+transition reader, or liveness tracker. `schedule` is a pure decision;
+`reconcile`, `initialize`, `observe`, `autoscale`, and `remove_capacity` perform
+bounded provider work and return observations or effects for the controller to
+fold and persist.
 
-`BackendDescriptor.kind` is `WORKER` or `KUBERNETES`. The controller calls the
-three phases uniformly. Kubernetes reconcile receives the dispatch queue drain;
-worker reconcile sources worker state through the bound store. Dashboard
+The descriptor declares one reconciliation mechanism: `WORKER_FLEET` or
+`DIRECT_DISPATCH`; `AUTOSCALER` is an optional capability for worker fleets.
+The controller uses capabilities only to choose the complete request variant.
+Kubernetes reconcile receives the dispatch queue drain; worker reconcile
+receives a target list pairing each exact plan with its address. Dashboard
 capability strings are derived presentation data.
 
-Backends return one neutral `ReconcileObservation` shape: exact task updates and
+Backends return one neutral `ReconcileObservation`: exact task updates and
 optional worker-health events, never controller effects. After backend I/O,
-`ops/reconcile.py` applies the observation once: `ops/task.py` reloads current
-state, fences exact Attempt UIDs, and runs one lifecycle-policy path before
-worker liveness is updated. Worker-daemon
-backends still construct the shared `WorkerHealthTracker` and reach the DB through
-`DbBackendWorkerStore`. There is no ping loop: reconcile RPC outcomes are the
-liveness signal.
-Kubernetes backends have no Iris workers or worker-health tracker.
+`ops/reconcile.py` reloads current state, fences exact Attempt UIDs, runs one
+lifecycle-policy path, and applies liveness events. The controller then commits
+the effects. There is no ping loop: reconcile RPC outcomes are the worker
+liveness signal. Kubernetes backends report exact Pod observations and no worker
+liveness events.
 
 Two implementations satisfy it: `RpcTaskBackend` (`backends/rpc/backend.py`,
 kind `WORKER`, owns the `Scheduler` and optional `Autoscaler`) for

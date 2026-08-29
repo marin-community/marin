@@ -3,12 +3,11 @@
 
 """In-memory worker liveness derived from backend-observed events.
 
-Each worker-daemon backend currently owns one tracker for its scale groups. A
-reconcile tick classifies its I/O outcomes as :class:`WorkerHealthEvent`s and
-applies them through :meth:`WorkerHealthTracker.apply`, which accumulates counters
-and applies termination thresholds. The controller reaches the tracker through
-the registered backend for scheduling and worker RPCs. ``apply`` is the sole
-liveness-accounting mutation site; the other writes are startup seeding, worker
+The controller owns one tracker for its registered worker-daemon backend. A
+reconcile tick classifies I/O outcomes as :class:`WorkerHealthEvent`s and the
+controller applies them through :meth:`WorkerHealthTracker.apply`, which
+accumulates counters and enforces termination thresholds. ``apply`` is the sole
+reconcile-time mutation site; the other writes are startup recovery, worker
 registration, and removal.
 
 Per-worker signals:
@@ -30,8 +29,8 @@ autoscale), so it costs far more than ``poll_interval`` — a count of
 a controller stall — which ages every heartbeat at once without running any
 reconciles — from mass-reaping the fleet on resume.
 
-Thread-safe: ``apply`` runs on the reconcile thread; reads come from the
-scheduler and RPC handler threads.
+Thread-safe: ``apply`` runs on the control thread; reads also come from RPC
+handler and housekeeping threads.
 """
 
 import dataclasses

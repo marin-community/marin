@@ -55,8 +55,11 @@ from iris.cluster.backends.rpc.backend import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.backend import plans_from_snapshot
-from iris.cluster.controller.backend_store import BackendWorkerStore
+from iris.cluster.controller.backend import (
+    WorkerFleetReconcileRequest,
+    WorkerReconcileTarget,
+    plans_from_snapshot,
+)
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _CONTROLLER_KEEPALIVE,
@@ -2632,33 +2635,6 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-@dataclasses.dataclass
-class _PrebuiltWorkerSource:
-    """Hands the backend a reconcile snapshot the benchmark built itself.
-
-    The synthetic reconcile benchmark times snapshot assembly separately, then
-    drives ``RpcTaskBackend.reconcile`` against the prebuilt snapshot; the backend
-    sources its snapshot through this O(1) stub so only the RPC fan-out is timed.
-    """
-
-    snapshot: ControlSnapshot
-    # The benchmark times only the RPC fan-out (``_observe_fleet``), which never
-    # folds liveness; the tracker is present solely to satisfy ``BackendWorkerStore``.
-    health: WorkerHealthTracker = dataclasses.field(default_factory=WorkerHealthTracker)
-
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        return self.snapshot
-
-    def worker_snapshots(self):
-        raise NotImplementedError
-
-    def worker_status(self):
-        raise NotImplementedError
-
-    def transition_snapshot(self, **kwargs):
-        raise NotImplementedError
-
-
 def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
@@ -2671,12 +2647,13 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
         job_specs=inputs.job_specs,
     )
     t2 = time.perf_counter()
-    # The backend sources its own reconcile snapshot; the benchmark prebuilds it
-    # (measured above) and hands it back through a stub store so the RPC fan-out
-    # is what t2..t3 times. The stub implements only the fan-out read surface (it
-    # never folds liveness or tears down), so it is cast to the full BackendWorkerStore.
-    provider._store = cast(BackendWorkerStore, _PrebuiltWorkerSource(snapshot))
-    observation = provider._observe_fleet()
+    request = WorkerFleetReconcileRequest(
+        targets=[
+            WorkerReconcileTarget(plan=plan, address=snapshot.worker_addresses[plan.worker_id])
+            for plan in plans_from_snapshot(snapshot)
+        ]
+    )
+    observation = provider.reconcile(request)
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:

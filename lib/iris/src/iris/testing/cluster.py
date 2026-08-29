@@ -147,7 +147,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     ctrl = MockController()
     # Share the harness tracker so the service registers into and reads liveness
     # through the same object this harness's ControllerTestState exposes.
-    ctrl.backend.health = health
+    ctrl.worker_health = health
 
     service = ControllerServiceImpl(
         controller=ctrl,

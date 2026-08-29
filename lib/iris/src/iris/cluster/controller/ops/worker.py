@@ -29,10 +29,9 @@ FAIL_WORKERS_CHUNK_SIZE = 10
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    A worker-daemon backend's teardown forwards these IDs to ``backend.autoscale``
-    for slice-sibling teardown. Per-task kill targets and log events are already
-    applied by ``commit_effects`` inside the batch, so they don't need to surface
-    in the return value.
+    The controller forwards these IDs to ``backend.remove_capacity`` after the
+    logical failure commits. Per-task kill targets and log events are already
+    applied by ``commit_effects`` inside the batch, so they do not surface here.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]

@@ -4,19 +4,24 @@
 """Tests for KubernetesProvider integration with controller and transitions."""
 
 import json
-import threading
 
 import pytest
 from finelog.rpc import logging_pb2
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendDescriptor,
     BackendKind,
-    BackendRuntime,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
     ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
@@ -26,7 +31,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import delete_job, set_user_budget
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     make_direct_job_request,
     query_attempt,
@@ -44,9 +49,6 @@ from sqlalchemy import update as sa_update
 class FakeDirectProvider:
     """Minimal cluster-view TaskBackend (K8s-like) for testing."""
 
-    autoscaler = None
-    health = None
-
     def __init__(self):
         self.descriptor = BackendDescriptor(
             backend_id=DEFAULT_BACKEND_ID,
@@ -57,16 +59,18 @@ class FakeDirectProvider:
         self.sync_result = ReconcileObservation()
         self.closed = False
 
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
+
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation()
+
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
     def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         self.sync_calls.append(request)
         return self.sync_result
-
-    def teardown(self, dead_workers, *, reason: str) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers to reap."""
-
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """No-op: a cluster-view backend tracks no Iris workers to garbage-collect."""
-        return 0
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()
@@ -74,13 +78,35 @@ class FakeDirectProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers, so it builds no worker source."""
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def seed_liveness(self) -> None:
-        """No-op: a cluster-view backend tracks no Iris worker liveness."""
+    def job_feasibility(
+        self,
+        constraints: list[Constraint],
+        *,
+        replicas: int | None,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> str | None:
+        return None
 
     def get_process_status(self, target: TaskTarget, request):
+        raise ProviderUnsupportedError("fake k8s")
+
+    def profile_task(
+        self,
+        target: TaskTarget,
+        request: job_pb2.ProfileTaskRequest,
+        timeout_ms: int,
+    ) -> job_pb2.ProfileTaskResponse:
+        raise ProviderUnsupportedError("fake k8s")
+
+    def exec_in_container(
+        self,
+        target: TaskTarget,
+        request: worker_pb2.Worker.ExecInContainerRequest,
+        timeout_seconds: int = 60,
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         raise ProviderUnsupportedError("fake k8s")
 
     def fetch_live_logs(

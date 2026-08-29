@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 
 from finelog.client.log_client import Table
-from rigging.timing import Duration
 
 from iris.cluster.backends.k8s.tasks import (
     _CW_DEFAULT_TOPOLOGIES,
@@ -35,11 +34,11 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.backend import (
+    BackendCapability,
     BackendDescriptor,
     BackendKind,
     TaskBackend,
 )
-from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
@@ -60,7 +59,6 @@ def make_task_backend(
     config: IrisClusterConfig,
     *,
     descriptor: BackendDescriptor,
-    unreachable_grace: Duration,
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
@@ -71,9 +69,8 @@ def make_task_backend(
     or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
     profile tables are passed to the K8s backend; node agents write per-pod
     resource samples, while RPC worker daemons write their own rows.
-    ``unreachable_grace`` sizes the liveness tracker the worker-daemon backend
-    constructs and owns. ``autoscaler`` provisions capacity for that backend
-    (None for clusters with no scale groups).
+    ``autoscaler`` provisions capacity for that backend (None for clusters with
+    no controller-managed capacity).
     """
     which = config.provider_kind()
     if which == "kubernetes_provider":
@@ -142,7 +139,6 @@ def make_task_backend(
         return RpcTaskBackend(
             descriptor=descriptor,
             stub_factory=RpcWorkerStubFactory(),
-            unreachable_grace=unreachable_grace,
             autoscaler=autoscaler,
         )
     raise ValueError(
@@ -190,15 +186,12 @@ def build_base_worker_config(
 def make_backend(
     config: IrisClusterConfig,
     *,
-    db: ControllerDB,
     auth: ControllerAuth,
     remote_state_dir: str,
     dry_run: bool,
     log_stack: LogStack,
-    unreachable_grace: Duration,
 ) -> TaskBackend:
-    """Create the TaskBackend and, for Iris-provisioned backends, build and restore
-    the autoscaler that drives it.
+    """Create the TaskBackend and its provider-side capacity mechanism.
 
     The finelog tables from ``log_stack`` are threaded into the backend and
     autoscaler at construction. Capacity-managing backends (k8s) provision their
@@ -207,19 +200,24 @@ def make_backend(
     the autoscaler and the provider bundle are skipped (bundle creation needs
     platform credentials unavailable on a dev machine).
     """
+    which = config.provider_kind()
+    capabilities = (
+        frozenset({BackendCapability.DIRECT_DISPATCH})
+        if which == "kubernetes_provider"
+        else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
+    )
     descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name=config.name or DEFAULT_BACKEND_ID,
         kind=BackendKind.KUBERNETES if config.provider_kind() == "kubernetes_provider" else BackendKind.WORKER,
         advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
         scale_groups=frozenset(config.scale_groups),
+        capabilities=capabilities,
     )
-    which = config.provider_kind()
     if which == "kubernetes_provider":
         provider = make_task_backend(
             config,
             descriptor=descriptor,
-            unreachable_grace=unreachable_grace,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -231,7 +229,6 @@ def make_backend(
         return make_task_backend(
             config,
             descriptor=descriptor,
-            unreachable_grace=unreachable_grace,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -266,13 +263,9 @@ def make_backend(
         )
         logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
 
-        autoscaler.restore_from_db(db, workers)
-        logger.info("Autoscaler state restored from DB")
-
     provider = make_task_backend(
         config,
         descriptor=descriptor,
-        unreachable_grace=unreachable_grace,
         task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,

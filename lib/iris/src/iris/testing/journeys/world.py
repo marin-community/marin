@@ -295,7 +295,7 @@ class JourneyWorld:
         exit_code: int | None = None,
         attempt_id: int | None = None,
     ) -> None:
-        self.backend.observe(
+        self.backend.queue_observation(
             task.wire_id,
             ScriptedObservation(state, error=error, exit_code=exit_code, attempt_id=attempt_id),
         )

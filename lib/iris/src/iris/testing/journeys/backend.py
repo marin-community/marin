@@ -3,31 +3,35 @@
 
 """Deterministic external-boundary backend for Iris journeys."""
 
-import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from finelog.rpc import logging_pb2
 
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendDescriptor,
     BackendKind,
-    BackendRuntime,
-    DeviceCapacity,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
+    DirectReconcileRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
     ReconcileRequest,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, WorkerId
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName
+from iris.rpc import job_pb2, worker_pb2
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +60,6 @@ class ScriptedTaskBackend:
     effects and never reads or writes controller tables.
     """
 
-    autoscaler = None
-    health: WorkerHealthTracker | None = None
-
     def __init__(
         self,
         *,
@@ -77,7 +78,6 @@ class ScriptedTaskBackend:
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
-        self.health = WorkerHealthTracker() if kind is BackendKind.WORKER else None
         self.closed = False
 
     @property
@@ -88,7 +88,7 @@ class ScriptedTaskBackend:
     def pending_task_ids(self) -> tuple[str, ...]:
         return tuple(sorted(task_id for task_id, queue in self._queued.items() if queue))
 
-    def observe(self, task_id: str, observation: ScriptedObservation) -> None:
+    def queue_observation(self, task_id: str, observation: ScriptedObservation) -> None:
         """Queue one observation for the Task's current desired Attempt."""
         self._queued[task_id].append(observation)
 
@@ -99,17 +99,14 @@ class ScriptedTaskBackend:
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
 
-    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
-        return None
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
+
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation()
 
     def runtime_image(self, requested_image: str) -> str:
         return requested_image
-
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        return controller_pb2.Controller.BackendStatus()
-
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        return vm_pb2.AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         self.calls.append("schedule")
@@ -120,6 +117,8 @@ class ScriptedTaskBackend:
         if self._reconcile_failures:
             self._reconcile_failures -= 1
             raise ConnectionError("scripted backend is unavailable")
+        if not isinstance(request, DirectReconcileRequest):
+            raise ValueError("scripted direct backend requires DirectReconcileRequest")
         desired = {
             **{(run.task_id, run.attempt_id): run.attempt_uid for run in request.tasks_to_run},
             **{(entry.task_id.to_wire(), entry.attempt_id): entry.attempt_uid for entry in request.running_tasks},
@@ -172,20 +171,20 @@ class ScriptedTaskBackend:
             exit_code=observation.exit_code,
         )
 
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        return None
-
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        return 0
-
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         self.calls.append("autoscale")
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        return None
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def seed_liveness(self) -> None:
+    def job_feasibility(
+        self,
+        constraints: list[Constraint],
+        *,
+        replicas: int | None,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> str | None:
         return None
 
     def get_process_status(

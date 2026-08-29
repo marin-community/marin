@@ -35,23 +35,28 @@ from iris.cluster.backends.k8s.output_contract import (
     output_uploader_environment,
 )
 from iris.cluster.config import TaskOutputPolicy
-from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendDescriptor,
-    BackendRuntime,
+    BackendObservation,
+    BackendObservationRequest,
+    BackendRecoveryRequest,
+    BackendRecoveryResult,
     DeviceCapacity,
+    DirectReconcileRequest,
     ProviderError,
     ReconcileObservation,
     ReconcileRequest,
+    RemoveCapacityRequest,
+    RemoveCapacityResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
@@ -122,8 +127,8 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
+from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
@@ -2388,10 +2393,6 @@ class K8sTaskProvider:
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
     cluster_scan_interval: float = 5.0
-    # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
-    autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
-    # A Kubernetes backend tracks no Iris worker liveness.
-    health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     _pod_unresolved_counts: dict[RunningTaskEntry, int] = field(default_factory=dict, init=False, repr=False)
     # The disruption condition last seen on an attempt's pod, keyed by the
     # incarnation (a resubmit reuses task_id/attempt_id under a fresh uid) and
@@ -2435,7 +2436,7 @@ class K8sTaskProvider:
     def runtime_image(self, requested_image: str) -> str:
         return requested_image or self.pods.default_image
 
-    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+    def _resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPUs inferred from the periodic kubectl cluster sync.
 
         Kueue owns placement, so there is no per-worker Iris capacity view here; instead
@@ -2460,28 +2461,38 @@ class K8sTaskProvider:
         Iris-managed slices to tear down."""
         return AutoscaleResult()
 
-    def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """No-op: a cluster backend tracks no Iris workers, so it builds no worker source."""
+    def initialize(self, request: BackendRecoveryRequest) -> BackendRecoveryResult:
+        return BackendRecoveryResult()
 
-    def seed_liveness(self) -> None:
-        """No-op: a cluster backend tracks no Iris worker liveness to seed."""
+    def observe(self, request: BackendObservationRequest) -> BackendObservation:
+        return BackendObservation(
+            status=controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status()),
+            resource_capacity=self._resource_capacity(),
+        )
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileObservation:
         """Converge Pods and return exact task-attempt observations."""
+        if not isinstance(request, DirectReconcileRequest):
+            raise ValueError("Kubernetes backend requires DirectReconcileRequest")
         return ReconcileObservation(task_updates=self.sync(request))
 
     def collect_garbage(self) -> None:
         """Run one garbage-collection pass for eligible Kubernetes resources."""
         self._gc_terminal_resources(self._list_active_pods())
 
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """No-op: a cluster backend tracks no Iris workers to reap."""
+    def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
+        return RemoveCapacityResult()
 
-    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
-        """No-op: a cluster backend tracks no Iris workers to garbage-collect."""
-        return 0
+    def job_feasibility(
+        self,
+        constraints: list[Constraint],
+        *,
+        replicas: int | None,
+        resources: job_pb2.ResourceSpecProto,
+    ) -> str | None:
+        return None
 
-    def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
+    def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -2729,14 +2740,6 @@ class K8sTaskProvider:
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
         return self._cluster_state.to_status_response(self.pods.namespace)
-
-    def status(self) -> controller_pb2.Controller.BackendStatus:
-        """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
-        return controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status())
-
-    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """Empty: K8s provisions its own capacity and runs no Iris autoscaler."""
-        return vm_pb2.AutoscalerStatus()
 
     # -------------------------------------------------------------------------
     # Internal helpers

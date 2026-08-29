@@ -25,13 +25,21 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendDescriptor, BackendKind, BackendRuntime, DeviceCapacity
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendDescriptor,
+    BackendKind,
+    BackendObservation,
+    BackendObservationRequest,
+    DeviceCapacity,
+    DirectReconcileRequest,
+)
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -160,32 +168,45 @@ def scheduler():
 
 
 def _worker_backend(
-    state,
     autoscaler,
     backend_id=DEFAULT_BACKEND_ID,
     *,
     advertised_attributes=None,
     scale_groups=frozenset(),
 ):
-    """A real ``RpcTaskBackend`` bound to the test DB and shared liveness tracker.
-
-    It authors its own ``status()`` / ``autoscaler_status()`` exactly as in
-    production — health counts from its tracker, per-VM usability + running-task
-    overlay from its own state, groups tagged with its own ``backend_id`` — so the
-    controller reads the result verbatim. The stub factory is unused by the status
-    paths, so a bare ``Mock`` suffices."""
+    """A real ``RpcTaskBackend`` for authoring status from supplied facts."""
     backend = RpcTaskBackend(
-        descriptor=worker_backend_descriptor(
-            backend_id,
-            advertised_attributes=advertised_attributes,
+        descriptor=BackendDescriptor(
+            backend_id=backend_id,
+            display_name="worker",
+            kind=BackendKind.WORKER,
+            advertised_attributes=advertised_attributes or {},
             scale_groups=scale_groups,
+            capabilities=frozenset(
+                {BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if autoscaler is not None else set())
+            ),
         ),
         stub_factory=Mock(),
+        autoscaler=autoscaler,
     )
-    backend.health = state._health
-    backend.autoscaler = autoscaler
-    backend.bind_runtime(BackendRuntime(db=state._db))
     return backend
+
+
+def _backend_observation_request(state: ControllerTestState) -> BackendObservationRequest:
+    liveness = state._health.all()
+    with state._db.read_snapshot() as tx:
+        usage = reads.resource_usage_by_worker(tx)
+        workers = healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
+        running = reads.running_tasks_by_worker(tx, set(liveness))
+    return BackendObservationRequest(
+        workers=[worker_snapshot_from_row(worker, usage.get(worker.worker_id)) for worker in workers],
+        liveness=liveness,
+        running_tasks=running,
+    )
+
+
+def _publish_backend_observation(controller_mock, state: ControllerTestState) -> None:
+    controller_mock.backend_observation = controller_mock.backend.observe(_backend_observation_request(state))
 
 
 def _make_controller_mock(state, scheduler, autoscaler=None):
@@ -258,23 +279,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
-    controller_mock.backend = Mock()
-    controller_mock.backend.descriptor = BackendDescriptor(
-        backend_id=DEFAULT_BACKEND_ID,
-        display_name="worker",
-        kind=BackendKind.WORKER,
-    )
-    controller_mock.backend.autoscaler = autoscaler
-    # The backend owns the liveness tracker; the service reads it through the controller.
-    controller_mock.backend.health = state._health
-    # status()/autoscaler_status() are delegated to a real backend bound to the same
-    # DB + tracker, so the provider authors them exactly as production — the service
-    # overlays nothing on top.
-    _authoring_backend = _worker_backend(state, autoscaler)
-    controller_mock.backend.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
-    controller_mock.backend.status.side_effect = _authoring_backend.status
-    controller_mock.backend.runtime_image.side_effect = _authoring_backend.runtime_image
-    controller_mock.backend.resource_capacity.side_effect = _authoring_backend.resource_capacity
+    _authoring_backend = _worker_backend(autoscaler)
+    controller_mock.backend = _authoring_backend
+    controller_mock.worker_health = state._health
+    _publish_backend_observation(controller_mock, state)
     controller_mock.all_liveness = lambda: state._health.all()
     controller_mock.liveness_for_worker = lambda wid: state._health.liveness(wid)
     return controller_mock
@@ -872,6 +880,7 @@ def test_overlay_capacity_status_busy_healthy_slice_is_in_use():
 
 def test_pending_reason_uses_autoscaler_hint_for_scale_up(
     client_with_autoscaler,
+    service_with_autoscaler,
     state,
     job_request,
     mock_autoscaler,
@@ -886,6 +895,7 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
             is_scaling_up=True,
         )
     }
+    _publish_backend_observation(service_with_autoscaler._controller, state)
 
     # GetJobStatus appends this job's autoscaler hint via the per-cycle hint
     # cache (#4848) — a single dict lookup, no routing-table serialization.
@@ -906,6 +916,7 @@ def test_pending_reason_uses_autoscaler_hint_for_scale_up(
 
 def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
     client_with_autoscaler,
+    service_with_autoscaler,
     state,
     mock_autoscaler,
 ):
@@ -935,6 +946,7 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
             is_scaling_up=False,
         )
     }
+    _publish_backend_observation(service_with_autoscaler._controller, state)
 
     # GetJobStatus appends this job's autoscaler passive-wait hint.
     job_resp = rpc_post(
@@ -946,6 +958,7 @@ def test_pending_reason_uses_passive_autoscaler_hint_over_scheduler(
 
 def test_list_jobs_shows_passive_autoscaler_wait_hint(
     client_with_autoscaler,
+    service_with_autoscaler,
     state,
     job_request,
     mock_autoscaler,
@@ -960,6 +973,7 @@ def test_list_jobs_shows_passive_autoscaler_wait_hint(
             is_scaling_up=False,
         )
     }
+    _publish_backend_observation(service_with_autoscaler._controller, state)
 
     jobs_resp = rpc_post(client_with_autoscaler, "ListJobs")
     listed = [
@@ -1488,7 +1502,6 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
     """auth/config advertises the cluster capability for a backend-placed (k8s) backend."""
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend = Mock()
-    controller_mock.backend.autoscaler = None
     controller_mock.backend.descriptor = BackendDescriptor(
         backend_id=DEFAULT_BACKEND_ID,
         display_name="kubernetes",
@@ -1531,6 +1544,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     )
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend = provider
+    _publish_backend_observation(controller_mock, state)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1539,12 +1553,17 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         endpoint_service=EndpointServiceImpl(db=state._db),
     )
     dashboard = ControllerDashboard(svc)
-    return TestClient(dashboard.app), k8s, provider
+    return (
+        TestClient(dashboard.app),
+        k8s,
+        provider,
+        lambda: _publish_backend_observation(controller_mock, state),
+    )
 
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    client, k8s, provider, refresh = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
 
     # Seed nodes and a pod.
     k8s.seed_resource(
@@ -1575,13 +1594,8 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, l
     )
 
     # Reconcile to populate ClusterState.
-    provider.sync(
-        ControlSnapshot(
-            worker_addresses={},
-            reconcile_rows=[],
-            timeout_rows=[],
-        )
-    )
+    provider.sync(DirectReconcileRequest())
+    refresh()
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
@@ -1603,7 +1617,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, l
 
 def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(state, scheduler, tmp_path, log_client):
     """SchedulingGated pod statuses include Kueue admission diagnostics."""
-    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    client, k8s, provider, refresh = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
     queue_name = "iris-local"
     provider.local_queue = queue_name
     pod_group = "iris-pg-test-0"
@@ -1658,7 +1672,8 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
         },
     )
 
-    provider.sync(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
+    provider.sync(DirectReconcileRequest())
+    refresh()
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
@@ -1678,7 +1693,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
 
 def test_k8s_cluster_status_empty_before_sync(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus returns empty data when no sync has run yet."""
-    client, _k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    client, _k8s, provider, _refresh = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
@@ -1713,6 +1728,7 @@ def test_k8s_cluster_status_without_direct_provider(client):
 def _backend_client(state, scheduler, tmp_path, log_client, backend):
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.backend = backend
+    _publish_backend_observation(controller_mock, state)
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1854,14 +1870,21 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
 def test_list_backends_returns_controller_backend_summary(state, scheduler, tmp_path, log_client):
     """ListBackends exposes the controller's one backend and its available capacity."""
     backend = _worker_backend(
-        state,
         None,
         "gcp",
         advertised_attributes={"device-variant": {"v6e-16", "v5e-4"}},
         scale_groups=frozenset({"tpu-v5e"}),
     )
-    backend.resource_capacity = Mock(
-        return_value={"v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})}
+    backend.observe = Mock(
+        return_value=BackendObservation(
+            resource_capacity={
+                "v6e-16": DeviceCapacity(
+                    free=32,
+                    total=64,
+                    held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32},
+                )
+            }
+        )
     )
     client = _backend_client(state, scheduler, tmp_path, log_client, backend)
 
@@ -1885,16 +1908,11 @@ def test_list_backends_returns_controller_backend_summary(state, scheduler, tmp_
 def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state, scheduler, tmp_path, log_client):
     """ListBackends.detail.worker carries the backend's autoscaler groups plus the
     health counts the backend authors from its own liveness tracker."""
-    client = _backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        _worker_backend(state, _status_autoscaler("tpu-v5e-us")),
-    )
+    backend = _worker_backend(_status_autoscaler("tpu-v5e-us"))
     register_worker(state, "w-healthy-1", "10.0.0.1:8080", make_worker_metadata(), scale_group="tpu-v5e")
     register_worker(state, "w-healthy-2", "10.0.0.2:8080", make_worker_metadata(), scale_group="tpu-v5e")
     register_worker(state, "w-dead", "10.0.0.3:8080", make_worker_metadata(), healthy=False, scale_group="tpu-v5e")
+    client = _backend_client(state, scheduler, tmp_path, log_client, backend)
 
     detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
         "detail"
@@ -1924,13 +1942,7 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
             )
         ],
     )
-    client = _backend_client(
-        state,
-        scheduler,
-        tmp_path,
-        log_client,
-        _worker_backend(state, autoscaler),
-    )
+    backend = _worker_backend(autoscaler)
     # Place a running task on the VM's worker so the overlay's DB lookup finds it.
     wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")
     task_id = submit_job(state, "run-job", job_request).task(0)
@@ -1948,6 +1960,7 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
             health=state._health,
             now=Timestamp.now(),
         )
+    client = _backend_client(state, scheduler, tmp_path, log_client, backend)
 
     detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
         "detail"
@@ -1958,7 +1971,7 @@ def test_list_backends_worker_detail_overlays_running_task_counts(state, schedul
 
 def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tmp_path, log_client):
     """ListBackends.detail.kubernetes carries the backend's synced node/pod snapshot."""
-    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    client, k8s, provider, refresh = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
     k8s.seed_resource(
         K8sResource.NODES,
         "node-1",
@@ -1981,7 +1994,8 @@ def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tm
             "status": {"phase": "Running"},
         },
     )
-    provider.sync(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
+    provider.sync(DirectReconcileRequest())
+    refresh()
 
     detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
         "detail"

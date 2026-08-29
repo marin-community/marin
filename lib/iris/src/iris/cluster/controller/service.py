@@ -43,7 +43,8 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import (
-    BackendKind,
+    BackendCapability,
+    BackendObservation,
     ProviderError,
     TaskBackend,
     TaskTarget,
@@ -83,7 +84,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
@@ -1231,6 +1232,12 @@ class ControllerProtocol(Protocol):
     def backend(self) -> TaskBackend: ...
 
     @property
+    def backend_observation(self) -> BackendObservation: ...
+
+    @property
+    def worker_health(self) -> WorkerHealthTracker: ...
+
+    @property
     def federation(self) -> FederationManager: ...
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
@@ -1337,8 +1344,7 @@ class ControllerServiceImpl:
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build the backend autoscaler's cached pending hints keyed by job id."""
-        autoscaler = self._controller.backend.autoscaler
-        return autoscaler.get_pending_hints() if autoscaler is not None else {}
+        return self._controller.backend_observation.pending_hints
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -1685,7 +1691,7 @@ class ControllerServiceImpl:
         # manifest builder would otherwise raise mid-reconcile and stall dispatch.
         if (
             resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
-            and self._controller.backend.descriptor.kind is not BackendKind.WORKER
+            and BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities
         ):
             raise ConnectError(
                 Code.INVALID_ARGUMENT,
@@ -1897,18 +1903,13 @@ class ControllerServiceImpl:
         # queued for a federation peer. A backend without an Iris autoscaler (for
         # example Kubernetes) cannot prove infeasibility and is treated as feasible.
         backend = self._controller.backend
-        autoscaler = backend.autoscaler
-        if autoscaler is None:
-            feasible = True
-            feasibility_errors: list[str] = []
-        else:
-            error = autoscaler.job_feasibility(
-                constraints=constraints,
-                replicas=replicas,
-                resources=request.resources,
-            )
-            feasible = error is None
-            feasibility_errors = [error] if error is not None else []
+        error = backend.job_feasibility(
+            constraints=constraints,
+            replicas=replicas,
+            resources=request.resources,
+        )
+        feasible = error is None
+        feasibility_errors = [error] if error is not None else []
 
         # Classify at submit: run locally, queue for federation, or reject. Submit
         # never picks a peer — the control tick's federation pass does, once a peer
@@ -2550,8 +2551,6 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        health = self._controller.backend.health
-        assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
         with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
@@ -2559,7 +2558,7 @@ class ControllerServiceImpl:
                 address=request.address,
                 metadata=request.metadata,
                 ts=Timestamp.now(),
-                health=health,
+                health=self._controller.worker_health,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
@@ -2602,7 +2601,7 @@ class ControllerServiceImpl:
         ``query.limit == 0`` disables paging (preserves CLI callers that fetch the
         whole roster); ``limit > 0`` is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
-        if self._controller.backend.descriptor.kind is not BackendKind.WORKER:
+        if BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities:
             return controller_pb2.Controller.ListWorkersResponse()
 
         query = controller_pb2.Controller.WorkerQuery()
@@ -2696,7 +2695,7 @@ class ControllerServiceImpl:
         attempt_uid = next((a.attempt_uid for a in task.attempts if a.attempt_id == attempt_id), "")
         task_worker_id = _task_worker_id(task)
         if not task_worker_id:
-            if self._controller.backend.descriptor.kind is not BackendKind.KUBERNETES:
+            if BackendCapability.DIRECT_DISPATCH not in self._controller.backend.descriptor.capabilities:
                 raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
             return TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -2736,12 +2735,12 @@ class ControllerServiceImpl:
 
         A mismatched ``request.backend_id`` returns an empty status.
         """
-        if self._controller.backend.autoscaler is None:
+        if BackendCapability.AUTOSCALER not in self._controller.backend.descriptor.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
         if request.backend_id and request.backend_id != self._controller.backend.descriptor.backend_id:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
-        status = self._controller.backend.autoscaler_status()
+        status = self._controller.backend_observation.status.worker.autoscaler
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
     # --- Kubernetes Cluster Status ---
@@ -2762,8 +2761,8 @@ class ControllerServiceImpl:
                 Code.INVALID_ARGUMENT,
                 f"Backend {request.backend_id!r} does not exist",
             )
-        if backend.descriptor.kind is BackendKind.KUBERNETES:
-            return backend.status().kubernetes
+        if BackendCapability.DIRECT_DISPATCH in backend.descriptor.capabilities:
+            return self._controller.backend_observation.status.kubernetes
         return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
     # --- VM Logs ---
@@ -2922,7 +2921,7 @@ class ControllerServiceImpl:
         worker state (health, tasks, logs). VM status lives on the Autoscaler
         tab.
         """
-        if self._controller.backend.descriptor.kind is not BackendKind.WORKER:
+        if BackendCapability.WORKER_FLEET not in self._controller.backend.descriptor.capabilities:
             raise ConnectError(Code.UNIMPLEMENTED, "Direct provider mode: no workers")
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
@@ -3403,7 +3402,7 @@ class ControllerServiceImpl:
             )
             worker_count = int(snap.execute(select(func.count()).select_from(workers_table)).scalar_one())
 
-        backend_status = backend.status()
+        backend_status = self._controller.backend_observation.status
         variant = backend_status.WhichOneof("detail")
         cap_health: dict[str, int] = {}
         if variant == "worker":
@@ -3420,16 +3419,16 @@ class ControllerServiceImpl:
             worker_count=worker_count,
             pending_task_count=pending_count,
             running_task_count=running_count,
-            has_autoscaler=backend.autoscaler is not None,
+            has_autoscaler=BackendCapability.AUTOSCALER in descriptor.capabilities,
             capacity_health=cap_health,
         )
         for key, values in descriptor.advertised_attributes.items():
             summary.advertised_attributes[key].values.extend(sorted(values))
 
-        capacity = backend.resource_capacity()
+        capacity = self._controller.backend_observation.resource_capacity
         if capacity is not None:
             summary.availability.version = AVAILABILITY_METRIC_VERSION
-            summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
+            summary.availability.observation_epoch_ms = self._controller.backend_observation.observed_at.epoch_ms()
             held_by_band: dict[int, dict[str, int]] = {}
             for token, device_capacity in capacity.items():
                 summary.availability.amounts[token] = device_capacity.free

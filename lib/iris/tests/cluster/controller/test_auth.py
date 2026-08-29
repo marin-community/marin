@@ -85,7 +85,6 @@ def _make_service(db, log_client, auth=None):
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.last_scheduling_context = None
     controller_mock.backend = Mock()
-    controller_mock.backend.autoscaler = None
     controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
@@ -118,7 +117,6 @@ def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.backend = Mock()
-    controller_mock.backend.autoscaler = None
     controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
