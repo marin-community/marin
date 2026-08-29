@@ -480,3 +480,23 @@ moving them (H9 proved moving them re-loses the time to contention; true
 deletion removes ~785 ms of copy work minus the ~300 ms contention
 giveback the schedule may re-take). Implementation being drafted; dual
 review before rack per protocol.
+
+## 2026-08-29 ~14:45Z: T-H9-2 codex review — NO-GO parsed
+
+Codex P1: the return-path transpose mask miscomputes when an expert group
+is EMPTY (duplicate unclipped offsets -> .at[offsets].set(1) collapses ->
+cotangents leak through overwritten rows; concrete 2-shard counterexample
+given). CRITICALLY: bit-for-bit inherited from jax 0.11.1's own
+_ragged_all_to_all_transpose (parallel.py:1705) — the wrapper replicated
+it faithfully, so control and treatment share it and the arm introduces
+ZERO divergence. At hero scale the trigger is latent (mean ~2048
+tokens/group at the trained router; P(empty) ~ e^-2048), but it is a real
+upstream JAX bug to report separately (empty groups are realistic at
+small scale / early training / skewed routers). Disposition: does not
+block the arm (bit-parity is the point); flagged for an upstream report +
+a marin issue after the campaign beat. P2 (custom_vjp kills JVP): nothing
+in the training path jvp's this code (verified train.py:761
+value_and_grad); acknowledged limitation, documented in-code.
+Codex found NO other divergence: operand/offset order matches, output_t
+dead, every tie nonempty+nonnegative, offload_carry re-trace keeps the
+wrappers. Awaiting the fable review before GO.

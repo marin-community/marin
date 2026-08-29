@@ -1,0 +1,2914 @@
+Reading additional input from stdin...
+OpenAI Codex v0.149.0
+--------
+workdir: /home/marin/projects/marin-mfu-loop
+model: gpt-5.6-sol
+provider: openai
+approval: on-request
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: high
+reasoning summaries: none
+session id: 01a04d6e-81dc-72d0-990d-bdba0abf9286
+--------
+user
+Adversarial correctness review of an UNCOMMITTED diff before GPU rack time; read-only, findings only, do not modify or commit. Diff: git diff -- lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py (156+/7-). It eliminates XLA CopyInsertion's per-iteration multi-GB copies on the in-place ragged-all-to-all by (1) replacing trace-time jnp.zeros inits with _loop_local_zeros: broadcast(min(tie[0],0)) where tie is a per-site non-negative traced sizes array (loop-variant, un-CSE-able, exactly 0 at runtime), and (2) two custom_vjp wrappers (_dispatch_ragged_a2a, _return_ragged_a2a) replicating jax 0.11.1's ragged_all_to_all transpose rule op-for-op with private inits; the dispatch wrapper drops the output_t cotangent chain as dead.
+
+This is production hero transport code — a subtle gradient/drop-handling divergence is silent training corruption. Highest-priority attacks: (1) diff the wrappers' backward against the REAL jax 0.11.1 transpose rule in the installed venv (.venv/.../jax/_src/lax/parallel.py, ragged_all_to_all transpose): operand order, offset-exchange direction, scatter set vs add, cumsum/select_n masking, empty-group degenerate; (2) prove or refute that output_t is dead in this call pattern; (3) can min(tie[0],0) ever be negative or empty at runtime given the actual bincount/clip provenance at each site (negative fill would poison dropped rows); (4) custom_vjp interaction with jax.checkpoint/save_and_offload_only_these_names remat (hero remat_mode=offload_carry): does the re-traced backward forward use the wrapper, and are checkpoint names/offload behavior unchanged; (5) shard_map/explicit-mesh compatibility of the custom_vjp; (6) confirm nothing jvp's this path. Verdict: GO/NO-GO for a rack arm under the campaign's fidelity gates (29-step paired loss series max 1e-4; drops must match control). Anchor findings to file:line in the diff and the jax source.
+codex
+I’ll treat this as a read-only, findings-only correctness audit. The `review-pr` workflow does not apply because the target is an uncommitted file diff rather than a pull request; I’ll inspect the local Levanter guidance, the exact diff, installed JAX 0.11.1 source, and relevant call/remat/sharding paths without modifying anything.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '1,240p' lib/levanter/AGENTS.md && git status --short -- lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py && git diff --stat -- lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py && git diff -- lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+# Levanter Agent Notes
+
+JAX-based language model training library using Haliax named tensors and Equinox modules. Start with the shared instructions in `../../AGENTS.md`; only Levanter-specific conventions are below.
+
+## Key Docs
+
+- `docs/` — full documentation site (update `mkdocs.yml` when adding sections)
+- `docs/` — model porting guides (see `docs/` for architecture-specific guides)
+- `docs/design/jit-safety.md` — JIT safety rules (must-read before writing jitted code)
+
+## Development
+
+```bash
+# Full safe Levanter suite
+uv run --package marin-levanter --group test pytest lib/levanter/tests
+```
+
+- Mark long-running tests with `@pytest.mark.slow`.
+- Protect PyTorch-dependent tests with `@skip_if_no_torch`.
+- Batch sizes should be a low multiple of `len(jax.devices())` to ensure multi-device correctness.
+- Do not relax numerical tolerances without prior agreement from a human. Prefer `assert_allclose` with 1e-4 for complex modules and 1e-5 for simpler ones.
+
+### TPU VMEM flags for kernel tuning
+
+- `v5p`/`v5e`: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
+- `v6e`: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`
+- `v4`: no special flag unless user explicitly asks.
+
+## Code Conventions
+
+- **Named tensors:** Use `NamedArray` and explicit `Axis` objects; operate over named axes.
+- **Modules:** Use Equinox and Haliax — avoid Flax and Haiku in new code.
+- **Configurations:** Dataclasses loaded via `draccus`. Keep them declarative and typed.
+- **Datasets:** Prefer `AsyncDataset` over `SyncDataset` unless there is a concrete reason not to.
+- **Compile performance:** Prefer `Stacked` with `fold` or `scan` over hand-written loops.
+- **Reproducibility:** Aim for deterministic training; use explicit PRNG keys.
+- **JIT safety:** Follow `docs/design/jit-safety.md` for all jitted code paths.
+- Maintain compatibility with both GPU and TPU backends.
+ M lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py
+ .../src/levanter/grug/_moe/ep_ragged_all_to_all.py | 163 ++++++++++++++++++++-
+ 1 file changed, 156 insertions(+), 7 deletions(-)
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py --- 1/4 --- Python
+210 210 _gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
+... 211 
+... 212 
+... 213 def _loop_local_zeros(rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."]) -> Float[Array, "rows H"]:
+... 214     """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
+... 215 
+... 216     ``ragged_all_to_all`` writes its result in place into the output-init operand. A literal
+... 217     ``jnp.zeros`` init is a trace-time constant: it gets hoisted out of the layer scan (and
+... 218     identical inits CSE together), so CopyInsertion must mint a fresh multi-GB device copy of
+... 219     the pristine zeros into the a2a's output slot on every scan iteration. Deriving the zeros
+... 220     from ``tie`` -- a per-site, per-iteration traced value -- keeps each init inside the loop
+... 221     body and distinct from every other init, so it lowers to one write-only fill kernel whose
+... 222     buffer the a2a updates directly.
+... 223 
+... 224     ``tie`` must be a non-negative integer array (group or transfer sizes): ``min(tie[0], 0)``
+... 225     is exactly zero at runtime but not foldable at compile time.
+... 226     """
+... 227     zero = jnp.minimum(tie.reshape(-1)[0], 0).astype(dtype)
+... 228     return jax.lax.broadcast(zero, (rows, hidden_dim))
+... 229 
+... 230 
+... 231 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+... 232 def _dispatch_ragged_a2a(
+... 233     capacity: int,
+... 234     source_rows: int,
+... 235     chunk_source: Float[Array, "TK H"],
+... 236     input_offsets: Int[Array, "U"],
+... 237     send_sizes: Int[Array, "U"],
+... 238     output_offsets: Int[Array, "U"],
+... 239     recv_sizes: Int[Array, "U"],
+... 240 ) -> Float[Array, "C H"]:
+... 241     """Dispatch-direction ``ragged_all_to_all`` into a freshly zeroed receiver buffer.
+... 242 
+... 243     Owning the output-init here (instead of taking a caller-built ``jnp.zeros``) lets both the
+... 244     primal and the transposed direction build their inits with `_loop_local_zeros`. jax's
+... 245     built-in transpose rule inits the swapped a2a with plain zeros, which XLA hoists out of
+... 246     the layer loop and re-copies every iteration; the custom vjp below is that same rule with
+... 247     the init construction replaced. Zeros stay load-bearing: receiver rows no peer writes must
+... 248     read 0 downstream, and dropped source rows must read a 0 cotangent in the backward.
+... 249     """
+... 250     del source_rows
+... 251     output_init = _loop_local_zeros(capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes)
+... 252     return jax.lax.ragged_all_to_all(
+... 253         chunk_source, output_init, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+... 254     )
+... 255 
+... 256 
+... 257 def _dispatch_ragged_a2a_fwd(
+... 258     capacity: int,
+... 259     source_rows: int,
+... 260     chunk_source: Float[Array, "TK H"],
+... 261     input_offsets: Int[Array, "U"],
+... 262     send_sizes: Int[Array, "U"],
+... 263     output_offsets: Int[Array, "U"],
+... 264     recv_sizes: Int[Array, "U"],
+... 265 ) -> tuple[Float[Array, "C H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+... 266     result = _dispatch_ragged_a2a(
+... 267         capacity, source_rows, chunk_source, input_offsets, send_sizes, output_offsets, recv_sizes
+... 268     )
+... 269     return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+... 270 
+... 271 
+... 272 def _dispatch_ragged_a2a_bwd(
+... 273     capacity: int,
+... 274     source_rows: int,
+... 275     residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+... 276     cotangent: Float[Array, "C H"],
+... 277 ) -> tuple[Float[Array, "TK H"], None, None, None, None]:
+... 278     del capacity
+... 279     input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+... 280     # The transpose of a ragged all-to-all is the reverse ragged all-to-all: swap the send and
+... 281     # recv roles and exchange the offset vectors across shards, exactly as jax's transpose rule
+... 282     # does. Source rows that were clipped receive no cotangent and keep the init's zeros.
+... 283     output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+... 284     input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+... 285     init = _loop_local_zeros(source_rows, cotangent.shape[1], cotangent.dtype, recv_sizes)
+... 286     source_ct = jax.lax.ragged_all_to_all(
+... 287         cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+... 288     )
+... 289     return source_ct, None, None, None, None
+... 290 
+... 291 
+... 292 _dispatch_ragged_a2a.defvjp(_dispatch_ragged_a2a_fwd, _dispatch_ragged_a2a_bwd)
+... 293 
+... 294 
+... 295 @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+... 296 def _return_ragged_a2a(
+... 297     capacity: int,
+... 298     out_dispatch: Float[Array, "C H"],
+... 299     returned: Float[Array, "TK H"],
+... 300     input_offsets: Int[Array, "U"],
+... 301     send_sizes: Int[Array, "U"],
+... 302     output_offsets: Int[Array, "U"],
+... 303     recv_sizes: Int[Array, "U"],
+... 304 ) -> Float[Array, "TK H"]:
+... 305     """Return-direction ``ragged_all_to_all``: write expert outputs back over ``returned``.
+... 306 
+... 307     Same construction as `_dispatch_ragged_a2a`: the primal is unchanged, and the custom vjp
+... 308     replicates jax's transpose rule operation for operation, replacing only the transposed
+... 309     a2a's zero init so it is built per-iteration instead of hoisted and copied.
+... 310     """
+... 311     del capacity
+... 312     return jax.lax.ragged_all_to_all(
+... 313         out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+... 314     )
+... 315 
+... 316 
+... 317 def _return_ragged_a2a_fwd(
+... 318     capacity: int,
+... 319     out_dispatch: Float[Array, "C H"],
+... 320     returned: Float[Array, "TK H"],
+... 321     input_offsets: Int[Array, "U"],
+... 322     send_sizes: Int[Array, "U"],
+... 323     output_offsets: Int[Array, "U"],
+... 324     recv_sizes: Int[Array, "U"],
+... 325 ) -> tuple[Float[Array, "TK H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+... 326     result = _return_ragged_a2a(
+... 327         capacity, out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes
+... 328     )
+... 329     return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+... 330 
+... 331 
+... 332 def _return_ragged_a2a_bwd(
+... 333     capacity: int,
+... 334     residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+... 335     cotangent: Float[Array, "TK H"],
+... 336 ) -> tuple[Float[Array, "C H"], Float[Array, "TK H"], None, None, None, None]:
+... 337     input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+... 338     output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+... 339     input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+... 340     init = _loop_local_zeros(capacity, cotangent.shape[1], cotangent.dtype, recv_sizes)
+... 341     out_dispatch_ct = jax.lax.ragged_all_to_all(
+... 342         cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+... 343     )
+... 344     # Rows this a2a overwrote took their value from ``out_dispatch``, so the pass-through
+... 345     # cotangent to ``returned`` is zeroed on exactly the written intervals. This mirrors jax's
+... 346     # transpose rule op for op (interval marks, cumsum, integer select_n) so the behavior is
+... 347     # bit-identical, including on degenerate empty-group offset patterns.
+... 348     interval_marks = (
+... 349         jnp.zeros(cotangent.shape[0], jnp.int32).at[output_offsets_x].set(1).at[output_offsets_x + recv_sizes].add(-1)
+... 350     )
+... 351     written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
+... 352     passthrough_zero = _loop_local_zeros(cotangent.shape[0], cotangent.shape[1], cotangent.dtype, send_sizes)
+... 353     returned_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
+... 354     return out_dispatch_ct, returned_ct, None, None, None, None
+... 355 
+... 356 
+... 357 _return_ragged_a2a.defvjp(_return_ragged_a2a_fwd, _return_ragged_a2a_bwd)
+211 358 
+212 359 
+213 360 def _moe_mlp_ep_ragged_a2a_local(
+
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py --- 2/4 --- Python
+254                                      401 
+255     expert_mlp = _select_expert_mlp  402     expert_mlp = _select_expert_mlp
+... (activation_fn)                      ... (activation_fn)
+256     chunk_of_expert = (jnp.arange(n  403     chunk_of_expert = (jnp.arange(n
+... um_experts, dtype=jnp.int32) % loca  ... um_experts, dtype=jnp.int32) % loca
+... l_experts) // chunk_experts  # [E]   ... l_experts) // chunk_experts  # [E]
+...                                      404     # Built per-iteration (not jnp.
+...                                      ... zeros) so the layer scan does not r
+...                                      ... e-copy a hoisted
+...                                      405     # constant into the in-place re
+...                                      ... turn a2a's output slot every step; 
+...                                      ... see _loop_local_zeros.
+...                                      406     # The zeros are load-bearing: r
+...                                      ... ows no peer writes back must read 0
+...                                      ...  in the combine.
+257     returned = jnp.zeros((assignmen  407     returned = _loop_local_zeros(as
+... ts_per_shard, hidden_dim), dtype=x_  ... signments_per_shard, hidden_dim, x_
+... local.dtype)  # [TK, H]              ... local.dtype, group_sizes)  # [TK, H
+...                                      ... ]
+258     accepted_local = jnp.zeros((),   408     accepted_local = jnp.zeros((), 
+... dtype=jnp.int32)                     ... dtype=jnp.int32)
+259     for chunk_index in range(chunks  409     for chunk_index in range(chunks
+... ):                                   ... ):
+260         with jax.named_scope(f"moe_  410         with jax.named_scope(f"moe_
+... chunk_{chunk_index}"):               ... chunk_{chunk_index}"):
+
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py --- 3/4 --- Python
+278             # But it does not incre  428             # But it does not incre
+... ase the speed. The transport and th  ... ase the speed. The transport and th
+... e MLP compete for the                ... e MLP compete for the
+279             # same SMs.              429             # same SMs.
+280             chunk_source, _ = jax.l  430             chunk_source, _ = jax.l
+... ax.optimization_barrier((sorted_x,   ... ax.optimization_barrier((sorted_x, 
+... returned))                           ... returned))
+281             dispatch_out_shape = jn  ... 
+... p.zeros((chunk_capacity, hidden_dim  ... 
+... ), dtype=x_local.dtype)  # [C, H]    ... 
+282             # Accepted rows are the  431             # Accepted rows are the
+...  prefix of each unclipped expert gr  ...  prefix of each unclipped expert gr
+... oup and receiver offsets             ... oup and receiver offsets
+283             # pack arrivals expert-  432             # pack arrivals expert-
+... major, so the received buffer feeds  ... major, so the received buffer feeds
+...  the grouped MLP                     ...  the grouped MLP
+284             # directly: no sender c  433             # directly: no sender c
+... ompaction and no receiver-side perm  ... ompaction and no receiver-side perm
+... ute.                                 ... ute.
+285             x_dispatch = jax.lax.ra  434             x_dispatch = _dispatch_
+... gged_all_to_all(  # [C, H]           ... ragged_a2a(  # [C, H]
+...                                      435                 chunk_capacity,
+...                                      436                 assignments_per_sha
+...                                      ... rd,
+286                 chunk_source,        437                 chunk_source,
+287                 dispatch_out_shape,  ... 
+288                 *dispatch_params,    438                 *dispatch_params,
+289                 axis_name="expert",  ... 
+290             )                        439             )
+291             active_all = jnp.sum(    440             active_all = jnp.sum(  
+... # [Elocal]                           ... # [Elocal]
+292                 clipped_group_sizes  441                 clipped_group_sizes
+... .reshape(ep_size, ep_size, local_ex  ... .reshape(ep_size, ep_size, local_ex
+... perts)[:, shard_id, :], axis=0       ... perts)[:, shard_id, :], axis=0
+
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py --- 4/4 --- Python
+308             # Chaining every chunk   457             # Chaining every chunk 
+... through one output buffer composes   ... through one output buffer composes 
+... the disjoint writes;                 ... the disjoint writes;
+309             # dropped rows keep the  458             # dropped rows keep the
+...  buffer's zeros, so the final gathe  ...  buffer's zeros, so the final gathe
+... r-sum reads dropped                  ... r-sum reads dropped
+310             # slots as zero contrib  459             # slots as zero contrib
+... utions with no expansion step.       ... utions with no expansion step.
+311             returned = jax.lax.ragg  460             returned = _return_ragg
+... ed_all_to_all(                       ... ed_a2a(
+...                                      461                 chunk_capacity,
+312                 out_dispatch,        462                 out_dispatch,
+313                 returned,            463                 returned,
+314                 *return_params,      464                 *return_params,
+315                 axis_name="expert",  ... 
+316             )                        465             )
+317             accepted_local = accept  466             accepted_local = accept
+... ed_local + jnp.sum(clipped_group_si  ... ed_local + jnp.sum(clipped_group_si
+... zes[shard_id], dtype=jnp.int32)      ... zes[shard_id], dtype=jnp.int32)
+318                                      467 
+
+
+codex
+The diff introduces three distinct correctness surfaces: zero construction, dispatch transpose, and return-buffer pass-through masking. I’m now checking each against the installed primitive rule and the exact size/offset provenance rather than relying on the comments’ equivalence claims.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '1,220p' lib/levanter/docs/design/jit-safety.md && sed -n '1,540p' lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py && rg -n \"def _ragged_all_to_all_transpose|ragged_all_to_all.*transpose|ragged_all_to_all_p\" .venv/lib/python*/site-packages/jax/_src/lax/parallel.py && rg -n \"ep_ragged_all_to_all|_moe_mlp_ep_ragged_a2a|ragged_all_to_all\" lib/levanter/src lib/levanter/tests | head -240" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+# JIT Safety Rules
+
+Any method inside an `equinox.Module`, any function decorated with `jax.jit` or one of its variants (e.g. `eqx.filter_jit`, `haliax.named_jit`), and any helpers they call must follow these rules.
+
+## Rules
+
+1. **No data-dependent Python control flow** inside jitted code.
+2. **No dynamic shapes or dynamic lengths** when indexing.
+3. Use `debug.print` to inspect values (not Python `print`).
+4. Use jit-safe variants like `jnp.where` or `hax.where` when branching on data.
+5. Do not call `jax.default_backend()` or `jax.devices()` at module import time; resolve backend/device lazily inside runtime functions.
+
+## Examples
+
+```python
+# BAD — data-dependent control flow
+@jax.jit
+def f(x):
+    if x > 0:  # Python bool from traced value
+        return x
+    return -x
+
+# GOOD — jit-safe branching
+@jax.jit
+def f(x):
+    return jnp.where(x > 0, x, -x)
+```
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Ragged all-to-all expert-parallel Grug MoE backend.
+
+Axis names used in the shape annotations:
+
+    Tlocal  tokens on this shard
+    K       routed experts per token
+    TK      routed assignments on this shard, Tlocal * K
+    H       hidden size
+    I       expert intermediate size
+    I2      gate and up projections fused, 2 * I
+    E       experts in the model
+    Elocal  experts held by this shard
+    Echunk  experts in one sequential chunk, Elocal / chunks
+    C       rows in one chunk's receiver buffer, the per-chunk capacity
+    S       shards on the expert axis
+"""
+
+import functools
+import logging
+import math
+from collections.abc import Callable
+from typing import Protocol
+
+import jax
+import jax.numpy as jnp
+from jaxtyping import Array, Float, Int
+
+from haliax.nn.ragged_dot import ragged_dot
+from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
+from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
+from levanter.grug._moe.ep_common import (
+    _clip_receiver_group_sizes,
+    _expert_granular_a2a_params,
+    _sort_activations,
+)
+from levanter.grug.sharding import _batch_axes
+
+logger = logging.getLogger(__name__)
+
+# QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
+_SM100_COMPUTE_CAPABILITY = 10.0
+
+# Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
+# back to a single chunk when the local expert count is not divisible.
+_EXPERT_CHUNKS = 2
+
+# Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
+# every other collective keeps NCCL's host-launched kernels.
+RAGGED_REQUIRED_XLA_FLAGS = (
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+)
+
+
+class _ExpertMlp(Protocol):
+    """Runs the expert MLP over a receiver buffer laid out expert-major.
+
+    Implementations take both views of the buffer's group sizes: the physical sizes, which charge
+    trailing padding to the last expert, and the active sizes, which count only received rows.
+    Which one a kernel reads depends on whether it covers the whole buffer or works from segment
+    boundaries, so both are always passed and a kernel discards the one it does not use.
+    """
+
+    def __call__(
+        self,
+        x_dispatch: Float[Array, "C H"],
+        moe_w13_local: Float[Array, "Echunk H I2"],
+        moe_w2_local: Float[Array, "Echunk I H"],
+        physical_group_sizes: Int[Array, "Echunk"],
+        active_group_sizes: Int[Array, "Echunk"],
+        activation_fn: Callable[[jax.Array], jax.Array],
+    ) -> Float[Array, "C H"]: ...
+
+
+def _ragged_dot_expert_mlp(
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "C H"]:
+    """Portable expert MLP over XLA's `ragged_dot`, which covers the whole receiver buffer."""
+    del active_group_sizes
+    w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
+    moe_dim = moe_w2_local.shape[1]
+    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+
+
+def _cute_expert_mlp(
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "C H"]:
+    """Expert MLP on QuACK's SM100 grouped GEMMs plus cuDNN grouped weight gradients.
+
+    The grouped kernels are driven by segment boundaries, so they take the active sizes and
+    mask the receiver buffer's trailing padding rather than charging it to the last expert.
+    """
+    del activation_fn, physical_group_sizes
+
+    # QuACK, cuDNN Frontend, and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+    from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn  # noqa: PLC0415
+
+    moe_dim = moe_w2_local.shape[1]
+    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    cumulative_group_sizes = jnp.concatenate(
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
+    )
+    return _expert_mlp_cudnn(x_dispatch, w13_interleaved, moe_w2_local, active_group_sizes, cumulative_group_sizes)
+
+
+@functools.cache
+def _quack_grouped_gemm_available() -> bool:
+    if jax.default_backend() != "gpu":
+        return False
+    if float(jax.devices("gpu")[0].compute_capability) < _SM100_COMPUTE_CAPABILITY:
+        return False
+    try:
+        import levanter.grug._moe.sonic_cute  # noqa: F401,PLC0415
+        from levanter.grug._moe.cudnn_wgrad_cute import _cudnn_modules  # noqa: PLC0415
+
+        _ = _cudnn_modules()  # check if compatible cudnn is available
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "SM100 GPU present but the QuACK/cuDNN grouped-GEMM kernels did not import (%s). "
+            "The ragged expert MLP falls back to ragged_dot, which computes the same function "
+            "more slowly. Install levanter's `gpu` extra to use them.",
+            exc,
+        )
+        return False
+    return True
+
+
+def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
+    """Pick the fastest expert-MLP kernel this process can actually run.
+
+    QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
+    activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
+    portable `ragged_dot` path, which computes the same function.
+    """
+    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
+        return _cute_expert_mlp
+    return _ragged_dot_expert_mlp
+
+
+def _unpermute_from_global_expert(
+    intermediate: Float[Array, "TK H"],
+    sorted_indices: Int[Array, "TK"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    *,
+    tokens_per_shard: int,
+    topk: int,
+) -> Float[Array, "Tlocal H"]:
+    """Weight each token's expert outputs by its routing weights and sum them."""
+    positions = jnp.argsort(sorted_indices)
+    if sonic_gather_sum_available():
+        # One kernel for the gather and the sum, materializing neither the unpermuted
+        # ``[TK, H]`` buffer nor the ``[T, K, H]`` view -- at top-8 that view is eight times
+        # the output. It accumulates in fp32 like the einsum below and keeps the routing
+        # weight in fp32 through the multiply, where the einsum has to cast it down to avoid
+        # promoting the larger operand, so the two agree to a single rounding.
+        return sonic_gather_sum(intermediate, positions.reshape(tokens_per_shard, topk), combine_weights_local)
+    unsorted = _sort_activations(intermediate, positions)
+    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    return jnp.einsum(
+        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
+    )
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
+def _gather_dispatch_rows(
+    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
+) -> Float[Array, "TK H"]:
+    """Build the expert-sorted dispatch buffer with one gather.
+
+    Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
+    materializing the repeated buffer or running a data-sized permute. The backward pass
+    is the transpose: each token sums the cotangent rows of its ``topk`` sorted slots.
+    """
+    return x_local[sorted_indices // topk]
+
+
+def _gather_dispatch_rows_fwd(
+    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
+) -> tuple[Float[Array, "TK H"], Int[Array, "TK"]]:
+    return _gather_dispatch_rows(x_local, sorted_indices, topk), sorted_indices
+
+
+def _gather_dispatch_rows_bwd(
+    topk: int, sorted_indices: Int[Array, "TK"], cotangent: Float[Array, "TK H"]
+) -> tuple[Float[Array, "Tlocal H"], None]:
+    tokens_per_shard = sorted_indices.shape[0] // topk
+    positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
+    if sonic_gather_sum_available():
+        ones = jnp.ones((tokens_per_shard, topk), dtype=jnp.float32)
+        grad_x = sonic_gather_sum(cotangent, positions, ones)
+    else:
+        grad_x = jnp.sum(cotangent[positions], axis=1, dtype=jnp.float32)
+    return grad_x.astype(cotangent.dtype), None
+
+
+_gather_dispatch_rows.defvjp(_gather_dispatch_rows_fwd, _gather_dispatch_rows_bwd)
+
+
+def _loop_local_zeros(rows: int, hidden_dim: int, dtype, tie: Int[Array, "..."]) -> Float[Array, "rows H"]:
+    """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
+
+    ``ragged_all_to_all`` writes its result in place into the output-init operand. A literal
+    ``jnp.zeros`` init is a trace-time constant: it gets hoisted out of the layer scan (and
+    identical inits CSE together), so CopyInsertion must mint a fresh multi-GB device copy of
+    the pristine zeros into the a2a's output slot on every scan iteration. Deriving the zeros
+    from ``tie`` -- a per-site, per-iteration traced value -- keeps each init inside the loop
+    body and distinct from every other init, so it lowers to one write-only fill kernel whose
+    buffer the a2a updates directly.
+
+    ``tie`` must be a non-negative integer array (group or transfer sizes): ``min(tie[0], 0)``
+    is exactly zero at runtime but not foldable at compile time.
+    """
+    zero = jnp.minimum(tie.reshape(-1)[0], 0).astype(dtype)
+    return jax.lax.broadcast(zero, (rows, hidden_dim))
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def _dispatch_ragged_a2a(
+    capacity: int,
+    source_rows: int,
+    chunk_source: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> Float[Array, "C H"]:
+    """Dispatch-direction ``ragged_all_to_all`` into a freshly zeroed receiver buffer.
+
+    Owning the output-init here (instead of taking a caller-built ``jnp.zeros``) lets both the
+    primal and the transposed direction build their inits with `_loop_local_zeros`. jax's
+    built-in transpose rule inits the swapped a2a with plain zeros, which XLA hoists out of
+    the layer loop and re-copies every iteration; the custom vjp below is that same rule with
+    the init construction replaced. Zeros stay load-bearing: receiver rows no peer writes must
+    read 0 downstream, and dropped source rows must read a 0 cotangent in the backward.
+    """
+    del source_rows
+    output_init = _loop_local_zeros(capacity, chunk_source.shape[1], chunk_source.dtype, send_sizes)
+    return jax.lax.ragged_all_to_all(
+        chunk_source, output_init, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+    )
+
+
+def _dispatch_ragged_a2a_fwd(
+    capacity: int,
+    source_rows: int,
+    chunk_source: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> tuple[Float[Array, "C H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+    result = _dispatch_ragged_a2a(
+        capacity, source_rows, chunk_source, input_offsets, send_sizes, output_offsets, recv_sizes
+    )
+    return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+
+
+def _dispatch_ragged_a2a_bwd(
+    capacity: int,
+    source_rows: int,
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangent: Float[Array, "C H"],
+) -> tuple[Float[Array, "TK H"], None, None, None, None]:
+    del capacity
+    input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+    # The transpose of a ragged all-to-all is the reverse ragged all-to-all: swap the send and
+    # recv roles and exchange the offset vectors across shards, exactly as jax's transpose rule
+    # does. Source rows that were clipped receive no cotangent and keep the init's zeros.
+    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    init = _loop_local_zeros(source_rows, cotangent.shape[1], cotangent.dtype, recv_sizes)
+    source_ct = jax.lax.ragged_all_to_all(
+        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+    )
+    return source_ct, None, None, None, None
+
+
+_dispatch_ragged_a2a.defvjp(_dispatch_ragged_a2a_fwd, _dispatch_ragged_a2a_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _return_ragged_a2a(
+    capacity: int,
+    out_dispatch: Float[Array, "C H"],
+    returned: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> Float[Array, "TK H"]:
+    """Return-direction ``ragged_all_to_all``: write expert outputs back over ``returned``.
+
+    Same construction as `_dispatch_ragged_a2a`: the primal is unchanged, and the custom vjp
+    replicates jax's transpose rule operation for operation, replacing only the transposed
+    a2a's zero init so it is built per-iteration instead of hoisted and copied.
+    """
+    del capacity
+    return jax.lax.ragged_all_to_all(
+        out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes, axis_name="expert"
+    )
+
+
+def _return_ragged_a2a_fwd(
+    capacity: int,
+    out_dispatch: Float[Array, "C H"],
+    returned: Float[Array, "TK H"],
+    input_offsets: Int[Array, "U"],
+    send_sizes: Int[Array, "U"],
+    output_offsets: Int[Array, "U"],
+    recv_sizes: Int[Array, "U"],
+) -> tuple[Float[Array, "TK H"], tuple[jax.Array, jax.Array, jax.Array, jax.Array]]:
+    result = _return_ragged_a2a(
+        capacity, out_dispatch, returned, input_offsets, send_sizes, output_offsets, recv_sizes
+    )
+    return result, (input_offsets, send_sizes, output_offsets, recv_sizes)
+
+
+def _return_ragged_a2a_bwd(
+    capacity: int,
+    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+    cotangent: Float[Array, "TK H"],
+) -> tuple[Float[Array, "C H"], Float[Array, "TK H"], None, None, None, None]:
+    input_offsets, send_sizes, output_offsets, recv_sizes = residuals
+    output_offsets_x = jax.lax.all_to_all(output_offsets, "expert", 0, 0, tiled=True)
+    input_offsets_x = jax.lax.all_to_all(input_offsets, "expert", 0, 0, tiled=True)
+    init = _loop_local_zeros(capacity, cotangent.shape[1], cotangent.dtype, recv_sizes)
+    out_dispatch_ct = jax.lax.ragged_all_to_all(
+        cotangent, init, output_offsets_x, recv_sizes, input_offsets_x, send_sizes, axis_name="expert"
+    )
+    # Rows this a2a overwrote took their value from ``out_dispatch``, so the pass-through
+    # cotangent to ``returned`` is zeroed on exactly the written intervals. This mirrors jax's
+    # transpose rule op for op (interval marks, cumsum, integer select_n) so the behavior is
+    # bit-identical, including on degenerate empty-group offset patterns.
+    interval_marks = (
+        jnp.zeros(cotangent.shape[0], jnp.int32).at[output_offsets_x].set(1).at[output_offsets_x + recv_sizes].add(-1)
+    )
+    written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
+    passthrough_zero = _loop_local_zeros(cotangent.shape[0], cotangent.shape[1], cotangent.dtype, send_sizes)
+    returned_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
+    return out_dispatch_ct, returned_ct, None, None, None, None
+
+
+_return_ragged_a2a.defvjp(_return_ragged_a2a_fwd, _return_ragged_a2a_bwd)
+
+
+def _moe_mlp_ep_ragged_a2a_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    shard_id = jax.lax.axis_index("expert")
+    ep_size = num_experts // local_experts
+    tokens_per_shard = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_shard = tokens_per_shard * topk
+    local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
+    local_capacity = max(local_experts, local_capacity)
+
+    # Local experts are processed in sequential chunks so only one chunk's transport buffers
+    # are live at a time. The a2a outputs cannot be rematerialized (XLA never recomputes
+    # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
+    # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
+    # which also makes drop clipping per-chunk.
+    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunk_experts = local_experts // chunks
+    chunk_capacity = max(chunk_experts, int(math.ceil(local_capacity / chunks)))
+    hidden_dim = x_local.shape[1]
+
+    with jax.named_scope("dispatch"):
+        flat_selected = selected_experts_local.reshape(-1)  # [TK]
+        sorted_indices = jnp.argsort(flat_selected)  # [TK]
+        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
+        sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
+        all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
+
+    expert_mlp = _select_expert_mlp(activation_fn)
+    chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
+    # Built per-iteration (not jnp.zeros) so the layer scan does not re-copy a hoisted
+    # constant into the in-place return a2a's output slot every step; see _loop_local_zeros.
+    # The zeros are load-bearing: rows no peer writes back must read 0 in the combine.
+    returned = _loop_local_zeros(assignments_per_shard, hidden_dim, x_local.dtype, group_sizes)  # [TK, H]
+    accepted_local = jnp.zeros((), dtype=jnp.int32)
+    for chunk_index in range(chunks):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)  # [S, E]
+            clipped_group_sizes = _clip_receiver_group_sizes(
+                chunk_all_group_sizes,
+                local_expert_size=local_experts,
+                receiver_capacity=chunk_capacity,
+            )
+            # Sender starts come from the full (unmasked) sizes, so each chunk reads its
+            # groups' accepted prefixes in place in the shared sorted buffer.
+            dispatch_params, return_params = _expert_granular_a2a_params(
+                all_group_sizes,
+                clipped_group_sizes,
+                shard_id,
+                local_expert_size=local_experts,
+            )
+            # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
+            # of every chunk at the same time. This causes the high memory use that the chunks
+            # prevent. A variant that overlaps one transport with the MLP stays within memory.
+            # But it does not increase the speed. The transport and the MLP compete for the
+            # same SMs.
+            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
+            # Accepted rows are the prefix of each unclipped expert group and receiver offsets
+            # pack arrivals expert-major, so the received buffer feeds the grouped MLP
+            # directly: no sender compaction and no receiver-side permute.
+            x_dispatch = _dispatch_ragged_a2a(  # [C, H]
+                chunk_capacity,
+                assignments_per_shard,
+                chunk_source,
+                *dispatch_params,
+            )
+            active_all = jnp.sum(  # [Elocal]
+                clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
+            )
+            active_group_sizes = active_all[
+                chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts
+            ]  # [Echunk]
+            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
+            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
+            out_dispatch = expert_mlp(  # [C, H]
+                x_dispatch,
+                moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
+                moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
+                physical_group_sizes,
+                active_group_sizes,
+                activation_fn,
+            )
+            # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
+            # Chaining every chunk through one output buffer composes the disjoint writes;
+            # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
+            # slots as zero contributions with no expansion step.
+            returned = _return_ragged_a2a(
+                chunk_capacity,
+                out_dispatch,
+                returned,
+                *return_params,
+            )
+            accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
+
+    with jax.named_scope("combine"):
+        out_local = _unpermute_from_global_expert(
+            returned,
+            sorted_indices,
+            combine_weights_local,
+            tokens_per_shard=tokens_per_shard,
+            topk=topk,
+        ).astype(x_local.dtype)
+        dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - accepted_local
+        dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, CapacityOverflow(sender=dropped_total, receiver=jnp.zeros_like(dropped_total))
+783:  return ragged_all_to_all_p.bind(operand, output, input_offsets, send_sizes,
+1681:  result = ragged_all_to_all_p.bind(
+1688:    result_dot = ragged_all_to_all_p.bind(
+1692:def _ragged_all_to_all_transpose(
+1702:    operand_t = ragged_all_to_all_p.bind(
+1716:    out = ragged_all_to_all_p.bind(*vals_in, axis_name=axis_name,
+1746:ragged_all_to_all_p = core.Primitive('ragged_all_to_all')
+1747:ragged_all_to_all_p.def_impl(_ragged_all_to_all_impl)
+1748:ragged_all_to_all_p.def_effectful_abstract_eval(_ragged_all_to_all_effectful_abstract_eval)
+1749:ad.primitive_jvps[ragged_all_to_all_p] = _ragged_all_to_all_jvp
+1750:ad.primitive_transposes[ragged_all_to_all_p] = _ragged_all_to_all_transpose
+1751:mlir.register_lowering(ragged_all_to_all_p, _ragged_all_to_all_lowering)
+1752:batching.fancy_primitive_batchers[ragged_all_to_all_p] = _ragged_all_to_all_batched_collective
+lib/levanter/tests/grug/test_grugformer_moe.py:645:    ["ring", "ragged_all_to_all", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"],
+lib/levanter/tests/grug/test_grugformer_moe.py:1016:    """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
+lib/levanter/tests/grug/test_grugformer_moe.py:1147:@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+lib/levanter/tests/grug/test_grugformer_moe.py:1153:        pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
+lib/levanter/tests/grug/test_grugformer_moe.py:1285:            implementation="ragged_all_to_all",
+lib/levanter/tests/grug/test_grugformer_moe.py:1409:            implementation="ragged_all_to_all",
+lib/levanter/src/levanter/grug/grug_moe.py:48:from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+lib/levanter/src/levanter/grug/grug_moe.py:244:        elif resolved_implementation == "ragged_all_to_all":
+lib/levanter/src/levanter/grug/grug_moe.py:245:            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+lib/levanter/src/levanter/grug/_moe/common.py:93:    "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+lib/levanter/src/levanter/grug/_moe/common.py:104:    "ragged_all_to_all",
+lib/levanter/src/levanter/grug/_moe/ep_common.py:126:    """Offset/size vectors for one direction of an expert-granular ``ragged_all_to_all``."""
+lib/levanter/src/levanter/grug/_moe/ep_common.py:141:    """Build dispatch and return ``ragged_all_to_all`` parameters at (peer, expert) granularity.
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:53:    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:214:    """Zero buffer for an in-place ``ragged_all_to_all`` output slot, built so XLA never copies it.
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:216:    ``ragged_all_to_all`` writes its result in place into the output-init operand. A literal
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:241:    """Dispatch-direction ``ragged_all_to_all`` into a freshly zeroed receiver buffer.
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:252:    return jax.lax.ragged_all_to_all(
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:286:    source_ct = jax.lax.ragged_all_to_all(
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:305:    """Return-direction ``ragged_all_to_all``: write expert outputs back over ``returned``.
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:312:    return jax.lax.ragged_all_to_all(
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:341:    out_dispatch_ct = jax.lax.ragged_all_to_all(
+lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:360:def _moe_mlp_ep_ragged_a2a_local(
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba .venv/lib/python*/site-packages/jax/_src/lax/parallel.py | sed -n '1650,1735p'; nl -ba lib/levanter/src/levanter/grug/_moe/ep_common.py | sed -n '95,205p'; nl -ba lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py | sed -n '205,480p'; .venv/bin/python - <<'PY'
+import jax
+print(jax.__version__)
+print(jax.__file__)
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 192ms:
+0.11.1
+/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/__init__.py
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n \"save_and_offload_only_these_names|offload_carry|remat_mode|checkpoint_name|checkpoint.*name|prevent_cse\" lib/levanter/src experiments tests lib/levanter/tests | head -400; nl -ba lib/levanter/src/levanter/grug/grug_moe.py | sed -n '180,285p'; nl -ba lib/levanter/tests/grug/test_grugformer_moe.py | sed -n '980,1205p'; nl -ba lib/levanter/tests/grug/test_grugformer_moe.py | sed -n '1260,1435p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+lib/levanter/tests/test_array_stacked.py:262:    original = array_stacked_module.tree_checkpoint_name
+lib/levanter/tests/test_array_stacked.py:264:    def wrapped_tree_checkpoint_name(x, name):
+lib/levanter/tests/test_array_stacked.py:268:    monkeypatch.setattr(array_stacked_module, "tree_checkpoint_name", wrapped_tree_checkpoint_name)
+lib/levanter/tests/test_tensorstore_serialization.py:105:def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
+lib/levanter/tests/test_checkpoint.py:514:    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+lib/levanter/tests/test_checkpoint.py:518:    phase_records = [record for record in checkpoint_records if record["name"] == "checkpoint_phase_duration_seconds"]
+lib/levanter/tests/test_checkpoint.py:527:        record for record in checkpoint_records if record["name"] == "checkpoint_total_duration_seconds"
+lib/levanter/tests/test_checkpoint.py:559:    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+lib/levanter/tests/test_checkpoint.py:598:    checkpoint_records = [record for record in transport.records if record["name"].startswith("checkpoint_")]
+lib/levanter/tests/test_checkpoint.py:607:        register_debug_checkpointer_state_provider(provider_name, provider)
+lib/levanter/tests/test_checkpoint.py:608:        assert _collect_debug_checkpointer_state()[provider_name] == {"weight_transfer": {"bytes": 123}}
+lib/levanter/tests/test_checkpoint.py:610:        unregister_debug_checkpointer_state_provider(provider_name)
+experiments/june_tpu_67b_a2b/moe/model.py:127:    remat_mode: RematMode = "recompute_all"
+experiments/june_tpu_67b_a2b/moe/model.py:745:        if cfg.remat_mode == "save_moe":
+experiments/june_tpu_67b_a2b/moe/model.py:746:            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+tests/test_moe_hero_ep.py:217:    remat_mode="recompute_all",
+tests/test_moe_hero_ep.py:225:        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
+tests/test_moe_hero_ep.py:446:    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION, remat_mode="offload_carry")
+tests/test_moe_hero_ep.py:470:    ("moe_implementation", "expected_remat_mode"),
+tests/test_moe_hero_ep.py:471:    [(train.RAGGED_MOE_IMPLEMENTATION, "offload_carry"), ("fixed_pooled_wave_all_to_all", "recompute_all")],
+tests/test_moe_hero_ep.py:473:def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+tests/test_moe_hero_ep.py:484:    assert config.model.remat_mode == expected_remat_mode
+experiments/sft/delphi_chat_template.py:60:# checkpoint preparation renames them so the canonical strings above tokenize to one id each and
+experiments/grug/moe_hero_fsdp/launch.py:210:    remat_mode: RematMode | None = None
+experiments/grug/moe_hero_fsdp/launch.py:511:    remat_mode: RematMode | None,
+experiments/grug/moe_hero_fsdp/launch.py:527:            remat_mode=remat_mode,
+experiments/grug/moe/model.py:141:    remat_mode: RematMode = "recompute_all"
+experiments/grug/moe/model.py:748:        if cfg.remat_mode == "save_moe":
+experiments/grug/moe/model.py:749:            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+experiments/grug/moe/launch_cw_scale.py:111:    remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
+experiments/grug/moe/launch_cw_scale.py:112:    if remat_mode not in ("recompute_all", "save_moe"):
+experiments/grug/moe/launch_cw_scale.py:113:        raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+experiments/grug/moe/launch_cw_scale.py:127:        remat_mode=cast(RematMode, remat_mode),
+experiments/grug/moe_hero_ep/launch_diagnostics.py:45:    with_transport_remat_mode,
+experiments/grug/moe_hero_ep/launch_diagnostics.py:147:    model = with_transport_remat_mode(model)
+experiments/grug/moe_hero_fsdp/model.py:175:    remat_mode: RematMode = "recompute_all"
+experiments/grug/moe_hero_fsdp/model.py:1011:        if cfg.remat_mode == "save_moe":
+experiments/grug/moe_hero_fsdp/model.py:1012:            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+experiments/grug/moe_hero_fsdp/model.py:1013:        elif cfg.remat_mode == "offload_moe":
+experiments/grug/moe_hero_fsdp/model.py:1014:            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+experiments/grug/moe_hero_ep/restore_benchmark.py:62:    with_transport_remat_mode,
+experiments/grug/moe_hero_ep/restore_benchmark.py:247:        model = with_transport_remat_mode(HERO_MODEL_CONFIG)
+experiments/grug/moe_hero_ep/restore_benchmark.py:320:        remat_mode=model.remat_mode,
+experiments/grug/moe_hero_fsdp/sweep.py:109:    return Setting(overrides=HeroOverrides(remat_mode=mode))
+experiments/grug/moe_hero_fsdp/README.md:99:- `offload_opt_state` to pinned host; `remat_mode="recompute_all"`.
+experiments/grug/moe_hero_ep/model.py:21:from haliax.jax_utils import named_call, tree_checkpoint_name
+experiments/grug/moe_hero_ep/model.py:96:RematMode = Literal["recompute_all", "save_moe", "offload_carry"]
+experiments/grug/moe_hero_ep/model.py:198:    remat_mode: RematMode = "recompute_all"
+experiments/grug/moe_hero_ep/model.py:201:    backward skips re-running expert dispatch and its EP collectives; "offload_carry"
+experiments/grug/moe_hero_ep/model.py:1140:        x = tree_checkpoint_name(x, LAYER_CARRY_REMAT_NAME)
+experiments/grug/moe_hero_ep/model.py:1247:        if cfg.remat_mode == "save_moe":
+experiments/grug/moe_hero_ep/model.py:1248:            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+experiments/grug/moe_hero_ep/model.py:1249:        elif cfg.remat_mode == "offload_carry":
+experiments/grug/moe_hero_ep/model.py:1253:            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+experiments/grug/moe_hero_ep/hero_recipe.py:60:def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+experiments/grug/moe_hero_ep/hero_recipe.py:72:    return dataclasses.replace(model, remat_mode="offload_carry")
+lib/levanter/src/levanter/models/snowball.py:340:            "this checkpoint uses a different Grug attention recipe and needs its own named snapshot."
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:70:    with_transport_remat_mode,
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:120:        return with_transport_remat_mode(HERO_MODEL_CONFIG)
+experiments/grug/moe_hero_ep/memory_soak.py:55:    with_transport_remat_mode,
+experiments/grug/moe_hero_ep/memory_soak.py:170:    model = with_transport_remat_mode(model)
+experiments/grug/moe_hero_ep/train.py:200:    remat_mode: RematMode,
+experiments/grug/moe_hero_ep/train.py:221:    latency_hiding = not ragged or remat_mode == "offload_carry"
+experiments/grug/moe_hero_ep/train.py:238:    if remat_mode == "offload_carry":
+experiments/grug/moe_hero_ep/train.py:1256:        remat_mode=config.model.remat_mode,
+lib/levanter/src/levanter/grug/_moe/sonic.py:17:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/sonic.py:371:    x_dispatch = tree_checkpoint_name(x[token_ids_sort], _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/sonic.py:374:        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+lib/levanter/src/levanter/grug/_moe/sonic.py:379:        out = tree_checkpoint_name(
+lib/levanter/src/levanter/main/export_hf_to_lm.py:94:        tokenizer_path = hf_checkpoint.model_name_or_path
+lib/levanter/src/levanter/grug/_moe/ep_ring.py:11:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/ep_ring.py:95:        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/ep_ring.py:103:        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+lib/levanter/src/levanter/grug/_moe/ep_ring.py:106:        out_dispatch = tree_checkpoint_name(
+lib/levanter/src/levanter/grug/_moe/ep_fixed_pooled_wave_all_to_all.py:558:        prevent_cse=False,
+lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py:13:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py:150:            received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py:168:        send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
+lib/levanter/src/levanter/grug/_moe/common.py:123:# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:20:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:142:    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:148:        out_dispatch = tree_checkpoint_name(
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:197:    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:249:            out_dispatch = tree_checkpoint_name(
+lib/levanter/src/levanter/main/sample_lm.py:111:        tok_string = config.hf_checkpoint.model_name_or_path
+lib/levanter/src/levanter/grug/_moe/scatter.py:10:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/scatter.py:41:    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/scatter.py:44:        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+lib/levanter/src/levanter/grug/_moe/scatter.py:47:        out_dispatch = tree_checkpoint_name(
+lib/levanter/src/levanter/grug/_moe/ep_deepep.py:14:from haliax.jax_utils import tree_checkpoint_name
+lib/levanter/src/levanter/grug/_moe/ep_deepep.py:162:        x_dispatch = tree_checkpoint_name(local_assignments.x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+lib/levanter/src/levanter/grug/_moe/ep_deepep.py:165:        w13_out = tree_checkpoint_name(
+lib/levanter/src/levanter/grug/_moe/ep_deepep.py:170:        out_dispatch = tree_checkpoint_name(
+lib/levanter/src/levanter/checkpoint.py:78:def register_debug_checkpointer_state_provider(name: str, provider: CheckpointDebugStateProvider) -> None:
+lib/levanter/src/levanter/checkpoint.py:84:def unregister_debug_checkpointer_state_provider(name: str) -> None:
+lib/levanter/src/levanter/compat/hf_checkpoints.py:590:                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1017:                f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1080:        the reference_checkpoint as the repo name
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1100:                raise ValueError("No reference checkpoint provided, so no repo name to upload to")
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1471:        logger.info(f"Uploading HF-compatible checkpoint to {ref.model_name_or_path}")
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1475:        logger.info(f"Finished uploading HF-compatible checkpoint to {ref.model_name_or_path}")
+lib/levanter/src/levanter/compat/hf_checkpoints.py:1477:        logger.info(f"Finished waiting for rank 0 to upload checkpoint to {ref.model_name_or_path}")
+   180	    if mesh is None:
+   181	        mesh = _current_mesh()
+   182	
+   183	    if isinstance(activation, ActivationFunctionEnum):
+   184	        activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
+   185	    else:
+   186	        activation_fn = activation
+   187	
+   188	    if x.ndim != 2:
+   189	        raise ValueError(f"x must be rank-2 [T, D], got shape={x.shape}")
+   190	    if selected_experts.ndim != 2:
+   191	        raise ValueError(f"selected_experts must be rank-2 [T, K], got shape={selected_experts.shape}")
+   192	    if selected_experts.shape != combine_weights.shape:
+   193	        raise ValueError(
+   194	            "selected_experts and combine_weights must have identical [T, K] shapes; "
+   195	            f"got {selected_experts.shape} vs {combine_weights.shape}"
+   196	        )
+   197	    if selected_experts.shape[0] != x.shape[0]:
+   198	        raise ValueError(
+   199	            f"selected_experts/combine_weights token dim ({selected_experts.shape[0]}) must match x token "
+   200	            f"dim ({x.shape[0]})"
+   201	        )
+   202	
+   203	    num_experts = int(w_up_gate.shape[0])
+   204	    if w_down.shape[0] != num_experts:
+   205	        raise ValueError(
+   206	            f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
+   207	        )
+   208	
+   209	    has_expert_axis = _mesh_has_axis(mesh, "expert")
+   210	    expert_axis_size = _mesh_axis_size(mesh, "expert")
+   211	
+   212	    if mesh is None or mesh.empty:
+   213	        out, dropped = _moe_mlp_local(
+   214	            x,
+   215	            selected_experts,
+   216	            combine_weights,
+   217	            w_up_gate,
+   218	            w_down,
+   219	            activation_fn=activation_fn,
+   220	            num_experts=num_experts,
+   221	            implementation=resolved_implementation,
+   222	            expert_chunks=expert_chunks,
+   223	        )
+   224	        if report_capacity_overflow:
+   225	            return out, CapacityOverflow(sender=dropped, receiver=jnp.zeros_like(dropped))
+   226	        return out
+   227	
+   228	    batch_spec = _batch_spec_from_x(x, mesh)
+   229	
+   230	    if has_expert_axis and expert_axis_size > 1:
+   231	        if expert_chunks != 1:
+   232	            raise ValueError("expert_chunks must be 1 when expert parallelism is active")
+   233	        if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
+   234	            raise ValueError(
+   235	                "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
+   236	                "requires a dispatch/combine schedule inside each expert shard plus cross-shard routing. "
+   237	                f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+   238	            )
+   239	        if num_experts % expert_axis_size != 0:
+   240	            raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+   241	
+   242	        if resolved_implementation == "ring":
+   243	            shard_local_fn = _moe_mlp_ep_ring_local
+   244	        elif resolved_implementation == "ragged_all_to_all":
+   245	            shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+   246	        elif resolved_implementation == "fixed_all_to_all":
+   247	            shard_local_fn = _moe_mlp_ep_fixed_a2a_local
+   248	        elif resolved_implementation == "fixed_pooled_wave_all_to_all":
+   249	            if pooled_transport_capacity_factor is None:
+   250	                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+   251	            shard_local_fn = partial(
+   252	                _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+   253	                transport_capacity_factor=pooled_transport_capacity_factor,
+   254	                num_expert_waves=num_expert_waves,
+   255	            )
+   256	        elif resolved_implementation == "deepep":
+   257	            shard_local_fn = _moe_mlp_ep_deepep_local
+   258	        else:
+   259	            raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
+   260	
+   261	        w_up_gate_spec = P("expert", None, None)
+   262	        w_down_spec = P("expert", None, None)
+   263	
+   264	        x = _reshard_for_shard_map(x, mesh, batch_spec)
+   265	        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+   266	        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+   267	        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+   268	        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+   269	
+   270	        shard_fn = shard_map(
+   271	            partial(
+   272	                shard_local_fn,
+   273	                activation_fn=activation_fn,
+   274	                num_experts=num_experts,
+   275	                capacity_factor=capacity_factor,
+   276	            ),
+   277	            mesh=mesh,
+   278	            in_specs=(
+   279	                batch_spec,
+   280	                batch_spec,
+   281	                batch_spec,
+   282	                w_up_gate_spec,
+   283	                w_down_spec,
+   284	            ),
+   285	            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
+   980	                w_down,
+   981	                activation=jax.nn.silu,
+   982	                implementation=implementation,
+   983	                mesh=mesh,
+   984	                capacity_factor=4.0,
+   985	                **extra,
+   986	            )
+   987	
+   988	        with jax.set_mesh(mesh):
+   989	            actual = backend_output(x, w_up_gate, w_down)
+   990	            actual_gradients = jax.grad(
+   991	                lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down) * cotangent),
+   992	                argnums=(0, 1, 2),
+   993	            )(x, w_up_gate, w_down)
+   994	
+   995	        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+   996	        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+   997	            np.testing.assert_allclose(
+   998	                np.asarray(actual_gradient),
+   999	                np.asarray(expected_gradient),
+  1000	                rtol=1e-5,
+  1001	                atol=1e-5,
+  1002	            )
+  1003	    """
+  1004	    result = subprocess.run(
+  1005	        [sys.executable, "-c", textwrap.dedent(script.replace("__IMPLEMENTATION__", implementation))],
+  1006	        env=env,
+  1007	        text=True,
+  1008	        capture_output=True,
+  1009	        check=False,
+  1010	    )
+  1011	
+  1012	    assert result.returncode == 0, result.stderr
+  1013	
+  1014	
+  1015	def _simulate_ragged_a2a(operands, outputs, params):
+  1016	    """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
+  1017	
+  1018	    Checks the receiver's ``recv_sizes`` against what each sender actually writes. The real
+  1019	    collective sizes incoming transfers from that vector, so building it from the wrong direction
+  1020	    -- the easiest mistake in this arithmetic, since the two are transposes of one another -- moves
+  1021	    the right bytes here but mis-sizes the receive on a real multi-shard run.
+  1022	    """
+  1023	    num_shards = len(operands)
+  1024	    for sender in range(num_shards):
+  1025	        in_off, send, out_off, _ = (np.asarray(a) for a in params[sender])
+  1026	        slices_per_device = len(in_off) // num_shards
+  1027	        for i in range(len(in_off)):
+  1028	            dst = i // slices_per_device
+  1029	            n = send[i]
+  1030	            recv = np.asarray(params[dst].recv_sizes)[sender * slices_per_device + i % slices_per_device]
+  1031	            assert recv == n, f"recv_sizes {recv} != send_sizes {n} for update {i} from {sender} to {dst}"
+  1032	            outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
+  1033	
+  1034	
+  1035	def test_expert_granular_a2a_params_roundtrip_with_drops():
+  1036	    """Dispatch packs receivers expert-major with sender order inside each expert, and the
+  1037	    return direction restores each accepted row to its unclipped sorted position, leaving
+  1038	    dropped rows at the output operand's values -- all under forced capacity clipping."""
+  1039	    shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
+  1040	    num_experts = shards * local_experts
+  1041	    assignments = tokens * topk
+  1042	    capacity = int(0.7 * assignments)  # force drops
+  1043	
+  1044	    rng = np.random.default_rng(0)
+  1045	    selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
+  1046	    payload = rng.normal(size=(shards, assignments, hidden)).astype(np.float32)
+  1047	    sorted_payload = np.stack([payload[s][np.argsort(selected[s].reshape(-1), kind="stable")] for s in range(shards)])
+  1048	    group_sizes = np.stack(
+  1049	        [np.bincount(selected[s].reshape(-1), minlength=num_experts) for s in range(shards)]
+  1050	    ).astype(np.int32)
+  1051	    starts = np.cumsum(group_sizes, axis=1) - group_sizes
+  1052	
+  1053	    clipped = np.asarray(
+  1054	        _clip_receiver_group_sizes(
+  1055	            jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=capacity
+  1056	        )
+  1057	    )
+  1058	    assert clipped.sum() < group_sizes.sum()  # drops actually happen
+  1059	
+  1060	    params = [
+  1061	        _expert_granular_a2a_params(
+  1062	            jnp.asarray(group_sizes),
+  1063	            jnp.asarray(clipped),
+  1064	            jnp.asarray(s),
+  1065	            local_expert_size=local_experts,
+  1066	        )
+  1067	        for s in range(shards)
+  1068	    ]
+  1069	
+  1070	    received = [np.zeros((capacity, hidden), np.float32) for _ in range(shards)]
+  1071	    _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+  1072	    for receiver in range(shards):
+  1073	        rows = [
+  1074	            sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]]
+  1075	            for e in range(local_experts)
+  1076	            for g in [receiver * local_experts + e]
+  1077	            for s in range(shards)
+  1078	        ]
+  1079	        expected = np.concatenate(rows, axis=0)
+  1080	        np.testing.assert_array_equal(received[receiver][: len(expected)], expected)
+  1081	        np.testing.assert_array_equal(received[receiver][len(expected) :], 0)
+  1082	
+  1083	    returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
+  1084	    _simulate_ragged_a2a(received, returned, [p[1] for p in params])
+  1085	    for s in range(shards):
+  1086	        expected = np.zeros_like(sorted_payload[s])
+  1087	        for g in range(num_experts):
+  1088	            expected[starts[s, g] : starts[s, g] + clipped[s, g]] = sorted_payload[s][
+  1089	                starts[s, g] : starts[s, g] + clipped[s, g]
+  1090	            ]
+  1091	        np.testing.assert_array_equal(returned[s], expected)
+  1092	
+  1093	
+  1094	def test_expert_granular_a2a_params_chunked_masking_composes():
+  1095	    """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
+  1096	    reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
+  1097	    and the chained returns cover exactly the per-chunk accepted prefixes."""
+  1098	    shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
+  1099	    num_experts = shards * local_experts
+  1100	    assignments = tokens * topk
+  1101	    capacity = int(0.7 * assignments)
+  1102	    chunks = 3
+  1103	    chunk_capacity = -(-capacity // chunks)
+  1104	    chunk_of_expert = (np.arange(num_experts) % local_experts) // (local_experts // chunks)
+  1105	
+  1106	    rng = np.random.default_rng(0)
+  1107	    selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
+  1108	    payload = rng.normal(size=(shards, assignments, hidden)).astype(np.float32)
+  1109	    sorted_payload = np.stack([payload[s][np.argsort(selected[s].reshape(-1), kind="stable")] for s in range(shards)])
+  1110	    group_sizes = np.stack(
+  1111	        [np.bincount(selected[s].reshape(-1), minlength=num_experts) for s in range(shards)]
+  1112	    ).astype(np.int32)
+  1113	    starts = np.cumsum(group_sizes, axis=1) - group_sizes
+  1114	
+  1115	    returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
+  1116	    accepted = np.zeros((shards, num_experts), np.int32)
+  1117	    for chunk in range(chunks):
+  1118	        masked = np.where(chunk_of_expert[None, :] == chunk, group_sizes, 0)
+  1119	        clipped = np.asarray(
+  1120	            _clip_receiver_group_sizes(
+  1121	                jnp.asarray(masked), local_expert_size=local_experts, receiver_capacity=chunk_capacity
+  1122	            )
+  1123	        )
+  1124	        accepted += clipped
+  1125	        params = [
+  1126	            _expert_granular_a2a_params(
+  1127	                jnp.asarray(group_sizes),
+  1128	                jnp.asarray(clipped),
+  1129	                jnp.asarray(s),
+  1130	                local_expert_size=local_experts,
+  1131	            )
+  1132	            for s in range(shards)
+  1133	        ]
+  1134	        received = [np.zeros((chunk_capacity, hidden), np.float32) for _ in range(shards)]
+  1135	        _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+  1136	        _simulate_ragged_a2a(received, returned, [p[1] for p in params])
+  1137	
+  1138	    for s in range(shards):
+  1139	        expected = np.zeros_like(sorted_payload[s])
+  1140	        for g in range(num_experts):
+  1141	            expected[starts[s, g] : starts[s, g] + accepted[s, g]] = sorted_payload[s][
+  1142	                starts[s, g] : starts[s, g] + accepted[s, g]
+  1143	            ]
+  1144	        np.testing.assert_array_equal(returned[s], expected)
+  1145	
+  1146	
+  1147	@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+  1148	def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(implementation: MoeImplementation):
+  1149	    mesh = _make_ep_mesh_or_none()
+  1150	    if mesh is None:
+  1151	        pytest.skip("requires an even number of >=2 devices")
+  1152	    if jax.devices()[0].platform == "cpu":
+  1153	        pytest.skip("ragged_all_to_all is not implemented on XLA:CPU")
+  1154	
+  1155	    tokens = len(jax.devices()) * 8
+  1156	    gpu_runtime = jax.devices()[0].platform == "gpu"
+  1157	    hidden_dim = 16 if gpu_runtime else 128
+  1158	    intermediate_dim = 24 if gpu_runtime else 128
+  1159	    num_experts = 4
+  1160	    topk = 2
+  1161	    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+  1162	        key=jax.random.key(23),
+  1163	        tokens=tokens,
+  1164	        hidden_dim=hidden_dim,
+  1165	        intermediate_dim=intermediate_dim,
+  1166	        num_experts=num_experts,
+  1167	        topk=topk,
+  1168	    )
+  1169	    dtype = jnp.bfloat16 if gpu_runtime else jnp.float32
+  1170	    relative_tolerance = _BF16_MOE_RELATIVE_TOLERANCE if dtype == jnp.bfloat16 else _FP32_MOE_RELATIVE_TOLERANCE
+  1171	    x = x.astype(dtype)
+  1172	    combine_weights = combine_weights.astype(dtype)
+  1173	    w_up_gate = w_up_gate.astype(dtype)
+  1174	    w_down = w_down.astype(dtype)
+  1175	    cotangent = jax.random.normal(jax.random.key(24), x.shape, dtype=dtype)
+  1176	
+  1177	    x_reference = x.astype(jnp.float32)
+  1178	    combine_weights_reference = combine_weights.astype(jnp.float32)
+  1179	    w_up_gate_reference = w_up_gate.astype(jnp.float32)
+  1180	    w_down_reference = w_down.astype(jnp.float32)
+  1181	    cotangent_reference = cotangent.astype(jnp.float32)
+  1182	    expected = _dense_moe_output(
+  1183	        x_reference,
+  1184	        selected_experts,
+  1185	        combine_weights_reference,
+  1186	        w_up_gate_reference,
+  1187	        w_down_reference,
+  1188	    )
+  1189	    expected_gradients = jax.grad(
+  1190	        lambda x, w_up_gate, w_down: jnp.sum(
+  1191	            _dense_moe_output(x, selected_experts, combine_weights_reference, w_up_gate, w_down) * cotangent_reference
+  1192	        ),
+  1193	        argnums=(0, 1, 2),
+  1194	    )(x_reference, w_up_gate_reference, w_down_reference)
+  1195	
+  1196	    batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+  1197	    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+  1198	    x = jax.sharding.reshard(x, batch_sharding)
+  1199	    selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+  1200	    combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+  1201	    w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+  1202	    w_down = jax.sharding.reshard(w_down, expert_sharding)
+  1203	    cotangent = jax.sharding.reshard(cotangent, batch_sharding)
+  1204	
+  1205	    def backend_output(x, w_up_gate, w_down):
+  1260	        x = jax.sharding.reshard(x, batch_sharding)
+  1261	        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+  1262	        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+  1263	        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+  1264	        w_down = jax.sharding.reshard(w_down, expert_sharding)
+  1265	
+  1266	        out = moe_mlp(
+  1267	            x,
+  1268	            selected_experts,
+  1269	            combine_weights,
+  1270	            w_up_gate,
+  1271	            w_down,
+  1272	            activation=ActivationFunctionEnum.silu,
+  1273	            mesh=None,
+  1274	        )
+  1275	        assert out.shape == (tokens, hidden_dim)
+  1276	        assert jnp.isfinite(out).all()
+  1277	
+  1278	        out_ragged = moe_mlp(
+  1279	            x,
+  1280	            selected_experts,
+  1281	            combine_weights,
+  1282	            w_up_gate,
+  1283	            w_down,
+  1284	            activation=ActivationFunctionEnum.silu,
+  1285	            implementation="ragged_all_to_all",
+  1286	            mesh=None,
+  1287	        )
+  1288	        assert out_ragged.shape == (tokens, hidden_dim)
+  1289	        assert jnp.isfinite(out_ragged).all()
+  1290	
+  1291	
+  1292	def test_functional_moe_mlp_accepts_enum_and_callable_activation():
+  1293	    tokens = 16
+  1294	    hidden_dim = 16
+  1295	    intermediate_dim = 24
+  1296	    num_experts = 8
+  1297	    topk = 2
+  1298	
+  1299	    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+  1300	        key=jax.random.key(2),
+  1301	        tokens=tokens,
+  1302	        hidden_dim=hidden_dim,
+  1303	        intermediate_dim=intermediate_dim,
+  1304	        num_experts=num_experts,
+  1305	        topk=topk,
+  1306	    )
+  1307	
+  1308	    y_enum = moe_mlp(
+  1309	        x,
+  1310	        selected_experts,
+  1311	        combine_weights,
+  1312	        w_up_gate,
+  1313	        w_down,
+  1314	        activation=ActivationFunctionEnum.silu,
+  1315	        mesh=None,
+  1316	    )
+  1317	    y_callable = moe_mlp(
+  1318	        x,
+  1319	        selected_experts,
+  1320	        combine_weights,
+  1321	        w_up_gate,
+  1322	        w_down,
+  1323	        activation=lambda t: jax.nn.silu(t),
+  1324	        mesh=None,
+  1325	    )
+  1326	    np.testing.assert_allclose(np.asarray(y_callable), np.asarray(y_enum), rtol=1e-5, atol=1e-5)
+  1327	
+  1328	
+  1329	def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
+  1330	    mesh = _make_ep_mesh_or_none()
+  1331	    if mesh is None:
+  1332	        pytest.skip("requires an even number of >=2 devices")
+  1333	
+  1334	    tokens = len(jax.devices()) * 8
+  1335	    hidden_dim = 16
+  1336	    intermediate_dim = 24
+  1337	    num_experts = 4
+  1338	    topk = 2
+  1339	
+  1340	    key = jax.random.key(5)
+  1341	    x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
+  1342	    selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
+  1343	    combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
+  1344	    w_up_gate = jax.random.normal(
+  1345	        jax.random.key(6), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+  1346	    )
+  1347	    w_down = jax.random.normal(jax.random.key(7), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+  1348	
+  1349	    with jax.set_mesh(mesh):
+  1350	        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+  1351	        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+  1352	        x = jax.sharding.reshard(x, batch_sharding)
+  1353	        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+  1354	        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+  1355	        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+  1356	        w_down = jax.sharding.reshard(w_down, expert_sharding)
+  1357	
+  1358	        out, dropped = moe_mlp(
+  1359	            x,
+  1360	            selected_experts,
+  1361	            combine_weights,
+  1362	            w_up_gate,
+  1363	            w_down,
+  1364	            implementation="ring",
+  1365	            mesh=None,
+  1366	            report_capacity_overflow=True,
+  1367	        )
+  1368	
+  1369	    assert out.shape == (tokens, hidden_dim)
+  1370	    assert dropped.total.shape == ()
+  1371	    assert int(dropped.total) > 0
+  1372	
+  1373	
+  1374	def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():
+  1375	    mesh = _make_ep_mesh_or_none()
+  1376	    if mesh is None:
+  1377	        pytest.skip("requires an even number of >=2 devices")
+  1378	
+  1379	    tokens = len(jax.devices()) * 8
+  1380	    hidden_dim = 16
+  1381	    intermediate_dim = 24
+  1382	    num_experts = 4
+  1383	    topk = 2
+  1384	
+  1385	    key = jax.random.key(15)
+  1386	    x = jax.random.normal(key, (tokens, hidden_dim), dtype=jnp.float32)
+  1387	    selected_experts = jnp.zeros((tokens, topk), dtype=jnp.int32)
+  1388	    combine_weights = jnp.full((tokens, topk), 0.5, dtype=jnp.float32)
+  1389	    w_up_gate = jax.random.normal(
+  1390	        jax.random.key(16), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+  1391	    )
+  1392	    w_down = jax.random.normal(jax.random.key(17), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32)
+  1393	
+  1394	    with jax.set_mesh(mesh):
+  1395	        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+  1396	        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+  1397	        x = jax.sharding.reshard(x, batch_sharding)
+  1398	        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+  1399	        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+  1400	        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+  1401	        w_down = jax.sharding.reshard(w_down, expert_sharding)
+  1402	
+  1403	        out, dropped = moe_mlp(
+  1404	            x,
+  1405	            selected_experts,
+  1406	            combine_weights,
+  1407	            w_up_gate,
+  1408	            w_down,
+  1409	            implementation="ragged_all_to_all",
+  1410	            mesh=None,
+  1411	            report_capacity_overflow=True,
+  1412	        )
+  1413	
+  1414	    assert out.shape == (tokens, hidden_dim)
+  1415	    assert dropped.total.shape == ()
+  1416	    assert int(dropped.total) > 0
+  1417	
+  1418	
+  1419	def test_ragged_a2a_receiver_clipping_respects_capacity():
+  1420	    group_sizes = jnp.array(
+  1421	        [
+  1422	            [3, 1, 0, 0],
+  1423	            [2, 0, 4, 1],
+  1424	        ],
+  1425	        dtype=jnp.int32,
+  1426	    )
+  1427	
+  1428	    clipped = grug_moe._clip_receiver_group_sizes(
+  1429	        group_sizes,
+  1430	        local_expert_size=2,
+  1431	        receiver_capacity=3,
+  1432	    )
+  1433	
+  1434	    np.testing.assert_array_equal(
+  1435	        np.asarray(clipped),
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/model.py | sed -n '1120,1165p'; nl -ba experiments/grug/moe_hero_ep/model.py | sed -n '1225,1270p'; nl -ba experiments/grug/moe_hero_ep/hero_recipe.py | sed -n '45,85p'; nl -ba lib/levanter/src/levanter/grug/_moe/common.py | sed -n '105,145p'; nl -ba lib/levanter/src/levanter/grug/grug_moe.py | sed -n '264,325p'; rg -n \"jax\\.jvp|linearize|jacfwd|custom_jvp|jet\\(\" experiments/grug/moe_hero_ep lib/levanter/src/levanter lib/levanter/tests tests/test_moe_hero_ep.py | head -300" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+  1120	            mlp=MoEMLP.init(cfg, key=mlp_key),
+  1121	            shared=shared,
+  1122	            sconv_attn=(
+  1123	                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
+  1124	            ),
+  1125	            sconv_mlp=(
+  1126	                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+  1127	            ),
+  1128	        )
+  1129	
+  1130	    @named_call
+  1131	    def __call__(
+  1132	        self,
+  1133	        x: Float[Array, "B S D"],
+  1134	        mask: AttentionMask | jax.Array,
+  1135	        disable_rope: bool | jax.Array = False,
+  1136	        is_global: bool | jax.Array = False,
+  1137	    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+  1138	        # A remat policy acts on named intermediates, and a block argument is not one. This
+  1139	        # reassignment routes every use below through the name, which lets the policy offload it.
+  1140	        x = tree_checkpoint_name(x, LAYER_CARRY_REMAT_NAME)
+  1141	        # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
+  1142	        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+  1143	        sconv_segment_ids = _seg[0] if _seg is not None else None
+  1144	
+  1145	        attn_in = self.attn_gated_norm(self.rms_attn(x))
+  1146	        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+  1147	        if self.sconv_attn is not None:
+  1148	            attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
+  1149	        x = x + attn_out
+  1150	        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+  1151	        mlp_out, router_stats = self.mlp(mlp_in)
+  1152	        if self.shared is not None:
+  1153	            for shared_expert in self.shared:
+  1154	                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
+  1155	        if self.sconv_mlp is not None:
+  1156	            mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
+  1157	        x = x + mlp_out
+  1158	        return x, router_stats
+  1159	
+  1160	
+  1161	def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+  1162	    # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
+  1163	    # not a multiple of global_every still ends on a global-context layer.
+  1164	    layer_indices = jnp.arange(num_layers)
+  1165	    return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
+  1225	        mask: AttentionMask | jax.Array | None = None,
+  1226	    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+  1227	        if mask is None:
+  1228	            mask = AttentionMask.causal()
+  1229	
+  1230	        cfg = self.config
+  1231	        hidden = _embedding_gather(self.token_embed, token_ids)
+  1232	        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+  1233	
+  1234	        # Local layers use a sliding window; every global_every-th layer is full causal.
+  1235	        segment_ids = None
+  1236	        if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+  1237	            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer-scan
+  1238	            # and use one array for both sides of self-attention. Resharding the original tuple
+  1239	            # separately loses object identity and adds a runtime equality conditional whose output
+  1240	            # is pinned to device 0.
+  1241	            q_segment_ids, _ = mask.segment_ids
+  1242	            q_segment_ids = _batch_reshard(q_segment_ids)
+  1243	            segment_ids = (q_segment_ids, q_segment_ids)
+  1244	        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+  1245	        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+  1246	
+  1247	        if cfg.remat_mode == "save_moe":
+  1248	            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+  1249	        elif cfg.remat_mode == "offload_carry":
+  1250	            # XLA stacks each offloaded name's scan residuals into one pinned allocation. Adding
+  1251	            # names is therefore not free: carry plus the attention residuals asked for 72.56 GiB
+  1252	            # per rank, above the node's host budget.
+  1253	            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+  1254	                names_which_can_be_saved=[],
+  1255	                names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
+  1256	                offload_src="device",
+  1257	                offload_dst="pinned_host",
+  1258	            )
+  1259	        else:
+  1260	            remat_policy = None
+  1261	
+  1262	        # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
+  1263	        # short/long choice rides in as a Bool[num_layers] scan input.
+  1264	        mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
+  1265	        # Precompute the FA4 per-token metadata for both the full-causal (long) and sliding-window
+  1266	        # (short) layers outside the scan, then select per layer with a jnp.where inside the body:
+  1267	        # the sliding window is a static AttentionMask field the scan body cannot vary, so the
+  1268	        # per-layer window rides in as the selected bound arrays. ``valid`` is window-independent, so
+  1269	        # it is shared; long/global layers run rope-free (``disable_rope`` is the per-layer scalar).
+  1270	        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+    45	    MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
+    46	    MasterParamMode.DEVICE: "params=float32,compute=bfloat16,output=bfloat16",
+    47	}
+    48	HERO_QB_HIST_BINS = 10_000
+    49	# A two-tray loader benchmark found that 1 GB kept 18.6x throughput headroom. The process cache
+    50	# stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
+    51	HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
+    52	HERO_WATCH_INTERVAL = 10
+    53	HERO_MODEL_CONFIG = dataclasses.replace(
+    54	    HERO_MODEL,
+    55	    qb_estimator=QbEstimator.HIST,
+    56	    qb_hist_bins=HERO_QB_HIST_BINS,
+    57	)
+    58	
+    59	
+    60	def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+    61	    """Give the ragged transport the layer-carry offload that its scheduling posture depends on.
+    62	
+    63	    Staging the carry on pinned host lowered the measured HBM peak by 36 GiB, which is what makes
+    64	    the latency-hiding scheduler fit. The other transports are unmeasured with the offload, which
+    65	    is the only reason they do not take it.
+    66	
+    67	    The scheduler reads the remat mode, so a launcher that skips this keeps the scheduling
+    68	    posture it was measured under, exactly as it did before the mode existed.
+    69	    """
+    70	    if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+    71	        return model
+    72	    return dataclasses.replace(model, remat_mode="offload_carry")
+    73	
+    74	
+    75	class HeroThroughputResult(Artifact):
+    76	    """Metrics artifact for an EP hero run."""
+    77	
+    78	
+    79	def hero_grug_trainer_config(
+    80	    *,
+    81	    replica_axis_size: int,
+    82	    training_data_mode: TrainingDataMode,
+    83	    watch_mode: WatchMode,
+    84	    save_checkpoints: bool,
+    85	    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+   105	    "fixed_all_to_all",
+   106	    "fixed_pooled_wave_all_to_all",
+   107	    "deepep",
+   108	)
+   109	# Local means no collectives over an expert axis. These backends can still run
+   110	# under ordinary data/model sharding through the no-EP shard_map path.
+   111	_LOCAL_MOE_IMPLEMENTATIONS = (
+   112	    "scatter",
+   113	    "sonic",
+   114	    "sonic_cute",
+   115	)
+   116	
+   117	_CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
+   118	_CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
+   119	_CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
+   120	_CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
+   121	
+   122	# Checkpoint names every MoE backend tags on its dispatch tensors. A remat
+   123	# policy of jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+   124	# keeps these alive for backward instead of re-running expert dispatch —
+   125	# including the EP collectives — during the recompute.
+   126	MOE_REMAT_SAVE_NAMES = (
+   127	    _CHECKPOINT_DISPATCH_INPUT,
+   128	    _CHECKPOINT_EXPERT_HIDDEN,
+   129	    _CHECKPOINT_DISPATCH_OUTPUT,
+   130	    _CHECKPOINT_MOE_OUTPUT,
+   131	)
+   132	
+   133	
+   134	class CapacityOverflow(NamedTuple):
+   135	    """Expert assignments dropped before and after transport."""
+   136	
+   137	    sender: Int[Array, ""]
+   138	    receiver: Int[Array, ""]
+   139	
+   140	    @property
+   141	    def total(self) -> Int[Array, ""]:
+   142	        return self.sender + self.receiver
+   143	
+   144	
+   145	@dataclass(frozen=True)
+   264	        x = _reshard_for_shard_map(x, mesh, batch_spec)
+   265	        selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+   266	        combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+   267	        w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+   268	        w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+   269	
+   270	        shard_fn = shard_map(
+   271	            partial(
+   272	                shard_local_fn,
+   273	                activation_fn=activation_fn,
+   274	                num_experts=num_experts,
+   275	                capacity_factor=capacity_factor,
+   276	            ),
+   277	            mesh=mesh,
+   278	            in_specs=(
+   279	                batch_spec,
+   280	                batch_spec,
+   281	                batch_spec,
+   282	                w_up_gate_spec,
+   283	                w_down_spec,
+   284	            ),
+   285	            out_specs=(batch_spec, CapacityOverflow(sender=P(), receiver=P())),
+   286	            check_vma=False,
+   287	        )
+   288	        out, overflow = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+   289	        if report_capacity_overflow:
+   290	            return out, overflow
+   291	        return out
+   292	
+   293	    # Fallback path for no expert axis (or expert axis size 1) keeps routing
+   294	    # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
+   295	    # match the actual input sharding, so reshard ordinary inputs to the mesh
+   296	    # specs that preserve data-axis parallelism.
+   297	    x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
+   298	    selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
+   299	    combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
+   300	    if expert_chunks > 1 and resolved_implementation == "sonic_cute":
+   301	        # The chunked sonic_cute path all-gathers the hidden dim per expert-chunk over ``data``, so it
+   302	        # needs a real data axis; without one the local kernel hits an unbound-axis error.
+   303	        if not _mesh_has_axis(mesh, "data") or _mesh_axis_size(mesh, "data") <= 1:
+   304	            raise ValueError(
+   305	                "chunked sonic_cute (expert_chunks > 1) requires a data axis to all-gather the expert "
+   306	                "weights; use expert_chunks=1 on a single device or an unsharded mesh."
+   307	            )
+   308	        # The local weights must arrive H-sharded ([E, H/data, 2I] / [E, I, H/data]). Force that FSDP
+   309	        # layout rather than inheriting whatever (possibly replicated) sharding the layer scan left,
+   310	        # which would make the tiled all-gather reconstruct H * data_shards.
+   311	        w_up_gate_spec = _drop_absent_mesh_axes(mesh, P("expert", "data", "model"))
+   312	        w_down_spec = _drop_absent_mesh_axes(mesh, P("expert", "model", "data"))
+   313	    else:
+   314	        w_up_gate_spec = _value_spec_or_default(w_up_gate, P(*(None for _ in range(w_up_gate.ndim))))
+   315	        w_down_spec = _value_spec_or_default(w_down, P(*(None for _ in range(w_down.ndim))))
+   316	
+   317	    x = _reshard_for_shard_map(x, mesh, x_spec)
+   318	    selected_experts = _reshard_for_shard_map(selected_experts, mesh, selected_experts_spec)
+   319	    combine_weights = _reshard_for_shard_map(combine_weights, mesh, combine_weights_spec)
+   320	    w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
+   321	    w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+   322	
+   323	    def local_moe(x, selected_experts, combine_weights, w_up_gate, w_down):
+   324	        out, dropped = _moe_mlp_local(
+   325	            x,
+lib/levanter/src/levanter/trainer.py:99:    "jax_softmax_custom_jvp": True,
+lib/levanter/src/levanter/grad_accum.py:26:# TODO: should we use a custom_jvp on microbatched?
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/model.py | sed -n '1270,1345p'; rg -n \"filter_checkpoint|jax\\.checkpoint|remat_policy|scan\\(\" experiments/grug/moe_hero_ep/model.py | tail -80; rg -n \"grad\\(|value_and_grad|filter_value_and_grad|linearize|jvp|jacfwd\" experiments/grug/moe_hero_ep/train.py lib/levanter/src/levanter | head -300" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+  1270	        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+  1271	        long_lower_bounds, valid = fa4_cute_segment_bounds(
+  1272	            long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+  1273	        )
+  1274	        short_lower_bounds, _ = fa4_cute_segment_bounds(
+  1275	            short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+  1276	        )
+  1277	        long_lower_bounds = _batch_reshard(long_lower_bounds)
+  1278	        short_lower_bounds = _batch_reshard(short_lower_bounds)
+  1279	        valid = _batch_reshard(valid)
+  1280	
+  1281	        def _scan_layers(
+  1282	            carry_hidden: Float[Array, "B S D"],
+  1283	            scan_inputs: tuple[Block, jax.Array],
+  1284	        ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+  1285	            layer, layer_use_long_mask = scan_inputs
+  1286	            use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+  1287	            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+  1288	            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+  1289	            return eqx.filter_checkpoint(layer, policy=remat_policy)(
+  1290	                carry_hidden,
+  1291	                layer_mask,
+  1292	                use_long,
+  1293	                use_long,
+  1294	            )
+  1295	
+  1296	        hidden, stacked_router_stats = jax.lax.scan(
+  1297	            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+  1298	        )
+  1299	        # One cross-device reduction for the whole stack of layers, instead of one inside every
+  1300	        # scan iteration. See `_local_routing_stats`.
+  1301	        reduced_router_stats = _reduce_router_stats(
+  1302	            stacked_router_stats,
+  1303	            num_experts=cfg.num_experts,
+  1304	            num_experts_per_token=cfg.num_experts_per_token,
+  1305	            num_tokens=batch_size * seq_len,
+  1306	        )
+  1307	        router_metrics = {
+  1308	            "routing_entropy_per_layer": reduced_router_stats["routing_entropy"],
+  1309	            "routing_counts_per_layer": reduced_router_stats["routing_counts"],
+  1310	            "load_balancing_loss_per_layer": reduced_router_stats["load_balancing_loss"],
+  1311	            "router_z_loss_per_layer": reduced_router_stats["router_z_loss"],
+  1312	            "qb_beta_per_layer": reduced_router_stats["qb_beta"],
+  1313	            "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+  1314	            "sender_capacity_overflow_per_layer": stacked_router_stats["sender_capacity_overflow"],
+  1315	            "receiver_capacity_overflow_per_layer": stacked_router_stats["receiver_capacity_overflow"],
+  1316	            "margin_min_per_layer": stacked_router_stats["margin_min"],
+  1317	            "margin_max_per_layer": stacked_router_stats["margin_max"],
+  1318	        }
+  1319	        hidden = self.final_gated_norm(self.final_norm(hidden))
+  1320	        return hidden, router_metrics
+  1321	
+  1322	    @named_call
+  1323	    def logits(
+  1324	        self,
+  1325	        token_ids: Int[Array, "B S"],
+  1326	        mask: AttentionMask | jax.Array | None = None,
+  1327	    ) -> Float[Array, "B S V"]:
+  1328	        batch_spec = _batch_spec()
+  1329	        hidden, _ = self(token_ids, mask=mask)
+  1330	        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+  1331	
+  1332	    def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
+  1333	        return grugmoe_inference_state_dict(self, prefix=prefix)
+  1334	
+  1335	    def next_token_loss(
+  1336	        self,
+  1337	        token_ids: Int[Array, "B S"],
+  1338	        loss_weight: Float[Array, "B S"],
+  1339	        *,
+  1340	        mask: AttentionMask | jax.Array | None = None,
+  1341	        reduction: str = "mean",
+  1342	        logsumexp_weight: float | None = None,
+  1343	        loss_dtype: jnp.dtype = jnp.float32,
+  1344	        return_router_metrics: bool = False,
+  1345	    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+1248:            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+1253:            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+1260:            remat_policy = None
+1289:            return eqx.filter_checkpoint(layer, policy=remat_policy)(
+1296:        hidden, stacked_router_stats = jax.lax.scan(
+experiments/grug/moe_hero_ep/train.py:761:    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+lib/levanter/src/levanter/testing/helpers.py:238:def single_token_moe_block_grad(block, config):
+lib/levanter/src/levanter/testing/helpers.py:251:    return eqx.filter_jit(eqx.filter_grad(task_loss))(block, x)
+lib/levanter/src/levanter/grad_accum.py:26:# TODO: should we use a custom_jvp on microbatched?
+lib/levanter/src/levanter/grad_accum.py:43:    ``eqx.filter_value_and_grad(loss_fn, has_aux=True)`` where ``loss_fn`` returns
+lib/levanter/src/levanter/trainer.py:99:    "jax_softmax_custom_jvp": True,
+lib/levanter/src/levanter/trainer.py:782:        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+lib/levanter/src/levanter/optim/kron.py:1194:def _precond_grad(Q, G, exprs):
+lib/levanter/src/levanter/analysis/backward_flow.py:30:        "jvp",
+lib/levanter/src/levanter/grug/_moe/ep_fixed_pooled_wave_all_to_all.py:45:def _dispatch_gather_input_grad(
+lib/levanter/src/levanter/grug/_moe/ep_fixed_pooled_wave_all_to_all.py:251:    grad_x = _dispatch_gather_input_grad(activation_cotangent, linear_indices, keep, tokens_per_shard)
+lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:104:def cudnn_grouped_wgrad(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:117:    dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
+lib/levanter/src/levanter/grug/_moe/sonic_cute.py:121:    dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
+
+codex
+So far, operand/offset order in both reverse collectives matches JAX 0.11.1 exactly. The return pass-through uses the same interval-mark/cumsum semantics; the key remaining questions are whether the custom-VJP boundary survives the real `checkpoint` + `shard_map` transforms and whether any forward-mode caller exists. I’m checking staged JAXPRs and the hero training entry point next.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba lib/levanter/tests/grug/test_grugformer_moe.py | sed -n '1140,1265p'; nl -ba experiments/grug/moe_hero_ep/train.py | sed -n '735,775p'; nl -ba lib/levanter/src/levanter/trainer.py | sed -n '760,795p'; rg -n \"selected_experts|top_k|topk\" experiments/grug/moe_hero_ep/model.py | head -100; nl -ba lib/levanter/src/levanter/grug/_moe/ep_common.py | sed -n '55,100p'; .venv/bin/python - <<'PY'
+import inspect
+import jax
+print(inspect.signature(jax.lax.ragged_all_to_all))
+print(inspect.getsource(jax.lax.select))
+print(inspect.getsource(jax.lax.select_n))
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 212ms:
+(operand, output, input_offsets, send_sizes, output_offsets, recv_sizes, *, axis_name, axis_index_groups=None)
+def select(pred: ArrayLike, on_true: ArrayLike, on_false: ArrayLike) -> Array:
+  """Selects between two branches based on a boolean predicate.
+
+  Wraps XLA's `Select
+  <https://www.openxla.org/xla/operation_semantics#select>`_
+  operator.
+
+  In general :func:`~jax.lax.select` leads to evaluation of both branches, although
+  the compiler may elide computations if possible. For a similar function that
+  usually evaluates only a single branch, see :func:`~jax.lax.cond`.
+
+  Args:
+    pred: boolean array
+    on_true: array containing entries to return where ``pred`` is True. Must have
+      the same shape as ``pred``, and the same shape and dtype as ``on_false``.
+    on_false: array containing entries to return where ``pred`` is False. Must have
+      the same shape as ``pred``, and the same shape and dtype as ``on_true``.
+
+  Returns:
+    result: array with same shape and dtype as ``on_true`` and ``on_false``.
+  """
+  # Caution! The select_n_p primitive has the *opposite* order of arguments to
+  # select(). This is because it implements `select_n`.
+  pred, on_false, on_true = core.auto_insert_reshard(
+      pred, on_false, on_true)
+  return select_n_p.bind(pred, on_false, on_true)
+
+def select_n(which: ArrayLike, *cases: ArrayLike) -> Array:
+  """Selects array values from multiple cases.
+
+  Generalizes XLA's `Select
+  <https://www.openxla.org/xla/operation_semantics#select>`_
+  operator. Unlike XLA's version, the operator is variadic and can select
+  from many cases using an integer `pred`.
+
+  Args:
+    which: determines which case should be returned. Must be an array containing
+      either a boolean or integer values. May either be a scalar or have
+      shape matching ``cases``. For each array element, the value of ``which``
+      determines which of ``cases`` is taken. ``which`` must be in the range
+      ``[0 .. len(cases))``; for values outside that range the behavior is
+      implementation-defined.
+    *cases: a non-empty list of array cases. All must have equal dtypes and
+      equal shapes.
+  Returns:
+    An array with shape and dtype equal to the cases, whose values are chosen
+    according to ``which``.
+  """
+  if len(cases) == 0:
+    raise ValueError("select_n() must have at least one case")
+  which_pvary, *cases_pvary = core.auto_insert_reshard(which, *cases)
+  return select_n_p.bind(which_pvary, *cases_pvary)
+
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '1,80p' lib/levanter/src/levanter/grug/grug_moe.py; XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P
+from jax.experimental.shard_map import shard_map
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a, _return_ragged_a2a
+mesh = Mesh(np.array(jax.devices()), ('expert',))
+# Each shard sees these local shapes. Use one transfer per destination.
+def local(x, returned, io, ss, oo, rs):
+    y = _dispatch_ragged_a2a(4, 4, x, io, ss, oo, rs)
+    return _return_ragged_a2a(4, y, returned, oo, rs, io, ss)
+f = shard_map(local, mesh=mesh, in_specs=(P('expert',None), P('expert',None), P('expert'), P('expert'), P('expert'), P('expert')), out_specs=P('expert',None), check_vma=False)
+x = jnp.arange(16., dtype=jnp.float32).reshape(8,2)
+returned = jnp.zeros_like(x)
+io = jnp.array([0,2,0,2], jnp.int32)
+ss = jnp.array([2,2,2,2], jnp.int32)
+oo = jnp.array([0,2,0,2], jnp.int32)
+rs = jnp.array([2,2,2,2], jnp.int32)
+with jax.set_mesh(mesh):
+    primal = jax.make_jaxpr(f)(x, returned, io, ss, oo, rs)
+    backward = jax.make_jaxpr(jax.grad(lambda z: jnp.sum(f(z, returned, io, ss, oo, rs))))(x)
+    remat_backward = jax.make_jaxpr(jax.grad(lambda z: jnp.sum(jax.checkpoint(f, policy=jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['layer_carry'], offload_src='device', offload_dst='pinned_host'))(z, returned, io, ss, oo, rs))))(x)
+print('PRIMAL_RAGGED', str(primal).count('ragged_all_to_all'))
+print('BWD_RAGGED', str(backward).count('ragged_all_to_all'))
+print('BWD_CUSTOM_VJP', str(backward).count('custom_vjp'))
+print('REMAT_BWD_RAGGED', str(remat_backward).count('ragged_all_to_all'))
+print('REMAT_PRESENT', 'remat' in str(remat_backward))
+print('REMAT_CUSTOM_VJP', str(remat_backward).count('custom_vjp'))
+print('REMAT JAXPR\\n', remat_backward)
+PY" in /home/marin/projects/marin-mfu-loop
+ exited 1 in 397ms:
+<stdin>:5: DeprecationWarning: jax.experimental.shard_map is deprecated in v0.8.0. Used jax.shard_map instead.
+Traceback (most recent call last):
+  File "<stdin>", line 12, in <module>
+TypeError: shard_map() got an unexpected keyword argument 'check_vma'
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a, _return_ragged_a2a
+mesh = Mesh(np.array(jax.devices()), ('expert',))
+def local(x, returned, io, ss, oo, rs):
+    y = _dispatch_ragged_a2a(4, 4, x, io, ss, oo, rs)
+    return _return_ragged_a2a(4, y, returned, oo, rs, io, ss)
+f = jax.shard_map(local, mesh=mesh, in_specs=(P('expert',None), P('expert',None), P('expert'), P('expert'), P('expert'), P('expert')), out_specs=P('expert',None), check_vma=False)
+x = jnp.arange(16., dtype=jnp.float32).reshape(8,2)
+returned = jnp.zeros_like(x)
+io = jnp.array([0,2,0,2], jnp.int32)
+ss = jnp.array([2,2,2,2], jnp.int32)
+oo = jnp.array([0,2,0,2], jnp.int32)
+rs = jnp.array([2,2,2,2], jnp.int32)
+policy = jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['layer_carry'], offload_src='device', offload_dst='pinned_host')
+with jax.set_mesh(mesh):
+    primal = jax.make_jaxpr(f)(x, returned, io, ss, oo, rs)
+    backward = jax.make_jaxpr(jax.grad(lambda z: jnp.sum(f(z, returned, io, ss, oo, rs))))(x)
+    remat_backward = jax.make_jaxpr(jax.grad(lambda z: jnp.sum(jax.checkpoint(f, policy=policy)(z, returned, io, ss, oo, rs))))(x)
+print('PRIMAL_RAGGED', str(primal).count('ragged_all_to_all'))
+print('BWD_RAGGED', str(backward).count('ragged_all_to_all'))
+print('BWD_CUSTOM_VJP', str(backward).count('custom_vjp'))
+print('REMAT_BWD_RAGGED', str(remat_backward).count('ragged_all_to_all'))
+print('REMAT_PRESENT', 'remat' in str(remat_backward))
+print('REMAT_CUSTOM_VJP', str(remat_backward).count('custom_vjp'))
+print('REMAT JAXPR\\n', remat_backward)
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 486ms:
+PRIMAL_RAGGED 2
+BWD_RAGGED 4
+BWD_CUSTOM_VJP 2
+REMAT_BWD_RAGGED 4
+REMAT_PRESENT True
+REMAT_CUSTOM_VJP 2
+REMAT JAXPR
+ let jaxpr = { lambda ; a:f32[4,2] b:i32[2] c:i32[2] d:i32[2] e:i32[2]. let
+    f:i32[2] = all_to_all[
+      axis_index_groups=None
+      axis_name=expert
+      concat_axis=0
+      split_axis=0
+      tiled=True
+    ] d
+    g:i32[2] = all_to_all[
+      axis_index_groups=None
+      axis_name=expert
+      concat_axis=0
+      split_axis=0
+      tiled=True
+    ] b
+    h:i32[1] = slice[limit_indices=(1,) start_indices=(0,) strides=None] e
+    i:i32[] = squeeze[dimensions=(0,)] h
+    j:i32[] = min i 0:i32[]
+    k:f32[] = convert_element_type[new_dtype=float32 weak_type=False] j
+    l:f32[4,2] = broadcast_in_dim k
+    m:f32[4,2] = ragged_all_to_all[axis_index_groups=None axis_name=('expert',)] a
+      l f e g c
+    n:i32[4] = broadcast_in_dim 0:i32[]
+    o:bool[2] = lt f 0:i32[]
+    p:i32[2] = add f 4:i32[]
+    q:i32[2] = select_n o f p
+    r:i32[2,1] = broadcast_in_dim[broadcast_dimensions=(0,)] q
+    s:i32[2] = broadcast_in_dim 1:i32[]
+    t:i32[4] = scatter[
+      dimension_numbers=ScatterDimensionNumbers(update_window_dims=(), inserted_window_dims=(0,), scatter_dims_to_operand_dims=(0,), operand_batching_dims=(), scatter_indices_batching_dims=())
+      indices_are_sorted=False
+      mode=GatherScatterMode.FILL_OR_DROP
+      unique_indices=False
+      update_consts=()
+      update_jaxpr=None
+    ] n r s
+    u:i32[2] = add f e
+    v:bool[2] = lt u 0:i32[]
+    w:i32[2] = add u 4:i32[]
+    x:i32[2] = select_n v u w
+    y:i32[2,1] = broadcast_in_dim[broadcast_dimensions=(0,)] x
+    z:i32[2] = broadcast_in_dim -1:i32[]
+    ba:i32[4] = scatter-add[
+      dimension_numbers=ScatterDimensionNumbers(update_window_dims=(), inserted_window_dims=(0,), scatter_dims_to_operand_dims=(0,), operand_batching_dims=(), scatter_indices_batching_dims=())
+      indices_are_sorted=False
+      mode=GatherScatterMode.FILL_OR_DROP
+      unique_indices=False
+      update_consts=()
+      update_jaxpr={ lambda ; bb:i32[] bc:i32[]. let
+          bd:i32[] = add bb bc
+        in (bd,) }
+    ] t y z
+    be:i32[4] = jit[
+      name=cumsum
+      ctx_mesh=Mesh('expert': 2, axis_types=(Auto,))
+      jaxpr={ lambda ; ba:i32[4]. let
+          be:i32[4] = cumsum[axis=0 reverse=False] ba
+        in (be,) }
+    ] ba
+    bf:i32[4,1] = broadcast_in_dim[broadcast_dimensions=(0,)] be
+    bg:i32[4,2] = broadcast_in_dim[broadcast_dimensions=(0, 1)] bf
+    bh:i32[1] = slice[limit_indices=(1,) start_indices=(0,) strides=None] c
+    bi:i32[] = squeeze[dimensions=(0,)] bh
+    bj:i32[] = min bi 0:i32[]
+    bk:f32[] = convert_element_type[new_dtype=float32 weak_type=False] bj
+    bl:f32[4,2] = broadcast_in_dim bk
+    bm:f32[4,2] = select_n bg a bl
+    bn:i32[2] = all_to_all[
+      axis_index_groups=None
+      axis_name=expert
+      concat_axis=0
+      split_axis=0
+      tiled=True
+    ] b
+    bo:i32[2] = all_to_all[
+      axis_index_groups=None
+      axis_name=expert
+      concat_axis=0
+      split_axis=0
+      tiled=True
+    ] d
+    bp:i32[1] = slice[limit_indices=(1,) start_indices=(0,) strides=None] c
+    bq:i32[] = squeeze[dimensions=(0,)] bp
+    br:i32[] = min bq 0:i32[]
+    bs:f32[] = convert_element_type[new_dtype=float32 weak_type=False] br
+    bt:f32[4,2] = broadcast_in_dim bs
+    bu:f32[4,2] = ragged_all_to_all[
+      axis_index_groups=None
+      axis_name=('expert',)
+    ] m bt bn c bo e
+  in (bu,) } in
+{ lambda bv:f32[8,2] bw:i32[4] bx:i32[4] by:i32[4] bz:i32[4]; ca:f32[8,2]. let
+    cb:f32[8,2] = shard_map[
+      check_vma=False
+      in_specs=(P('expert', None), P('expert', None), P('expert',), P('expert',), P('expert',), P('expert',))
+      jaxpr={ lambda ; cc:f32[4,2] cd:f32[4,2] ce:i32[2] cf:i32[2] cg:i32[2] ch:i32[2]. let
+          ci:f32[4,2] = custom_vjp_call[
+            name=_dispatch_ragged_a2a
+            bwd=_dispatch_ragged_a2a_bwd
+            call_jaxpr={ lambda ; cj:f32[4,2] ck:i32[2] cl:i32[2] cm:i32[2] cn:i32[2]. let
+                co:i32[1] = slice[
+                  limit_indices=(1,)
+                  start_indices=(0,)
+                  strides=None
+                ] cl
+                cp:i32[] = squeeze[dimensions=(0,)] co
+                cq:i32[] = min cp 0:i32[]
+                cr:f32[] = convert_element_type[
+                  new_dtype=float32
+                  weak_type=False
+                ] cq
+                cs:f32[4,2] = broadcast_in_dim cr
+                ct:f32[4,2] = ragged_all_to_all[
+                  axis_index_groups=None
+                  axis_name=('expert',)
+                ] cj cs ck cl cm cn
+              in (ct,) }
+            fwd=_dispatch_ragged_a2a_fwd
+            symbolic_zeros=False
+          ] cc ce cf cg ch
+          cu:f32[4,2] = custom_vjp_call[
+            name=_return_ragged_a2a
+            bwd=_return_ragged_a2a_bwd
+            call_jaxpr={ lambda ; cv:f32[4,2] cw:f32[4,2] cx:i32[2] cy:i32[2] cz:i32[2]
+                da:i32[2]. let
+                db:f32[4,2] = ragged_all_to_all[
+                  axis_index_groups=None
+                  axis_name=('expert',)
+                ] cv cw cx cy cz da
+              in (db,) }
+            fwd=_return_ragged_a2a_fwd
+            symbolic_zeros=False
+          ] ci cd cg ch ce cf
+        in (cu,) }
+      mesh=Mesh('expert': 2, axis_types=(Auto,))
+      newly_manual_axes=frozenset({'expert'})
+      out_specs=(P('expert', None),)
+    ] ca bv bw bx by bz
+    _:f32[] = reduce_sum[axes=(0, 1) out_sharding=None] cb
+    dc:f32[8,2] = broadcast_in_dim 1.0:f32[]
+    dd:f32[8,2] = remat2[
+      differentiated=True
+      jaxpr={ lambda ; de:i32[4] df:i32[4] dg:i32[4] dh:i32[4] di:f32[8,2]. let
+          shard_map[
+            check_vma=False
+            in_specs=(P('expert',), P('expert',), P('expert',), P('expert',))
+            jaxpr={ lambda ; dj:i32[2] dk:i32[2] dl:i32[2] dm:i32[2]. let
+                
+              in () }
+            mesh=Mesh('expert': 2, axis_types=(Auto,))
+            newly_manual_axes=frozenset({'expert'})
+            out_specs=()
+          ] de df dg dh
+          dn:f32[8,2] = shard_map[
+            check_vma=False
+            in_specs=(P('expert', None), P('expert',), P('expert',), P('expert',), P('expert',))
+            jaxpr=jaxpr
+            mesh=Mesh('expert': 2, axis_types=(Auto,))
+            newly_manual_axes=frozenset({'expert'})
+            out_specs=(P('expert', None),)
+          ] di dg dh de df
+        in (dn,) }
+      policy=SaveAndOffloadOnlyTheseNames(names_which_can_be_saved=frozenset(), names_which_can_be_offloaded=frozenset({'layer_carry'}), offload_src='device', offload_dst='pinned_host')
+      prevent_cse=True
+    ] bw bx by bz dc
+  in (dd,) }
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P
+from levanter.grug.grug_moe import moe_mlp
+mesh = Mesh(np.array(jax.devices()), ('expert',))
+tokens, hidden, inter, experts, topk = 4, 2, 3, 4, 2
+x = jnp.arange(tokens * hidden, dtype=jnp.float32).reshape(tokens, hidden) / 10
+selected = jnp.array([[0,1],[0,2],[1,3],[0,3]], jnp.int32)
+combine = jnp.full((tokens, topk), .5, jnp.float32)
+w13 = jnp.arange(experts * hidden * inter * 2, dtype=jnp.float32).reshape(experts,hidden,inter*2) / 100
+w2 = jnp.arange(experts * inter * hidden, dtype=jnp.float32).reshape(experts,inter,hidden) / 100
+policy = jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['grug_layer_carry'], offload_src='device', offload_dst='pinned_host')
+def layer(x, w13, w2):
+  return moe_mlp(x, selected, combine, w13, w2, activation=jax.nn.silu, implementation='ragged_all_to_all', mesh=mesh, capacity_factor=.5)
+def loss(x, w13, w2):
+  return jnp.sum(jax.checkpoint(layer, policy=policy)(x,w13,w2))
+with jax.set_mesh(mesh):
+  j = jax.make_jaxpr(jax.grad(loss, argnums=(0,1,2)))(x,w13,w2)
+s = str(j)
+print('TOTAL_RAGGED', s.count('ragged_all_to_all'))
+print('CUSTOM_DISPATCH', s.count('name=_dispatch_ragged_a2a'))
+print('CUSTOM_RETURN', s.count('name=_return_ragged_a2a'))
+print('REMAT', s.count('remat2['))
+idx=s.find('remat2[')
+remat=s[idx:]
+print('REMAT_RAGGED', remat.count('ragged_all_to_all'))
+print('REMAT_CUSTOM_DISPATCH', remat.count('name=_dispatch_ragged_a2a'))
+print('REMAT_CUSTOM_RETURN', remat.count('name=_return_ragged_a2a'))
+for needle in ('name=_dispatch_ragged_a2a','name=_return_ragged_a2a','min '):
+  print('\\nSNIPS', needle)
+  pos=0
+  shown=0
+  while shown < 8:
+    pos=remat.find(needle,pos)
+    if pos < 0: break
+    print(remat[max(0,pos-180):pos+300].replace('\\n',' '))
+    pos += len(needle); shown += 1
+PY" in /home/marin/projects/marin-mfu-loop
+ exited 1 in 560ms:
+Traceback (most recent call last):
+  File "<stdin>", line 19, in <module>
+  File "<stdin>", line 17, in loss
+  File "<stdin>", line 15, in layer
+  File "/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/grug_moe.py", line 264, in moe_mlp
+    x = _reshard_for_shard_map(x, mesh, batch_spec)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/sharding.py", line 105, in _reshard_for_shard_map
+    return reshard(x, NamedSharding(mesh, spec))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/sharding_impls.py", line 891, in canonicalize_sharding
+    raise ValueError(
+ValueError: PartitionSpec passed to reshard cannot contain axis names that are of type Auto or Manual. Got PartitionSpec: P('expert',) with axis name: expert of type: AxisType.Auto. This error occurs at source:  /home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/sharding.py:105:15 (_reshard_for_shard_map)
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n \"def _make_ep_mesh_or_none\" -A30 lib/levanter/tests/grug/test_grugformer_moe.py; rg -n \"AxisType\\.Explicit|axis_types\" experiments/grug/moe_hero_ep lib/levanter/src/levanter | head -100" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+64:def _make_ep_mesh_or_none() -> Mesh | None:
+65-    """An expert-parallel mesh, or None when the runtime has too few devices to build one.
+66-
+67-    Callers skip on None. Under CI's single CPU device that silences every test below that runs a
+68-    backend end to end, so those tests assert nothing on a green run. The repository has no marker
+69-    or fixture for declaring a device requirement; #8704 tracks adding one.
+70-    """
+71-    devices = jax.devices()
+72-    if len(devices) < 2 or len(devices) % 2 != 0:
+73-        return None
+74-    mesh_devices = np.array(devices).reshape(len(devices) // 2, 2, 1)
+75-    return Mesh(
+76-        mesh_devices,
+77-        axis_names=("data", "expert", "model"),
+78-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+79-    )
+80-
+81-
+82-def _make_abstract_moe_mesh(*, data: int, expert: int, model: int) -> AbstractMesh:
+83-    return AbstractMesh(
+84-        axis_sizes=(data, expert, model),
+85-        axis_names=("data", "expert", "model"),
+86-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+87-    )
+88-
+89-
+90-def _make_single_expert_mesh() -> Mesh:
+91-    return Mesh(
+92-        np.asarray([jax.devices()[0]]),
+93-        axis_names=("expert",),
+94-        axis_types=(AxisType.Explicit,),
+experiments/grug/moe_hero_ep/model.py:1411:        axis_types=(
+experiments/grug/moe_hero_ep/model.py:1412:            jax.sharding.AxisType.Explicit,
+experiments/grug/moe_hero_ep/model.py:1413:            jax.sharding.AxisType.Explicit,
+experiments/grug/moe_hero_ep/model.py:1414:            jax.sharding.AxisType.Explicit,
+experiments/grug/moe_hero_ep/model.py:1415:            jax.sharding.AxisType.Explicit,
+lib/levanter/src/levanter/trainer.py:880:    """If True, build the device mesh with `AxisType.Explicit` axes.
+lib/levanter/src/levanter/trainer.py:1015:        axis_types = None
+lib/levanter/src/levanter/trainer.py:1018:            axis_types = tuple(AxisType.Explicit for _ in axis_names)
+lib/levanter/src/levanter/trainer.py:1019:        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
+lib/levanter/src/levanter/models/lm_model.py:173:        """Whether this model's forward/sharding needs an ``AxisType.Explicit`` device mesh.
+lib/levanter/src/levanter/models/snowball.py:251:        # over raw Grug PartitionSpecs, which only lower under an AxisType.Explicit mesh.
+lib/levanter/src/levanter/utils/mesh.py:138:    axis_types: tuple[AxisType, ...] | None = None,
+lib/levanter/src/levanter/utils/mesh.py:176:    if axis_types is not None and len(axis_types) != len(axis_names):
+lib/levanter/src/levanter/utils/mesh.py:177:        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
+lib/levanter/src/levanter/utils/mesh.py:179:    return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
+lib/levanter/src/levanter/utils/jax_utils.py:89:    axis_types = dict(zip(mesh.axis_names, mesh.axis_types, strict=True))
+lib/levanter/src/levanter/utils/jax_utils.py:94:        axis_type = axis_types.get(axis_name)
+lib/levanter/src/levanter/utils/jax_utils.py:95:        if axis_type is None or axis_type != AxisType.Explicit:
+lib/levanter/src/levanter/grug/sharding.py:169:    axis_types = tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES)
+lib/levanter/src/levanter/grug/sharding.py:170:    return Mesh(devices, _GRUG_MESH_AXIS_NAMES, axis_types=axis_types)
+lib/levanter/src/levanter/kernels/pallas/autotune_utils.py:67:    return any(axis_type is AxisType.Manual for axis_type in sharding.mesh.axis_types)
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P, AxisType
+from levanter.grug.grug_moe import moe_mlp
+mesh = Mesh(np.array(jax.devices()), ('expert',), axis_types=(AxisType.Explicit,))
+tokens, hidden, inter, experts, topk = 4, 2, 3, 4, 2
+x = jnp.arange(tokens * hidden, dtype=jnp.float32).reshape(tokens, hidden) / 10
+selected = jnp.array([[0,1],[0,2],[1,3],[0,3]], jnp.int32)
+combine = jnp.full((tokens, topk), .5, jnp.float32)
+w13 = jnp.arange(experts * hidden * inter * 2, dtype=jnp.float32).reshape(experts,hidden,inter*2) / 100
+w2 = jnp.arange(experts * inter * hidden, dtype=jnp.float32).reshape(experts,inter,hidden) / 100
+policy = jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['grug_layer_carry'], offload_src='device', offload_dst='pinned_host')
+def layer(x, w13, w2):
+  return moe_mlp(x, selected, combine, w13, w2, activation=jax.nn.silu, implementation='ragged_all_to_all', mesh=mesh, capacity_factor=.5)
+def loss(x, w13, w2):
+  return jnp.sum(jax.checkpoint(layer, policy=policy)(x,w13,w2))
+with jax.set_mesh(mesh):
+  j = jax.make_jaxpr(jax.grad(loss, argnums=(0,1,2)))(x,w13,w2)
+s = str(j)
+print('TOTAL_RAGGED', s.count('ragged_all_to_all'))
+print('CUSTOM_DISPATCH', s.count('name=_dispatch_ragged_a2a'))
+print('CUSTOM_RETURN', s.count('name=_return_ragged_a2a'))
+print('REMAT', s.count('remat2['))
+idx=s.find('remat2[')
+remat=s[idx:]
+print('REMAT_RAGGED', remat.count('ragged_all_to_all'))
+print('REMAT_CUSTOM_DISPATCH', remat.count('name=_dispatch_ragged_a2a'))
+print('REMAT_CUSTOM_RETURN', remat.count('name=_return_ragged_a2a'))
+for needle in ('name=_dispatch_ragged_a2a','name=_return_ragged_a2a'):
+  print('\\nSNIPS', needle)
+  pos=0
+  shown=0
+  while shown < 8:
+    pos=remat.find(needle,pos)
+    if pos < 0: break
+    print(remat[max(0,pos-180):pos+350].replace('\\n',' '))
+    pos += len(needle); shown += 1
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 663ms:
+TOTAL_RAGGED 11
+CUSTOM_DISPATCH 4
+CUSTOM_RETURN 3
+REMAT 1
+REMAT_RAGGED 0
+REMAT_CUSTOM_DISPATCH 0
+REMAT_CUSTOM_RETURN 0
+
+SNIPS name=_dispatch_ragged_a2a
+
+SNIPS name=_return_ragged_a2a
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax import core
+from jax.sharding import Mesh, AxisType
+from levanter.grug.grug_moe import moe_mlp
+mesh = Mesh(np.array(jax.devices()), ('expert',), axis_types=(AxisType.Explicit,))
+tokens, hidden, inter, experts, topk = 4, 2, 3, 4, 2
+x = jnp.arange(tokens * hidden, dtype=jnp.float32).reshape(tokens, hidden) / 10
+selected = jnp.array([[0,1],[0,2],[1,3],[0,3]], jnp.int32)
+combine = jnp.full((tokens, topk), .5, jnp.float32)
+w13 = jnp.arange(experts * hidden * inter * 2, dtype=jnp.float32).reshape(experts,hidden,inter*2) / 100
+w2 = jnp.arange(experts * inter * hidden, dtype=jnp.float32).reshape(experts,inter,hidden) / 100
+policy = jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['grug_layer_carry'], offload_src='device', offload_dst='pinned_host')
+def layer(x, w13, w2):
+  return moe_mlp(x, selected, combine, w13, w2, activation=jax.nn.silu, implementation='ragged_all_to_all', mesh=mesh, capacity_factor=.5)
+def loss(x, w13, w2): return jnp.sum(jax.checkpoint(layer, policy=policy)(x,w13,w2))
+with jax.set_mesh(mesh): closed = jax.make_jaxpr(jax.grad(loss, argnums=(0,1,2)))(x,w13,w2)
+
+def walk(obj, path):
+  if isinstance(obj, core.ClosedJaxpr): obj=obj.jaxpr
+  if isinstance(obj, core.Jaxpr):
+    for i,e in enumerate(obj.eqns):
+      p=f'{path}/{i}:{e.primitive.name}'
+      if e.primitive.name in {'remat2','shard_map','custom_vjp_call','ragged_all_to_all','all_to_all'}:
+        extra=''
+        if e.primitive.name=='custom_vjp_call': extra=' name='+str(e.params.get('name'))
+        print(p+extra)
+      for k,v in e.params.items(): walk(v,p+f'[{k}]')
+  elif isinstance(obj, dict):
+    for k,v in obj.items(): walk(v,path+f'[{k}]')
+  elif isinstance(obj,(tuple,list)):
+    for i,v in enumerate(obj): walk(v,path+f'[{i}]')
+walk(closed,'root')
+PY" in /home/marin/projects/marin-mfu-loop
+ exited 1 in 657ms:
+Traceback (most recent call last):
+  File "<stdin>", line 34, in <module>
+  File "<stdin>", line 21, in walk
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/deprecations.py", line 57, in getattr
+    raise AttributeError(f"module {module!r} has no attribute {name!r}")
+AttributeError: module 'jax.core' has no attribute 'ClosedJaxpr'
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, AxisType
+from levanter.grug.grug_moe import moe_mlp
+mesh = Mesh(np.array(jax.devices()), ('expert',), axis_types=(AxisType.Explicit,))
+tokens, hidden, inter, experts, topk = 4, 2, 3, 4, 2
+x = jnp.arange(tokens * hidden, dtype=jnp.float32).reshape(tokens, hidden) / 10
+selected = jnp.array([[0,1],[0,2],[1,3],[0,3]], jnp.int32)
+combine = jnp.full((tokens, topk), .5, jnp.float32)
+w13 = jnp.arange(experts * hidden * inter * 2, dtype=jnp.float32).reshape(experts,hidden,inter*2) / 100
+w2 = jnp.arange(experts * inter * hidden, dtype=jnp.float32).reshape(experts,inter,hidden) / 100
+policy = jax.checkpoint_policies.save_and_offload_only_these_names(names_which_can_be_saved=[], names_which_can_be_offloaded=['grug_layer_carry'], offload_src='device', offload_dst='pinned_host')
+def layer(x, w13, w2):
+  return moe_mlp(x, selected, combine, w13, w2, activation=jax.nn.silu, implementation='ragged_all_to_all', mesh=mesh, capacity_factor=.5)
+def loss(x, w13, w2): return jnp.sum(jax.checkpoint(layer, policy=policy)(x,w13,w2))
+with jax.set_mesh(mesh): closed = jax.make_jaxpr(jax.grad(loss, argnums=(0,1,2)))(x,w13,w2)
+
+def walk(obj, path):
+  if hasattr(obj,'jaxpr') and not hasattr(obj,'eqns'): obj=obj.jaxpr
+  if hasattr(obj,'eqns'):
+    for i,e in enumerate(obj.eqns):
+      p=f'{path}/{i}:{e.primitive.name}'
+      if e.primitive.name in {'remat2','shard_map','custom_vjp_call','ragged_all_to_all','all_to_all'}:
+        extra=''
+        if e.primitive.name=='custom_vjp_call': extra=' name='+str(e.params.get('name'))
+        print(p+extra)
+      for k,v in e.params.items(): walk(v,p+f'[{k}]')
+  elif isinstance(obj, dict):
+    for k,v in obj.items(): walk(v,path+f'[{k}]')
+  elif isinstance(obj,(tuple,list)):
+    for i,v in enumerate(obj): walk(v,path+f'[{i}]')
+walk(closed,'root')
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 661ms:
+root/5:shard_map
+root/5:shard_map[jaxpr]/11:custom_vjp_call name=None
+root/5:shard_map[jaxpr]/143:custom_vjp_call name=None
+root/5:shard_map[jaxpr]/143:custom_vjp_call[call_jaxpr]/5:ragged_all_to_all
+root/5:shard_map[jaxpr]/173:custom_vjp_call name=None
+root/5:shard_map[jaxpr]/173:custom_vjp_call[call_jaxpr]/0:ragged_all_to_all
+root/5:shard_map[jaxpr]/296:custom_vjp_call name=None
+root/5:shard_map[jaxpr]/296:custom_vjp_call[call_jaxpr]/5:ragged_all_to_all
+root/5:shard_map[jaxpr]/326:custom_vjp_call name=None
+root/5:shard_map[jaxpr]/326:custom_vjp_call[call_jaxpr]/0:ragged_all_to_all
+root/5:shard_map[jaxpr]/328:custom_vjp_call name=None
+root/9:remat2
+root/9:remat2[jaxpr]/5:shard_map
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/11:custom_vjp_call name=None
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/143:custom_vjp_call name=None
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/143:custom_vjp_call[call_jaxpr]/5:ragged_all_to_all
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/173:custom_vjp_call name=None
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/173:custom_vjp_call[call_jaxpr]/0:ragged_all_to_all
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/296:custom_vjp_call name=None
+root/9:remat2[jaxpr]/5:shard_map[jaxpr]/296:custom_vjp_call[call_jaxpr]/5:ragged_all_to_all
+root/9:remat2[jaxpr]/6:shard_map
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/4:custom_vjp_call name=None
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/5:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/6:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/12:ragged_all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/52:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/53:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/59:ragged_all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/61:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/62:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/68:ragged_all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/110:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/111:all_to_all
+root/9:remat2[jaxpr]/6:shard_map[jaxpr]/117:ragged_all_to_all
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba .venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py | sed -n '745,795p'; nl -ba .venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py | sed -n '1610,1655p'; rg -n \"filter_jvp|jax\\.jvp|\\.jvp\\(|jacfwd|linearize\\(|jet\\(\" --glob '*.py' . | head -400; rg -n \"kron|optimizer|optax|adam|muon\" experiments/grug/moe_hero_ep/hero_recipe.py experiments/grug/moe_hero_ep/train.py | head -200; nl -ba experiments/grug/moe_hero_ep/model.py | sed -n '950,1070p'; nl -ba lib/levanter/src/levanter/grug/_moe/sonic_cute.py | sed -n '125,170p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+   745	  then::
+   746	
+   747	    axis index 0:
+   748	      result = [1, 3, 0, 0]
+   749	
+   750	    axis index 1:
+   751	      result = [2, 2, 4, 0]
+   752	
+   753	  Args:
+   754	    operand: data array of shape (N, A, B, ...) representing concatenated
+   755	      (possibly padded) ragged data to be sent.
+   756	    output: data array of shape (M, A, B, ...) to update with received data.
+   757	    input_offsets: 1D integer array of shape (K,) representing the offsets of
+   758	      leading-axis slices into ``operand`` to be sent.
+   759	    send_sizes: 1D integer array array of shape (K,) representing the sizes of
+   760	      leading-axis slices into ``operand`` to be sent.
+   761	    output_offsets: 1D integer array of shape (K,) representing where the
+   762	      corresponding sent data is written on each corresponding receiver.
+   763	    recv_sizes: 1D integer array of shape (K,) representing sizes of
+   764	      leading-axis slices into ``output`` to update with received data.
+   765	    axis_name: name of the mapped axis over which to perform the communication.
+   766	    axis_index_groups: optional list of lists containing axis indices (e.g. for
+   767	      an axis of size 4, [[0, 1], [2, 3]] would run ragged all to all over the
+   768	      first two and last two replicas). Groups must cover all axis indices
+   769	      exactly once, and all groups must be the same size. Otherwise, the
+   770	      behavior is undefined.
+   771	
+   772	  Returns:
+   773	    Array of shape (M, A, B, ...) with the same value as the ``output`` except
+   774	    with received data written into slices starting at
+   775	    ``all_to_all(output_offsets, axis_name, 0, 0, tiled=True)`` and with size
+   776	    ``recv_sizes``.
+   777	  """
+   778	
+   779	  if not isinstance(axis_name, (tuple, list)):
+   780	    axis_name = (axis_name,)
+   781	
+   782	  axis_index_groups = _canonicalize_axis_index_groups(axis_index_groups)
+   783	  return ragged_all_to_all_p.bind(operand, output, input_offsets, send_sizes,
+   784	                                  output_offsets, recv_sizes,
+   785	                                  axis_name=axis_name,
+   786	                                  axis_index_groups=axis_index_groups)
+   787	
+   788	
+   789	def axis_index(axis_name: AxisName) -> Array:
+   790	  """Return the index along the mapped axis ``axis_name``.
+   791	
+   792	  Args:
+   793	    axis_name: hashable Python object used to name the mapped axis.
+   794	
+   795	  Returns:
+  1610	    *, axis_name, axis_index_groups
+  1611	):
+  1612	  replica_groups = _replica_groups(ctx.module_context.axis_context, axis_name,
+  1613	                                   axis_index_groups)
+  1614	
+  1615	  # Assumes all groups are the same size
+  1616	  split_count = len(replica_groups[0])
+  1617	  if not all(split_count == len(g) for g in replica_groups):
+  1618	    raise ValueError('Replica groups must be equally sized')
+  1619	
+  1620	  ragged_all_to_all_attrs: dict[str, ir.Attribute] = {
+  1621	      "replica_groups": _device_list_replica_groups_hlo(replica_groups)
+  1622	  }
+  1623	  is_spmd = isinstance(
+  1624	      ctx.module_context.axis_context, (SPMDAxisContext, ShardingContext))
+  1625	  if is_spmd:
+  1626	    ragged_all_to_all_attrs['channel_id'] = ir.IntegerAttr.get(
+  1627	        ir.IntegerType.get_signless(64), mlir.COLLECTIVE_CHANNEL_ID
+  1628	    )
+  1629	
+  1630	  return hlo.CustomCallOp(
+  1631	      result=[output.type],
+  1632	      inputs=[operand, output, input_offsets, send_sizes, output_offsets,
+  1633	              recv_sizes],
+  1634	      call_target_name=ir.StringAttr.get('ragged_all_to_all'),
+  1635	      backend_config=ir.DictAttr.get(ragged_all_to_all_attrs),
+  1636	      api_version=ir.IntegerAttr.get(ir.IntegerType.get_signless(32), 4),
+  1637	  ).results
+  1638	
+  1639	def _ragged_all_to_all_effectful_abstract_eval(
+  1640	    operand, output, input_offsets, send_sizes, output_offsets, recv_sizes,
+  1641	    axis_name, axis_index_groups
+  1642	):
+  1643	  del operand, axis_index_groups
+  1644	  if not dtypes.issubdtype(input_offsets.dtype, np.integer):
+  1645	    raise ValueError("ragged_all_to_all input_offsets must be integer type.")
+  1646	  if not dtypes.issubdtype(send_sizes.dtype, np.integer):
+  1647	    raise ValueError("ragged_all_to_all send_sizes must be integer type.")
+  1648	  if not dtypes.issubdtype(output_offsets.dtype, np.integer):
+  1649	    raise ValueError("ragged_all_to_all output_offsets must be integer type.")
+  1650	  if not dtypes.issubdtype(recv_sizes.dtype, np.integer):
+  1651	    raise ValueError("ragged_all_to_all recv_sizes must be integer type.")
+  1652	  if len(input_offsets.shape) != 1 or input_offsets.shape[0] < 1:
+  1653	    raise ValueError(
+  1654	        "ragged_all_to_all input_offsets must be rank 1 with positive dimension"
+  1655	        " size, but got shape {}".format(input_offsets.shape)
+experiments/grug/moe_hero_ep/train.py:24:import optax
+experiments/grug/moe_hero_ep/train.py:137:    offloaded optimizer state, which is most of a hero checkpoint. Reading the sharding off a
+experiments/grug/moe_hero_ep/train.py:339:    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+experiments/grug/moe_hero_ep/train.py:650:    opt_state: optax.OptState
+experiments/grug/moe_hero_ep/train.py:673:            # Scalar optimizer metadata has no operand from which to inherit the active mesh.
+experiments/grug/moe_hero_ep/train.py:686:    optimizer: optax.GradientTransformation,
+experiments/grug/moe_hero_ep/train.py:698:        opt_state = optimizer.init(master_params)
+experiments/grug/moe_hero_ep/train.py:703:        opt_state = optimizer.init(params)
+experiments/grug/moe_hero_ep/train.py:799:    optimizer: optax.GradientTransformation,
+experiments/grug/moe_hero_ep/train.py:837:            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+experiments/grug/moe_hero_ep/train.py:838:            master_params = optax.apply_updates(master_params_in, updates)
+experiments/grug/moe_hero_ep/train.py:842:            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+experiments/grug/moe_hero_ep/train.py:843:            params = optax.apply_updates(qb_params, updates)
+experiments/grug/moe_hero_ep/train.py:905:    optimizer = config.optimizer.build(trainer.num_train_steps)
+experiments/grug/moe_hero_ep/train.py:917:        optimizer,
+experiments/grug/moe_hero_ep/train.py:954:                optimizer=optimizer,
+   950	                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+   951	            ),
+   952	            expert_mlp=MoEExpertMlp.init(
+   953	                num_experts=cfg.num_experts,
+   954	                hidden_dim=expert_width,
+   955	                intermediate_dim=cfg.intermediate_dim,
+   956	                initializer_std=cfg.initializer_std,
+   957	                key=k_expert,
+   958	                implementation=cfg.moe_implementation,
+   959	                activation=ActivationFunctionEnum.silu,
+   960	                capacity_factor=cfg.capacity_factor,
+   961	                pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
+   962	                expert_chunks=cfg.expert_chunks,
+   963	                num_expert_waves=cfg.num_expert_waves,
+   964	            ),
+   965	            cfg=cfg,
+   966	        )
+   967	
+   968	    @named_call
+   969	    def __call__(
+   970	        self,
+   971	        x: Float[Array, "B S D"],
+   972	    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+   973	        b, s, _ = x.shape
+   974	        x_flat = rearrange(x, "b s d -> (b s) d")
+   975	        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
+   976	        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+   977	        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
+   978	        router_probs = jax.nn.softmax(router_logits, axis=-1)
+   979	        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
+   980	        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+   981	        qb_alpha = _topk_logits[:, -1:]
+   982	        selected_experts = selected_experts[:, :-1]
+   983	        # Sigmoid combine weights on unbiased logits for selected experts.
+   984	        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+   985	        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+   986	        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+   987	        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+   988	        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+   989	        combine_weights = combine_weights_f.astype(x.dtype)
+   990	        mesh = get_abstract_mesh()
+   991	        # Per-shard partials only; the cross-device reduction happens once after the layer scan.
+   992	        router_stats = _local_routing_stats(
+   993	            reshard(selected_experts, P(_BATCH_AXES, None)),
+   994	            reshard(router_probs, P(_BATCH_AXES, None)),
+   995	            reshard(router_logits, P(_BATCH_AXES, None)),
+   996	            mesh,
+   997	            num_experts=self.cfg.num_experts,
+   998	        )
+   999	        # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
+  1000	        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+  1001	        if self.cfg.qb_estimator == QbEstimator.HIST:
+  1002	            beta, margin_min, margin_max = _qb_beta_hist(
+  1003	                s_minus_alpha,
+  1004	                mesh,
+  1005	                num_experts_per_token=self.cfg.num_experts_per_token,
+  1006	                num_experts=self.cfg.num_experts,
+  1007	                n_bins=self.cfg.qb_hist_bins,
+  1008	            )
+  1009	            router_stats["qb_beta"] = beta
+  1010	            router_stats["margin_min"] = margin_min
+  1011	            router_stats["margin_max"] = margin_max
+  1012	        else:
+  1013	            num_devices = 1
+  1014	            for a in _BATCH_AXES:
+  1015	                num_devices *= mesh.shape[a]
+  1016	            local_tokens = s_minus_alpha.shape[0] // num_devices
+  1017	            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+  1018	
+  1019	            def _local_qb_beta(s_ma):
+  1020	                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+  1021	                # The `pmean` that used to live here is deferred to `_reduce_router_stats`: the
+  1022	                # mean of the per-shard betas is the same number whether it is taken per layer or
+  1023	                # once over the stacked layers, and beta is not read until the *next* step.
+  1024	                return topk_vals[:, -1][None, :]
+  1025	
+  1026	            router_stats["qb_beta_local"] = shard_map(
+  1027	                _local_qb_beta,
+  1028	                mesh=mesh,
+  1029	                in_specs=(P(_BATCH_AXES, None),),
+  1030	                out_specs=P(_BATCH_AXES, None),
+  1031	            )(s_minus_alpha)
+  1032	            # TOPK has no histogram grid, so no live margin range to surface. Reshard the
+  1033	            # placeholder onto the run's mesh: a bare constant carries an empty-mesh sharding,
+  1034	            # and stacking that through the router stats leaves the train step's inputs placed
+  1035	            # inconsistently with the compiled executable under offloaded pinned-host state.
+  1036	            zero = reshard(jnp.zeros((), dtype=jnp.float32), P())
+  1037	            router_stats["margin_min"] = zero
+  1038	            router_stats["margin_max"] = zero
+  1039	
+  1040	        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+  1041	        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+  1042	        # token, and the shared experts in the enclosing block never see this path.
+  1043	        routed_input = x_flat
+  1044	        if self.w_latent_down is not None and self.latent_norm is not None:
+  1045	            routed_input = jnp.einsum(
+  1046	                "td,dl->tl",
+  1047	                x_flat,
+  1048	                self.w_latent_down.astype(x_flat.dtype),
+  1049	                out_sharding=_batch_spec(),
+  1050	            )
+  1051	            # Keep the expert input scale independent of the down-projection initialization.
+  1052	            routed_input = self.latent_norm(routed_input)
+  1053	        moe_out = self.expert_mlp(
+  1054	            routed_input,
+  1055	            selected_experts.astype(jnp.int32),
+  1056	            combine_weights,
+  1057	            mesh=get_abstract_mesh(),
+  1058	            report_capacity_overflow=self.cfg.report_capacity_overflow,
+  1059	        )
+  1060	        if self.cfg.report_capacity_overflow:
+  1061	            routed_flat, capacity_overflow = moe_out
+  1062	            dropped_assignments = capacity_overflow.total
+  1063	            sender_dropped_assignments = capacity_overflow.sender
+  1064	            receiver_dropped_assignments = capacity_overflow.receiver
+  1065	        else:
+  1066	            routed_flat = moe_out
+  1067	            dropped_assignments = _zero_dropped_assignments()
+  1068	            sender_dropped_assignments = _zero_dropped_assignments()
+  1069	            receiver_dropped_assignments = _zero_dropped_assignments()
+  1070	        router_stats["capacity_overflow"] = dropped_assignments
+   125	
+   126	
+   127	_expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
+   128	
+   129	
+   130	def _moe_mlp_local_sonic_cute(
+   131	    x: Float[Array, "T H"],
+   132	    selected_experts: Int[Array, "T K"],
+   133	    combine_weights: Float[Array, "T K"],
+   134	    moe_w13: Float[Array, "E H I2"],
+   135	    moe_w2: Float[Array, "E I H"],
+   136	    *,
+   137	    num_experts: int,
+   138	) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+   139	    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+   140	        x, selected_experts, combine_weights, num_experts=num_experts
+   141	    )
+   142	    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+   143	    moe_dim = moe_w2.shape[1]
+   144	    w13_il = _interleave_gate_up(moe_w13, moe_dim)
+   145	    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+   146	
+   147	    with jax.named_scope("moe_up_down_quack"):
+   148	        out_dispatch = tree_checkpoint_name(
+   149	            _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu), _CHECKPOINT_DISPATCH_OUTPUT
+   150	        )
+   151	
+   152	    with jax.named_scope("scatter"):
+   153	        out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+   154	    return out, _zero_dropped_assignments()
+   155	
+   156	
+   157	def _moe_mlp_local_sonic_cute_chunked(
+   158	    x: Float[Array, "T H"],
+   159	    selected_experts: Int[Array, "T K"],
+   160	    combine_weights: Float[Array, "T K"],
+   161	    moe_w13_local: Float[Array, "E Hlocal I2"],
+   162	    moe_w2_local: Float[Array, "E I Hlocal"],
+   163	    *,
+   164	    num_experts: int,
+   165	    chunk_sizes: tuple[int, ...],
+   166	    data_axis_name: str,
+   167	) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+   168	    """Chunked variant that gathers only one chunk of the expert weights at a time.
+   169	
+   170	    The FSDP weights arrive H-sharded over ``data_axis_name`` (``moe_w13_local`` is [E, H/data, 2I],
+
+codex
+The real hero-shaped staged reverse pass is compatible with an explicit expert mesh: under `save_and_offload_only_these_names`, the rematerialized forward still contains the custom wrappers, and the backward contains their swapped-offset reverse collectives. No repository caller uses forward-mode AD; I’m doing one final check of the intentional `custom_vjp` JVP limitation and the existing drop/gradient coverage before issuing the rack verdict.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a
+args = (
+    jnp.zeros((2, 3), jnp.float32),
+    jnp.array([0], jnp.int32),
+    jnp.array([2], jnp.int32),
+    jnp.array([0], jnp.int32),
+    jnp.array([2], jnp.int32),
+)
+try:
+    jax.jvp(lambda x: _dispatch_ragged_a2a(2, 2, x, *args[1:]), (args[0],), (jnp.ones_like(args[0]),))
+except Exception as exc:
+    print(type(exc).__name__ + ': ' + str(exc))
+PY
+
+git diff --check -- lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py
+rg -n \"29.step|paired loss|drops must match|max 1e-4|1e-4.*drop|fidelity gate\" experiments tests docs .agents --glob '*.py' --glob '*.md' --glob '*.json' --glob '*.yaml' --glob '*.yml' | head -200" in /home/marin/projects/marin-mfu-loop
+ succeeded in 535ms:
+RuntimeError: ragged_all_to_all must be used within a mapped context like vmap or shard_map.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P, AxisType
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a
+mesh=Mesh(np.array(jax.devices()),('expert',),axis_types=(AxisType.Explicit,))
+def local(x, io, ss, oo, rs): return _dispatch_ragged_a2a(2,2,x,io,ss,oo,rs)
+f=jax.shard_map(local,mesh=mesh,in_specs=(P('expert',None),P('expert'),P('expert'),P('expert'),P('expert')),out_specs=P('expert',None),check_vma=False)
+x=jnp.zeros((4,3),jnp.float32)
+p=jnp.array([0,0],jnp.int32); s=jnp.array([2,2],jnp.int32)
+try:
+  with jax.set_mesh(mesh):
+    jax.make_jaxpr(lambda a,da: jax.jvp(lambda z:f(z,p,s,p,s),(a,),(da,)))(x,jnp.ones_like(x))
+except Exception as exc:
+  print(type(exc).__name__ + ': ' + str(exc))
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 516ms:
+ValueError: in_specs passed to shard_map: P('expert', None) does not match the specs of the input: P(None, None) for arg: float32[4,3]. `in_specs` is an optional argument so you can omit specifying it and shard_map will infer the in_specs from the arguments. If you want to reshard your inputs, you can use `jax.reshard` on the arguments and then pass those args to shard_map.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, AxisType
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a
+mesh=Mesh(np.array(jax.devices()),('expert',),axis_types=(AxisType.Explicit,))
+def local(x, io, ss, oo, rs): return _dispatch_ragged_a2a(2,2,x,io,ss,oo,rs)
+f=jax.shard_map(local,mesh=mesh,in_specs=(P('expert',None),P('expert'),P('expert'),P('expert'),P('expert')),out_specs=P('expert',None),check_vma=False)
+with jax.set_mesh(mesh):
+  x=jax.device_put(jnp.zeros((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  dx=jax.device_put(jnp.ones((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  p=jax.device_put(jnp.array([0,0],jnp.int32),NamedSharding(mesh,P('expert')))
+  s=jax.device_put(jnp.array([2,2],jnp.int32),NamedSharding(mesh,P('expert')))
+  try:
+    jax.make_jaxpr(lambda a,da: jax.jvp(lambda z:f(z,p,s,p,s),(a,),(da,)))(x,dx)
+  except Exception as exc:
+    print(type(exc).__name__ + ': ' + str(exc))
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 453ms:
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, AxisType
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a
+mesh=Mesh(np.array(jax.devices()),('expert',),axis_types=(AxisType.Explicit,))
+def local(x, io, ss, oo, rs): return _dispatch_ragged_a2a(2,2,x,io,ss,oo,rs)
+f=jax.shard_map(local,mesh=mesh,in_specs=(P('expert',None),P('expert'),P('expert'),P('expert'),P('expert')),out_specs=P('expert',None),check_vma=False)
+with jax.set_mesh(mesh):
+  x=jax.device_put(jnp.zeros((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  dx=jax.device_put(jnp.ones((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  p=jax.device_put(jnp.array([0,0],jnp.int32),NamedSharding(mesh,P('expert')))
+  s=jax.device_put(jnp.array([2,2],jnp.int32),NamedSharding(mesh,P('expert')))
+  closed=jax.make_jaxpr(lambda a,da: jax.jvp(lambda z:f(z,p,s,p,s),(a,),(da,)))(x,dx)
+ss=str(closed)
+print('custom_vjp',ss.count('custom_vjp'))
+print('ragged',ss.count('ragged_all_to_all'))
+print(ss)
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 473ms:
+custom_vjp 1
+ragged 1
+{ lambda a:i32[2@expert] b:i32[2@expert]; c:f32[4@expert,3] d:f32[4@expert,3]. let
+    e:f32[4@expert,3] f:f32[4@expert,3] = shard_map[
+      check_vma=False
+      in_specs=(P('expert', None), P('expert',), P('expert',), P('expert',), P('expert',), P('expert', None))
+      jaxpr={ lambda ; g:f32[2,3] h:i32[1] i:i32[1] j:i32[1] k:i32[1] l:f32[2,3]. let
+          m:f32[2,3] = custom_vjp_call[
+            name=_dispatch_ragged_a2a
+            bwd=_dispatch_ragged_a2a_bwd
+            call_jaxpr={ lambda ; n:f32[2,3] o:i32[1] p:i32[1] q:i32[1] r:i32[1]. let
+                s:i32[] = squeeze[dimensions=(0,)] p
+                t:i32[] = min s 0:i32[]
+                u:f32[] = convert_element_type[
+                  new_dtype=float32
+                  weak_type=False
+                ] t
+                v:f32[2,3] = broadcast_in_dim u
+                w:f32[2,3] = ragged_all_to_all[
+                  axis_index_groups=None
+                  axis_name=('expert',)
+                ] n v o p q r
+              in (w,) }
+            fwd=_dispatch_ragged_a2a_fwd
+            symbolic_zeros=False
+          ] g h i j k
+          x:f32[2,3] = custom_lin[
+            bwd=_dispatch_ragged_a2a_bwd
+            in_zeros=[False, True, True, True, True]
+            num_res=4
+            symbolic_zeros=False
+          ] h i j k l
+        in (m, x) }
+      mesh=Mesh('expert': 2, axis_types=(Explicit,))
+      newly_manual_axes=frozenset({'expert'})
+      out_specs=(P('expert', None), P('expert', None))
+    ] c a b a b d
+  in (e, f) }
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+@jax.custom_vjp
+def f(x): return x*x
+def ff(x): return x*x, x
+def fb(r,g): return (2*r*g,)
+f.defvjp(ff,fb)
+try:
+ print(jax.jvp(f,(jnp.array(3.),),(jnp.array(1.),)))
+except Exception as exc:
+ print(type(exc).__name__+': '+str(exc))
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 287ms:
+TypeError: can't apply forward-mode autodiff (jvp) to a custom_vjp function.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "XLA_FLAGS=--xla_force_host_platform_device_count=2 .venv/bin/python - <<'PY'
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, AxisType
+from levanter.grug._moe.ep_ragged_all_to_all import _dispatch_ragged_a2a
+mesh=Mesh(np.array(jax.devices()),('expert',),axis_types=(AxisType.Explicit,))
+def local(x, io, ss, oo, rs): return _dispatch_ragged_a2a(2,2,x,io,ss,oo,rs)
+f=jax.shard_map(local,mesh=mesh,in_specs=(P('expert',None),P('expert'),P('expert'),P('expert'),P('expert')),out_specs=P('expert',None),check_vma=False)
+with jax.set_mesh(mesh):
+  x=jax.device_put(jnp.zeros((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  dx=jax.device_put(jnp.ones((4,3),jnp.float32),NamedSharding(mesh,P('expert',None)))
+  p=jax.device_put(jnp.array([0,0],jnp.int32),NamedSharding(mesh,P('expert')))
+  s=jax.device_put(jnp.array([2,2],jnp.int32),NamedSharding(mesh,P('expert')))
+  try:
+    jax.jit(lambda a,da: jax.jvp(lambda z:f(z,p,s,p,s),(a,),(da,))).lower(x,dx)
+  except Exception as exc:
+    print(type(exc).__name__ + ': ' + str(exc))
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 488ms:
+TypeError: can't apply forward-mode autodiff (jvp) to a custom_vjp function.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python - <<'PY'
+import jax.numpy as jnp
+from levanter.grug._moe.ep_common import _expert_granular_a2a_params
+# [source, global expert], 2 shards x 4 experts. Source 0 has an empty expert 0 followed by 3 rows for expert 1.
+g = jnp.array([[0,3,2,1],[1,1,1,1]], jnp.int32)
+c = g
+params=[_expert_granular_a2a_params(g,c,jnp.array(s,jnp.int32),local_expert_size=2)[1] for s in range(2)]
+# all_to_all(output_offsets) result on destination/original source 0: block 0 from each expert receiver.
+outx=jnp.concatenate([p.output_offsets.reshape(2,2)[0] for p in params])
+recv=params[0].recv_sizes
+marks=jnp.zeros(7,jnp.int32).at[outx].set(1).at[outx+recv].add(-1)
+print('output_offsets_x', outx.tolist())
+print('recv_sizes', recv.tolist())
+print('marks', marks.tolist())
+print('mask', jnp.cumsum(marks).tolist())
+expected=jnp.zeros(7,jnp.int32)
+for o,n in zip(outx.tolist(),recv.tolist()): expected=expected.at[o:o+n].set(1)
+print('expected',expected.tolist())
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 754ms:
+output_offsets_x [0, 0, 3, 5]
+recv_sizes [0, 3, 2, 1]
+marks [0, 0, 0, 0, 0, 0, -1]
+mask [0, 0, 0, 0, 0, 0, -1]
+expected [1, 1, 1, 1, 1, 1, 0]
+
+codex
+## Verdict: NO-GO
+
+- **P1 — Empty groups make the copied return-buffer transpose mask incorrect.** The mask uses `.at[output_offsets_x].set(1)` followed by end-point subtraction at [ep_ragged_all_to_all.py:348](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:348). Return offsets are unclipped expert starts [ep_common.py:156](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_common.py:156), so consecutive groups have identical offsets whenever `bincount` produces an empty expert [ep_ragged_all_to_all.py:398](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:398). There is no invariant preventing that.
+
+  Concrete valid two-shard example: source counts `[0, 3, 2, 1]` produce exchanged offsets `[0, 0, 3, 5]` and receive sizes `[0, 3, 2, 1]`. The implemented mask becomes `[0, 0, 0, 0, 0, 0, -1]`; the correct written mask is `[1, 1, 1, 1, 1, 1, 0]`. Thus [returned_ct at line 353](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:353) passes cotangents through overwritten rows and feeds an out-of-range selector afterward. With two expert chunks, this can corrupt an earlier chunk’s gradient.
+
+  This is indeed bit-for-bit copied from JAX 0.11.1’s rule [parallel.py:1705](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1705), so it is not a treatment/control divergence—it is a shared correctness bug. Consequently, the 29-step paired-loss and drop-equality gates cannot detect it. The existing gradient test also explicitly exercises zero drops [test_grugformer_moe.py:1215](/home/marin/projects/marin-mfu-loop/lib/levanter/tests/grug/test_grugformer_moe.py:1215), while the forced-drop test checks only forward behavior.
+
+- **P2 — The wrappers remove forward-mode AD support.** JAX’s primitive has a JVP rule [parallel.py:1678](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1678), whereas lowering a JVP through the new `custom_vjp` boundary at [ep_ragged_all_to_all.py:231](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:231) fails with `can't apply forward-mode autodiff (jvp) to a custom_vjp function`. No repository caller currently JVPs this path; hero training uses reverse-mode `value_and_grad` [train.py:761](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:761), so this is not itself a hero-rack blocker.
+
+No other divergence was found: reverse-collective operand/offset order matches JAX [parallel.py:1692](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1692); dispatch `output_t` is dead; every actual `tie` is nonempty and nonnegative; and staged `offload_carry` reverse-mode tracing retained the wrappers under the explicit expert `shard_map`.
+tokens used
+130,099
+## Verdict: NO-GO
+
+- **P1 — Empty groups make the copied return-buffer transpose mask incorrect.** The mask uses `.at[output_offsets_x].set(1)` followed by end-point subtraction at [ep_ragged_all_to_all.py:348](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:348). Return offsets are unclipped expert starts [ep_common.py:156](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_common.py:156), so consecutive groups have identical offsets whenever `bincount` produces an empty expert [ep_ragged_all_to_all.py:398](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:398). There is no invariant preventing that.
+
+  Concrete valid two-shard example: source counts `[0, 3, 2, 1]` produce exchanged offsets `[0, 0, 3, 5]` and receive sizes `[0, 3, 2, 1]`. The implemented mask becomes `[0, 0, 0, 0, 0, 0, -1]`; the correct written mask is `[1, 1, 1, 1, 1, 1, 0]`. Thus [returned_ct at line 353](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:353) passes cotangents through overwritten rows and feeds an out-of-range selector afterward. With two expert chunks, this can corrupt an earlier chunk’s gradient.
+
+  This is indeed bit-for-bit copied from JAX 0.11.1’s rule [parallel.py:1705](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1705), so it is not a treatment/control divergence—it is a shared correctness bug. Consequently, the 29-step paired-loss and drop-equality gates cannot detect it. The existing gradient test also explicitly exercises zero drops [test_grugformer_moe.py:1215](/home/marin/projects/marin-mfu-loop/lib/levanter/tests/grug/test_grugformer_moe.py:1215), while the forced-drop test checks only forward behavior.
+
+- **P2 — The wrappers remove forward-mode AD support.** JAX’s primitive has a JVP rule [parallel.py:1678](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1678), whereas lowering a JVP through the new `custom_vjp` boundary at [ep_ragged_all_to_all.py:231](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:231) fails with `can't apply forward-mode autodiff (jvp) to a custom_vjp function`. No repository caller currently JVPs this path; hero training uses reverse-mode `value_and_grad` [train.py:761](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:761), so this is not itself a hero-rack blocker.
+
+No other divergence was found: reverse-collective operand/offset order matches JAX [parallel.py:1692](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1692); dispatch `output_t` is dead; every actual `tie` is nonempty and nonnegative; and staged `offload_carry` reverse-mode tracing retained the wrappers under the explicit expert `shard_map`.
