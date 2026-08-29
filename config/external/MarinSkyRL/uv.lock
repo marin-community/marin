@@ -1144,7 +1144,7 @@ wheels = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=fix-hf-export-torch-free#35cc9c98d5a3dab50fe71823fde8ffd76001b51a" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=fix-hf-export-torch-free#5f6aed2d10f6ea0f2ba6285f9611ec65b203fdf3" }
 dependencies = [
     { name = "boto3" },
     { name = "datasets" },
