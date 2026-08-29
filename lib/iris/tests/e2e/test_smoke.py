@@ -504,16 +504,24 @@ def test_dashboard_job_expand(smoke_cluster, smoke_page, smoke_screenshot):
 
 def test_dashboard_job_detail(smoke_cluster, smoke_page, smoke_screenshot):
     """SUCCEEDED job detail page."""
-    job = smoke_cluster.submit(TestJobs.quick, "smoke-detail")
+    job = smoke_cluster.submit(
+        TestJobs.quick,
+        "smoke-detail",
+        max_retries_failure=2,
+        max_task_failures=5,
+    )
     smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
     job_id = job.job_id.to_wire()
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job_id}")
     wait_for_dashboard_ready(smoke_page)
     _wait_for_job_detail_screenshot_ready(smoke_page, job_id)
-    assert_visible(smoke_page, "text=Failure retries")
-    assert_visible(smoke_page, "text=job max 0")
-    assert_visible(smoke_page, "text=max 0/task")
+    job_budget = smoke_page.get_by_test_id("job-failure-budget")
+    retry_budget = smoke_page.get_by_test_id("task-failure-retry-budget")
+    assert job_budget.is_visible()
+    assert job_budget.text_content() == "5"
+    assert retry_budget.is_visible()
+    assert retry_budget.text_content() == "2"
     smoke_screenshot(
         "job-detail",
         "Job detail page for succeeded job with explicit per-task retry and job-wide failure budgets, "

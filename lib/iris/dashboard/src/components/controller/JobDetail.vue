@@ -1102,12 +1102,16 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </InfoRow>
           <InfoRow label="Failure attempts">
             <span :title="failuresTitle">
-              {{ job.failureCount ?? 0 }}<span class="text-text-muted"> / (job max {{ maxTaskFailures }})</span>
+              {{ job.failureCount ?? 0 }}<span class="text-text-muted">
+                / (job max <span data-testid="job-failure-budget">{{ maxTaskFailures }}</span>)
+              </span>
             </span>
           </InfoRow>
           <InfoRow label="Failure retries">
             <span :title="failuresTitle">
-              <span class="text-text-muted">max {{ maxRetriesFailure }}/task</span>
+              <span class="text-text-muted">
+                max <span data-testid="task-failure-retry-budget">{{ maxRetriesFailure }}</span>/task
+              </span>
             </span>
           </InfoRow>
           <InfoRow label="Preemptions">
