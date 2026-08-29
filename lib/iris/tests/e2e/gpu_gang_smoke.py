@@ -85,6 +85,7 @@ from iris.cluster.platforms.types import Labels, find_free_port
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
+from rigging.timing import Duration, ExponentialBackoff
 
 # install_kueue is a sibling ops script under lib/iris/scripts/ (not part of the
 # iris package), so add that dir to the path before importing it.
@@ -613,12 +614,10 @@ def validate_priority_preemption(controller_url: str, target: ControllerTarget, 
         priority_band=job_pb2.PRIORITY_BAND_BATCH,
     )
     try:
-        deadline = time.monotonic() + args.timeout
-        while time.monotonic() < deadline:
-            if batch.status().state is JobState.RUNNING:
-                break
-            time.sleep(1)
-        else:
+        if not ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
+            lambda: batch.status().state is JobState.RUNNING,
+            timeout=Duration.from_seconds(args.timeout),
+        ):
             logger.error("batch quota filler did not reach RUNNING")
             return False
 
@@ -642,16 +641,23 @@ def validate_priority_preemption(controller_url: str, target: ControllerTarget, 
             logger.error("interactive preemption probe finished in %s", interactive_status.state)
             return False
 
-        preemption_deadline = time.monotonic() + args.timeout
-        while time.monotonic() < preemption_deadline:
+        preempted_workload: str | None = None
+
+        def preemption_observed() -> bool:
+            nonlocal preempted_workload
             current_preemptions = kueue_preemption_events(target)
             new_preemptions = current_preemptions.keys() - existing_preemptions.keys()
             if new_preemptions:
                 event_uid = next(iter(new_preemptions))
-                workload_name = current_preemptions[event_uid]
-                logger.info("interactive workload triggered Kueue preemption of Workload %s", workload_name)
-                return True
-            time.sleep(1)
+                preempted_workload = current_preemptions[event_uid]
+            return preempted_workload is not None
+
+        if ExponentialBackoff(initial=0.1, maximum=1.0).wait_until(
+            preemption_observed,
+            timeout=Duration.from_seconds(args.timeout),
+        ):
+            logger.info("interactive workload triggered Kueue preemption of Workload %s", preempted_workload)
+            return True
         logger.error("interactive workload ran without a Kueue Workload preemption event")
         return False
     finally:
