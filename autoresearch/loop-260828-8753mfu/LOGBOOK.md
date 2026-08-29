@@ -605,3 +605,39 @@ Sequencing: free diagnostics now (C2/C3 from disk, C4 tail on next arm),
 C1 as the first new arm after H11's identity control, C5 after the
 headroom split settles. All memory-budget candidates pre-declare the
 #8490 churn signature.
+
+## H11 arm plan (iteration 6, pending dual review)
+
+Wheel: jax_cuda13_pjrt-0.11.1+marin.ce6db0d2c555 (adhoc branch
+mcwitt/adhoc-ragged-dk-cta-cap = pinned c9526e8c0272 + the one-header
+env-gated CTA cap; built by the fork CI as artifact only, staged at
+s3://marin-us-east-02a/marin/research/mcwitt-mfuloop/pjrt-h11-cta-cap/).
+Consumption: --pjrt-wheel sideload (reinstalls exactly jax-cuda13-pjrt in
+the worker env; verify_ragged_pjrt accepts the +marin. version).
+
+Sequence, all on the salted tree, one arm at a time:
+1. mfl-h11-id — IDENTITY CONTROL: sideloaded wheel, env UNSET. The patch
+   defaults to multiplier 8 = today's grid, so this must land in the
+   reference family (23.645-23.779, median band). A miss means the wheel
+   differs beyond the patch (build drift) — stop and diagnose, run no
+   sweep.
+2. mfl-h11-c4 — TREATMENT: XLA_RAGGED_A2A_DK_CTAS_PER_SM=4 (592 CTAs,
+   4/SM). Predicted: a2a copy phase lengthens ~0-20%, barrier-spin
+   footprint halves, GEMM contention tax shrinks; net positive if the
+   contention recovery beats the exposure growth.
+3. mfl-h11-c2 — TREATMENT: =2 (296 CTAs) if c4 is non-negative; expected
+   past the bandwidth knee (BDP says ~1.2MB in flight, likely undershoots).
+4. Confirmation draw at the best rung + bracketing salted control.
+
+Env plumbing: XLA_ prefix forwards to tasks (verified path); the knob must
+be identical on all ranks (uniform arm env guarantees it). Engagement:
+TF_CPP_VMODULE gains ragged_all_to_all_thunk=3 on all arms — the thunk
+VLOGs the live cta_count, so every arm's grid is directly observable
+(1184 default / 592 / 296). Metric side: exposed-a2a and GEMM per-kernel
+times from a profile tail on the best rung tell WHERE any delta came from.
+Fidelity: the kernel moves identical bytes; grid size does not touch
+numerics (same put targets, same barrier semantics); loss series gate as
+always. Risks: skew sensitivity — fewer CTAs spin longer per barrier at
+arrival skew (watch stall counts); a c4 regression with exposed-a2a
+GROWTH means bandwidth-bound (close H11 honestly); #8490-style variance
+rules pre-declared.
