@@ -79,6 +79,25 @@ pub struct LocalSegment {
     pub artifacts: crate::store::table_state::LocalArtifacts,
 }
 
+/// The catalog row mirroring `segment` (key bounds stringified at the catalog
+/// boundary).
+pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
+    SegmentRow {
+        namespace: namespace.to_string(),
+        path: segment.path.clone(),
+        level: segment.level,
+        min_seq: segment.min_seq,
+        max_seq: segment.max_seq,
+        row_count: segment.row_count,
+        byte_size: segment.size_bytes,
+        created_at_ms: segment.created_at_ms,
+        min_key_value: segment.min_key_value.map(|value| value.to_string()),
+        max_key_value: segment.max_key_value.map(|value| value.to_string()),
+        partition: segment.partition.clone(),
+        location: segment.location,
+    }
+}
+
 /// Aggregate counters for one namespace's persisted segments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NamespaceStats {

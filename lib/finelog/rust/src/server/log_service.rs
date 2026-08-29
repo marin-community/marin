@@ -20,8 +20,8 @@ use crate::store::log_read::{
     add_cluster_filter, add_common_filters, add_seq_upper_bound, build_log_predicates,
     shape_log_read_result, str_to_log_level, ShapedEntry,
 };
-use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::store::LOG_NAMESPACE_NAME;
+use crate::store::table::ingest::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::Store;
 
 /// Server default for `max_lines` when the request leaves it unset/<=0.

@@ -14,8 +14,19 @@
 //! - the controller path serializes durable state transitions and republishes
 //!   the immutable [`TableSnapshot`] readers observe.
 
-mod controller;
+pub(crate) mod controller;
+pub mod flush;
+pub mod index_artifacts;
+pub mod ingest;
+pub mod maintenance;
 pub mod query_view;
+pub mod runtime;
+pub mod runtime_policy;
+pub mod segment_format;
+pub mod segment_view;
+pub mod spec_migration;
+#[cfg(test)]
+pub(crate) mod test_tables;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,7 +41,6 @@ use crate::indices::IndexRegistry;
 use crate::maintenance::MaintenanceLimits;
 use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::Catalog;
-use crate::store::namespace::Namespace;
 use crate::store::object_store::ObjectStore;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{AlignedBatch, Schema};
@@ -41,6 +51,17 @@ pub use controller::{
     file_sha256, local_artifacts, object_segment_is_query_visible, MaintenanceLease,
     ObjectPersistence, TableController, WrittenObject,
 };
+pub use maintenance::{TableWork, WorkOutcome};
+pub use runtime::TableRuntime;
+pub use segment_view::SegmentSnapshot;
+
+/// The current wall clock in milliseconds, as segment metadata records it.
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// Bounded budget for stopping and joining a table's background tasks during a
 /// live lifecycle transition (re-register replacement, drop). Runs inside the
@@ -59,7 +80,7 @@ pub struct TableManager {
     /// object store is configured.
     object_state_store: Option<Arc<dyn TableStateStore>>,
     fence: WriterFence,
-    runtimes: Mutex<HashMap<String, Arc<Namespace>>>,
+    runtimes: Mutex<HashMap<String, Arc<TableRuntime>>>,
     /// One controller per table, retained across engine rebuilds so a re-register
     /// never loses an owed publication or a claimed fence.
     controllers: Mutex<HashMap<String, Arc<TableController>>>,
@@ -226,7 +247,7 @@ impl TableManager {
         self.controller(name).mark_unready(reason);
     }
 
-    pub fn get(&self, name: &str) -> Option<Arc<Namespace>> {
+    pub fn get(&self, name: &str) -> Option<Arc<TableRuntime>> {
         self.runtimes.lock().unwrap().get(name).cloned()
     }
 
@@ -240,12 +261,12 @@ impl TableManager {
     }
 
     /// Every live table runtime.
-    pub fn runtimes(&self) -> Vec<Arc<Namespace>> {
+    pub fn runtimes(&self) -> Vec<Arc<TableRuntime>> {
         self.runtimes.lock().unwrap().values().cloned().collect()
     }
 
     /// The live runtime for `name`, or `NamespaceNotFound`.
-    pub fn require(&self, name: &str) -> Result<Arc<Namespace>, StatsError> {
+    pub fn require(&self, name: &str) -> Result<Arc<TableRuntime>, StatsError> {
         self.get(name).ok_or_else(|| {
             StatsError::NamespaceNotFound(format!("namespace {name:?} is not registered"))
         })
@@ -254,7 +275,7 @@ impl TableManager {
     /// The live runtime for `name`, rejected when another writer owns the
     /// table's durable state. A fenced table serves reads and takes no writes
     /// until a restart re-claims it.
-    pub fn require_writable(&self, name: &str) -> Result<Arc<Namespace>, StatsError> {
+    pub fn require_writable(&self, name: &str) -> Result<Arc<TableRuntime>, StatsError> {
         let runtime = self.require(name)?;
         if !runtime.write_ready() {
             return Err(StatsError::SchemaConflict(format!(
@@ -276,7 +297,7 @@ impl TableManager {
         name: &str,
         schema: Schema,
         policy: StoragePolicy,
-    ) -> Result<Arc<Namespace>, StatsError> {
+    ) -> Result<Arc<TableRuntime>, StatsError> {
         let table_dir = self.table_dir(name);
         // A disk-backed re-register always runs under a runtime: it arrives via
         // the registration RPC's `spawn_blocking` worker. The boot rehydrate path
@@ -287,7 +308,7 @@ impl TableManager {
                     .block_on(prior.shutdown(TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT));
             }
         }
-        let runtime = Namespace::open(
+        let runtime = TableRuntime::open(
             name,
             schema,
             table_dir,
@@ -354,14 +375,36 @@ impl TableManager {
 
     /// Run one full maintenance cycle for `name`.
     pub async fn maintain(&self, name: &str, force_compact_l0: bool) -> Result<(), StatsError> {
-        self.require(name)?.run_maintenance(force_compact_l0).await
+        self.run_work(&self.require(name)?, TableWork::Cycle { force_compact_l0 })
+            .await
+            .map(|_| ())
+    }
+
+    /// Dispatch one unit of maintenance against a live table.
+    ///
+    /// This is the seam the maintenance scheduler uses: it decides *when* work is
+    /// due and names the kind, and the mapping from a kind to the module that
+    /// owns it lives in one place —
+    /// [`maintenance::run`](crate::store::table::maintenance::run).
+    pub async fn run_work(
+        &self,
+        runtime: &Arc<TableRuntime>,
+        work: TableWork,
+    ) -> Result<WorkOutcome, StatsError> {
+        maintenance::run(runtime, work).await
+    }
+
+    /// Whether `runtime` still owes legacy placement work, which the scheduler
+    /// polls at a faster cadence than an ordinary cycle.
+    pub fn placement_is_pending(&self, runtime: &Arc<TableRuntime>) -> bool {
+        maintenance::placement_is_pending(runtime)
     }
 
     /// Remove `name`'s runtime and controller from the registry.
     ///
     /// Returns them so the caller can stop the runtime and publish the table's
     /// tombstone before the local rows and files disappear.
-    pub fn take(&self, name: &str) -> (Option<Arc<Namespace>>, Option<Arc<TableController>>) {
+    pub fn take(&self, name: &str) -> (Option<Arc<TableRuntime>>, Option<Arc<TableController>>) {
         let runtime = self.runtimes.lock().unwrap().remove(name);
         let controller = self.controllers.lock().unwrap().remove(name);
         (runtime, controller)

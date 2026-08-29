@@ -29,12 +29,12 @@ use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::catalog::TableSpecStatus;
 use crate::store::ipc::encode_ipc;
-use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
     ignored_forwarded_schema_columns, schema_from_proto_view, schema_to_proto_owned, Schema,
 };
 use crate::store::store::ForwardedWrite;
+use crate::store::table::ingest::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::table_spec::ValidatedTableSpec;
 use crate::store::Store;
 use crate::telemetry_policy::{is_forwarded_telemetry_namespace, TELEMETRY_NAMESPACE};

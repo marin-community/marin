@@ -10,10 +10,10 @@ use crate::proto::finelog::stats::{
     ArtifactPolicy, L0Mode, RemoteRetentionPolicy, SourceLayout, TableSpec as ProtoTableSpec,
     TableSpecView,
 };
-use crate::store::namespace::{DEFAULT_FLUSH_INTERVAL, SEGMENT_TARGET_BYTES};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_from_proto_view, schema_to_proto_owned, Schema};
 use crate::store::segment::MAX_ROW_GROUP_ROWS;
+use crate::store::table::runtime_policy::{DEFAULT_FLUSH_INTERVAL, SEGMENT_TARGET_BYTES};
 
 pub const DEFAULT_TARGET_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_MAX_QUERY_TIME_MS: u64 = 10 * 60 * 1_000;

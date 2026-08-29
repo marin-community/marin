@@ -703,6 +703,55 @@ pub fn remove_if_exists(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Whether any fixed-name artifact still sits beside `parquet_path`.
+///
+/// Covering projections carry the projection name, so they are enumerated
+/// separately; these are the containers whose filename is derived from the
+/// segment's alone.
+pub fn fixed_index_artifacts_exist(parquet_path: &Path) -> bool {
+    format::bundle_path(parquet_path).exists()
+        || format::staging_path(parquet_path).exists()
+        || legacy_artifact_paths(parquet_path)
+            .into_iter()
+            .any(|path| path.exists())
+}
+
+/// Best-effort removal of a segment's derived index files, co-located with every
+/// Parquet unlink. Missing artifacts are not errors.
+pub fn remove_index_artifacts(parquet_path: &str) {
+    let parquet = Path::new(parquet_path);
+    let mut artifacts = vec![
+        (format::bundle_path(parquet), "index bundle"),
+        (format::staging_path(parquet), "staged index bundle"),
+    ];
+    artifacts.extend(
+        legacy_artifact_paths(parquet)
+            .into_iter()
+            .map(|path| (path, "legacy index")),
+    );
+    match covering_projection_paths(parquet) {
+        Ok(paths) => artifacts.extend(paths.into_iter().map(|path| (path, "covering projection"))),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate segment index artifacts");
+        }
+    }
+    match projection::covering_projection_staging_paths(parquet) {
+        Ok(paths) => artifacts.extend(
+            paths
+                .into_iter()
+                .map(|path| (path, "staged covering projection")),
+        ),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate staged segment index artifacts");
+        }
+    }
+    for (path, kind) in artifacts {
+        if let Err(error) = remove_if_exists(&path) {
+            tracing::warn!(path = %path.display(), %error, index_artifact = kind, "failed to remove segment index artifact");
+        }
+    }
+}
+
 fn remove_legacy_artifacts(parquet_path: &Path) {
     for path in legacy_artifact_paths(parquet_path) {
         if let Err(error) = remove_if_exists(&path) {

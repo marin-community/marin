@@ -11,8 +11,8 @@ pub mod compaction;
 #[cfg(test)]
 mod failure_scenarios;
 pub mod ipc;
+pub mod legacy;
 pub mod log_read;
-pub mod namespace;
 pub mod namespace_name;
 pub mod object_store;
 pub mod policy;

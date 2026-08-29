@@ -17,7 +17,7 @@
 //! (`{data_dir}/.finelog-rust-catalog`) fast-paths once adoption is `done`,
 //! otherwise it footer-scans every namespace subdir and persists the recovered
 //! namespace + segment rows into the sqlite catalog so the subsequent
-//! `rehydrate_from_catalog` + `Namespace::open` (which re-discovers local
+//! `rehydrate_from_catalog` + `TableRuntime::open` (which re-discovers local
 //! segments) materialize the live engines. It runs **before** the listener
 //! binds, inside `Store::new`, between opening the catalog and rehydrating it.
 //!
@@ -70,21 +70,26 @@
 //! registered schema + policy because deploy drives `RegisterTable` for every
 //! known table at startup (an additive merge is a no-op when identical).
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
+use crate::indices::local_sidecar_artifacts;
 use crate::store::catalog::Catalog;
 use crate::store::namespace_name::validate_namespace_name;
+use crate::store::object_store::ObjectStore;
 use crate::store::schema::{
     arrow_to_column_type, resolve_key_column, Column, Schema, IMPLICIT_KEY_COLUMN,
     IMPLICIT_SEQ_COLUMN,
 };
-use crate::store::segment::{discover_segments, read_segment_footer};
-use crate::store::types::{SegmentLocation, SegmentRow};
+use crate::store::segment::{discover_files, discover_segments, read_segment_footer};
+use crate::store::table::object_segment_is_query_visible;
+use crate::store::table::segment_view::{debug_assert_unique_paths, segment_artifacts};
+use crate::store::types::{LocalSegment, SegmentLocation, SegmentRow};
 
 /// Sentinel filename for the catalog-adoption state machine (the disk->catalog
 /// rebuild).
@@ -538,6 +543,227 @@ pub fn ensure_catalog_adopted(
     Ok(())
 }
 
+/// Delete `*.parquet.tmp` left behind by a segment write or layout rewrite that
+/// died before its rename. Nothing references them: the catalog only ever names
+/// the final path, and `discover_segments` ignores the extension, so a survivor
+/// is disk the table's own byte accounting cannot see.
+fn discard_staging_files(dir: &Path, namespace: &str) {
+    for path in discover_files(dir) {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("tmp") {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(namespace, file = %path.display(),
+                "discarded an abandoned staging file"),
+            Err(error) => {
+                tracing::warn!(namespace, file = %path.display(), %error,
+                "could not discard an abandoned staging file")
+            }
+        }
+    }
+}
+
+/// Adopt a table's segments at boot, reconciling catalog rows against local
+/// files.
+///
+/// Two-pass reconcile:
+/// - **Pass 1** walks existing catalog rows. A catalog row with a local file
+///   present enters the view (a `REMOTE` row whose file reappeared collapses to
+///   `BOTH`). A `LOCAL` row whose file vanished is dropped (data lost). A `BOTH`
+///   row whose file vanished collapses to `REMOTE` (durable archive survives).
+///   A `REMOTE`-only row stays in the catalog but NEVER enters the view (queries
+///   don't see archived data; stats exclude it).
+/// - **Pass 2** walks local files not seen in pass 1 — files with no catalog row
+///   — and adopts them as `LOCAL`, EXCEPT one whose seq range the catalog already
+///   covers. A file with no catalog row is either genuinely-new flushed data
+///   whose catalog upsert had not yet run (adopt it: crash recovery) or a
+///   compaction input the catalog has already superseded — its row replaced by
+///   the merge output — but whose unlink has not yet run. Adopting the latter
+///   resurrects a phantom segment whose file is about to vanish: a dangling
+///   reference that wedges compaction (#7361). Monotonic seq allocation
+///   separates the two — a genuine flush orphan always sits strictly ABOVE the
+///   cataloged high-water seq, a superseded input at or below it — so pass 2
+///   skips any file whose `min_seq` is not past every catalog row's `max_seq`.
+///
+/// The result is sorted by `min_seq` so iteration matches the planner's
+/// oldest-first expectation. Catalog REMOTE rows are left untouched.
+pub fn adopt_local_segments(
+    dir: &Path,
+    key_column: Option<&str>,
+    catalog: &Catalog,
+    namespace: &str,
+    objects: Option<&dyn ObjectStore>,
+) -> Result<VecDeque<LocalSegment>, StatsError> {
+    let started = Instant::now();
+    let mut segments: Vec<LocalSegment> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    discard_staging_files(dir, namespace);
+
+    let status = catalog.table_spec_status(namespace)?;
+    let object_records: HashMap<_, _> = catalog
+        .object_segments(namespace)?
+        .into_iter()
+        .map(|record| (record.path.clone(), record))
+        .collect();
+
+    let discover_started = Instant::now();
+    let mut local_files: HashMap<String, PathBuf> = discover_segments(dir)
+        .into_iter()
+        .map(|path| (path.to_string_lossy().into_owned(), path))
+        .collect();
+    for record in object_records.values() {
+        let path = PathBuf::from(&record.path);
+        if path.exists() {
+            local_files.insert(record.path.clone(), path);
+        }
+    }
+    let discover_ms = discover_started.elapsed().as_millis() as u64;
+
+    // Pass 1: catalog rows.
+    let catalog_started = Instant::now();
+    let catalog_rows = catalog.list_segments(namespace)?;
+    let catalog_read_ms = catalog_started.elapsed().as_millis() as u64;
+    let footer_reconcile_started = Instant::now();
+    // Highest seq the catalog still ACCOUNTS FOR after reconciliation: a local
+    // file past it is genuinely new (an uncataloged flush); a file at or below it
+    // whose row is gone is a compaction input the catalog already superseded (the
+    // pass-2 skip). A `LOCAL` row whose file vanished is dropped by pass 1 below —
+    // its data is lost — so it must not extend the cutoff, or a lower-seq on-disk
+    // file it does not actually cover would be misread as superseded and skipped.
+    // Every other row's range stays covered: adopted to the view, or kept as a
+    // `REMOTE` / `BOTH` durable archive.
+    let max_catalog_seq = catalog_rows
+        .iter()
+        .filter(|row| row.location != SegmentLocation::Local || local_files.contains_key(&row.path))
+        .map(|row| row.max_seq)
+        .max();
+    for row in &catalog_rows {
+        seen.insert(row.path.clone());
+        let Some(local_path) = local_files.get(&row.path) else {
+            // Local file gone.
+            match row.location {
+                SegmentLocation::Local => {
+                    // No durable copy — drop the row.
+                    catalog.remove_segment(namespace, &row.path)?;
+                }
+                SegmentLocation::Both => {
+                    // Bucket copy is durable; collapse to REMOTE.
+                    catalog.set_location(namespace, &row.path, SegmentLocation::Remote)?;
+                }
+                SegmentLocation::Remote => {}
+            }
+            continue;
+        };
+        let Some(meta) = read_segment_footer(local_path, key_column) else {
+            continue;
+        };
+        let location = if row.location == SegmentLocation::Remote {
+            SegmentLocation::Both
+        } else {
+            row.location
+        };
+        let query_visible = match object_records.get(&row.path) {
+            Some(record) => object_segment_is_query_visible(&status, record),
+            None => status.active_version() == 0,
+        };
+        if !query_visible {
+            continue;
+        }
+        let size = std::fs::metadata(local_path)
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or(0);
+        segments.push(LocalSegment {
+            path: row.path.clone(),
+            size_bytes: size,
+            level: meta.level,
+            min_seq: meta.min_seq,
+            max_seq: meta.max_seq,
+            row_count: meta.row_count,
+            created_at_ms: row.created_at_ms,
+            min_key_value: meta.min_key_value,
+            max_key_value: meta.max_key_value,
+            partition: meta.partition,
+            location,
+            artifacts: segment_artifacts(objects, object_records.get(&row.path), local_path)?,
+        });
+    }
+
+    // Pass 2: local files with no catalog row -> fresh LOCAL segments.
+    for (path_str, path) in &local_files {
+        if seen.contains(path_str) {
+            continue;
+        }
+        if status.active_version() > 0 {
+            continue;
+        }
+        let Some(meta) = read_segment_footer(path, key_column) else {
+            continue;
+        };
+        // A file with no catalog row whose seq range the catalog already covers
+        // is a compaction input whose row the merge output replaced but whose
+        // unlink has not yet run (a concurrent adopt caught the post-splice /
+        // pre-unlink window). Adopting it would resurrect a phantom segment whose
+        // file is about to vanish, wedging compaction (#7361). A genuine
+        // uncataloged flush always sits strictly above the cataloged high-water
+        // seq, so this only skips the superseded case.
+        if let Some(max_seq) = max_catalog_seq {
+            if meta.min_seq <= max_seq {
+                tracing::warn!(
+                    namespace,
+                    path = %path_str,
+                    file_min_seq = meta.min_seq,
+                    file_max_seq = meta.max_seq,
+                    max_catalog_seq = max_seq,
+                    "skipping orphan segment file already covered by the catalog (superseded compaction input mid-unlink)"
+                );
+                continue;
+            }
+        }
+        let size = std::fs::metadata(path)
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or(0);
+        let created_at_ms = std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or_else(now_ms);
+        segments.push(LocalSegment {
+            path: path_str.clone(),
+            size_bytes: size,
+            level: meta.level,
+            min_seq: meta.min_seq,
+            max_seq: meta.max_seq,
+            row_count: meta.row_count,
+            created_at_ms,
+            min_key_value: meta.min_key_value,
+            max_key_value: meta.max_key_value,
+            partition: meta.partition,
+            location: SegmentLocation::Local,
+            // A file with no catalog row is not object-backed, so its sidecars
+            // come from the local layout.
+            artifacts: local_sidecar_artifacts(path),
+        });
+    }
+
+    segments.sort_by_key(|segment| segment.min_seq);
+    let adopted: VecDeque<LocalSegment> = segments.into();
+    debug_assert_unique_paths(&adopted);
+    tracing::info!(
+        namespace,
+        local_files = local_files.len(),
+        catalog_rows = catalog_rows.len(),
+        adopted_segments = adopted.len(),
+        discover_ms,
+        catalog_read_ms,
+        footer_reconcile_ms = footer_reconcile_started.elapsed().as_millis() as u64,
+        total_ms = started.elapsed().as_millis() as u64,
+        "finelog local segment adoption complete"
+    );
+    Ok(adopted)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -548,7 +774,10 @@ mod tests {
 
     use super::*;
     use crate::proto::finelog::stats::ColumnType;
+    use crate::store::ram_buffer::stamp_seq_and_build;
+    use crate::store::schema::schema_to_arrow;
     use crate::store::segment::write_segment_to_dir;
+    use crate::store::table::test_tables::{aligned, worker_schema};
     use crate::store::types::NamespaceStats;
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -936,5 +1165,123 @@ mod tests {
     fn in_memory_mode_is_noop() {
         let catalog = Catalog::open(None).unwrap();
         ensure_catalog_adopted(None, &catalog).unwrap();
+    }
+
+    // ----- adopt_local_segments ------------------------------------------
+
+    /// Write a `seg_L{level}_{first_seq}.parquet` of `n` worker rows to `dir` and
+    /// return its path. Used to stage the on-disk state adoption reconciles.
+    fn write_seg(dir: &Path, level: i32, first_seq: i64, n: i64) -> PathBuf {
+        let arrow = schema_to_arrow(&worker_schema());
+        let batch = stamp_seq_and_build(&aligned(n), first_seq, &arrow);
+        write_segment_to_dir(dir, level, first_seq, &batch)
+            .unwrap()
+            .0
+    }
+
+    /// A `LOCAL` catalog `SegmentRow` for `path`. Key bounds are re-read from the
+    /// file footer during adoption, so they are left `None` here.
+    fn seg_row(path: &Path, level: i32, min_seq: i64, max_seq: i64) -> SegmentRow {
+        SegmentRow {
+            namespace: "iris.task".to_string(),
+            path: path.to_string_lossy().into_owned(),
+            level,
+            min_seq,
+            max_seq,
+            row_count: max_seq - min_seq + 1,
+            byte_size: 1,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: SegmentLocation::Local,
+        }
+    }
+
+    #[test]
+    fn adopt_skips_superseded_compaction_input_still_on_disk() {
+        // Regression for #7361. A compaction had committed its catalog splice —
+        // `replace_segments` swapped the L0 input rows for the merged L1 output —
+        // but had not yet unlinked the input files when adoption ran (a
+        // re-register replacing the engine, or a crash, caught the post-splice /
+        // pre-unlink window). Pass 2 must not resurrect those inputs as phantom
+        // segments whose files are about to vanish, while still adopting a genuine
+        // uncataloged flush orphan.
+        let dir = tempdir("phantom");
+        let table_dir = dir.join("iris.task");
+        std::fs::create_dir_all(&table_dir).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // The committed merge output L1 [1..4]: on disk AND in the catalog.
+        let l1 = write_seg(&table_dir, 1, 1, 4);
+        catalog.upsert_segment(&seg_row(&l1, 1, 1, 4)).unwrap();
+
+        // A superseded L0 input [1..2]: still on disk, its catalog row already
+        // gone. Its seq range is covered by the L1 output — the phantom.
+        let l0_input = write_seg(&table_dir, 0, 1, 2);
+
+        // A genuine fresh flush orphan [5..6]: file written, catalog upsert not
+        // yet run. It sits above the cataloged high-water seq (4) — adopt it.
+        let l0_new = write_seg(&table_dir, 0, 5, 2);
+
+        let deque = adopt_local_segments(
+            &table_dir,
+            Some("timestamp_ms"),
+            &catalog,
+            "iris.task",
+            None,
+        )
+        .unwrap();
+        let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
+
+        assert!(has(&l1), "the merge output is adopted");
+        assert!(
+            has(&l0_new),
+            "a genuine flush orphan above the cataloged high-water seq is adopted"
+        );
+        assert!(
+            !has(&l0_input),
+            "the superseded compaction input must NOT be resurrected as a phantom"
+        );
+        assert_eq!(deque.len(), 2, "only the output and the genuine orphan");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn adopt_recovers_low_orphan_under_a_stale_high_catalog_row() {
+        // The coverage cutoff must come only from rows whose data survives pass 1.
+        // A stale LOCAL catalog row whose file is gone is dropped (its data lost),
+        // so it must not extend the cutoff and mask a lower-seq on-disk file that
+        // it never actually covered — that file is a recoverable orphan.
+        let dir = tempdir("low_orphan");
+        let table_dir = dir.join("iris.task");
+        std::fs::create_dir_all(&table_dir).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // A stale LOCAL row [100..200] whose parquet was never written to disk.
+        let gone = table_dir.join("seg_L0_00000000000000000100.parquet");
+        catalog
+            .upsert_segment(&seg_row(&gone, 0, 100, 200))
+            .unwrap();
+
+        // A real on-disk orphan [1..2], lower seq than the stale row, no catalog
+        // row. It must be recovered, not skipped as covered.
+        let orphan = write_seg(&table_dir, 0, 1, 2);
+
+        let deque = adopt_local_segments(
+            &table_dir,
+            Some("timestamp_ms"),
+            &catalog,
+            "iris.task",
+            None,
+        )
+        .unwrap();
+        let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
+        assert!(
+            has(&orphan),
+            "a low-seq orphan is recovered even under a stale high catalog row"
+        );
+        assert_eq!(deque.len(), 1, "only the recovered orphan");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

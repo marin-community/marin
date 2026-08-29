@@ -247,8 +247,8 @@ impl Store {
     /// per-namespace engines from the catalog, and ensure the privileged `log`
     /// namespace exists.
     ///
-    /// `remote_log_dir` configures the per-namespace offload target (empty
-    /// disables sync). Pass it through to each `Namespace`.
+    /// `remote_log_dir` configures the per-table offload target (empty disables
+    /// sync). Pass it through to each table runtime.
     pub fn new(
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
@@ -1431,10 +1431,10 @@ impl Store {
 
     /// Cooperatively shut down every namespace's background tasks.
     ///
-    /// Called after the server loop returns. Each engine's
-    /// [`Namespace::shutdown`] latches its stop flag, wakes its flush +
-    /// maintenance tasks, JOINs them bounded by `per_namespace_timeout`, and does
-    /// a final `flush_once`. Durability is preserved: an acked write was already
+    /// Called after the server loop returns. Each table's
+    /// [`TableRuntime::shutdown`](crate::store::table::TableRuntime::shutdown)
+    /// latches its stop flag, wakes its dispatched maintenance work, JOINs it
+    /// bounded by `per_namespace_timeout`, and does a final flush. Durability is preserved: an acked write was already
     /// on a sealed L0 segment before the ack, and the final flush drains any
     /// not-yet-acked RAM rows. The bounded join (plus the task-abort fallback on
     /// timeout) guarantees this cannot hang — `main` applies its own outer
@@ -2675,11 +2675,8 @@ mod tests {
             .register_versioned_table("iris.worker", object_backed_spec(1))
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
-        store
-            .tables
-            .require("iris.worker")
-            .unwrap()
-            .sync_step()
+        let table = store.tables.require("iris.worker").unwrap();
+        crate::store::table::maintenance::sync_archive(&table)
             .await
             .unwrap();
 

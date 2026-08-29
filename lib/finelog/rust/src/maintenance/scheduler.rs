@@ -24,9 +24,8 @@ use crate::maintenance::{
     MaintenanceLimits, LAYOUT_MIGRATION_RETRY_INTERVAL, MAX_POLL_INTERVAL, MIN_FLUSH_INTERVAL,
     MIN_POLL_INTERVAL,
 };
-use crate::store::namespace::Namespace;
 use crate::store::store::ServeMode;
-use crate::store::table::TableManager;
+use crate::store::table::{TableManager, TableRuntime, TableWork};
 
 /// What one table's scheduling decisions are based on between rounds.
 struct TableCadence {
@@ -161,7 +160,7 @@ impl MaintenanceScheduler {
     /// flushes once its buffer reaches the definition's maximum flush age.
     fn schedule_flush(
         &self,
-        runtime: &Arc<Namespace>,
+        runtime: &Arc<TableRuntime>,
         entry: &mut TableCadence,
         now: Instant,
     ) -> Duration {
@@ -189,11 +188,12 @@ impl MaintenanceScheduler {
         let limits = Arc::clone(&self.limits);
         let wake = Arc::clone(&self.wake);
         let cadence = Arc::clone(&self.cadence);
+        let tables = Arc::clone(&self.tables);
         let dispatched = runtime.clone().spawn_tracked({
             let runtime = Arc::clone(runtime);
             async move {
                 let _permit = limits.flushes().acquire().await;
-                if let Err(error) = runtime.flush_once_async().await {
+                if let Err(error) = tables.run_work(&runtime, TableWork::Flush).await {
                     tracing::warn!(namespace = %runtime.name(), %error, "scheduled flush failed");
                 }
                 if let Some(entry) = cadence.lock().unwrap().get_mut(&table) {
@@ -212,7 +212,7 @@ impl MaintenanceScheduler {
     /// its next maintenance decision.
     fn schedule_maintenance(
         &self,
-        runtime: &Arc<Namespace>,
+        runtime: &Arc<TableRuntime>,
         entry: &mut TableCadence,
         now: Instant,
     ) -> Duration {
@@ -235,12 +235,16 @@ impl MaintenanceScheduler {
         let limits = Arc::clone(&self.limits);
         let wake = Arc::clone(&self.wake);
         let cadence = Arc::clone(&self.cadence);
+        let tables = Arc::clone(&self.tables);
         let dispatched = runtime.clone().spawn_tracked({
             let runtime = Arc::clone(runtime);
             async move {
                 let _permit = limits.maintenance_cycles().acquire().await;
-                let migration_pending = match runtime.run_maintenance(false).await {
-                    Ok(()) => runtime.physical_layout_migration_is_pending(),
+                let cycle = TableWork::Cycle {
+                    force_compact_l0: false,
+                };
+                let migration_pending = match tables.run_work(&runtime, cycle).await {
+                    Ok(outcome) => outcome.pending,
                     Err(error) => {
                         // Fall back to the ordinary interval after an error. A
                         // bad input must not turn this into a hot loop.
@@ -260,17 +264,6 @@ impl MaintenanceScheduler {
         }
         interval
     }
-}
-
-/// What the scheduler needs to know about a table's buffer to time its flush.
-pub struct FlushDemand {
-    /// An append has arrived since the last flush.
-    pub requested: bool,
-    /// The buffer already holds a whole segment, so the coalescing window is
-    /// bypassed.
-    pub forced: bool,
-    /// The definition's maximum buffer age.
-    pub max_flush_age: Duration,
 }
 
 #[cfg(test)]
