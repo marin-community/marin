@@ -20,12 +20,13 @@ ARMS = ("naive", "thompson", "grade-uniform", "grade-adaptive", "grade-prior")
 @click.option("--version", default="2026.08.29", show_default=True)
 @click.option("--evals", default="math500,gsm8k-0shot", show_default=True)
 def main(version: str, evals: str) -> None:
+    del version, evals
     for arm in ARMS:
-        for child in StoragePath(f"{EVALS_ROOT}/curriculum-rl-{arm}/{evals}/{version}/**/*.json").glob():
-            name = str(child)
+        pattern = f"{EVALS_ROOT}/2026*-curriculum-rl-{arm}-*/results/*/results_*.json"
+        for child in StoragePath(pattern).glob():
             payload = json.loads(child.read_text())
-            print(f"== {arm} {'/'.join(name.rsplit('/', 3)[-2:])}")
-            print(json.dumps(payload)[:1500])
+            print(f"== {arm} {str(child).rsplit('/', 3)[-3]}")
+            print(json.dumps(payload.get("results", payload))[:600])
 
 
 if __name__ == "__main__":
