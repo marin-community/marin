@@ -713,11 +713,19 @@ impl TableController {
         let objects = self
             .require_objects()
             .map_err(CommitError::PublicationDeferred)?;
-        let state = TableState::new(
-            namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
-                .map_err(CommitError::PublicationDeferred)?,
-        );
+        let mut catalog = namespace_catalog(&self.catalog, &self.table, &objects.table_dir)
+            .map_err(CommitError::PublicationDeferred)?;
         let expected = self.selected.lock().unwrap().clone();
+        // The high-water mark is monotone across revisions: the local aggregate
+        // it is computed from shrinks when retirement deletes legacy rows, and
+        // a shrunken mark would let a later recovery reissue sequence numbers.
+        if let Some(previous) = &expected {
+            let floor = previous.catalog.persisted_high_water.unwrap_or(0);
+            if catalog.persisted_high_water.unwrap_or(0) < floor {
+                catalog.persisted_high_water = Some(floor);
+            }
+        }
+        let state = TableState::new(catalog);
         let outcome = objects
             .state_store
             .commit(

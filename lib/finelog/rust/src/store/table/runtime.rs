@@ -335,6 +335,11 @@ impl TableRuntime {
         )
     }
 
+    /// Raise the sequence allocator to at least `next_seq`; never lowers it.
+    pub fn raise_next_seq_floor(&self, next_seq: i64) {
+        self.buffer.raise_next_seq_floor(next_seq);
+    }
+
     /// Block until `target` is durable, bounded by `timeout`.
     pub async fn await_persisted(&self, target: i64, timeout: Duration) -> Result<(), StatsError> {
         self.buffer.await_persisted(target, timeout).await

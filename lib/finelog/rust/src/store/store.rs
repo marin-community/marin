@@ -513,9 +513,19 @@ impl Store {
                 }
             };
             let state = claimed.catalog.clone();
+            let high_water = state.persisted_high_water.unwrap_or(0);
             self.tables.adopt_claimed_state(&namespace, claimed);
             if self.recover_claimed_table(&namespace, state).await? {
                 loaded_count += 1;
+            }
+            // The durable state's high-water mark can exceed the max seq in its
+            // published segments (a legacy import excludes archive-only rows;
+            // retirement deletes legacy rows). Seed the allocator past it so a
+            // recovered writer never reissues a sequence number.
+            if high_water > 0 {
+                if let Some(runtime) = self.tables.get(&namespace) {
+                    runtime.raise_next_seq_floor(high_water + 1);
+                }
             }
         }
         Ok(loaded_count)
@@ -635,7 +645,24 @@ impl Store {
                 let table_spec_version = segment
                     .table_spec_version
                     .unwrap_or(version.table_spec_version.unwrap_or(0));
-                let reference = crate::store::object_store::ObjectReference::try_from(source)?;
+                let reference = match crate::store::object_store::ObjectReference::try_from(source)
+                {
+                    Ok(reference) => reference,
+                    Err(error) if table_spec_version == 0 => {
+                        // A version-0 entry can point into the legacy archive
+                        // rather than the object layout (an archive-only row
+                        // retained until retirement). Its bytes are not
+                        // recoverable from the object store; the entry is
+                        // rollback bookkeeping, not a projection row.
+                        tracing::debug!(
+                            namespace,
+                            %error,
+                            "skipping a legacy-archive segment in the durable state"
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 reference.id.table_relative(namespace).ok_or_else(|| {
                     StatsError::Internal(format!(
                         "table state segment for {namespace:?} references another table"
@@ -3006,6 +3033,116 @@ mod tests {
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A legacy import excludes archive-only rows, so the imported segments can
+    /// top out below sequence numbers the table already issued. The published
+    /// high-water mark must carry those, and a recovered allocator must start
+    /// past them: reissuing a sequence number silently breaks every consumer
+    /// that checkpoints on seq.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cold_recovery_seeds_the_allocator_past_archive_only_sequences() {
+        let data_dir = crate::test_support::unique_dir("seq_floor_data");
+        let remote_dir = crate::test_support::unique_dir("seq_floor_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .table_spec_status("iris.worker")
+                .unwrap()
+                .active_version(),
+            1
+        );
+        // An archive-only legacy row holds the table's highest sequence
+        // numbers. It stays in the catalog until retirement, so the published
+        // state carries it as a version-0 legacy-archive entry and its seqs
+        // through the high-water mark.
+        store
+            .catalog
+            .upsert_segments(&[crate::store::types::SegmentRow {
+                namespace: "iris.worker".to_string(),
+                path: format!(
+                    "{}/iris.worker/seg_L2_0000000000000999999.parquet",
+                    data_dir.display()
+                ),
+                level: 2,
+                min_seq: 900_000,
+                max_seq: 999_999,
+                row_count: 10,
+                byte_size: 1,
+                created_at_ms: 1,
+                min_key_value: None,
+                max_key_value: None,
+                partition: None,
+                location: SegmentLocation::Remote,
+            }])
+            .unwrap();
+        // The next flush commits a revision whose published state carries the
+        // archive-only row and its high-water mark.
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+
+        let cold_data_dir = crate::test_support::unique_dir("seq_floor_cold_target");
+        let recovered = Store::new(
+            Some(cold_data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
+        )
+        .unwrap();
+        recovered.bootstrap_maintenance();
+        assert_eq!(recovered.recover_tables().await.unwrap(), 1);
+        let (_, recovered_seq) = recovered.write_rows("iris.worker", &ipc, None).unwrap();
+        assert!(
+            recovered_seq > 999_999,
+            "recovered allocator reissued sequence numbers: {recovered_seq}"
+        );
+
+        recovered.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(cold_data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }
 

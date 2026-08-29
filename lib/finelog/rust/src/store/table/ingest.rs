@@ -169,6 +169,19 @@ impl IngestBuffer {
         self.persisted_seq.send_replace(seq);
     }
 
+    /// Raise the sequence allocator to at least `next_seq`; never lowers it.
+    ///
+    /// Recovery calls this with the claimed durable state's high-water mark so
+    /// a projection that carries fewer rows than the table ever allocated (for
+    /// example after a legacy import that leaves archive-only rows behind)
+    /// cannot cause sequence reuse.
+    pub fn raise_next_seq_floor(&self, next_seq: i64) {
+        self.buffers
+            .lock()
+            .unwrap()
+            .ensure_next_seq_at_least(next_seq);
+    }
+
     /// Subscribe to the durability high-water mark. The current value is already
     /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
     pub fn watch_persisted(&self) -> watch::Receiver<i64> {
