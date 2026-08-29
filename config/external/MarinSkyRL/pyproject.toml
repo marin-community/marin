@@ -8,4 +8,4 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "fix-hf-export-torch-free" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "curriculum-sampling" }

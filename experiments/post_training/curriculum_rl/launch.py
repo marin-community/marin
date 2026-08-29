@@ -5,8 +5,8 @@
 
 Each arm trains the same policy on the same pool with the same step budget and
 differs only in how prompts are sampled per step. The naive arm is the pinned
-trainer's uniform shuffle; the other arms require the curriculum sampler branch
-of MarinSkyRL and fail fast until that lands.
+trainer's uniform shuffle; the other arms select a ``data.sampling`` policy from
+the pinned MarinSkyRL curriculum sampler.
 
 Plan or run arms::
 
@@ -83,10 +83,6 @@ class SamplerKind(StrEnum):
     GRADE_PRIOR = "grade-prior"
 
 
-# Widened once the MarinSkyRL curriculum sampler branch lands and the pin moves.
-SUPPORTED_SAMPLERS = frozenset({SamplerKind.NAIVE})
-
-
 # The launcher auto-defaults trainer.hf_hub_repo_id to laion/<job_name>, and the
 # export job then needs create access to that org. Exports stay in object storage.
 # enable_thinking goes through a ++ override because the config flattener emits
@@ -100,11 +96,15 @@ BASE_OVERRIDES = (
 
 
 def sampler_overrides(sampler: SamplerKind) -> tuple[str, ...]:
+    """Per-arm hydra overrides; curriculum arms select a data.sampling policy.
+
+    The naive arm keeps ``data.sampling.kind`` at its null default, i.e. the stock
+    uniform shuffle without replacement. Curriculum arms use the branch defaults
+    for decay, priors, and adaptive thresholds so arms differ only in kind.
+    """
     if sampler is SamplerKind.NAIVE:
         return BASE_OVERRIDES
-    raise NotImplementedError(
-        f"Sampler {sampler} needs the MarinSkyRL curriculum branch; the current pin only supports uniform shuffle."
-    )
+    return (*BASE_OVERRIDES, f"data.sampling.kind={sampler.value}")
 
 
 @dataclass(frozen=True)
