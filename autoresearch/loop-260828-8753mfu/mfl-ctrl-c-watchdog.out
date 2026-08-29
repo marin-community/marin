@@ -8,3 +8,17 @@
 08:14:00 t=420s train=running step=-1
 08:15:09 t=488s train=running step=-1
 08:16:16 t=557s train=running step=-1
+08:17:25 t=625s train=running step=-1
+08:18:39 t=693s train=running step=30001
+08:18:39 first observed step=30001, step budget 1200s starts now
+08:19:54 t=768s train=running step=30005
+08:21:08 t=842s train=running step=30010
+08:22:23 t=917s train=running step=30014
+08:23:37 t=991s train=running step=30018
+08:24:50 t=1065s train=running step=30021
+08:24:50 cancelling /mwittmann/mfl-ctrl-c-coord: scored through step 30021 (19 past first)
+Cancelled jobs:
+  /mwittmann/mfl-ctrl-c-coord/grug-train-mfl-ctrl-c
+Cancelled jobs:
+  /mwittmann/mfl-ctrl-c-coord
+WATCHDOG scored step=30021 first=30001

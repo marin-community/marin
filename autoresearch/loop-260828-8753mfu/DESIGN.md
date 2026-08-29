@@ -92,8 +92,16 @@ near-threshold results get more draws rather than a coin-flip call.
 
 ## Metric and guards
 
-- Metric: mean `throughput/mfu` over scored steps +5..+19 relative to the
-  first logged step (`score.py --relative`). Higher is better.
+- Metric (CALIBRATED at iteration 0, before any treatment comparison): the
+  primary decision statistic is the RUN MEDIAN of `throughput/mfu` over
+  scored steps +5..+19. Iteration-0 controls showed sparse environmental
+  stall steps (cross-node skew stragglers, 0/4/4 per draw, each -1.5 to -3
+  MFU for one step) that dominate run means (sd 0.255) while medians stay
+  tight (sd 0.053) — same phenomenon and remedy as the 260811 loop's
+  median switch. Stall count (steps >3% below the run median) is reported
+  per arm and guards the median's blind spot: a treatment whose draws
+  consistently raise stall counts is flagged regardless of median. Mean is
+  still recorded.
 - Guards (from the same run): `moe/drop_fraction` max/mean not worse than the
   paired control; `train/loss` at the window's last step equivalent to
   control (bf16-noise band; 24k arms showed 1.29964-65 across four arms);
@@ -102,12 +110,16 @@ near-threshold results get more draws rather than a coin-flip call.
   (user-supplied fact, 2026-08-29; overrides the ±2pp cross-night figure,
   which came from multi-rack clusters) — residual noise is neighbor jobs,
   clocks/thermals, and run-to-run scheduling jitter. The decision statistic
-  is the DIFFERENCE OF RUN-MEAN MFU, with run-level sd estimated from the
-  >=3 iteration-0 control draws and refreshed by later controls; per-step
-  points within a run are autocorrelated and are never treated as
-  independent replicates. KEEP requires >=2 treatment draws and >=2
-  same-session control draws (bracketing), delta > max(0.15 MFU,
-  3 x sd̂_run); a single C/T pair never keeps. Near-threshold deltas get
+  is the DIFFERENCE OF RUN-MEDIAN MFU, with run-level sd estimated from
+  the >=3 iteration-0 control draws (sd̂_run(median)=0.053; baseline
+  medians 23.3208/23.2400/23.3395) and refreshed by later controls;
+  per-step points within a run are autocorrelated and are never treated
+  as independent replicates. KEEP requires >=2 treatment draws and >=2
+  same-session control draws (bracketing), median delta > max(0.15 MFU,
+  3 x sd̂_run) = 0.16 at current calibration; a single C/T pair never
+  keeps. Calibrated guard bands (2x the worst observed across three C-C
+  pairs): drops max <= 1.7e-4; pointwise loss delta max <= 1.05e-4,
+  median <= 4e-5. Near-threshold deltas get
   additional draws instead of a call. Periodic re-control draws guard
   against slow drift across the campaign.
 - Fidelity gate for keeps: paired-window comparison of the FULL 15-step loss
