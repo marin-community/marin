@@ -631,6 +631,16 @@ compactions indicate ingest pressure; tune `cpu_request`, `cpu_limit`,
 Kubernetes deployment also has a five-minute startup probe so reopening an
 existing network-backed store does not feed a liveness restart loop.
 
+The standalone `finelog-server` treats every Rust panic as process-fatal. Its
+panic hook reports the first panic and aborts before Tokio can contain it as a
+failed task. Kubernetes then restarts the container over the existing store and
+PVC. Inspect `kubectl logs ... --previous` for the initiating panic and the pod's
+restart count. A repeated deterministic panic becomes `CrashLoopBackOff`.
+Do not recover a poisoned store mutex with `PoisonError::into_inner`; the panic
+may have interrupted a state transition protected by that mutex. The PyO3
+server embedded in Iris does not install this process-wide hook because an
+abort would terminate the controller.
+
 The startup events carry millisecond timings for SQLite open, one-time catalog
 adoption, local directory discovery, catalog reads, Parquet footer reconciliation,
 batched catalog refresh, namespace rehydration, and total store open. The catalog

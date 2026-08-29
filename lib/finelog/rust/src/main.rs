@@ -120,8 +120,25 @@ struct Args {
     telemetry_migration_mode: TelemetryMigrationMode,
 }
 
+/// Terminate the standalone server on the first panic after reporting it.
+///
+/// Tokio normally contains task panics as `JoinError`s. That is unsafe for this
+/// process because a panic while a store mutex is held poisons the mutex while
+/// leaving the HTTP server alive; later requests then repeat the poison panic.
+/// Aborting lets the process supervisor restart over the durable store instead.
+/// Keep this binary-only: the `finelog` library is also embedded in Iris through
+/// PyO3, where aborting would terminate the host controller.
+fn install_abort_on_panic_hook() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        report(panic);
+        std::process::abort();
+    }));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_abort_on_panic_hook();
     let args = Args::parse();
 
     tracing_subscriber::fmt()
@@ -325,7 +342,42 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
+    use std::process::Command;
+
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn panic_boundary_aborts_process() {
+        const CHILD_PROCESS: &str = "FINELOG_ABORT_ON_PANIC_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            install_abort_on_panic_hook();
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime starts");
+            runtime.block_on(async {
+                let _ = tokio::spawn(async {
+                    panic!("exercise the finelog-server panic boundary");
+                })
+                .await;
+            });
+            return;
+        }
+
+        let status = Command::new(std::env::current_exe().expect("test executable exists"))
+            .args([
+                "--exact",
+                "tests::panic_boundary_aborts_process",
+                "--nocapture",
+            ])
+            .env(CHILD_PROCESS, "1")
+            .status()
+            .expect("panic-boundary child process starts");
+
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
+    }
 
     fn args(argv: &[&str]) -> Args {
         let mut full = vec!["finelog-server"];
