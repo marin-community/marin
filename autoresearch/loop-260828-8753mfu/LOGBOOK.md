@@ -851,3 +851,20 @@ Sequencing: S1/S2 discriminator retry first (rack), then the C5 smoke
 (NUM_STEPS=30002, finite-loss + overlay + peak ~114.3 + former-copy-
 family absence), then decide the pair. S2-quarantine: C5 arms' memory
 maps excluded from the S2 evidence set.
+
+## 2026-08-30 ~22:10Z: ITERATION 7 CLOSED — S1 verdict, keeps cleared, C3' dead
+
+Discriminator outcome: excluded-donation k=1 runs clean through 30030
+(the donated variant NaN'd at 30008), zero canary mismatches, loss in
+family. S1: the corruption is donation-dependent in-step clobbering of
+the resident momentum leaf under the async offload schedule — the
+#8317 hazard family, new member: donated device-resident opt-state RMW
+leaves adjacent to async offload traffic. No positive S2 evidence
+anywhere; the T-H9-2/H11 keeps' promotion dossier is CLEAR (caveat
+recorded: exclusion relocates the leaf, so an address-fixed stray
+write is masked rather than falsified — but nothing ever produced
+S2-positive evidence, and the keeps have ~15 clean fidelity-gated arms).
+C3' is dead both ways: donated corrupts; excluded is safe but -0.35
+(exclusion copies + canary + relocation costs exceed the deleted host
+round-trips). The instrument (ResidentDonation + canary) stays in the
+tree, default-inert, as reusable corruption forensics.
