@@ -641,3 +641,24 @@ always. Risks: skew sensitivity — fewer CTAs spin longer per barrier at
 arrival skew (watch stall counts); a c4 regression with exposed-a2a
 GROWTH means bandwidth-bound (close H11 honestly); #8490-style variance
 rules pre-declared.
+
+## 2026-08-29 ~22:40Z: free diagnostics — C2 closed, C3 promoted to top lever
+
+C2 (collective bytes): NO-ARM at zero cost. Grad reduce-scatter already
+bf16; only f32 collectives are per-layer SCALAR pmax/pmin/psum latency ops
+(~48ms); no loop-invariant payloads. Closed.
+
+C3 (optimizer anatomy): SMOKING GUN. The optimizer tail is ~784 ms/step
+(4.8%): three NS chains x 5 iterations of FULL-STACK GEMMs (nvjet grid
+110,592 CTAs = all 48 layers x 6144x9216 on EVERY device) + fp32 momentum
+for the three dense groups (exactly 10,871,635,968 B each — these are the
+"10.87 GB offload staging bursts", i.e. the exposed-offload leg is largely
+OPTIMIZER STATE round-trips, ~65 GB/step, not the layer carry) + embedding
+moments 3.15 GB x2. A sharded 3D path EXISTS in grugmuon_hero.py
+(_newtonschulz_padded_stack_sharded over the intra-rack axes) but the
+trace shows no reshard collectives in the tail — the silent mesh.empty /
+no-axes fallback is the suspect (optimizer update possibly traced outside
+the abstract-mesh context). If the LIVE HERO takes the same fallback,
+fixing it is +0.6-0.8 MFU at hero scale AND deletes most of the exposed
+offload leg (C1's target collapses into C3). Root-cause agent running.
+C8 rider: empty (no hoistable fa4 precompute).
