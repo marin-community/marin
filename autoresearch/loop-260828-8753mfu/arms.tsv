@@ -5,3 +5,5 @@ mfl-ctrl-b	f995c18687	2026.08.29.3	ragged_all_to_all	mixture	device	4470000	2880
 mfl-ctrl-c	21df572364	2026.08.29.4	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none
 mfl-slop90-a	de3a750774	2026.08.29.5	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_memory_limit_slop_factor=90
 mfl-slop90-b	0ac6ea7067	2026.08.29.6	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_memory_limit_slop_factor=90
+mfl-h9dd-a	287a295a11	2026.08.29.7	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_async_copy_min_bytes=1000000000
+mfl-h9dd-b	287a295a11	2026.08.29.8	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	--xla_gpu_async_copy_min_bytes=1000000000
