@@ -29,3 +29,4 @@ mfl-ctrl-h	5da5e1754f	2026.08.29.27	ragged_all_to_all	mixture	device	4470000	288
 mfl-c3p-k1-a	6fb19209d5	2026.08.29.28	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--opt-resident-leaves 1	none	0.75	none
 mfl-c3p-poold-a	7f58a00eb1	2026.08.29.29	fixed_pooled_wave_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--opt-resident-leaves 1	none	0.75	none
 mfl-c3p-poold-a2	7f58a00eb1	2026.08.29.30	fixed_pooled_wave_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--opt-resident-leaves 1	none	0.75	none
+mfl-c5-smoke	51b34c8f1f	2026.08.29.31	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--remat-save cheap_recompute	none	0.75	none

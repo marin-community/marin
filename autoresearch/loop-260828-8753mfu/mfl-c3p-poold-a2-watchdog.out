@@ -4,3 +4,10 @@
 19:12:11 t=137s train=running step=-1
 19:13:16 t=202s train=running step=-1
 19:14:22 t=268s train=running step=-1
+19:15:28 t=334s train=running step=-1
+19:16:11 cancelling /mwittmann/mfl-c3p-poold-a2-coord: train task failed (failures=1)
+Cancelled jobs:
+  /mwittmann/mfl-c3p-poold-a2-coord/grug-train-mfl-c3p-poold-a2
+Cancelled jobs:
+  /mwittmann/mfl-c3p-poold-a2-coord
+WATCHDOG task-failed train=worker_failed failures=1 step=-1
