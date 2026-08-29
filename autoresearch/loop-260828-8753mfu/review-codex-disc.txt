@@ -1559,3 +1559,2830 @@ tests/test_moe_hero_ep.py --- 2/2 --- Python
 1243 1373 def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
 
 
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba tests/test_moe_hero_ep.py | sed -n '1200,1380p' && sed -n '1,220p' experiments/AGENTS.md" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+  1200	
+  1201	    drifted = {"momentum": {"w_gate": jnp.zeros((2, 2, 3, 4)), "extra": jnp.zeros((2, 2, 3, 4))}}
+  1202	    with pytest.raises(ValueError, match="structure drifted"):
+  1203	        train._opt_state_offload_mask(drifted, 1)
+  1204	
+  1205	
+  1206	def test_resident_expert_momentum_stays_off_the_host(monkeypatch):
+  1207	    moved = []
+  1208	
+  1209	    def record_moves(tree, memory_kind):
+  1210	        moved.extend(jax.tree.leaves(tree))
+  1211	        return tree
+  1212	
+  1213	    monkeypatch.setattr(train, "_tree_to_memory_kind", record_moves)
+  1214	
+  1215	    with set_mesh(_explicit_mesh(1, 1, 1, 1)):
+  1216	        state = train.initial_state(
+  1217	            _latent_config(),
+  1218	            optimizer=optax.sgd(0.1, momentum=0.9),
+  1219	            mp=jmp.get_policy("f32"),
+  1220	            key=jax.random.key(0),
+  1221	            ema_beta=None,
+  1222	            offload_opt_state=True,
+  1223	            opt_state_resident_expert_leaves=1,
+  1224	        )
+  1225	
+  1226	    expert_leaves = [leaf for leaf in jax.tree.leaves(state.opt_state) if getattr(leaf, "ndim", 0) == 4]
+  1227	    assert len(expert_leaves) == 3
+  1228	    moved_ids = {id(leaf) for leaf in moved}
+  1229	    assert id(expert_leaves[0]) not in moved_ids
+  1230	    assert all(id(leaf) in moved_ids for leaf in expert_leaves[1:])
+  1231	
+  1232	
+  1233	def test_resident_expert_leaves_require_the_offload():
+  1234	    with pytest.raises(ValueError, match="requires offload_opt_state"):
+  1235	        train._make_train_step(
+  1236	            optax.sgd(0.1),
+  1237	            jmp.get_policy("f32"),
+  1238	            z_loss_weight=0,
+  1239	            ema_beta=None,
+  1240	            opt_state_resident_expert_leaves=1,
+  1241	        )
+  1242	
+  1243	
+  1244	def test_resident_donation_excluded_requires_resident_leaves():
+  1245	    with pytest.raises(ValueError, match="requires opt_state_resident_expert_leaves"):
+  1246	        train._make_train_step(
+  1247	            optax.sgd(0.1),
+  1248	            jmp.get_policy("f32"),
+  1249	            z_loss_weight=0,
+  1250	            ema_beta=None,
+  1251	            offload_opt_state=True,
+  1252	            opt_state_resident_donation=train.ResidentDonation.EXCLUDED,
+  1253	        )
+  1254	
+  1255	
+  1256	class _ExpertMomentumParams(NamedTuple):
+  1257	    w_gate: jax.Array
+  1258	    w_up: jax.Array
+  1259	    w_down: jax.Array
+  1260	
+  1261	
+  1262	def _expert_momentum_train_step(monkeypatch, *, resident_donation):
+  1263	    """Tiny train step whose optimizer state carries the production 4D expert-momentum layout."""
+  1264	
+  1265	    def loss_and_grads(params, batch, mp, z_loss):
+  1266	        del mp, z_loss
+  1267	        loss = sum(jnp.sum(leaf * leaf) for leaf in jax.tree.leaves(params)) + 0.0 * jnp.sum(batch)
+  1268	        grads = jax.tree.map(lambda leaf: 2.0 * leaf, params)
+  1269	        return (loss, {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+  1270	
+  1271	    monkeypatch.setattr(train, "_apply_qb_betas", lambda model_tree, betas: model_tree)
+  1272	    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+  1273	    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, kind: tree)  # no pinned_host on CPU
+  1274	    params = _ExpertMomentumParams(
+  1275	        w_gate=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 3, 4) / 7,
+  1276	        w_up=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 3, 4) / 11,
+  1277	        w_down=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 4, 3) / 13,
+  1278	    )
+  1279	    optimizer = optax.sgd(0.1, momentum=0.9)
+  1280	    state = train.GrugTrainState(
+  1281	        step=jnp.array(0, dtype=jnp.int32),
+  1282	        params=params,
+  1283	        master_params=None,
+  1284	        opt_state=optimizer.init(params),
+  1285	        ema_params=None,
+  1286	        pending_qb_betas=jnp.zeros((1, 1)),
+  1287	    )
+  1288	    train_step = train._make_train_step(
+  1289	        optimizer,
+  1290	        jmp.get_policy("params=float32,compute=float32,output=float32"),
+  1291	        z_loss_weight=0,
+  1292	        ema_beta=None,
+  1293	        offload_opt_state=True,
+  1294	        opt_state_resident_expert_leaves=1,
+  1295	        opt_state_resident_donation=resident_donation,
+  1296	    )
+  1297	    return train_step, state, jnp.zeros((2, 2), dtype=jnp.float32)
+  1298	
+  1299	
+  1300	def _cuda_arg_annotations(jit_fn, *args) -> list[str]:
+  1301	    """Per-argument donation annotation of the CUDA lowering.
+  1302	
+  1303	    CPU lowering drops donation entirely, so the aliasing facts must come from a CUDA export:
+  1304	    "aliased" arguments carry ``tf.aliasing_output`` (donated and paired with an output buffer),
+  1305	    "donor" ones carry ``jax.buffer_donor`` (donated, unpaired), and "plain" ones are not donated.
+  1306	    """
+  1307	    text = jax.export.export(jit_fn, platforms=["cuda"])(*args).mlir_module()
+  1308	    main = text[text.index("func.func public @main") :]
+  1309	    signature = main[: main.index("{\n")]
+  1310	    chunks = signature.split("%arg")[1:]
+  1311	    return [
+  1312	        "aliased" if "tf.aliasing_output" in chunk else ("donor" if "jax.buffer_donor" in chunk else "plain")
+  1313	        for chunk in chunks
+  1314	    ]
+  1315	
+  1316	
+  1317	def test_resident_donation_excluded_removes_the_leaf_from_the_alias_set(monkeypatch):
+  1318	    donated_step, state, batch = _expert_momentum_train_step(
+  1319	        monkeypatch, resident_donation=train.ResidentDonation.DONATED
+  1320	    )
+  1321	    resident_leaf = next(leaf for leaf in jax.tree.leaves(state.opt_state) if leaf.ndim == 4)
+  1322	
+  1323	    annotations = _cuda_arg_annotations(donated_step, state, batch)
+  1324	    flat_args = jax.tree.leaves((state, batch))
+  1325	    position = next(index for index, leaf in enumerate(flat_args) if leaf is resident_leaf)
+  1326	    assert annotations[position] == "aliased"
+  1327	
+  1328	    excluded_step, state, batch = _expert_momentum_train_step(
+  1329	        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+  1330	    )
+  1331	    offloaded_opt, resident_opt = train._split_resident_opt_state(state.opt_state, 1)
+  1332	    donated_state = dataclasses.replace(state, opt_state=offloaded_opt)
+  1333	    annotations = _cuda_arg_annotations(excluded_step.jit_train_step, donated_state, resident_opt, batch)
+  1334	    flat_args = jax.tree.leaves((donated_state, resident_opt, batch))
+  1335	    resident_leaves = jax.tree.leaves(resident_opt)
+  1336	    resident_positions = [
+  1337	        index for index, leaf in enumerate(flat_args) if any(leaf is resident for resident in resident_leaves)
+  1338	    ]
+  1339	    assert len(resident_positions) == 1
+  1340	    # The resident momentum leaf is no longer donated at all: neither aliased nor a buffer donor.
+  1341	    assert annotations[resident_positions[0]] == "plain"
+  1342	    # The donated state still aliases as before, e.g. the still-offloaded momentum leaves.
+  1343	    offloaded_momentum = [leaf for leaf in jax.tree.leaves(offloaded_opt) if leaf.ndim == 4]
+  1344	    for leaf in offloaded_momentum:
+  1345	        position = next(index for index, arg in enumerate(flat_args) if arg is leaf)
+  1346	        assert annotations[position] == "aliased"
+  1347	
+  1348	
+  1349	def test_resident_donation_excluded_canary_checksums_track_the_momentum(monkeypatch):
+  1350	    train_step, state, batch = _expert_momentum_train_step(
+  1351	        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+  1352	    )
+  1353	    first_state, first_metrics, _ = train_step(state, batch)
+  1354	    _, second_metrics, _ = train_step(first_state, batch)
+  1355	
+  1356	    assert {key for key in first_metrics if key.startswith("debug/")} == {
+  1357	        "debug/resident_ck_in/w_gate",
+  1358	        "debug/resident_ck_out/w_gate",
+  1359	    }
+  1360	    assert first_metrics["debug/resident_ck_in/w_gate"].dtype == jnp.uint32
+  1361	    # The momentum update changes the leaf, so the checksum tracks the value.
+  1362	    assert int(first_metrics["debug/resident_ck_out/w_gate"]) != int(first_metrics["debug/resident_ck_in/w_gate"])
+  1363	    # Nothing clobbers the buffer between steps here: the value read at t+1 is the value produced at t.
+  1364	    assert int(second_metrics["debug/resident_ck_in/w_gate"]) == int(first_metrics["debug/resident_ck_out/w_gate"])
+  1365	
+  1366	
+  1367	def test_resident_donation_donated_emits_no_canary(monkeypatch):
+  1368	    train_step, state, batch = _expert_momentum_train_step(monkeypatch, resident_donation=train.ResidentDonation.DONATED)
+  1369	    _, metrics, _ = train_step(state, batch)
+  1370	    assert not any(key.startswith("debug/") for key in metrics)
+  1371	
+  1372	
+  1373	def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+  1374	    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+  1375	    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+  1376	    optimizer = optax.sgd(0.1)
+  1377	    state = train.GrugTrainState(
+  1378	        step=jnp.array(0, dtype=jnp.int32),
+  1379	        params=params,
+  1380	        master_params=master_params,
+# Experiments Agent Notes
+
+Start with `/AGENTS.md`; this file adds experiment-specific guidance.
+
+## Dataset Catalogs
+
+All dataset definitions live under `experiments/datasets/`, one leaf module per
+dataset (or dataset family), built with the lazy data builders in
+`marin.experiment.data` (`tokenized`, `hf_download`, `pretokenized`, ...).
+
+- A single-corpus dataset exposes `<name>_dataset() -> ArtifactStep[TokenizedCache]`.
+- A keyed family exposes `<name>_datasets() -> dict[str, ArtifactStep[TokenizedCache]]`,
+  keyed by subset; a `<name>_dataset(key)` builder is added only when the keys are a
+  natural registry (e.g. a Paloma subset).
+- Mixture weights are policy, not catalog: keep them in a separate
+  `<NAME>_MIXTURE_WEIGHTS` constant keyed the same way, and let the experiment pick
+  weights and assemble them with `mixture()`.
+- A module that builds tokenized-cache handles is runnable: end it with
+  `if __name__ == "__main__": dataset_main(<family-dict>)`. `python -m
+  experiments.datasets.<name>` prints the build plan; `--run` (optionally `--only
+  <keys>`) builds it. Modules of a different shape — `eval` (builds `EvalDataset`s)
+  and the `instruction`/`preference` HF-id registries — are exceptions with no CLI.
+  Never change a handle's `name=`/`version=`/`pin=`/path strings — those are
+  artifact identities.
+- `__init__.py` stays docstring-only (no re-exports); import catalogs directly, e.g.
+  `from experiments.datasets.nemotron import nemotron_datasets`.
+
+## Artifact Path Rules
+
+- Do not hardcode `gs://...` paths in experiment configs unless there is no viable alternative.
+- Prefer artifact dependencies resolved at run time via `ctx.path(dep)` inside a recipe's `build_config`, so paths stay region-aware and reproducible.
+- To reference a pre-existing external output, use `adopt(name, version, source=...)` (see `marin.execution.lazy`) instead of a raw `gs://` URL.
+- If a referenced artifact may come from another region, point its source at a `mirror://...` path so reads are local-first and copied once when needed.
+
+## Cross-Region Large Artifacts
+
+- For `mirror://` copies, up to 10 GB can be copied without explicit human permission.
+- If a `mirror://` copy would exceed 10 GB, get explicit human permission first, regardless of previous instructions.
+- After approval, mirror it once into the local region and reference that mirrored copy thereafter.
+
+## Mirror FS (Quick Reference)
+
+- `mirror://` is an fsspec filesystem for transparent cross-region reads.
+- Read behavior: check local `marin_prefix()` first; if missing, scan other Marin regional buckets, copy to local once, then serve locally.
+- Copying uses a distributed lock so concurrent workers do not duplicate the same transfer.
+- Write behavior: writes go directly to the local prefix.
+- Both `mirror://` copies and direct cross-region GCS reads share a single process-global `TransferBudget` (default 10 GB) that raises `TransferBudgetExceeded` when exhausted.
+
+Implementation references: `lib/iris/src/iris/marin_fs.py` and `rigging.filesystem` (the `TransferBudget`).
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/train.py | sed -n '700,820p;900,1065p;1300,1415p'" in /home/marin/projects/marin-mfu-loop
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n 'NUM_STEPS|launch_diagnostics|opt-resident|schedule_steps|num_steps' autoresearch/loop-260828-8753mfu --glob '"'!arms.tsv'"' --glob '"'!*.out'"' --glob '"'!review-*.txt'"'" in /home/marin/projects/marin-mfu-loop
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/launch_diagnostics.py | sed -n '65,140p;175,205p;395,445p;515,590p' && nl -ba experiments/grug/moe_hero_ep/hero_recipe.py | sed -n '70,110p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+autoresearch/loop-260828-8753mfu/arm.sh:7:#     intrinsically bounded by the absolute NUM_STEPS stop); watchdog.sh COMPILE_CEILING=1800 +
+autoresearch/loop-260828-8753mfu/arm.sh:10:#     NUM_STEPS is the ABSOLUTE stop step (checkpoint step + window), never a relative count
+autoresearch/loop-260828-8753mfu/arm.sh:75:# after admission is intrinsically bounded by NUM_STEPS (~30 steps past restore); the watchdog
+autoresearch/loop-260828-8753mfu/arm.sh:78:NUM_STEPS="${NUM_STEPS:-30030}"
+autoresearch/loop-260828-8753mfu/arm.sh:110:  -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
+autoresearch/loop-260828-8753mfu/arm.sh:112:     --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
+autoresearch/loop-260828-8753mfu/results.tsv:3:0	2026-08-29T07:05Z	3e4cb6da4c	-	-	-	-	crash	mfl-ctrl-a: all 16 tasks SchedulingGated behind muchanem mokcamp (16-node gang, whole rack); iris timeout 3500 expired in the Kueue gate, W&B run never created. Lesson: iris --timeout covers queue wait; size it for wait+run (occupancy is intrinsically bounded by NUM_STEPS). Hero is LIVE on its own 11 racks (normal condition; campaign uses the one leftover rack).
+autoresearch/loop-260828-8753mfu/DESIGN.md:37:- One NVL72 rack, cw-us-east-08a, `experiments.grug.moe_hero_ep.launch_diagnostics`,
+autoresearch/loop-260828-8753mfu/DESIGN.md:80:  bounded by NUM_STEPS=30030 (~30 steps past restore, <1h even with no
+autoresearch/loop-260828-8753mfu/LOGBOOK.md:13:  launch_diagnostics.py hunk of 76a078bb3a (7db74df3cf); all four hunks
+autoresearch/loop-260828-8753mfu/LOGBOOK.md:59:  falls back to _init_state). Fixed three-deep: launch_diagnostics now sets
+autoresearch/loop-260828-8753mfu/LOGBOOK.md:200:  bounded by the absolute NUM_STEPS stop (~30 steps past restore), so a
+autoresearch/loop-260828-8753mfu/LOGBOOK.md:851:(NUM_STEPS=30002, finite-loss + overlay + peak ~114.3 + former-copy-
+
+ succeeded in 0ms:
+   700	    def _move(leaf):
+   701	        if not isinstance(leaf, jax.Array):
+   702	            return leaf
+   703	        sharding = jax.typeof(leaf).sharding
+   704	        mesh = getattr(sharding, "mesh", None)
+   705	        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+   706	            if jax.sharding.get_abstract_mesh().empty:
+   707	                return leaf
+   708	            # Scalar optimizer metadata has no operand from which to inherit the active mesh.
+   709	            # Bind it before changing memory kind so the initial and updated states have the
+   710	            # same JIT input signature.
+   711	            leaf = jax.sharding.reshard(leaf, P())
+   712	            sharding = jax.typeof(leaf).sharding
+   713	        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
+   714	
+   715	    return jax.tree.map(_move, tree)
+   716	
+   717	
+   718	def _opt_state_offload_mask(opt_state, resident_expert_leaves: int):
+   719	    """Boolean tree over ``opt_state``: True where an offloaded leaf moves to pinned host.
+   720	
+   721	    The first ``resident_expert_leaves`` 4D leaves stay on device. Rank 4 identifies the
+   722	    stacked expert momentum shards exactly: the expert matrices are the model's only 4D
+   723	    parameters (scan stacking prepends a layer axis to the per-layer ``(experts, in, out)``
+   724	    weights), so their optimizer moments are the only 4D optimizer leaves; every other
+   725	    moment is 3D or smaller. ``jax.tree.flatten`` orders leaves by dataclass/NamedTuple
+   726	    field declaration order and sorted dict keys, both fixed by the code alone, so
+   727	    "first k" names the same shards on every process, step, and restart. For the hero
+   728	    MuonH state that order is the ``MoEExpertMlp`` field order: ``w_gate``, ``w_up``,
+   729	    ``w_down``.
+   730	    """
+   731	    paths_and_leaves, treedef = jax.tree_util.tree_flatten_with_path(opt_state)
+   732	    leaves = [leaf for _, leaf in paths_and_leaves]
+   733	    expert_indices = [index for index, leaf in enumerate(leaves) if getattr(leaf, "ndim", None) == 4]
+   734	    if not 0 <= resident_expert_leaves <= len(expert_indices):
+   735	        raise ValueError(
+   736	            f"opt_state_resident_expert_leaves={resident_expert_leaves} must lie in "
+   737	            f"[0, {len(expert_indices)}]: the optimizer state has {len(expert_indices)} 4D expert leaves."
+   738	        )
+   739	    if resident_expert_leaves:
+   740	        # Fail closed on structure drift: residency is meaningful only while the 4D leaves are
+   741	        # exactly the three muonh expert momentum shards in field order. A new 4D accumulator or
+   742	        # model field would silently redirect which shard stays resident otherwise.
+   743	        expert_path_names = ["/".join(str(k) for k in paths_and_leaves[i][0]) for i in expert_indices]
+   744	        expected = ("w_gate", "w_up", "w_down")
+   745	        tails = tuple(name.rsplit("/", 1)[-1].strip("'.[]") for name in expert_path_names)
+   746	        if len(tails) != len(expected) or tuple(tails) != expected:
+   747	            raise ValueError(
+   748	                "opt_state 4D-leaf structure drifted: expected exactly the muonh expert momentum "
+   749	                f"shards {expected} in field order, found {expert_path_names}. Re-derive the "
+   750	                "residency selection before trusting resident_expert_leaves."
+   751	            )
+   752	    resident = set(expert_indices[:resident_expert_leaves])
+   753	    return jax.tree.unflatten(treedef, [index not in resident for index in range(len(leaves))])
+   754	
+   755	
+   756	def _opt_state_to_memory_kind(opt_state, memory_kind: str, offload_mask):
+   757	    """Move the True-masked optimizer leaves to ``memory_kind``; resident leaves pass through."""
+   758	    return jax.tree.map(
+   759	        lambda leaf, offload: _tree_to_memory_kind(leaf, memory_kind) if offload else leaf,
+   760	        opt_state,
+   761	        offload_mask,
+   762	    )
+   763	
+   764	
+   765	def _split_resident_opt_state(opt_state, resident_expert_leaves: int):
+   766	    """Partition ``opt_state`` into (offloaded-only, resident-only) trees with None placeholders."""
+   767	    offload_mask = _opt_state_offload_mask(opt_state, resident_expert_leaves)
+   768	    return eqx.partition(opt_state, offload_mask)
+   769	
+   770	
+   771	_UNSIGNED_BY_ITEMSIZE = {2: jnp.uint16, 4: jnp.uint32}
+   772	
+   773	
+   774	def _bitcast_u32_checksum(leaf: jax.Array) -> jax.Array:
+   775	    """Wraparound uint32 sum of the leaf's raw bits.
+   776	
+   777	    Exact integer addition mod 2**32 is associative and commutative, so the result is
+   778	    deterministic across shardings and reduction orders, and any clobbered bit range changes it.
+   779	    """
+   780	    bits = jax.lax.bitcast_convert_type(leaf, _UNSIGNED_BY_ITEMSIZE[leaf.dtype.itemsize])
+   781	    return jnp.sum(bits.astype(jnp.uint32), dtype=jnp.uint32)
+   782	
+   783	
+   784	def _resident_canary_metrics(prefix: str, opt_state, offload_mask) -> dict[str, jax.Array]:
+   785	    """Checksum each device-resident optimizer leaf (False in ``offload_mask``) under ``prefix``.
+   786	
+   787	    In-graph cost is one memory-bound reduce per resident leaf (~170 MB per device at d6144
+   788	    EP64, well under a millisecond).
+   789	    """
+   790	    paths_and_leaves, _ = jax.tree_util.tree_flatten_with_path(opt_state)
+   791	    mask_leaves = jax.tree.leaves(offload_mask)
+   792	    metrics: dict[str, jax.Array] = {}
+   793	    for (path, leaf), offloaded in zip(paths_and_leaves, mask_leaves, strict=True):
+   794	        if offloaded:
+   795	            continue
+   796	        tail = str(path[-1]).strip("'.[]")
+   797	        metrics[f"{prefix}/{tail}"] = _bitcast_u32_checksum(leaf)
+   798	    return metrics
+   799	
+   800	
+   801	def initial_state(
+   802	    model_config: GrugModelConfig,
+   803	    *,
+   804	    optimizer: optax.GradientTransformation,
+   805	    mp: jmp.Policy,
+   806	    key: PRNGKeyArray,
+   807	    ema_beta: float | None,
+   808	    offload_opt_state: bool = False,
+   809	    opt_state_resident_expert_leaves: int = 0,
+   810	    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+   811	) -> GrugTrainState:
+   812	    if opt_state_resident_expert_leaves and not offload_opt_state:
+   813	        raise ValueError("opt_state_resident_expert_leaves requires offload_opt_state=True")
+   814	    initialized_params = Transformer.init(model_config, key=key)
+   815	    num_moe_layers = model_config.num_layers
+   816	    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+   817	        master_params = _FP32_POLICY.cast_to_param(initialized_params)
+   818	        params = mp.cast_to_param(master_params)
+   819	        opt_state = optimizer.init(master_params)
+   820	        master_params = _tree_to_memory_kind(master_params, "pinned_host")
+   900	def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
+   901	    watch_targets = (
+   902	        tuple(t.strip() for t in watch_config.watch_targets.split(","))
+   903	        if isinstance(watch_config.watch_targets, str)
+   904	        else tuple(watch_config.watch_targets)
+   905	    )
+   906	    unsupported_targets = set(watch_targets) - {"grads", "params"}
+   907	    if unsupported_targets:
+   908	        raise ValueError(f"diagnostic watch does not support targets {sorted(unsupported_targets)}")
+   909	    diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
+   910	    z_loss = z_loss_weight if z_loss_weight > 0 else None
+   911	
+   912	    @jax.jit
+   913	    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
+   914	        params = _apply_qb_betas(params, pending_qb_betas)
+   915	        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
+   916	
+   917	    return diagnostic_watch_step
+   918	
+   919	
+   920	def _make_train_step(
+   921	    optimizer: optax.GradientTransformation,
+   922	    mp: jmp.Policy,
+   923	    *,
+   924	    z_loss_weight: float,
+   925	    ema_beta: float | None,
+   926	    watch_config: WatchConfig | None = None,
+   927	    offload_opt_state: bool = False,
+   928	    opt_state_resident_expert_leaves: int = 0,
+   929	    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+   930	    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+   931	):
+   932	    if opt_state_resident_expert_leaves and not offload_opt_state:
+   933	        raise ValueError("opt_state_resident_expert_leaves requires offload_opt_state=True")
+   934	    resident_excluded = opt_state_resident_donation is ResidentDonation.EXCLUDED
+   935	    if resident_excluded and not opt_state_resident_expert_leaves:
+   936	        raise ValueError("opt_state_resident_donation=excluded requires opt_state_resident_expert_leaves > 0")
+   937	    one = jnp.array(1, dtype=jnp.int32)
+   938	    z_loss = z_loss_weight if z_loss_weight > 0 else None
+   939	    if watch_config is not None:
+   940	        if isinstance(watch_config.watch_targets, str):
+   941	            watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
+   942	        else:
+   943	            watch_targets = tuple(watch_config.watch_targets)
+   944	    else:
+   945	        watch_targets = ()
+   946	
+   947	    def train_step(state: GrugTrainState, batch):
+   948	        # Apply pending QB betas to router biases inside JIT (avoids eager
+   949	        # host-side TPU kernel launches that can cause SPMD sync issues).
+   950	        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+   951	        if ema_beta is not None:
+   952	            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+   953	        else:
+   954	            qb_ema_params = None
+   955	
+   956	        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+   957	        metrics = {"train/loss": loss, **summarized_metrics}
+   958	        if offload_opt_state:
+   959	            # Resident leaves already live on device; skipping them here and below is what keeps
+   960	            # them out of the per-step host round-trip. `optimizer.update` preserves the state
+   961	            # structure, so the input mask names the same leaves in the updated state.
+   962	            opt_offload_mask = _opt_state_offload_mask(state.opt_state, opt_state_resident_expert_leaves)
+   963	            opt_state_in = _opt_state_to_memory_kind(state.opt_state, "device", opt_offload_mask)
+   964	        else:
+   965	            opt_offload_mask = None
+   966	            opt_state_in = state.opt_state
+   967	        if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+   968	            if state.master_params is None:
+   969	                raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
+   970	            master_params_in = _tree_to_memory_kind(state.master_params, "device")
+   971	            master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
+   972	            master_grads = _FP32_POLICY.cast_to_param(grads)
+   973	            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+   974	            master_params = optax.apply_updates(master_params_in, updates)
+   975	            params = mp.cast_to_param(master_params)
+   976	            master_params = _tree_to_memory_kind(master_params, "pinned_host")
+   977	        else:
+   978	            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+   979	            params = optax.apply_updates(qb_params, updates)
+   980	            master_params = None
+   981	
+   982	        if resident_excluded:
+   983	            # Canary: checksum of each resident momentum leaf as read by this step (ck_in) and as
+   984	            # produced by it (ck_out). ck_in[t+1] != ck_out[t] means the buffer changed BETWEEN
+   985	            # steps (S2-flavored stray write); matching checksums while training still corrupts
+   986	            # place the corruption inside the step (S1-flavored).
+   987	            metrics.update(_resident_canary_metrics("debug/resident_ck_in", state.opt_state, opt_offload_mask))
+   988	            metrics.update(_resident_canary_metrics("debug/resident_ck_out", opt_state, opt_offload_mask))
+   989	
+   990	        if ema_beta is None:
+   991	            ema_params = None
+   992	        else:
+   993	            if qb_ema_params is None:
+   994	                raise ValueError("ema_params must be initialized when ema_beta is set.")
+   995	            ema_params = jax.tree_util.tree_map(
+   996	                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
+   997	                qb_ema_params,
+   998	                params,
+   999	            )
+  1000	
+  1001	        watch_stats = None
+  1002	        if watch_config is not None:
+  1003	            watch_stats = compute_watch_stats(
+  1004	                watch_targets=watch_targets,
+  1005	                include_norms=watch_config.include_norms,
+  1006	                include_per_parameter_norms=watch_config.include_per_parameter_norms,
+  1007	                include_histogram=watch_config.include_histograms,
+  1008	                split_scan_layers=watch_config.split_scan_layers,
+  1009	                params=qb_params,
+  1010	                grads=grads,
+  1011	                updates=updates,
+  1012	                opt_state=opt_state_in,
+  1013	                model_tree_type=type(state.params),
+  1014	            )
+  1015	
+  1016	        if offload_opt_state:
+  1017	            opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host", opt_offload_mask)
+  1018	
+  1019	        next_state = dataclasses.replace(
+  1020	            state,
+  1021	            step=state.step + one,
+  1022	            params=params,
+  1023	            master_params=master_params,
+  1024	            opt_state=opt_state,
+  1025	            ema_params=ema_params,
+  1026	            pending_qb_betas=metrics["qb_beta_per_layer"],
+  1027	        )
+  1028	
+  1029	        return next_state, metrics, watch_stats
+  1030	
+  1031	    if not resident_excluded:
+  1032	        return jax.jit(train_step, donate_argnums=(0,))
+  1033	
+  1034	    @functools.partial(jax.jit, donate_argnums=(0,))
+  1035	    def resident_excluded_train_step(state: GrugTrainState, resident_opt_leaves, batch):
+  1036	        merged = dataclasses.replace(state, opt_state=eqx.combine(state.opt_state, resident_opt_leaves))
+  1037	        return train_step(merged, batch)
+  1038	
+  1039	    return _ResidentExcludedTrainStep(resident_excluded_train_step, opt_state_resident_expert_leaves)
+  1040	
+  1041	
+  1042	class _ResidentExcludedTrainStep:
+  1043	    """Train step that passes the resident momentum leaves as a separate, non-donated argument.
+  1044	
+  1045	    Donation is per-argument, so splitting the resident leaves out of the donated state is what
+  1046	    removes them from XLA's input/output alias set; ``jit_train_step`` is exposed so tests and
+  1047	    diagnostics can inspect the lowering's aliasing directly.
+  1048	    """
+  1049	
+  1050	    def __init__(self, jit_train_step, resident_expert_leaves: int):
+  1051	        self.jit_train_step = jit_train_step
+  1052	        self._resident_expert_leaves = resident_expert_leaves
+  1053	
+  1054	    def __call__(self, state: GrugTrainState, batch):
+  1055	        offloaded_opt, resident_opt = _split_resident_opt_state(state.opt_state, self._resident_expert_leaves)
+  1056	        donated = dataclasses.replace(state, opt_state=offloaded_opt)
+  1057	        return self.jit_train_step(donated, resident_opt, batch)
+  1058	
+  1059	
+  1060	def _run_grug_local(config: GrugRunConfig) -> None:
+  1061	    """Entry point for the grug template training loop."""
+  1062	    if config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION:
+  1063	        verify_ragged_pjrt()
+  1064	    if config.tensorstore_cache_bytes is not None:
+  1065	        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
+  1300	                            with jax_config.enable_pgle(False):
+  1301	                                log_dict = eval_model(_ev, model, prefix=_prefix)
+  1302	                            levanter.tracker.log(log_dict, step=step_count)
+  1303	
+  1304	                    eval_hooks.append(dropless_eval_hook)
+  1305	
+  1306	                if interval is not None and interval > 0:
+  1307	                    for hook in eval_hooks:
+  1308	                        state_callbacks.add_hook(hook, every=interval)
+  1309	
+  1310	                # Baseline point at the start of the loss curve. The periodic cadence first fires at
+  1311	                # `steps_per_eval` (step 3000 on the hero), thus a fresh run gets no early point.
+  1312	                # These run after the first optimization step, not before it: the first train step
+  1313	                # then allocates against a clean pool, and the eval-to-train handoff gets a gate at
+  1314	                # step 2 instead of first at step 3000. `every=1` is the only interval that covers
+  1315	                # the first step, and `_first_step_only` makes the hook fire once. A resumed run
+  1316	                # starts above step 1, thus it never fires. The hooks log at `StepInfo.step`, which
+  1317	                # is 0 there, so the point lands at step 0 on the curve.
+  1318	                if eval_cfg.eval_at_first_step:
+  1319	                    for hook in eval_hooks:
+  1320	                        state_callbacks.add_hook(_first_step_only(hook), every=1)
+  1321	
+  1322	        last_loss: float | jax.Array = 0.0
+  1323	        last_step_duration = 0.0
+  1324	        # Host-side memory of the previous step's resident-leaf checksums (excluded-donation
+  1325	        # canary): a ck_in that differs from the prior ck_out means the buffer changed between
+  1326	        # steps.
+  1327	        previous_resident_ck_out: dict[str, int] = {}
+  1328	
+  1329	        # Main optimization loop.
+  1330	        try:
+  1331	            while int(state.step) < stop_step:
+  1332	                with jax.profiler.TraceAnnotation("load_batch"):
+  1333	                    batch = next(iterator)
+  1334	                current_step = int(state.step)
+  1335	                watch_due = (
+  1336	                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
+  1337	                )
+  1338	                if watch_due and diagnostic_watch_step is not None:
+  1339	                    watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+  1340	                    jax.block_until_ready(watch_stats)
+  1341	                else:
+  1342	                    watch_stats = None
+  1343	                step_start = time.perf_counter()
+  1344	                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+  1345	                state, metrics, inline_watch_stats = train_step(state, batch)
+  1346	                if inline_watch_stats is not None and watch_due:
+  1347	                    watch_stats = inline_watch_stats
+  1348	                step = int(state.step) - 1
+  1349	
+  1350	                jax.block_until_ready(metrics["train/loss"])
+  1351	                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+  1352	
+  1353	                if not jnp.isfinite(metrics["train/loss"]):
+  1354	                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+  1355	                duration = time.perf_counter() - step_start
+  1356	                hook_start = time.perf_counter()
+  1357	                with jax.profiler.TraceAnnotation("callbacks"):
+  1358	                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+  1359	                    last_loss = metrics["train/loss"]
+  1360	                    last_step_duration = duration
+  1361	                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+  1362	                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+  1363	                    router_metrics = {
+  1364	                        key: value
+  1365	                        for key, value in metrics.items()
+  1366	                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+  1367	                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+  1368	                    }
+  1369	                    if router_metrics:
+  1370	                        levanter.tracker.log(router_metrics, step=step)
+  1371	                    if "train/cross_entropy_loss" in metrics:
+  1372	                        levanter.tracker.log(
+  1373	                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+  1374	                            step=step,
+  1375	                        )
+  1376	                    if "moe/dropped_assignments" in metrics:
+  1377	                        drop_metrics = _drop_metrics(
+  1378	                            metrics["moe/dropped_assignments"],
+  1379	                            metrics["moe/sender_dropped_assignments"],
+  1380	                            metrics["moe/receiver_dropped_assignments"],
+  1381	                            batch_size=batch.tokens.shape[0],
+  1382	                            sequence_length=batch.tokens.shape[1],
+  1383	                            top_k=config.model.num_experts_per_token,
+  1384	                            num_layers=config.model.num_layers,
+  1385	                        )
+  1386	                        levanter.tracker.log(drop_metrics, step=step)
+  1387	
+  1388	                    resident_canary = {
+  1389	                        key: int(value) for key, value in metrics.items() if key.startswith("debug/resident_ck_")
+  1390	                    }
+  1391	                    if resident_canary:
+  1392	                        if previous_resident_ck_out:
+  1393	                            resident_canary["debug/resident_ck_mismatch"] = sum(
+  1394	                                1
+  1395	                                for key, value in resident_canary.items()
+  1396	                                if key.startswith("debug/resident_ck_in/")
+  1397	                                and previous_resident_ck_out[key.replace("_ck_in/", "_ck_out/")] != value
+  1398	                            )
+  1399	                        previous_resident_ck_out = {
+  1400	                            key: value
+  1401	                            for key, value in resident_canary.items()
+  1402	                            if key.startswith("debug/resident_ck_out/")
+  1403	                        }
+  1404	                        levanter.tracker.log(resident_canary, step=step)
+  1405	
+  1406	                    if watch_stats is not None:
+  1407	                        levanter.tracker.log(watch_stats, step=step)
+  1408	
+  1409	                if checkpointer is not None:
+  1410	                    with callbacks.progress_event_scope(
+  1411	                        state_callbacks.emit_event,
+  1412	                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+  1413	                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+  1414	                    ):
+  1415	                        checkpointer.on_step(tree=state, step=int(state.step))
+
+ succeeded in 0ms:
+    65	def build_diagnostic_run(
+    66	    *,
+    67	    run_id: str,
+    68	    restore_from: str | None = None,
+    69	    pjrt_wheel: str | None = None,
+    70	    dp_racks: int,
+    71	    num_steps: int,
+    72	    schedule_steps: int | None = None,
+    73	    seed: int = 0,
+    74	    batch_size: int = HERO_EP_BATCH_SIZE,
+    75	    num_experts: int | None = None,
+    76	    num_experts_per_token: int | None = None,
+    77	    intermediate_dim: int | None = None,
+    78	    capacity_factor: float | None = None,
+    79	    latent_dim: int | None = None,
+    80	    moe_implementation: str | None = None,
+    81	    remat_save: str | None = None,
+    82	    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    83	    opt_resident_leaves: int = 0,
+    84	    opt_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+    85	    processes_per_task: int = HERO_PROCESSES_PER_TASK,
+    86	    eval_every: int = 0,
+    87	    save_checkpoints: bool = False,
+    88	    checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
+    89	    checkpoint_path: str | None = None,
+    90	    checkpoint_debug: CheckpointDebugConfig | None = None,
+    91	    watch_interval: int = HERO_WATCH_INTERVAL,
+    92	    watch_mode: WatchMode = WatchMode.INLINE,
+    93	    profile_steps: int = 0,
+    94	    profile_start_step: int = 5,
+    95	    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    96	    version: str | None = None,
+    97	) -> ArtifactStep[HeroThroughputResult]:
+    98	    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    99	
+   100	    The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
+   101	    hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
+   102	    comparable across a sweep. ``None`` keeps the hero value.
+   103	
+   104	    ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
+   105	    ``dp_racks``. ``batch_size`` and ``schedule_steps`` change the token budget for the heuristic.
+   106	    """
+   107	    if not run_id.strip():
+   108	        raise ValueError("run_id must not be empty")
+   109	    if dp_racks <= 0:
+   110	        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+   111	    if num_steps <= 0:
+   112	        raise ValueError(f"num_steps must be positive, got {num_steps}")
+   113	    if checkpoint_interval <= timedelta(0):
+   114	        raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
+   115	    if profile_steps < 0:
+   116	        raise ValueError(f"profile_steps must be non-negative, got {profile_steps}")
+   117	    if profile_start_step < 0:
+   118	        raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
+   119	    if profile_steps > 0 and profile_start_step >= num_steps:
+   120	        raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+   121	    # Fail before the rack is allocated: the donation-exclusion diagnostic is defined only for
+   122	    # device-resident momentum leaves.
+   123	    if opt_resident_donation is ResidentDonation.EXCLUDED and opt_resident_leaves == 0:
+   124	        raise ValueError("--opt-resident-donation excluded requires --opt-resident-leaves > 0")
+   125	    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
+   126	    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+   127	    # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
+   128	    # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
+   129	    # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
+   130	    # carry the schedule length too -- passing `num_steps` there warms up in `0.01 * num_steps` and
+   131	    # decays to `min_lr_ratio` by the end of the short run, which is a whole miniature schedule
+   132	    # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
+   133	    if schedule_steps is not None and schedule_steps <= 0:
+   134	        raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
+   135	    if schedule_steps is not None and schedule_steps < num_steps:
+   136	        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+   137	    total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
+   138	    _, optimizer = build_hero_configs(
+   139	        num_train_steps=total_schedule_steps,
+   140	        batch_size=batch_size,
+   175	        )
+   176	    pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
+   177	    if pooled and model.pooled_transport_capacity_factor is None:
+   178	        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
+   179	    backend_tag = model.moe_implementation.replace("_", "-")
+   180	    capacity_tag = f"capacity-{model.capacity_factor:g}"
+   181	    # Only the pooled transport has a receiver capacity of its own to report.
+   182	    transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
+   183	    wave_tag = f"expert-waves-{model.num_expert_waves}"
+   184	    size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
+   185	    remat_save_tags = (f"remat-save-{remat_save.replace('_', '-')}",) if remat_save is not None else ()
+   186	    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
+   187	    grug_trainer = hero_grug_trainer_config(
+   188	        replica_axis_size=dp_racks,
+   189	        training_data_mode=training_data_mode,
+   190	        watch_mode=watch_mode,
+   191	        save_checkpoints=save_checkpoints,
+   192	        master_param_mode=master_param_mode,
+   193	        opt_state_resident_expert_leaves=opt_resident_leaves,
+   194	        opt_state_resident_donation=opt_resident_donation,
+   195	    )
+   196	    train_resources = ResourceConfig.with_gpu(
+   197	        "GB200",
+   198	        count=HERO_GPUS_PER_NODE,
+   199	        cpu=HERO_NODE_CPU,
+   200	        ram=HERO_NODE_RAM,
+   201	        disk=HERO_NODE_DISK,
+   202	        replicas=HERO_EP_NODES * dp_racks,
+   203	    )
+   204	    name = f"grug/{run_id}"
+   205	    version = resolve_version(name, version)
+   395	        "Save a curated bundle of named per-token intermediates on device for the backward "
+   396	        "instead of recomputing them. Only the remat policy's saved-name list changes; the "
+   397	        "layer-carry offload and the XLA memory-budget flags stay untouched. Default keeps "
+   398	        "the hero's recompute-everything policy."
+   399	    ),
+   400	)
+   401	@click.option(
+   402	    "--master-params",
+   403	    type=click.Choice([mode.value for mode in MasterParamMode]),
+   404	    default=HERO_MASTER_PARAM_MODE.value,
+   405	    show_default=True,
+   406	    help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
+   407	)
+   408	@click.option(
+   409	    "--opt-resident-leaves",
+   410	    type=click.IntRange(min=0, max=3),
+   411	    default=0,
+   412	    show_default=True,
+   413	    help=(
+   414	        "Keep the first N of the offloaded 4D expert momentum shards on device instead of pinned "
+   415	        "host (each is 10.87 GiB of HBM at d6144 EP64 and saves its two per-step host copies). "
+   416	        "0 offloads all optimizer state, the previous behavior."
+   417	    ),
+   418	)
+   419	@click.option(
+   420	    "--opt-resident-donation",
+   421	    type=click.Choice([mode.value for mode in ResidentDonation]),
+   422	    default=ResidentDonation.DONATED.value,
+   423	    show_default=True,
+   424	    help=(
+   425	        "Diagnostic donation policy for the resident momentum leaves; needs --opt-resident-leaves > 0. "
+   426	        "'excluded' keeps them out of the train step's donated state (no input/output aliasing) and "
+   427	        "logs per-step debug/resident_ck_in and debug/resident_ck_out canary checksums. Costs one "
+   428	        "extra device copy per resident leaf per step (+10.87 GiB transient at d6144 EP64; predicted "
+   429	        "peak ~134 GiB at k=1, near the 138.2 GiB threshold -- watch for #8490 allocator churn). "
+   430	        "'donated' is the previous, bit-identical behavior."
+   431	    ),
+   432	)
+   433	@click.option(
+   434	    "--processes-per-task",
+   435	    type=click.IntRange(min=1),
+   436	    default=HERO_PROCESSES_PER_TASK,
+   437	    show_default=True,
+   438	    help="JAX processes per node.",
+   439	)
+   440	@click.option(
+   441	    "--latent-dim",
+   442	    type=click.IntRange(min=1),
+   443	    default=None,
+   444	    help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
+   445	)
+   515	    default=HERO_MODEL_CONFIG.capacity_factor,
+   516	    show_default=True,
+   517	    help="Override the pooled receiver capacity factor.",
+   518	)
+   519	@click.option(
+   520	    "--restore-from",
+   521	    default=None,
+   522	    help="Initialize from another run's checkpoint directory, read-only.",
+   523	)
+   524	@click.option(
+   525	    "--pjrt-wheel",
+   526	    default=None,
+   527	    help="Fetchable wheel URL (https, presigned object storage) of a self-built jax-cuda13-pjrt; "
+   528	    "workers pip-install it after the env sync, replacing the locked wheel. The task log's "
+   529	    "'+ jax-cuda13-pjrt==<version>' line is the install custody proof.",
+   530	)
+   531	@build_options
+   532	def main(
+   533	    run_id: str,
+   534	    restore_from: str | None,
+   535	    pjrt_wheel: str | None,
+   536	    dp_racks: int,
+   537	    num_steps: int,
+   538	    schedule_steps: int | None,
+   539	    seed: int,
+   540	    batch_size: int,
+   541	    num_experts: int | None,
+   542	    num_experts_per_token: int | None,
+   543	    intermediate_dim: int | None,
+   544	    capacity_factor: float | None,
+   545	    latent_dim: int | None,
+   546	    moe_implementation: str | None,
+   547	    remat_save: str | None,
+   548	    master_params: str,
+   549	    opt_resident_leaves: int,
+   550	    opt_resident_donation: str,
+   551	    processes_per_task: int,
+   552	    save_checkpoints: bool,
+   553	    checkpoint_minutes: float,
+   554	    checkpoint_path: str | None,
+   555	    checkpoint_debug: bool,
+   556	    eval_every: int,
+   557	    watch_interval: int,
+   558	    watch_mode: str,
+   559	    profile_steps: int,
+   560	    profile_start_step: int,
+   561	    training_data: str,
+   562	) -> ArtifactStep[HeroThroughputResult]:
+   563	    return build_diagnostic_run(
+   564	        run_id=run_id,
+   565	        restore_from=restore_from,
+   566	        pjrt_wheel=pjrt_wheel,
+   567	        dp_racks=dp_racks,
+   568	        num_steps=num_steps,
+   569	        schedule_steps=schedule_steps,
+   570	        seed=seed,
+   571	        batch_size=batch_size,
+   572	        num_experts=num_experts,
+   573	        num_experts_per_token=num_experts_per_token,
+   574	        intermediate_dim=intermediate_dim,
+   575	        capacity_factor=capacity_factor,
+   576	        latent_dim=latent_dim,
+   577	        moe_implementation=moe_implementation,
+   578	        remat_save=remat_save,
+   579	        master_param_mode=MasterParamMode(master_params),
+   580	        opt_resident_leaves=opt_resident_leaves,
+   581	        opt_resident_donation=ResidentDonation(opt_resident_donation),
+   582	        processes_per_task=processes_per_task,
+   583	        save_checkpoints=save_checkpoints,
+   584	        checkpoint_interval=timedelta(minutes=checkpoint_minutes),
+   585	        checkpoint_path=checkpoint_path,
+   586	        checkpoint_debug=(
+   587	            CheckpointDebugConfig(
+   588	                enabled=True,
+   589	                tracemalloc_frames=None,
+   590	                top_allocations=0,
+    70	    """
+    71	    if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
+    72	        return model
+    73	    return dataclasses.replace(model, remat_mode="offload_carry")
+    74	
+    75	
+    76	class HeroThroughputResult(Artifact):
+    77	    """Metrics artifact for an EP hero run."""
+    78	
+    79	
+    80	def hero_grug_trainer_config(
+    81	    *,
+    82	    replica_axis_size: int,
+    83	    training_data_mode: TrainingDataMode,
+    84	    watch_mode: WatchMode,
+    85	    save_checkpoints: bool,
+    86	    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    87	    opt_state_resident_expert_leaves: int = 0,
+    88	    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+    89	) -> GrugTrainerConfig:
+    90	    """Set the Grug options that affect the compiled hero step."""
+    91	    return GrugTrainerConfig(
+    92	        data_seed=None,
+    93	        log_every=1,
+    94	        ema_beta=None,
+    95	        z_loss_weight=1e-4,
+    96	        # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
+    97	        offload_opt_state=True,
+    98	        opt_state_resident_expert_leaves=opt_state_resident_expert_leaves,
+    99	        opt_state_resident_donation=opt_state_resident_donation,
+   100	        master_param_mode=master_param_mode,
+   101	        training_data_mode=training_data_mode,
+   102	        watch_mode=watch_mode,
+   103	        save_checkpoints=save_checkpoints,
+   104	        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+   105	        replica_axis_size=replica_axis_size,
+   106	        sharding_dump_path=None,
+   107	    )
+   108	
+   109	
+   110	def hero_trainer_config(
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/launch_diagnostics.py | sed -n '65,210p;360,435p'" in /home/marin/projects/marin-mfu-loop
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba autoresearch/loop-260828-8753mfu/arm.sh | sed -n '1,135p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+    65	def build_diagnostic_run(
+    66	    *,
+    67	    run_id: str,
+    68	    restore_from: str | None = None,
+    69	    pjrt_wheel: str | None = None,
+    70	    dp_racks: int,
+    71	    num_steps: int,
+    72	    schedule_steps: int | None = None,
+    73	    seed: int = 0,
+    74	    batch_size: int = HERO_EP_BATCH_SIZE,
+    75	    num_experts: int | None = None,
+    76	    num_experts_per_token: int | None = None,
+    77	    intermediate_dim: int | None = None,
+    78	    capacity_factor: float | None = None,
+    79	    latent_dim: int | None = None,
+    80	    moe_implementation: str | None = None,
+    81	    remat_save: str | None = None,
+    82	    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    83	    opt_resident_leaves: int = 0,
+    84	    opt_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+    85	    processes_per_task: int = HERO_PROCESSES_PER_TASK,
+    86	    eval_every: int = 0,
+    87	    save_checkpoints: bool = False,
+    88	    checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
+    89	    checkpoint_path: str | None = None,
+    90	    checkpoint_debug: CheckpointDebugConfig | None = None,
+    91	    watch_interval: int = HERO_WATCH_INTERVAL,
+    92	    watch_mode: WatchMode = WatchMode.INLINE,
+    93	    profile_steps: int = 0,
+    94	    profile_start_step: int = 5,
+    95	    training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE,
+    96	    version: str | None = None,
+    97	) -> ArtifactStep[HeroThroughputResult]:
+    98	    """Build a bounded diagnostic run for the production EP64 hero recipe.
+    99	
+   100	    The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
+   101	    hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
+   102	    comparable across a sweep. ``None`` keeps the hero value.
+   103	
+   104	    ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
+   105	    ``dp_racks``. ``batch_size`` and ``schedule_steps`` change the token budget for the heuristic.
+   106	    """
+   107	    if not run_id.strip():
+   108	        raise ValueError("run_id must not be empty")
+   109	    if dp_racks <= 0:
+   110	        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+   111	    if num_steps <= 0:
+   112	        raise ValueError(f"num_steps must be positive, got {num_steps}")
+   113	    if checkpoint_interval <= timedelta(0):
+   114	        raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
+   115	    if profile_steps < 0:
+   116	        raise ValueError(f"profile_steps must be non-negative, got {profile_steps}")
+   117	    if profile_start_step < 0:
+   118	        raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
+   119	    if profile_steps > 0 and profile_start_step >= num_steps:
+   120	        raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+   121	    # Fail before the rack is allocated: the donation-exclusion diagnostic is defined only for
+   122	    # device-resident momentum leaves.
+   123	    if opt_resident_donation is ResidentDonation.EXCLUDED and opt_resident_leaves == 0:
+   124	        raise ValueError("--opt-resident-donation excluded requires --opt-resident-leaves > 0")
+   125	    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
+   126	    # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
+   127	    # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
+   128	    # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
+   129	    # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
+   130	    # carry the schedule length too -- passing `num_steps` there warms up in `0.01 * num_steps` and
+   131	    # decays to `min_lr_ratio` by the end of the short run, which is a whole miniature schedule
+   132	    # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
+   133	    if schedule_steps is not None and schedule_steps <= 0:
+   134	        raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
+   135	    if schedule_steps is not None and schedule_steps < num_steps:
+   136	        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+   137	    total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
+   138	    _, optimizer = build_hero_configs(
+   139	        num_train_steps=total_schedule_steps,
+   140	        batch_size=batch_size,
+   141	    )
+   142	    if remat_save is not None and remat_save not in REMAT_SAVE_BUNDLES:
+   143	        raise ValueError(f"remat_save must be one of {sorted(REMAT_SAVE_BUNDLES)}, got {remat_save!r}")
+   144	    model = HERO_MODEL_CONFIG
+   145	    overrides = {
+   146	        name: value
+   147	        for name, value in (
+   148	            ("num_experts", num_experts),
+   149	            ("num_experts_per_token", num_experts_per_token),
+   150	            ("intermediate_dim", intermediate_dim),
+   151	            ("capacity_factor", capacity_factor),
+   152	            ("latent_dim", latent_dim),
+   153	            ("moe_implementation", moe_implementation),
+   154	            ("remat_save_names", REMAT_SAVE_BUNDLES[remat_save] if remat_save is not None else None),
+   155	        )
+   156	        if value is not None
+   157	    }
+   158	    if overrides:
+   159	        model = dataclasses.replace(model, **overrides)
+   160	    model = with_transport_remat_mode(model)
+   161	    # A bank that is not divisible by the expert axis fails inside `moe_mlp`, which is after the rack
+   162	    # is already allocated and the workspace is built. Reject it here instead.
+   163	    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
+   164	        raise ValueError(f"num_experts={model.num_experts} must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}")
+   165	    local_experts = model.num_experts // HERO_EP_EXPERT_AXIS_SIZE
+   166	    if local_experts % model.num_expert_waves != 0:
+   167	        raise ValueError(
+   168	            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+   169	        )
+   170	    # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
+   171	    if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
+   172	        raise ValueError(
+   173	            f"{RAGGED_MOE_IMPLEMENTATION} needs one process per GPU: pass "
+   174	            f"processes_per_task={HERO_GPUS_PER_NODE}, got {processes_per_task}"
+   175	        )
+   176	    pooled = model.moe_implementation == "fixed_pooled_wave_all_to_all"
+   177	    if pooled and model.pooled_transport_capacity_factor is None:
+   178	        raise AssertionError("the pooled-wave hero requires a transport capacity factor")
+   179	    backend_tag = model.moe_implementation.replace("_", "-")
+   180	    capacity_tag = f"capacity-{model.capacity_factor:g}"
+   181	    # Only the pooled transport has a receiver capacity of its own to report.
+   182	    transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
+   183	    wave_tag = f"expert-waves-{model.num_expert_waves}"
+   184	    size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
+   185	    remat_save_tags = (f"remat-save-{remat_save.replace('_', '-')}",) if remat_save is not None else ()
+   186	    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
+   187	    grug_trainer = hero_grug_trainer_config(
+   188	        replica_axis_size=dp_racks,
+   189	        training_data_mode=training_data_mode,
+   190	        watch_mode=watch_mode,
+   191	        save_checkpoints=save_checkpoints,
+   192	        master_param_mode=master_param_mode,
+   193	        opt_state_resident_expert_leaves=opt_resident_leaves,
+   194	        opt_state_resident_donation=opt_resident_donation,
+   195	    )
+   196	    train_resources = ResourceConfig.with_gpu(
+   197	        "GB200",
+   198	        count=HERO_GPUS_PER_NODE,
+   199	        cpu=HERO_NODE_CPU,
+   200	        ram=HERO_NODE_RAM,
+   201	        disk=HERO_NODE_DISK,
+   202	        replicas=HERO_EP_NODES * dp_racks,
+   203	    )
+   204	    name = f"grug/{run_id}"
+   205	    version = resolve_version(name, version)
+   206	    validation = validation_datasets() if eval_every > 0 else []
+   207	    flops_per_example, _ = _compute_flops(model_config=model)
+   208	    experiment_flops = flops_per_example * batch_size * total_schedule_steps
+   209	
+   210	    def build_config(ctx: StepContext) -> GrugRunConfig:
+   360	        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
+   361	        f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
+   362	    ),
+   363	)
+   364	@click.option(
+   365	    "--num-experts-per-token",
+   366	    type=click.IntRange(min=1),
+   367	    default=HERO_MODEL_CONFIG.num_experts_per_token,
+   368	    show_default=True,
+   369	    help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
+   370	)
+   371	@click.option(
+   372	    "--intermediate-dim",
+   373	    type=click.IntRange(min=1),
+   374	    default=HERO_MODEL_CONFIG.intermediate_dim,
+   375	    show_default=True,
+   376	    help="Override the routed expert width.",
+   377	)
+   378	@click.option(
+   379	    "--batch-size",
+   380	    type=click.IntRange(min=1),
+   381	    default=HERO_EP_BATCH_SIZE,
+   382	    show_default=True,
+   383	    help="Global sequences per step. This value does not scale with --dp-racks.",
+   384	)
+   385	@click.option(
+   386	    "--moe-implementation",
+   387	    default=None,
+   388	    help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+   389	)
+   390	@click.option(
+   391	    "--remat-save",
+   392	    type=click.Choice(sorted(REMAT_SAVE_BUNDLES)),
+   393	    default=None,
+   394	    help=(
+   395	        "Save a curated bundle of named per-token intermediates on device for the backward "
+   396	        "instead of recomputing them. Only the remat policy's saved-name list changes; the "
+   397	        "layer-carry offload and the XLA memory-budget flags stay untouched. Default keeps "
+   398	        "the hero's recompute-everything policy."
+   399	    ),
+   400	)
+   401	@click.option(
+   402	    "--master-params",
+   403	    type=click.Choice([mode.value for mode in MasterParamMode]),
+   404	    default=HERO_MASTER_PARAM_MODE.value,
+   405	    show_default=True,
+   406	    help=("Where the authoritative fp32 weights live: on device, or as a pinned-host master."),
+   407	)
+   408	@click.option(
+   409	    "--opt-resident-leaves",
+   410	    type=click.IntRange(min=0, max=3),
+   411	    default=0,
+   412	    show_default=True,
+   413	    help=(
+   414	        "Keep the first N of the offloaded 4D expert momentum shards on device instead of pinned "
+   415	        "host (each is 10.87 GiB of HBM at d6144 EP64 and saves its two per-step host copies). "
+   416	        "0 offloads all optimizer state, the previous behavior."
+   417	    ),
+   418	)
+   419	@click.option(
+   420	    "--opt-resident-donation",
+   421	    type=click.Choice([mode.value for mode in ResidentDonation]),
+   422	    default=ResidentDonation.DONATED.value,
+   423	    show_default=True,
+   424	    help=(
+   425	        "Diagnostic donation policy for the resident momentum leaves; needs --opt-resident-leaves > 0. "
+   426	        "'excluded' keeps them out of the train step's donated state (no input/output aliasing) and "
+   427	        "logs per-step debug/resident_ck_in and debug/resident_ck_out canary checksums. Costs one "
+   428	        "extra device copy per resident leaf per step (+10.87 GiB transient at d6144 EP64; predicted "
+   429	        "peak ~134 GiB at k=1, near the 138.2 GiB threshold -- watch for #8490 allocator churn). "
+   430	        "'donated' is the previous, bit-identical behavior."
+   431	    ),
+   432	)
+   433	@click.option(
+   434	    "--processes-per-task",
+   435	    type=click.IntRange(min=1),
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env bash
+     2	# Submit one hero EP64 arm for the 8753-mfu loop (research/mcwitt/8753-mfu-loop, #8753 head base).
+     3	#
+     4	# Protocol (fixed for every iteration so arms stay comparable; see DESIGN.md):
+     5	#   - one NVL72 rack on cw-us-east-08a, PRODUCTION priority allowed with job RUNTIME <1h
+     6	#     (user 2026-08-28): ARM_TIMEOUT 28800s covers Kueue queue wait plus run (occupancy is
+     7	#     intrinsically bounded by the absolute NUM_STEPS stop); watchdog.sh COMPILE_CEILING=1800 +
+     8	#     STEP_BUDGET=1200 enforce the runtime cap from admission
+     9	#   - restore from the live hero's step-30000 checkpoint, mixture data (trained-router routing);
+    10	#     NUM_STEPS is the ABSOLUTE stop step (checkpoint step + window), never a relative count
+    11	#   - no checkpoints, no eval; profiler off on SCORED arms (a profile tail on an otherwise-scored
+    12	#     draw is allowed: PROFILE_STEPS>0 with PROFILE_START_STEP as an ABSOLUTE step past the
+    13	#     scoring window, e.g. 30021)
+    14	#   - no MARIN_PJRT_WHEEL overlay: the branch's uv.lock pins jax_cuda13_pjrt 0.11.1+marin.c9526e8c0272
+    15	#   - JAX_COMPILATION_CACHE_DIR rotated per run id (clique-init deadlock dodge); a RESUBMITTED
+    16	#     arm must use a fresh RID (and VERSION): reusing one merges W&B histories, reuses the
+    17	#     leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts
+    18	#
+    19	# usage: RID=<run-id> VERSION=<calver> [REPO=<worktree>] [EXTRA_LAUNCH_ARGS="..."] arm.sh
+    20	set -euo pipefail
+    21	
+    22	: "${WANDB_API_KEY:?set WANDB_API_KEY}"
+    23	RID="${RID:?set RID}"
+    24	VERSION="${VERSION:?set VERSION -- bump it per arm or the artifact layer reuses the last run}"
+    25	
+    26	# The watchdog addresses jobs at /mwittmann/...; make the submission land there no matter what
+    27	# the caller's shell has. (-e below only sets the remote env.)
+    28	export IRIS_USER=mwittmann
+    29	
+    30	LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    31	REPO="${REPO:-$(cd "${LOOP_DIR}/../.." && pwd)}"
+    32	
+    33	# Iris bundles the working tree, not HEAD: uncommitted edits (including another session writing
+    34	# to a shared checkout) would ship silently and break arm attribution. Only the loop dir's DATA
+    35	# files (logs, tsv, review transcripts) are exempt; uncommitted protocol scripts count as dirty,
+    36	# since arms.tsv records HEAD as the arm's provenance.
+    37	dirty="$(git -C "$REPO" status --porcelain | grep -Ev "autoresearch/.*\.(log|out|txt|tsv)$" || true)"
+    38	if [ -z "${ALLOW_DIRTY:-}" ] && [ -n "$dirty" ]; then
+    39	  echo "refusing to submit from a dirty tree (set ALLOW_DIRTY=1 to override):" >&2
+    40	  echo "$dirty" >&2
+    41	  exit 1
+    42	fi
+    43	
+    44	# JAX_* env leaks into train tasks via dispatch forwarding, and this fork enables pipelined host
+    45	# offloading at optimization level O1+ regardless of its flag -- a leaked level would silently
+    46	# turn a control into an H10 treatment.
+    47	if [ -n "${JAX_OPTIMIZATION_LEVEL:-}" ]; then
+    48	  echo "JAX_OPTIMIZATION_LEVEL is set (${JAX_OPTIMIZATION_LEVEL}); unset it -- it changes compiler passes behind the arms' backs" >&2
+    49	  exit 1
+    50	fi
+    51	
+    52	# A flag-based treatment must be deliberate: an ARM_XLA_FLAGS value leaking from the supervisor
+    53	# shell into a "control" draw silently runs the treatment and records nothing -- the null delta
+    54	# then reads as "dead lever". Controls run with TREATMENT unset and ARM_XLA_FLAGS empty.
+    55	if [ -n "${ARM_XLA_FLAGS:-}" ] && [ -z "${TREATMENT:-}" ]; then
+    56	  echo "ARM_XLA_FLAGS is set but TREATMENT=1 is not; refusing (is this a contaminated control?)" >&2
+    57	  exit 1
+    58	fi
+    59	if [ -n "${DK_CTAS_PER_SM:-}" ] && [ -z "${TREATMENT:-}" ]; then
+    60	  echo "DK_CTAS_PER_SM is set but TREATMENT=1 is not; refusing (is this a contaminated control?)" >&2
+    61	  exit 1
+    62	fi
+    63	
+    64	# One RID/VERSION per submission, ever: a reused RID merges W&B histories, resurrects the
+    65	# leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts.
+    66	if [ -f "${LOOP_DIR}/arms.tsv" ] && awk -F'\t' -v rid="$RID" -v ver="$VERSION" \
+    67	    'NR>1 && ($1==rid || $3==ver) {found=1} END {exit !found}' "${LOOP_DIR}/arms.tsv"; then
+    68	  echo "RID ${RID} or VERSION ${VERSION} already appears in arms.tsv; pick fresh ones" >&2
+    69	  exit 1
+    70	fi
+    71	
+    72	PRIORITY="${PRIORITY:-production}"
+    73	# Covers Kueue queue wait PLUS the run: same-band gangs queue FIFO behind whatever holds the
+    74	# rack, and the coordinator's timeout clock runs while its child sits in the gate. Occupancy
+    75	# after admission is intrinsically bounded by NUM_STEPS (~30 steps past restore); the watchdog
+    76	# enforces the <1h-runtime rule from admission.
+    77	ARM_TIMEOUT="${ARM_TIMEOUT:-28800}"
+    78	NUM_STEPS="${NUM_STEPS:-30030}"
+    79	TRAINING_DATA="${TRAINING_DATA:-mixture}"
+    80	MASTER_PARAMS="${MASTER_PARAMS:-device}"
+    81	MOE_IMPL="${MOE_IMPL:-ragged_all_to_all}"
+    82	RESTORE_FROM="${RESTORE_FROM:-s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000}"
+    83	RESTORE_ARGS=()
+    84	if [ -n "$RESTORE_FROM" ]; then
+    85	  RESTORE_ARGS=(--restore-from "$RESTORE_FROM")
+    86	fi
+    87	# The learning-rate schedule's length; fixed across arms so losses stay comparable.
+    88	SCHEDULE_STEPS=4470000
+    89	
+    90	read -r -a EXTRA <<<"${EXTRA_LAUNCH_ARGS:-}"
+    91	
+    92	cd "$REPO"
+    93	uv run iris --config lib/iris/config/marin.yaml job run \
+    94	  --no-wait --enable-extra-resources \
+    95	  --target-cluster cw-us-east-08a --priority "${PRIORITY}" \
+    96	  --cpu 2 --memory 8GB --disk 32GB --timeout "${ARM_TIMEOUT}" \
+    97	  --job-name "${RID}-coord" \
+    98	  -e IRIS_USER mwittmann \
+    99	  -e WANDB_API_KEY "${WANDB_API_KEY}" \
+   100	  -e WANDB_PROJECT marin_moe \
+   101	  -e MARIN_PREFIX s3://marin-us-east-02a/marin \
+   102	  -e IRIS_PORT_JAX 32703 \
+   103	  -e AWS_MAX_ATTEMPTS 25 -e AWS_RETRY_MODE adaptive \
+   104	  -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
+   105	  -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
+   106	  -e XLA_PYTHON_CLIENT_MEM_FRACTION "${MEM_FRACTION:-0.75}" \
+   107	  -e XLA_RAGGED_A2A_DK_CTAS_PER_SM "${DK_CTAS_PER_SM:-}" \
+   108	  -e TF_CPP_MIN_LOG_LEVEL 0 \
+   109	  -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1,ragged_all_to_all_thunk=3" \
+   110	  -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
+   111	     --run-id "${RID}" \
+   112	     --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
+   113	     --capacity-factor 1.15 \
+   114	     --moe-implementation "${MOE_IMPL}" \
+   115	     --processes-per-task 4 \
+   116	     --master-params "${MASTER_PARAMS}" \
+   117	     --training-data "${TRAINING_DATA}" \
+   118	     --profile-steps "${PROFILE_STEPS:-0}" --profile-start-step "${PROFILE_START_STEP:-30021}" \
+   119	     --watch-interval 0 --eval-every 0 \
+   120	     --no-save-checkpoints \
+   121	     "${RESTORE_ARGS[@]}" \
+   122	     "${EXTRA[@]}" \
+   123	     --version "${VERSION}" --run >"${LOOP_DIR}/${RID}-submit.log" 2>&1 \
+   124	  || { echo "submit FAILED, tail of ${RID}-submit.log:" >&2; tail -20 "${LOOP_DIR}/${RID}-submit.log" >&2; exit 1; }
+   125	
+   126	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+   127	  "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \
+   128	  "${MASTER_PARAMS}" "${SCHEDULE_STEPS}" "${ARM_TIMEOUT}" "${RESTORE_FROM:-none}" \
+   129	  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" "${MEM_FRACTION:-0.75}" "${DK_CTAS_PER_SM:-none}" >> "${LOOP_DIR}/arms.tsv"
+   130	
+   131	echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none}, memfrac: ${MEM_FRACTION:-0.75}, dk_ctas: ${DK_CTAS_PER_SM:-none})"
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n 'stop_step|num_train_steps|num_steps' experiments/grug/moe_hero_ep/train.py | head -50" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+373:    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+374:    # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
+1075:    optimizer = config.optimizer.build(trainer.num_train_steps)
+1219:        # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
+1221:        requested_stop_step = trainer.num_train_steps if config.stop_after_steps is None else config.stop_after_steps
+1222:        stop_step = min(requested_stop_step, trainer.num_train_steps)
+1225:        profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
+1226:        profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
+1255:        state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
+1256:        state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
+1262:                    num_steps=profiler_num_steps,
+1331:            while int(state.step) < stop_step:
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/train.py | sed -n '1010,1060p;1070,1110p;1320,1410p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+  1010	                grads=grads,
+  1011	                updates=updates,
+  1012	                opt_state=opt_state_in,
+  1013	                model_tree_type=type(state.params),
+  1014	            )
+  1015	
+  1016	        if offload_opt_state:
+  1017	            opt_state = _opt_state_to_memory_kind(opt_state, "pinned_host", opt_offload_mask)
+  1018	
+  1019	        next_state = dataclasses.replace(
+  1020	            state,
+  1021	            step=state.step + one,
+  1022	            params=params,
+  1023	            master_params=master_params,
+  1024	            opt_state=opt_state,
+  1025	            ema_params=ema_params,
+  1026	            pending_qb_betas=metrics["qb_beta_per_layer"],
+  1027	        )
+  1028	
+  1029	        return next_state, metrics, watch_stats
+  1030	
+  1031	    if not resident_excluded:
+  1032	        return jax.jit(train_step, donate_argnums=(0,))
+  1033	
+  1034	    @functools.partial(jax.jit, donate_argnums=(0,))
+  1035	    def resident_excluded_train_step(state: GrugTrainState, resident_opt_leaves, batch):
+  1036	        merged = dataclasses.replace(state, opt_state=eqx.combine(state.opt_state, resident_opt_leaves))
+  1037	        return train_step(merged, batch)
+  1038	
+  1039	    return _ResidentExcludedTrainStep(resident_excluded_train_step, opt_state_resident_expert_leaves)
+  1040	
+  1041	
+  1042	class _ResidentExcludedTrainStep:
+  1043	    """Train step that passes the resident momentum leaves as a separate, non-donated argument.
+  1044	
+  1045	    Donation is per-argument, so splitting the resident leaves out of the donated state is what
+  1046	    removes them from XLA's input/output alias set; ``jit_train_step`` is exposed so tests and
+  1047	    diagnostics can inspect the lowering's aliasing directly.
+  1048	    """
+  1049	
+  1050	    def __init__(self, jit_train_step, resident_expert_leaves: int):
+  1051	        self.jit_train_step = jit_train_step
+  1052	        self._resident_expert_leaves = resident_expert_leaves
+  1053	
+  1054	    def __call__(self, state: GrugTrainState, batch):
+  1055	        offloaded_opt, resident_opt = _split_resident_opt_state(state.opt_state, self._resident_expert_leaves)
+  1056	        donated = dataclasses.replace(state, opt_state=offloaded_opt)
+  1057	        return self.jit_train_step(donated, resident_opt, batch)
+  1058	
+  1059	
+  1060	def _run_grug_local(config: GrugRunConfig) -> None:
+  1070	
+  1071	    run_id = trainer.id
+  1072	    if run_id is None:
+  1073	        raise ValueError("trainer.id was not initialized")
+  1074	
+  1075	    optimizer = config.optimizer.build(trainer.num_train_steps)
+  1076	    watch_config = trainer.watch
+  1077	    diagnostic_watch_step = None
+  1078	    inline_watch_config = watch_config if watch_config.is_enabled else None
+  1079	    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
+  1080	        diagnostic_watch_step = _make_diagnostic_watch_step(
+  1081	            trainer.mp,
+  1082	            z_loss_weight=config.trainer.z_loss_weight,
+  1083	            watch_config=watch_config,
+  1084	        )
+  1085	        inline_watch_config = None
+  1086	    train_step = _make_train_step(
+  1087	        optimizer,
+  1088	        trainer.mp,
+  1089	        z_loss_weight=config.trainer.z_loss_weight,
+  1090	        ema_beta=config.trainer.ema_beta,
+  1091	        watch_config=inline_watch_config,
+  1092	        offload_opt_state=config.trainer.offload_opt_state,
+  1093	        opt_state_resident_expert_leaves=config.trainer.opt_state_resident_expert_leaves,
+  1094	        opt_state_resident_donation=config.trainer.opt_state_resident_donation,
+  1095	        master_param_mode=config.trainer.master_param_mode,
+  1096	    )
+  1097	
+  1098	    data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
+  1099	    if config.trainer.data_seed is not None:
+  1100	        data_key = jax.random.PRNGKey(config.trainer.data_seed)
+  1101	
+  1102	    # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
+  1103	    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+  1104	    # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
+  1105	    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+  1106	    mesh = compact_grug_mesh(
+  1107	        expert_axis_size=config.trainer.expert_axis_size,
+  1108	        replica_axis_size=config.trainer.replica_axis_size,
+  1109	    )
+  1110	    # Armed before the state is built or restored. The watchdog's step and process deadlines only
+  1320	                        state_callbacks.add_hook(_first_step_only(hook), every=1)
+  1321	
+  1322	        last_loss: float | jax.Array = 0.0
+  1323	        last_step_duration = 0.0
+  1324	        # Host-side memory of the previous step's resident-leaf checksums (excluded-donation
+  1325	        # canary): a ck_in that differs from the prior ck_out means the buffer changed between
+  1326	        # steps.
+  1327	        previous_resident_ck_out: dict[str, int] = {}
+  1328	
+  1329	        # Main optimization loop.
+  1330	        try:
+  1331	            while int(state.step) < stop_step:
+  1332	                with jax.profiler.TraceAnnotation("load_batch"):
+  1333	                    batch = next(iterator)
+  1334	                current_step = int(state.step)
+  1335	                watch_due = (
+  1336	                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
+  1337	                )
+  1338	                if watch_due and diagnostic_watch_step is not None:
+  1339	                    watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+  1340	                    jax.block_until_ready(watch_stats)
+  1341	                else:
+  1342	                    watch_stats = None
+  1343	                step_start = time.perf_counter()
+  1344	                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+  1345	                state, metrics, inline_watch_stats = train_step(state, batch)
+  1346	                if inline_watch_stats is not None and watch_due:
+  1347	                    watch_stats = inline_watch_stats
+  1348	                step = int(state.step) - 1
+  1349	
+  1350	                jax.block_until_ready(metrics["train/loss"])
+  1351	                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+  1352	
+  1353	                if not jnp.isfinite(metrics["train/loss"]):
+  1354	                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+  1355	                duration = time.perf_counter() - step_start
+  1356	                hook_start = time.perf_counter()
+  1357	                with jax.profiler.TraceAnnotation("callbacks"):
+  1358	                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+  1359	                    last_loss = metrics["train/loss"]
+  1360	                    last_step_duration = duration
+  1361	                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+  1362	                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+  1363	                    router_metrics = {
+  1364	                        key: value
+  1365	                        for key, value in metrics.items()
+  1366	                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+  1367	                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+  1368	                    }
+  1369	                    if router_metrics:
+  1370	                        levanter.tracker.log(router_metrics, step=step)
+  1371	                    if "train/cross_entropy_loss" in metrics:
+  1372	                        levanter.tracker.log(
+  1373	                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+  1374	                            step=step,
+  1375	                        )
+  1376	                    if "moe/dropped_assignments" in metrics:
+  1377	                        drop_metrics = _drop_metrics(
+  1378	                            metrics["moe/dropped_assignments"],
+  1379	                            metrics["moe/sender_dropped_assignments"],
+  1380	                            metrics["moe/receiver_dropped_assignments"],
+  1381	                            batch_size=batch.tokens.shape[0],
+  1382	                            sequence_length=batch.tokens.shape[1],
+  1383	                            top_k=config.model.num_experts_per_token,
+  1384	                            num_layers=config.model.num_layers,
+  1385	                        )
+  1386	                        levanter.tracker.log(drop_metrics, step=step)
+  1387	
+  1388	                    resident_canary = {
+  1389	                        key: int(value) for key, value in metrics.items() if key.startswith("debug/resident_ck_")
+  1390	                    }
+  1391	                    if resident_canary:
+  1392	                        if previous_resident_ck_out:
+  1393	                            resident_canary["debug/resident_ck_mismatch"] = sum(
+  1394	                                1
+  1395	                                for key, value in resident_canary.items()
+  1396	                                if key.startswith("debug/resident_ck_in/")
+  1397	                                and previous_resident_ck_out[key.replace("_ck_in/", "_ck_out/")] != value
+  1398	                            )
+  1399	                        previous_resident_ck_out = {
+  1400	                            key: value
+  1401	                            for key, value in resident_canary.items()
+  1402	                            if key.startswith("debug/resident_ck_out/")
+  1403	                        }
+  1404	                        levanter.tracker.log(resident_canary, step=step)
+  1405	
+  1406	                    if watch_stats is not None:
+  1407	                        levanter.tracker.log(watch_stats, step=step)
+  1408	
+  1409	                if checkpointer is not None:
+  1410	                    with callbacks.progress_event_scope(
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/launch_diagnostics.py | sed -n '205,315p;320,365p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+   205	    version = resolve_version(name, version)
+   206	    validation = validation_datasets() if eval_every > 0 else []
+   207	    flops_per_example, _ = _compute_flops(model_config=model)
+   208	    experiment_flops = flops_per_example * batch_size * total_schedule_steps
+   209	
+   210	    def build_config(ctx: StepContext) -> GrugRunConfig:
+   211	        trainer = hero_trainer_config(
+   212	            run_id=run_id,
+   213	            seed=seed,
+   214	            train_batch_size=batch_size,
+   215	            num_train_steps=total_schedule_steps,
+   216	            master_param_mode=master_param_mode,
+   217	            load_checkpoint_path=restore_from,
+   218	            # An explicit --restore-from must fail loud. The optional-resume default returns a
+   219	            # fresh step-0 state when the path is wrong or unreadable, and a scratch run still
+   220	            # reports a plausible MFU; True makes restore raise instead of reinitializing. The
+   221	            # ladder launchers keep None on purpose (optional resume across retries).
+   222	            load_checkpoint=True if restore_from else None,
+   223	            profiler=ProfilerConfig(
+   224	                enabled=profile_steps > 0,
+   225	                start_step=profile_start_step,
+   226	                num_steps=profile_steps,
+   227	                # One rank is enough for a step trace, and tracing all 64 multiplies the upload
+   228	                # without adding signal.
+   229	                process_index=0,
+   230	                # Host scopes and HLO metadata identify compiled model regions in XProf.
+   231	                profile_options=ProfileOptionsConfig(
+   232	                    host_tracer_level=1,
+   233	                    python_tracer_level=0,
+   234	                    enable_hlo_proto=True,
+   235	                ),
+   236	            ),
+   237	            tracker=WandbConfig(
+   238	                entity="marin-community",
+   239	                project=wandb_project,
+   240	                tags=[
+   241	                    "grug",
+   242	                    "moe",
+   243	                    "hero",
+   244	                    "ep",
+   245	                    backend_tag,
+   246	                    capacity_tag,
+   247	                    f"master-params-{master_param_mode.value.replace('_', '-')}",
+   248	                    *transport_capacity_tags,
+   249	                    wave_tag,
+   250	                    size_tag,
+   251	                    *remat_save_tags,
+   252	                    "gb200",
+   253	                    HARRIER_MIX_2026_08_18_TAG,
+   254	                    "MHEP",
+   255	                ],
+   256	                group="moe-hero-ep",
+   257	                name=run_id,
+   258	                replicate_path=ctx.output_path,
+   259	            ),
+   260	            watch=WatchConfig(interval=watch_interval),
+   261	            # Levanter's default base path is pod-local, so a preempted run would have nothing to
+   262	            # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
+   263	            checkpointer=CheckpointerConfig(
+   264	                base_path=checkpoint_path or prefix_join(ctx.output_path, "checkpoints"),
+   265	                temporary_base_path=None,
+   266	                save_interval=checkpoint_interval,
+   267	                keep=None,
+   268	                append_run_id_to_base_path=False,
+   269	                delete_old_temp_checkpoints=True,
+   270	                keep_last_temporary_checkpoints=1,
+   271	                debug=checkpoint_debug or CheckpointDebugConfig(),
+   272	            ),
+   273	        )
+   274	        data = harrier_mix_2026_08_18_data_config(
+   275	            ctx=ctx,
+   276	            total_steps=total_schedule_steps,
+   277	            batch_size=batch_size,
+   278	            max_seq_len=model.max_seq_len,
+   279	            experiment_flops=experiment_flops,
+   280	            validation=validation,
+   281	        )
+   282	        return GrugRunConfig(
+   283	            model=model,
+   284	            data=data,
+   285	            resources=ctx.runtime_arg("train_resources"),
+   286	            tensorstore_cache_bytes=HERO_TENSORSTORE_CACHE_BYTES,
+   287	            optimizer=optimizer,
+   288	            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
+   289	            # Off by default so a throughput run stays a throughput run. Turn it on to make a
+   290	            # run scoreable: comparing configs needs held-out loss, not train loss.
+   291	            eval=(
+   292	                GrugEvalConfig(
+   293	                    steps_per_eval=eval_every,
+   294	                    eval_batch_size=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+   295	                    eval_ema=False,
+   296	                    compute_bpb=True,
+   297	                    dropless_eval=True,
+   298	                )
+   299	                if eval_every > 0
+   300	                else None
+   301	            ),
+   302	            stop_after_steps=num_steps,
+   303	            processes_per_task=processes_per_task,
+   304	            worker_pip_packages=((pjrt_wheel,) if pjrt_wheel is not None else ()),
+   305	        )
+   306	
+   307	    return ArtifactStep(
+   308	        name=user_namespaced_name(name, version),
+   309	        version=version,
+   310	        artifact_type=HeroThroughputResult,
+   311	        run=run_grug,
+   312	        build_config=build_config,
+   313	        deps=(HARRIER_MIX_2026_08_18_STORE, *validation),
+   314	        runtime_args={"train_resources": train_resources},
+   315	    )
+   320	@click.option(
+   321	    "--dp-racks",
+   322	    type=click.IntRange(min=1),
+   323	    default=1,
+   324	    show_default=True,
+   325	    help="Data-parallel NVL72 rack count. --batch-size stays global across all racks.",
+   326	)
+   327	@click.option(
+   328	    "--num-steps",
+   329	    type=click.IntRange(min=1),
+   330	    default=DEFAULT_HERO_STEPS,
+   331	    show_default=True,
+   332	    help=(
+   333	        "Number of steps at which training terminates. When restoring from a checkpoint, "
+   334	        "the number of steps taken in this run will be less than --num-steps "
+   335	        "by the number of steps at the checkpoint."
+   336	    ),
+   337	)
+   338	@click.option(
+   339	    "--schedule-steps",
+   340	    type=click.IntRange(min=1),
+   341	    default=None,
+   342	    help=(
+   343	        "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
+   344	        "heuristic scales its rates from the implied token budget, so this trains the head of a long "
+   345	        "run's schedule. Defaults to --num-steps."
+   346	    ),
+   347	)
+   348	@click.option(
+   349	    "--seed",
+   350	    type=int,
+   351	    default=0,
+   352	    help="Trainer seed. Vary it across otherwise identical runs to measure run-to-run variance.",
+   353	)
+   354	@click.option(
+   355	    "--num-experts",
+   356	    type=click.IntRange(min=1),
+   357	    default=HERO_MODEL_CONFIG.num_experts,
+   358	    show_default=True,
+   359	    help=(
+   360	        f"Override the routed expert count. The count must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}, "
+   361	        f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
+   362	    ),
+   363	)
+   364	@click.option(
+   365	    "--num-experts-per-token",
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/train.py | sed -n '350,390p;1200,1235p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+   350	    # For expert-parallel runs, also evaluate under the dropless local backend on an
+   351	    # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
+   352	    # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
+   353	    dropless_eval: bool = False
+   354	    # Local MoE kernel used after collapsing the expert axis. ``sonic`` is the Hopper Triton path;
+   355	    # ``sonic_cute`` is the Blackwell QuACK/CUTLASS path.
+   356	    dropless_eval_moe_implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
+   357	    # Run the evals once after the first optimization step, for a baseline at the start of the loss
+   358	    # curve. The periodic cadence first fires at `steps_per_eval`, thus it leaves that start bare.
+   359	    eval_at_first_step: bool = False
+   360	
+   361	
+   362	@dataclass(frozen=True)
+   363	class GrugRunConfig:
+   364	    """Top-level config for grug training."""
+   365	
+   366	    model: GrugModelConfig
+   367	    data: LmDataConfig
+   368	    resources: ResourceConfig
+   369	    tensorstore_cache_bytes: int | None = None
+   370	    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+   371	    trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
+   372	    eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+   373	    # Stop after this many steps while `trainer.num_train_steps` still sizes the learning-rate
+   374	    # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
+   375	    # long schedule requires the two to differ. None runs the whole schedule.
+   376	    stop_after_steps: int | None = None
+   377	    # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
+   378	    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+   379	    processes_per_task: int = 1
+   380	    # Retry budgets for the training job. The two are separate gates and the job fails when either
+   381	    # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
+   382	    # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
+   383	    # restores checkpoints benefits from a deep budget.
+   384	    max_retries_failure: int = 0
+   385	    max_task_failures: int = 10
+   386	    # Extra pip installs applied on each worker after the env sync, in order. Measurement
+   387	    # harnesses use this to substitute a self-built jax-cuda13-pjrt wheel (a fetchable URL);
+   388	    # empty means the bundled env runs exactly as locked.
+   389	    worker_pip_packages: tuple[str, ...] = ()
+   390	
+  1200	                    model_axis_size=mesh.shape["model"],
+  1201	                )
+  1202	                # Build under the eval mesh so every constant the evaluator captures at construction
+  1203	                # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
+  1204	                # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
+  1205	                # eval jit and fail the explicit-mesh check.
+  1206	                with set_mesh(dropless_eval_mesh):
+  1207	                    dropless_evaluator = build_tagged_evaluator(
+  1208	                        data_config=config.data,
+  1209	                        max_seq_len=config.model.max_seq_len,
+  1210	                        mesh=dropless_eval_mesh,
+  1211	                        eval_cfg=eval_cfg,
+  1212	                        mp=trainer.mp,
+  1213	                        model_transform=functools.partial(
+  1214	                            _to_dropless_local,
+  1215	                            implementation=eval_cfg.dropless_eval_moe_implementation,
+  1216	                        ),
+  1217	                    )
+  1218	
+  1219	        # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
+  1220	        # both use it so a head-of-schedule run reports against the steps it will actually take.
+  1221	        requested_stop_step = trainer.num_train_steps if config.stop_after_steps is None else config.stop_after_steps
+  1222	        stop_step = min(requested_stop_step, trainer.num_train_steps)
+  1223	
+  1224	        profiler_cfg = trainer.profiler
+  1225	        profiler_num_steps = profiler_cfg.resolve_num_profile_steps(num_train_steps=stop_step)
+  1226	        profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
+  1227	
+  1228	        log_every = max(1, config.trainer.log_every)
+  1229	        if config.trainer.training_data_mode == TrainingDataMode.SYNTHETIC:
+  1230	            synthetic_batch = _make_synthetic_batch(
+  1231	                batch_size=batch_schedule.batch_size_at_step(int(state.step)),
+  1232	                max_seq_len=config.model.max_seq_len,
+  1233	                vocab_size=config.model.vocab_size,
+  1234	                seed=trainer.seed + 1 if config.trainer.data_seed is None else config.trainer.data_seed,
+  1235	                mesh=mesh,
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "UV_CACHE_DIR=/tmp/echo-uv-cache uv run infra/echo/cli.py feedback --query 'C3 NaN root cause optimizer resident donation k=1 donation clobber stray transport write' --execution-id 3799 --grade issue:20896=2 --grade issue:20897=3 <<<'Results concern older SOAP NaNs and layout donation warnings, not the current C3 k=1 resident-state canary investigation.'" in /home/marin/projects/marin-mfu-loop
+ exited 2 in 11951ms:
+error: Failed to generate package metadata for `jax-cuda13-pjrt==0.11.1+marin.c9526e8c0272 @ direct+https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260828-c9526e8c0272/jax_cuda13_pjrt-0.11.1%2Bmarin.c9526e8c0272-py3-none-manylinux_2_27_aarch64.whl`
+  Caused by: Request failed after 3 retries in 12.0s
+  Caused by: Failed to fetch: `https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260828-c9526e8c0272/jax_cuda13_pjrt-0.11.1%2Bmarin.c9526e8c0272-py3-none-manylinux_2_27_aarch64.whl`
+  Caused by: error sending request for url (https://github.com/marin-community/xla/releases/download/marin-xla-pjrt-20260828-c9526e8c0272/jax_cuda13_pjrt-0.11.1%2Bmarin.c9526e8c0272-py3-none-manylinux_2_27_aarch64.whl)
+  Caused by: client error (Connect)
+  Caused by: dns error
+  Caused by: Device or resource busy (os error 16)
+
+codex
+The structural split looks internally consistent so far: the same mask defines both the host-offload selection and the Equinox partition, and CUDA-export assertions target the actual flattened resident argument. I’m now checking the tests and lowered dataflow for the harder issue: whether the “input” checksum has a real before-update ordering guarantee.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '1,320p' TESTING.md" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+# Testing Guidelines
+
+This is Marin's project-wide testing policy. Module-specific `AGENTS.md` and
+`TESTING.md` files are authoritative for local commands, markers, fakes, mocks,
+numerical tolerances, and integration-test boundaries. Before writing or
+reviewing tests, read root `AGENTS.md`, this file, the nearest module
+`AGENTS.md`, and any testing docs referenced there.
+
+## Running Tests Locally
+
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
+
+```bash
+uv run pytest <test path>
+uv run --no-project infra/ci/run_tests.py
+```
+
+The repository defaults exclude `slow`, `integration`, `data_integration`,
+`cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
+partial marker expression such as `-m "not slow"`; pytest replaces the default
+expression and may select live-cluster tests. Run excluded markers only when
+requested or directed by the relevant module guide.
+
+Tests run from the repository root have a 60-second per-test timeout, including
+fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
+with `SIGALRM`; if the test suppresses that failure, the test process exits five
+seconds later. Give a legitimately longer test an explicit
+`@pytest.mark.timeout(...)` value instead of increasing the repository default.
+
+A formatter-only mechanical edit does not require another test run. Rerun the
+repository formatting and lint checks after the edit; rerun tests only when the
+follow-up changes executable behavior or test expectations.
+
+## Core Rule
+
+A test must fail when behavior is wrong. It should not fail only because an
+implementation detail, wording choice, helper call, or command assembly changed.
+
+Prefer integration-style tests that validate externally observable behavior:
+
+- public API return values
+- structured output or machine-readable fields
+- persisted state
+- real side effects in a temp directory or in-memory fake
+- state transitions visible through the public event/status API
+- numerical value and gradient parity against an independent reference
+
+It is better to not have a test than to have "slop" tests (tautological or other useless tests). See below.
+
+## Good Targets
+
+- A regression for a reported bug.
+- A boundary case where user-visible behavior changes: empty input, duplicate
+  names, incompatible shapes, quota or capacity limits, timeout behavior, failed
+  workers, bad files, or invalid configs.
+- A round trip through the public API: submit a job, observe status, write
+  chunks, read chunks, serialize, deserialize, reload.
+- A stable contract: wire format, schema field, CLI JSON output, checkpoint
+  layout, or public exception type.
+- For numerical code, parity against an obvious reference implementation across
+  a small shape/dtype grid.
+
+## Slop Tests To Reject
+
+Delete or rewrite tests with negative value:
+
+- Tautologies: constant equals itself, method exists, object constructor assigns
+  attributes, `len(list) >= 0`, type exists. This definition should be construed broadly.
+- Private state: assertions on private attributes or `_`-prefixed state.
+- Incidental strings: assertions on human log text, progress messages, command
+  fragments, or copied prose.
+- Internal helper dispatch: assertions on `assert_called_once_with`, call count,
+  or "helper X was invoked" for in-process helpers.
+- Reimplementation: Tests that reimplement the production logic and compare the implementation to
+  itself.
+- Obvious error-condition behavior: Obvious error-condition tests that only prove a type checker, dataclass
+  constructor, or standard library function works. Infrastructure failure modes
+  are valid when the failure is externally observable.
+- Tests for Python language semantics.
+- Registration tests: Tests that check that specific items are registered in global registries.
+- Configuration projections: assertions that a lowered or constructed field equals the same value
+  supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
+  or a real external wire translation instead.
+- Permanently skipped tests or empty test files.
+- Screenshot-only tests without behavioral assertions.
+- "Does not raise" tests without a comment explaining why that is the contract.
+- "Does raise" tests if the exception type is not part of the contract or an important regression signal.
+
+Disposable smoke probes are different from checked-in tests. During development,
+use scratch scripts, REPL snippets, or temporary local assertions to confirm
+imports, object construction, or fixture wiring. Do not leave those as pytest
+tests. Before a PR-ready commit, replace them with behavior assertions or delete
+them.
+
+String assertions are allowed when the string is the contract: a wire format,
+machine-readable output, a downstream-parsed log line, or an exact user-facing
+error promised by the API. Assert on structured fields when possible.
+
+Command construction is rarely the contract. Prefer to run through the boundary
+and assert the effect. If the command line is the contract, assert the parsed
+argv or structured command object, not a substring in rendered shell text.
+
+## Mocks And Fakes
+
+Default to real behavior. Use mocks only at I/O boundaries:
+
+- subprocesses such as `gcloud` or `kubectl`
+- HTTP or remote APIs
+- GCS, W&B, or other external services
+- filesystem boundaries that would be slow, expensive, or destructive
+
+Prefer fakes over mocks when practical: in-memory services, temp directories,
+local clients, fake schedulers, and fake clocks. Check module-specific docs for
+existing fakes before adding a new one.
+
+Do not mock internal functions to prove wiring. If a side effect matters, expose
+or observe it through a public API or use a fake that records stable state.
+If this is difficult, it may be a sign that you shouldn't test that behavior or that the API needs to be redesigned to make it testable without mocks.
+
+## Timing
+
+Do not use `time.sleep()` in tests. Inject `now=time.time()`, use a fake clock,
+or use existing deadline/backoff helpers.
+
+Use module-specific deadline, backoff, polling, or fake-clock helpers when they
+exist. A single short sleep to let a background thread start is acceptable only
+with a comment that names the race being avoided.
+
+## Numerical Tests
+
+Do not relax tolerances without human agreement. Exact tolerance values may be
+module-specific; the global rule is that agents do not weaken them without
+explicit agreement from the user.
+
+Use module-specific slow-test markers and optional-dependency markers as
+appropriate.
+
+For kernels, start from an obvious reference: existing in-repo code, a PyTorch
+reference, Optax/JAX baseline, or clear pseudocode. Check:
+
+- value parity over a small shape/dtype grid
+- gradient parity on small shapes
+- CPU numerics and accelerator-aligned fast paths when applicable
+- pointwise deviation metrics such as max and mean absolute difference, not only
+  `allclose`
+- If sharding is relevant, check parallelization and shard-local numerics separately.
+
+Keep the reference independent and simple. A clever reference that shares the same bug as
+the implementation is not useful.
+
+## Pytest Style
+
+- Prefer top-level `def test_*` functions with fixtures over test classes.
+- Name tests as `test_<subject>_<scenario>_<expected_outcome>`.
+- Use parameterization for meaningful behavior variation.
+- Extend existing test files before creating new ones.
+- Every test must contain an assertion or `pytest.raises`.
+- Remove dead helpers, unused fakes, unused imports, and empty stubs.
+- Mark slow, Docker, and cluster-dependent tests with the package's established
+  markers.
+- For non-trivial public classes with protocols, test the protocol behavior
+  rather than concrete private state.
+
+## Review Checklist
+
+When reviewing tests, flag the test if the answer to any question is "yes":
+
+- Would this test pass if the behavior were wrong?
+- Would this test fail only because a helper was renamed or a log line changed?
+- Is it asserting on private state, call counts, or internal dispatch?
+- Does it duplicate the implementation instead of checking an independent
+  oracle or observable behavior?
+- Is the mock inside the system under test rather than at an external boundary?
+- Does it sleep, skip permanently, or lack a real assertion?
+- Did the change weaken a numerical tolerance or test expectation without justification?
+- Does it ignore local `AGENTS.md` or module `TESTING.md` rules for markers,
+  fakes, mocks, commands, optional dependencies, or integration boundaries?
+
+Ask for low-value tests to be deleted or rewritten. More tests are not better
+when they pin implementation details and miss real regressions.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "uv run pytest tests/test_moe_hero_ep.py -k 'resident_donation or resident_expert'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 9113ms:
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/marin/projects/marin-mfu-loop
+configfile: pyproject.toml
+plugins: flakefinder-1.1.0, xdist-3.8.0, anyio-4.12.1, playwright-0.7.2, base-url-2.1.0, jaxtyping-0.3.5, timeout-2.4.0, asyncio-1.4.0
+timeout: 60.0s
+timeout method: signal
+timeout func_only: False
+session timeout: 600.0s
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+created: 16/16 workers
+16 workers [6 items]
+
+......                                                                   [100%]
+============================== 6 passed in 8.40s ===============================
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc 'ls -l .venv/bin/python .venv/bin/pytest .venv/bin/ruff 2>/dev/null || true' in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+-rwxr-xr-x  1 marin users      341 Aug 29 05:04 .venv/bin/pytest
+lrwxrwxrwx  1 marin users       79 Aug 28 22:16 .venv/bin/python -> /home/marin/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12
+-rwxr-xr-x 12 marin users 34471840 Jul 15 17:50 .venv/bin/ruff
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python - <<'PY'
+import dataclasses
+import runpy
+import jax
+import pytest
+from experiments.grug.moe_hero_ep import train
+ns = runpy.run_path('tests/test_moe_hero_ep.py')
+mp = pytest.MonkeyPatch()
+try:
+    step, state, batch = ns['_expert_momentum_train_step'](mp, resident_donation=train.ResidentDonation.EXCLUDED)
+    offloaded, resident = train._split_resident_opt_state(state.opt_state, 1)
+    donated = dataclasses.replace(state, opt_state=offloaded)
+    module = jax.export.export(step.jit_train_step, platforms=['cuda'])(donated, resident, batch).mlir_module()
+    main = module[module.index('func.func public @main'):]
+    print(main[:main.index('{\\n')])
+    for line in main.splitlines():
+        if 'reduce' in line or 'bitcast' in line:
+            print(line)
+finally:
+    mp.undo()
+PY" in /home/marin/projects/marin-mfu-loop
+ succeeded in 2798ms:
+func.func public @main(%arg0: tensor<i32> {tf.aliasing_output = 0 : i32} loc("state.step"), %arg1: tensor<1x2x3x4xf32> {tf.aliasing_output = 1 : i32} loc("state.params.w_gate"), %arg2: tensor<1x2x3x4xf32> {tf.aliasing_output = 2 : i32} loc("state.params.w_up"), %arg3: tensor<1x2x4x3xf32> {tf.aliasing_output = 3 : i32} loc("state.params.w_down"), %arg4: tensor<1x2x3x4xf32> {tf.aliasing_output = 4 : i32} loc("state.opt_state[0].trace.w_up"), %arg5: tensor<1x2x4x3xf32> {tf.aliasing_output = 6 : i32} loc("state.opt_state[0].trace.w_down"), %arg6: tensor<1x2x3x4xf32> loc("resident_opt_leaves[0].trace.w_gate"), %arg7: tensor<2x2xf32> loc("batch")) -> (tensor<i32> {jax.result_info = "result[0].step"}, tensor<1x2x3x4xf32> {jax.result_info = "result[0].params.w_gate"}, tensor<1x2x3x4xf32> {jax.result_info = "result[0].params.w_up"}, tensor<1x2x4x3xf32> {jax.result_info = "result[0].params.w_down"}, tensor<1x2x3x4xf32> {jax.result_info = "result[0].opt_state[0].trace.w_gate"}, tensor<1x2x3x4xf32> {jax.result_info = "result[0].opt_state[0].trace.w_up"}, tensor<1x2x4x3xf32> {jax.result_info = "result[0].opt_state[0].trace.w_down"}, tensor<1x1xf32> {jax.result_info = "result[0].pending_qb_betas"}, tensor<ui32> {jax.result_info = "result[1]['debug/resident_ck_in/w_gate']"}, tensor<ui32> {jax.result_info = "result[1]['debug/resident_ck_out/w_gate']"}, tensor<1x1xf32> {jax.result_info = "result[1]['qb_beta_per_layer']"}, tensor<f32> {jax.result_info = "result[1]['train/loss']"}) 
+    %1 = stablehlo.reduce(%0 init: %cst_2) applies stablehlo.add across dimensions = [0, 1, 2, 3] : (tensor<1x2x3x4xf32>, tensor<f32>) -> tensor<f32> loc(#loc103)
+    %4 = stablehlo.reduce(%3 init: %cst_2) applies stablehlo.add across dimensions = [0, 1, 2, 3] : (tensor<1x2x3x4xf32>, tensor<f32>) -> tensor<f32> loc(#loc103)
+    %7 = stablehlo.reduce(%6 init: %cst_2) applies stablehlo.add across dimensions = [0, 1, 2, 3] : (tensor<1x2x4x3xf32>, tensor<f32>) -> tensor<f32> loc(#loc103)
+    %9 = stablehlo.reduce(%arg7 init: %cst_2) applies stablehlo.add across dimensions = [0, 1] : (tensor<2x2xf32>, tensor<f32>) -> tensor<f32> loc(#loc91)
+    %37 = stablehlo.bitcast_convert %arg6 : (tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xui32> loc(#loc108)
+    %38 = stablehlo.reduce(%37 init: %c) applies stablehlo.add across dimensions = [0, 1, 2, 3] : (tensor<1x2x3x4xui32>, tensor<ui32>) -> tensor<ui32> loc(#loc109)
+    %39 = stablehlo.bitcast_convert %21 : (tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xui32> loc(#loc110)
+    %40 = stablehlo.reduce(%39 init: %c) applies stablehlo.add across dimensions = [0, 1, 2, 3] : (tensor<1x2x3x4xui32>, tensor<ui32>) -> tensor<ui32> loc(#loc111)
+#loc63 = loc("_bitcast_u32_checksum"(#loc33))
+#loc66 = loc("_bitcast_u32_checksum"(#loc36))
+#loc91 = loc("jit(resident_excluded_train_step)/reduce_sum"(#loc78))
+#loc103 = loc("jit(resident_excluded_train_step)/reduce_sum"(#loc89))
+#loc108 = loc("jit(resident_excluded_train_step)/bitcast_convert_type"(#loc98))
+#loc109 = loc("jit(resident_excluded_train_step)/reduce_sum"(#loc99))
+#loc110 = loc("jit(resident_excluded_train_step)/bitcast_convert_type"(#loc100))
+#loc111 = loc("jit(resident_excluded_train_step)/reduce_sum"(#loc101))
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc '.venv/bin/pytest tests/test_moe_hero_ep.py' in /home/marin/projects/marin-mfu-loop
+codex
+The targeted tests pass, and the exported CUDA StableHLO confirms the resident leaf is a plain, non-donated parameter while `ck_in` is a live reduction directly from that parameter. The remaining concern is temporal: functional dataflow preserves the value, but it cannot order itself against an out-of-bounds transport write that XLA does not know exists.
+ exited 1 in 66166ms:
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/marin/projects/marin-mfu-loop
+configfile: pyproject.toml
+plugins: flakefinder-1.1.0, xdist-3.8.0, anyio-4.12.1, playwright-0.7.2, base-url-2.1.0, jaxtyping-0.3.5, timeout-2.4.0, asyncio-1.4.0
+timeout: 60.0s
+timeout method: signal
+timeout func_only: False
+session timeout: 600.0s
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+created: 16/16 workers
+16 workers [63 items]
+
+.............................................................F.          [100%]
+=================================== FAILURES ===================================
+_ test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore _
+[gw9] linux -- Python 3.12.13 /home/marin/projects/marin-mfu-loop/.venv/bin/python3
+
+tmp_path = PosixPath('/tmp/pytest-of-marin/pytest-1605/popen-gw9/test_a_master_bearing_checkpoi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7ac438de3aa0>
+
+    def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
+        """Restore reads the stored fp32 master directly into the run's fp32 params template.
+    
+        Reading with the run's own exemplar instead succeeds and returns bf16 weights, so a test that
+        only checked the restore did not raise would pass against the bug this migration exists for.
+        """
+        cfg = _latent_config()
+        mesh = _explicit_mesh(1, 1, 1, 1)
+        monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+    
+        def build(mp, key, master_param_mode):
+            with set_mesh(mesh):
+                return train.initial_state(
+                    cfg,
+                    optimizer=optax.sgd(0.1),
+                    mp=mp,
+                    key=jax.random.key(key),
+                    ema_beta=None,
+                    master_param_mode=master_param_mode,
+                )
+    
+        written = build(
+            jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
+        )
+        checkpoint_root = tmp_path / "checkpoints"
+        save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+    
+        template = build(jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DEVICE)
+        with set_mesh(mesh):
+            restored = train.take_master_as_params(
+>               restore_grug_state_from_checkpoint(
+                    template,
+                    checkpoint_search_paths=[str(checkpoint_root)],
+                    load_checkpoint_setting=True,
+                    mesh=None,
+                    allow_partial=False,
+                    template_for_candidate=lambda candidate: train.template_for_candidate_layout(
+                        template, candidate, train.MasterParamMode.DEVICE
+                    ),
+                )
+            )
+
+tests/test_moe_hero_ep.py:423: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+experiments/grug/checkpointing.py:144: in restore_grug_state_from_checkpoint
+    loaded = _load_candidate_state(
+experiments/grug/checkpointing.py:223: in _load_candidate_state
+    return load_fn(
+lib/levanter/src/levanter/checkpoint.py:941: in load_checkpoint
+    tree = tree_deserialize_leaves_tensorstore(
+lib/levanter/src/levanter/tensorstore_serialization.py:1324: in tree_deserialize_leaves_tensorstore
+    deser_leaves, indices_to_load = _restore_ocdbt(
+lib/levanter/src/levanter/tensorstore_serialization.py:1203: in _restore_ocdbt
+    deser_leaves = _deserialize_leaves(paths_to_load, shardings_to_load, tspecs_to_load, read_config)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+lib/levanter/src/levanter/tensorstore_serialization.py:1131: in _deserialize_leaves
+    result = asyncio.run(read_all())
+             ^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py:678: in run_until_complete
+    self.run_forever()
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py:645: in run_forever
+    self._run_once()
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/base_events.py:1961: in _run_once
+    event_list = self._selector.select(timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <selectors.EpollSelector object at 0x7ac426561ca0>, timeout = -1
+
+    def select(self, timeout=None):
+        if timeout is None:
+            timeout = -1
+        elif timeout <= 0:
+            timeout = 0
+        else:
+            # epoll_wait() has a resolution of 1 millisecond, round away
+            # from zero to wait *at least* timeout seconds.
+            timeout = math.ceil(timeout * 1e3) * 1e-3
+    
+        # epoll_wait() expects `maxevents` to be greater than zero;
+        # we want to make sure that `select()` can be called when no
+        # FD is registered.
+        max_ev = max(len(self._fd_to_key), 1)
+    
+        ready = []
+        try:
+>           fd_event_list = self._selector.poll(timeout, max_ev)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: Timeout (>60.0s) from pytest-timeout.
+
+../../.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/selectors.py:468: Failed
+----------------------------- Captured stdout call -----------------------------
++++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++
+~ Stack of pytest hard timeout tests/test_moe_hero_ep.py::test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore (134983185327808) ~
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/threading.py", line 1032, in _bootstrap
+    self._bootstrap_inner()
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/threading.py", line 1431, in run
+    self.finished.wait(self.interval)
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/threading.py", line 655, in wait
+    signaled = self._cond.wait(timeout)
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/threading.py", line 359, in wait
+    gotit = waiter.acquire(True, timeout)
+~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (134986650875584) ~~~~~~~~~~~~~~~~~~~~~
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
++++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++
+------------------------------ Captured log call -------------------------------
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+2026-08-29 13:58:55 WARNING Unknown leaf type <class 'NoneType'>
+=========================== short test summary info ============================
+FAILED tests/test_moe_hero_ep.py::test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore
+=================== 1 failed, 62 passed in 65.68s (0:01:05) ====================
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python infra/echo/cli.py feedback --query 'C3 NaN root cause optimizer resident donation k=1 donation clobber stray transport write' --execution-id 3799 --grade issue:20896=2 --grade issue:20897=3 <<<'Results concern older SOAP NaNs and layout donation warnings, not the current C3 k=1 resident-state canary investigation.'" in /home/marin/projects/marin-mfu-loop
+ exited 1 in 53ms:
+Traceback (most recent call last):
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 204, in _new_conn
+    sock = connection.create_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/util/connection.py", line 60, in create_connection
+    for res in socket.getaddrinfo(host, port, family, socket.SOCK_STREAM):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/socket.py", line 978, in getaddrinfo
+    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+socket.gaierror: [Errno -2] Name or service not known
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 788, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 488, in _make_request
+    raise new_e
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 464, in _make_request
+    self._validate_conn(conn)
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 1106, in _validate_conn
+    conn.connect()
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 759, in connect
+    self.sock = sock = self._new_conn()
+                       ^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 211, in _new_conn
+    raise NameResolutionError(self.host, self, e) from e
+urllib3.exceptions.NameResolutionError: HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno -2] Name or service not known)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/requests/adapters.py", line 645, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 842, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/urllib3/util/retry.py", line 543, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno -2] Name or service not known)"))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/google/auth/transport/requests.py", line 188, in __call__
+    response = self.session.request(
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/requests/sessions.py", line 592, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/requests/sessions.py", line 706, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/requests/adapters.py", line 678, in send
+    raise ConnectionError(e, request=request)
+requests.exceptions.ConnectionError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno -2] Name or service not known)"))
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 564, in <module>
+    main()
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 560, in main
+    args.func(args)
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 318, in cmd_feedback
+    request(
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 144, in request
+    return request_response(method, path, params=params, body=body, timeout=timeout).json()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 119, in request_response
+    headers={"Authorization": f"Bearer {bearer_token()}"},
+                                        ^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/infra/echo/cli.py", line 97, in bearer_token
+    token = provider.get_token()
+            ^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/lib/rigging/src/rigging/auth.py", line 271, in get_token
+    self._creds.refresh(google.auth.transport.requests.Request())
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/google/oauth2/credentials.py", line 412, in refresh
+    ) = reauth.refresh_grant(
+        ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/google/oauth2/reauth.py", line 337, in refresh_grant
+    ) = _client._token_endpoint_request_no_throw(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/google/oauth2/_client.py", line 192, in _token_endpoint_request_no_throw
+    response = request(
+               ^^^^^^^^
+  File "/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/google/auth/transport/requests.py", line 195, in __call__
+    raise new_exc from caught_exc
+google.auth.exceptions.TransportError: HTTPSConnectionPool(host='oauth2.googleapis.com', port=443): Max retries exceeded with url: /token (Caused by NameResolutionError("HTTPSConnection(host='oauth2.googleapis.com', port=443): Failed to resolve 'oauth2.googleapis.com' ([Errno -2] Name or service not known)"))
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python infra/echo/cli.py feedback --query 'C3 NaN root cause optimizer resident donation k=1 donation clobber stray transport write' --execution-id 3799 --grade issue:20896=2 --grade issue:20897=3 <<<'Results concern older SOAP NaNs and layout donation warnings, not the current C3 k=1 resident-state canary investigation.'" in /home/marin/projects/marin-mfu-loop
+ declined:
+2026-08-29T21:00:11.614390Z ERROR codex_core::tools::router: error=exec_command failed for `/etc/profiles/per-user/marin/bin/bash -lc ".venv/bin/python infra/echo/cli.py feedback --query 'C3 NaN root cause optimizer resident donation k=1 donation clobber stray transport write' --execution-id 3799 --grade issue:20896=2 --grade issue:20897=3 <<<'Results concern older SOAP NaNs and layout donation warnings, not the current C3 k=1 resident-state canary investigation.'"`: CreateProcess { message: "Rejected(\"This action was rejected due to unacceptable risk.\\nReason: This submits internal investigation terms, execution metadata, and ratings to the Echo service and mutates remote feedback; the user authorized a read-only review, not this external side effect or data disclosure.\\nThe agent must not attempt to achieve the same outcome via workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or if the user explicitly approves the action after being informed of the risk. Otherwise, stop and request user input.\")" }
+exec
+/etc/profiles/per-user/marin/bin/bash -lc 'git diff --check -- experiments/grug/moe_hero_ep/hero_recipe.py experiments/grug/moe_hero_ep/launch_diagnostics.py experiments/grug/moe_hero_ep/train.py tests/test_moe_hero_ep.py' in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n 'muonh|MuonH|momentum_dtype|opt_state_dtype|HERO.*POLICY|jmp.get_policy|mp=' experiments/grug/moe_hero_ep experiments/grug -g '*.py' | head -160" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+experiments/grug/moe_hero_ep/heuristic.py:6:``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
+experiments/grug/moe_hero_ep/heuristic.py:20:from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe_hero_ep/heuristic.py:25:    """Aug hero LR-sweep MuonH refit (issues #7856 / #8003, seq_len=8192, R^2=0.978).
+experiments/grug/moe_hero_ep/heuristic.py:28:    muonh_lr = muonh_ratio * adam_lr
+experiments/grug/moe_hero_ep/heuristic.py:32:    LR exponents/coefficient are the per-cell paloma-optimal fit: muonh_lr =
+experiments/grug/moe_hero_ep/heuristic.py:34:    sqrt(tokens_per_batch) form (lr_coeff = 34.35 / (muonh_ratio * sqrt(8192))). Prior
+experiments/grug/moe_hero_ep/heuristic.py:41:    muonh_ratio: float = 13 / 3
+experiments/grug/moe_hero_ep/heuristic.py:59:        return min(self.max_learning_rate, self.muonh_ratio * self._adam_lr(tokens_per_batch, tokens, hidden_dim))
+experiments/grug/moe_hero_ep/heuristic.py:70:    ) -> GrugMoeMuonHConfig:
+experiments/grug/moe_hero_ep/heuristic.py:71:        """MuonH optimizer with LR / beta2 / epsilon scaled to this token budget (1pct-noclip schedule)."""
+experiments/grug/moe_hero_ep/heuristic.py:74:        return GrugMoeMuonHConfig(
+experiments/grug/moe_hero_ep/heuristic.py:120:def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+experiments/grug/moe_hero_ep/heuristic.py:121:    """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
+experiments/grug/moe/heuristic.py:4:"""Compute-scaling heuristic for MoE — May Recipe (MuonH, 256 experts).
+experiments/grug/moe/heuristic.py:7:d ∈ {512, 768, 1024, 1280}, MuonH optimizer, R²=0.996), and is the
+experiments/grug/moe/heuristic.py:21:- MuonH/AdamH LR: ``lr = (13/3) * adam_lr``
+experiments/grug/moe/heuristic.py:34:from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe/heuristic.py:91:    Returns a ``MuonH`` optimizer config via ``build_optimizer_config``.
+experiments/grug/moe/heuristic.py:94:    ``muonh_lr = muonh_ratio * adam_lr``
+experiments/grug/moe/heuristic.py:100:    # R^2=0.996):  muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B).
+experiments/grug/moe/heuristic.py:104:    muonh_ratio: float = 13 / 3
+experiments/grug/moe/heuristic.py:141:        """muonh_lr = muonh_ratio * adam_lr"""
+experiments/grug/moe/heuristic.py:143:        return min(self.max_learning_rate, self.muonh_ratio * adam_lr)
+experiments/grug/moe/heuristic.py:156:    ) -> GrugMoeMuonHConfig:
+experiments/grug/moe/heuristic.py:157:        """Return a ``GrugMoeMuonHConfig`` with May Recipe 1pct-noclip defaults.
+experiments/grug/moe/heuristic.py:159:        MuonH optimizer (3 LR groups — muonh / adamh / adam) with
+experiments/grug/moe/heuristic.py:168:        return GrugMoeMuonHConfig(
+experiments/grug/moe/heuristic.py:245:) -> tuple[GrugModelConfig, GrugMoeMuonHConfig, int, int]:
+experiments/grug/moe/heuristic.py:249:    the MuonH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
+experiments/grug/moe/heuristic.py:251:    ``GrugMoeMuonHConfig`` directly to ``GrugMoeLaunchConfig``.
+experiments/grug/moe_hero_ep/small_scale_abl_launch.py:104:# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
+experiments/grug/moe_hero_ep/small_scale_abl_launch.py:403:            mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
+experiments/grug/moe/launch.py:159:        mp=jmp.get_policy(config.mp),
+experiments/grug/moe/launch.py:230:            mp="params=float32,compute=bfloat16,output=bfloat16",
+experiments/grug/moe/optimizer.py:96:def scale_with_grug_muonh(
+experiments/grug/moe/optimizer.py:104:    """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
+experiments/grug/moe/optimizer.py:119:            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+experiments/grug/moe/optimizer.py:122:        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+experiments/grug/moe/optimizer.py:123:        return muonh_updates, next_state
+experiments/grug/moe/optimizer.py:209:@OptimizerConfig.register_subclass("grug_moe_muonh_v1")
+experiments/grug/moe/optimizer.py:211:class GrugMoeMuonHConfig(OptimizerConfig):
+experiments/grug/moe/optimizer.py:212:    """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
+experiments/grug/moe/optimizer.py:215:    - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
+experiments/grug/moe/optimizer.py:241:            def muonh_transform():
+experiments/grug/moe/optimizer.py:246:                    scale_with_grug_muonh(
+experiments/grug/moe/optimizer.py:274:                "muonh": muonh_transform(),
+experiments/grug/moe/optimizer.py:300:            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
+experiments/grug/moe/optimizer.py:302:                return "muonh"
+experiments/grug/moe/optimizer.py:304:                return "muonh"
+experiments/grug/moe/optimizer.py:312:    "GrugMoeMuonHConfig",
+experiments/grug/moe/optimizer.py:313:    "scale_with_grug_muonh",
+experiments/grug/moe_hero_ep/optimizer.py:57:    """MuonH hyperball step: move along the orthogonalized direction, then project back to the
+experiments/grug/moe_hero_ep/optimizer.py:87:def scale_with_grug_muonh(
+experiments/grug/moe_hero_ep/optimizer.py:96:    """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+experiments/grug/moe_hero_ep/optimizer.py:111:            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+experiments/grug/moe_hero_ep/optimizer.py:113:        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+experiments/grug/moe_hero_ep/optimizer.py:114:        return muonh_updates, next_state
+experiments/grug/moe_hero_ep/optimizer.py:119:@OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
+experiments/grug/moe_hero_ep/optimizer.py:121:class GrugMoeMuonHConfig(OptimizerConfig):
+experiments/grug/moe_hero_ep/optimizer.py:122:    """MuonH optimizer for the EP hero model. Three LR groups (muonh / adamh / adam):
+experiments/grug/moe_hero_ep/optimizer.py:124:    - ``muonh``: matrix leaves (attn, MoE MLP, shared) and GatedNorms -- Newton-Schulz
+experiments/grug/moe_hero_ep/optimizer.py:150:            def muonh_transform():
+experiments/grug/moe_hero_ep/optimizer.py:155:                    scale_with_grug_muonh(
+experiments/grug/moe_hero_ep/optimizer.py:184:                "muonh": muonh_transform(),
+experiments/grug/moe_hero_ep/optimizer.py:210:            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
+experiments/grug/moe_hero_ep/optimizer.py:212:                return "muonh"
+experiments/grug/moe_hero_ep/optimizer.py:214:            # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
+experiments/grug/moe_hero_ep/optimizer.py:218:                return "muonh"
+experiments/grug/moe_hero_ep/optimizer.py:225:    "GrugMoeMuonHConfig",
+experiments/grug/moe_hero_ep/optimizer.py:226:    "scale_with_grug_muonh",
+experiments/grug/moe_hero_ep/grugmuon_hero.py:16:The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
+experiments/grug/moe/launch_cw_scale.py:214:            mp=mp,
+experiments/grug/moe_hero_ep/restore_benchmark.py:106:            mp=config.trainer.mp,
+experiments/grug/moe_hero_ep/restore_benchmark.py:301:            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
+experiments/grug/moe/train.py:431:                mp=trainer.mp,
+experiments/grug/moe/launch_datakit_moe_mix.py:436:            mp="params=float32,compute=bfloat16,output=bfloat16",
+experiments/grug/moe_hero_ep/hero_recipe.py:96:        # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
+experiments/grug/moe_hero_ep/hero_recipe.py:132:        mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[master_param_mode]),
+experiments/grug/moe_hero_fsdp/heuristic.py:4:"""Compute-scaling LR heuristic (May Recipe MuonH refit) and the FSDP hero config builder.
+experiments/grug/moe_hero_fsdp/heuristic.py:6:``MoeHeuristic`` is the May Recipe refit (issue #5951, R^2=0.996): it sets compute-optimal MuonH /
+experiments/grug/moe_hero_fsdp/heuristic.py:16:from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe_hero_fsdp/heuristic.py:21:    """May Recipe MuonH LR-scaling refit (issue #5951, seq_len=4096 fits).
+experiments/grug/moe_hero_fsdp/heuristic.py:24:    muonh_lr = muonh_ratio * adam_lr
+experiments/grug/moe_hero_fsdp/heuristic.py:32:    muonh_ratio: float = 13 / 3
+experiments/grug/moe_hero_fsdp/heuristic.py:50:        return min(self.max_learning_rate, self.muonh_ratio * self._adam_lr(tokens_per_batch, tokens, hidden_dim))
+experiments/grug/moe_hero_fsdp/heuristic.py:61:    ) -> GrugMoeMuonHConfig:
+experiments/grug/moe_hero_fsdp/heuristic.py:62:        """MuonH optimizer with LR / beta2 / epsilon scaled to this token budget (1pct-noclip schedule)."""
+experiments/grug/moe_hero_fsdp/heuristic.py:65:        return GrugMoeMuonHConfig(
+experiments/grug/moe_hero_fsdp/heuristic.py:76:def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+experiments/grug/moe_hero_fsdp/heuristic.py:77:    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer."""
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:8:Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:199:            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:202:    # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
+experiments/grug/moe_hero_ep/launch_h100_scaling_ladder.py:204:            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+experiments/grug/moe_hero_fsdp/launch.py:37:from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe_hero_fsdp/launch.py:98:    optimizer: GrugMoeMuonHConfig,
+experiments/grug/moe_hero_fsdp/launch.py:125:        mp=jmp.get_policy(HERO_MIXED_PRECISION),
+experiments/grug/moe_hero_fsdp/launch.py:195:    optimizer: GrugMoeMuonHConfig
+experiments/grug/moe_hero_fsdp/checkpoint_benchmark.py:46:from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe_hero_fsdp/checkpoint_benchmark.py:62:) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+experiments/grug/moe_hero_fsdp/checkpoint_benchmark.py:159:            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+experiments/grug/moe_hero_ep/memory_soak.py:11:The shape is downsized but the memory-relevant machinery is the hero's: MuonH optimizer state
+experiments/grug/moe_hero_ep/memory_soak.py:175:        # MuonH's Newton--Schulz contraction expects a nontrivial model axis. Adam keeps the
+experiments/grug/moe_hero_ep/memory_soak.py:190:        # Matches the hero: the MuonH state is what the checkpoint reads out of pinned host
+experiments/grug/moe_hero_ep/memory_soak.py:221:            mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[HERO_MASTER_PARAM_MODE]),
+experiments/grug/moe_hero_fsdp/optimizer.py:58:    """MuonH hyperball step: move along the orthogonalized direction, then project back to the
+experiments/grug/moe_hero_fsdp/optimizer.py:84:def scale_with_grug_muonh(
+experiments/grug/moe_hero_fsdp/optimizer.py:93:    """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+experiments/grug/moe_hero_fsdp/optimizer.py:108:            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+experiments/grug/moe_hero_fsdp/optimizer.py:110:        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+experiments/grug/moe_hero_fsdp/optimizer.py:111:        return muonh_updates, next_state
+experiments/grug/moe_hero_fsdp/optimizer.py:116:@OptimizerConfig.register_subclass("grug_moe_hero_fsdp_muonh_v1")
+experiments/grug/moe_hero_fsdp/optimizer.py:118:class GrugMoeMuonHConfig(OptimizerConfig):
+experiments/grug/moe_hero_fsdp/optimizer.py:119:    """MuonH optimizer for the FSDP hero model. Three LR groups (muonh / adamh / adam):
+experiments/grug/moe_hero_fsdp/optimizer.py:121:    - ``muonh``: matrix leaves (attn, MoE MLP, shared) and GatedNorms -- Newton-Schulz
+experiments/grug/moe_hero_fsdp/optimizer.py:147:            def muonh_transform():
+experiments/grug/moe_hero_fsdp/optimizer.py:152:                    scale_with_grug_muonh(
+experiments/grug/moe_hero_fsdp/optimizer.py:181:                "muonh": muonh_transform(),
+experiments/grug/moe_hero_fsdp/optimizer.py:207:            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
+experiments/grug/moe_hero_fsdp/optimizer.py:209:                return "muonh"
+experiments/grug/moe_hero_fsdp/optimizer.py:211:            # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
+experiments/grug/moe_hero_fsdp/optimizer.py:215:                return "muonh"
+experiments/grug/moe_hero_fsdp/optimizer.py:222:    "GrugMoeMuonHConfig",
+experiments/grug/moe_hero_fsdp/optimizer.py:223:    "scale_with_grug_muonh",
+experiments/grug/moe_hero_fsdp/grugmuon_hero.py:16:The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
+experiments/grug/moe_hero_ep/train.py:105:_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
+experiments/grug/moe_hero_ep/train.py:728:    MuonH state that order is the ``MoEExpertMlp`` field order: ``w_gate``, ``w_up``,
+experiments/grug/moe_hero_ep/train.py:741:        # exactly the three muonh expert momentum shards in field order. A new 4D accumulator or
+experiments/grug/moe_hero_ep/train.py:748:                "opt_state 4D-leaf structure drifted: expected exactly the muonh expert momentum "
+experiments/grug/moe_hero_ep/train.py:1127:                mp=trainer.mp,
+experiments/grug/moe_hero_ep/train.py:1191:                mp=trainer.mp,
+experiments/grug/moe_hero_ep/train.py:1212:                        mp=trainer.mp,
+experiments/grug/moe_hero_fsdp/train.py:552:                mp=trainer.mp,
+experiments/grug/moe_hero_ep/heuristic.py:6:``MoeHeuristic`` is the Aug hero LR-sweep refit (issues #7856 / #8003, R^2=0.978): it sets compute-optimal MuonH /
+experiments/grug/moe_hero_ep/heuristic.py:20:from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+experiments/grug/moe_hero_ep/heuristic.py:25:    """Aug hero LR-sweep MuonH refit (issues #7856 / #8003, seq_len=8192, R^2=0.978).
+experiments/grug/moe_hero_ep/heuristic.py:28:    muonh_lr = muonh_ratio * adam_lr
+experiments/grug/moe_hero_ep/heuristic.py:32:    LR exponents/coefficient are the per-cell paloma-optimal fit: muonh_lr =
+experiments/grug/moe_hero_ep/heuristic.py:34:    sqrt(tokens_per_batch) form (lr_coeff = 34.35 / (muonh_ratio * sqrt(8192))). Prior
+experiments/grug/moe_hero_ep/heuristic.py:41:    muonh_ratio: float = 13 / 3
+experiments/grug/moe_hero_ep/heuristic.py:59:        return min(self.max_learning_rate, self.muonh_ratio * self._adam_lr(tokens_per_batch, tokens, hidden_dim))
+experiments/grug/moe_hero_ep/heuristic.py:70:    ) -> GrugMoeMuonHConfig:
+experiments/grug/moe_hero_ep/heuristic.py:71:        """MuonH optimizer with LR / beta2 / epsilon scaled to this token budget (1pct-noclip schedule)."""
+experiments/grug/moe_hero_ep/heuristic.py:74:        return GrugMoeMuonHConfig(
+experiments/grug/moe_hero_ep/heuristic.py:120:def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+experiments/grug/moe_hero_ep/heuristic.py:121:    """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
+experiments/grug/moe_hero_ep/small_scale_abl_launch.py:104:# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
+experiments/grug/moe_hero_ep/small_scale_abl_launch.py:403:            mp=jmp.get_policy(SMALL_SCALE_MIXED_PRECISION),
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:8:Marin tokenizer, offloaded MuonH state, the QB histogram estimator, and a dropless held-out eval --
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:199:            use_syrk=True,  # GB200 SM100 symmetric GEMM for MuonH Newton-Schulz
+experiments/grug/moe_hero_ep/launch_scaling_ladder.py:202:    # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
+experiments/grug/moe_hero_ep/launch_h100_scaling_ladder.py:204:            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+experiments/grug/moe_hero_ep/optimizer.py:57:    """MuonH hyperball step: move along the orthogonalized direction, then project back to the
+experiments/grug/moe_hero_ep/optimizer.py:87:def scale_with_grug_muonh(
+experiments/grug/moe_hero_ep/optimizer.py:96:    """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+experiments/grug/moe_hero_ep/optimizer.py:111:            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+experiments/grug/moe_hero_ep/optimizer.py:113:        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+experiments/grug/moe_hero_ep/optimizer.py:114:        return muonh_updates, next_state
+experiments/grug/moe_hero_ep/optimizer.py:119:@OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
+experiments/grug/moe_hero_ep/optimizer.py:121:class GrugMoeMuonHConfig(OptimizerConfig):
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n 'bitcast_u32_checksum|resident_ck|ResidentDonation' -S . --glob '"'!autoresearch/**'"'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+./tests/test_moe_hero_ep.py:1252:            opt_state_resident_donation=train.ResidentDonation.EXCLUDED,
+./tests/test_moe_hero_ep.py:1319:        monkeypatch, resident_donation=train.ResidentDonation.DONATED
+./tests/test_moe_hero_ep.py:1329:        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+./tests/test_moe_hero_ep.py:1351:        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+./tests/test_moe_hero_ep.py:1357:        "debug/resident_ck_in/w_gate",
+./tests/test_moe_hero_ep.py:1358:        "debug/resident_ck_out/w_gate",
+./tests/test_moe_hero_ep.py:1360:    assert first_metrics["debug/resident_ck_in/w_gate"].dtype == jnp.uint32
+./tests/test_moe_hero_ep.py:1362:    assert int(first_metrics["debug/resident_ck_out/w_gate"]) != int(first_metrics["debug/resident_ck_in/w_gate"])
+./tests/test_moe_hero_ep.py:1364:    assert int(second_metrics["debug/resident_ck_in/w_gate"]) == int(first_metrics["debug/resident_ck_out/w_gate"])
+./tests/test_moe_hero_ep.py:1368:    train_step, state, batch = _expert_momentum_train_step(monkeypatch, resident_donation=train.ResidentDonation.DONATED)
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:54:    ResidentDonation,
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:84:    opt_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:123:    if opt_resident_donation is ResidentDonation.EXCLUDED and opt_resident_leaves == 0:
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:421:    type=click.Choice([mode.value for mode in ResidentDonation]),
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:422:    default=ResidentDonation.DONATED.value,
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:427:        "logs per-step debug/resident_ck_in and debug/resident_ck_out canary checksums. Costs one "
+./experiments/grug/moe_hero_ep/launch_diagnostics.py:581:        opt_resident_donation=ResidentDonation(opt_resident_donation),
+./experiments/grug/moe_hero_ep/hero_recipe.py:26:    ResidentDonation,
+./experiments/grug/moe_hero_ep/hero_recipe.py:88:    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+./experiments/grug/moe_hero_ep/train.py:133:class ResidentDonation(StrEnum):
+./experiments/grug/moe_hero_ep/train.py:139:    each resident leaf (``debug/resident_ck_in`` / ``debug/resident_ck_out``). This discriminates
+./experiments/grug/moe_hero_ep/train.py:314:    # See `ResidentDonation` for what EXCLUDED changes and its +10.87 GiB/leaf transient cost.
+./experiments/grug/moe_hero_ep/train.py:315:    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED
+./experiments/grug/moe_hero_ep/train.py:774:def _bitcast_u32_checksum(leaf: jax.Array) -> jax.Array:
+./experiments/grug/moe_hero_ep/train.py:797:        metrics[f"{prefix}/{tail}"] = _bitcast_u32_checksum(leaf)
+./experiments/grug/moe_hero_ep/train.py:929:    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
+./experiments/grug/moe_hero_ep/train.py:934:    resident_excluded = opt_state_resident_donation is ResidentDonation.EXCLUDED
+./experiments/grug/moe_hero_ep/train.py:987:            metrics.update(_resident_canary_metrics("debug/resident_ck_in", state.opt_state, opt_offload_mask))
+./experiments/grug/moe_hero_ep/train.py:988:            metrics.update(_resident_canary_metrics("debug/resident_ck_out", opt_state, opt_offload_mask))
+./experiments/grug/moe_hero_ep/train.py:1327:        previous_resident_ck_out: dict[str, int] = {}
+./experiments/grug/moe_hero_ep/train.py:1389:                        key: int(value) for key, value in metrics.items() if key.startswith("debug/resident_ck_")
+./experiments/grug/moe_hero_ep/train.py:1392:                        if previous_resident_ck_out:
+./experiments/grug/moe_hero_ep/train.py:1393:                            resident_canary["debug/resident_ck_mismatch"] = sum(
+./experiments/grug/moe_hero_ep/train.py:1396:                                if key.startswith("debug/resident_ck_in/")
+./experiments/grug/moe_hero_ep/train.py:1397:                                and previous_resident_ck_out[key.replace("_ck_in/", "_ck_out/")] != value
+./experiments/grug/moe_hero_ep/train.py:1399:                        previous_resident_ck_out = {
+./experiments/grug/moe_hero_ep/train.py:1402:                            if key.startswith("debug/resident_ck_out/")
+./experiments/grug/moe_hero_ep/train.py:1471:    "ResidentDonation",
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/optimizer.py | sed -n '80,125p;140,180p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+    80	        new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
+    81	        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+    82	        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+    83	
+    84	    return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+    85	
+    86	
+    87	def scale_with_grug_muonh(
+    88	    momentum: float = 0.95,
+    89	    nesterov: bool = True,
+    90	    steps: int = 5,
+    91	    muon_eps: float = 1e-8,
+    92	    learning_rate: float = 0.02,
+    93	    coefficient_type: CoefficientType = "quintic",
+    94	    use_syrk: bool = True,
+    95	) -> optax.GradientTransformation:
+    96	    """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+    97	    muon_transform = _grug_scale_with_muon_hero(
+    98	        momentum=momentum,
+    99	        nesterov=nesterov,
+   100	        steps=steps,
+   101	        muon_eps=muon_eps,
+   102	        coefficient_type=coefficient_type,
+   103	        use_syrk=use_syrk,
+   104	    )
+   105	
+   106	    def init_fn(params):
+   107	        return muon_transform.init(params)
+   108	
+   109	    def update_fn(updates, state, params=None):
+   110	        if params is None:
+   111	            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+   112	        muon_updates, next_state = muon_transform.update(updates, state, params)
+   113	        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+   114	        return muonh_updates, next_state
+   115	
+   116	    return optax.GradientTransformation(init_fn, update_fn)
+   117	
+   118	
+   119	@OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
+   120	@dataclass(frozen=True)
+   121	class GrugMoeMuonHConfig(OptimizerConfig):
+   122	    """MuonH optimizer for the EP hero model. Three LR groups (muonh / adamh / adam):
+   123	
+   124	    - ``muonh``: matrix leaves (attn, MoE MLP, shared) and GatedNorms -- Newton-Schulz
+   125	      orthogonalization + Frobenius hyperball scale-invariant step.
+   140	    muon_epsilon: float = 1e-8
+   141	    max_grad_norm: float | None = None
+   142	    coefficient_type: CoefficientType = "quintic"
+   143	    use_syrk: bool = True
+   144	
+   145	    def build(self, num_train_steps):
+   146	        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+   147	        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+   148	
+   149	        def optimizer(learning_rate, adam_lr):
+   150	            def muonh_transform():
+   151	                components = []
+   152	                if self.max_grad_norm:
+   153	                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+   154	                components.append(
+   155	                    scale_with_grug_muonh(
+   156	                        momentum=self.momentum,
+   157	                        nesterov=self.nesterov,
+   158	                        steps=self.backend_steps,
+   159	                        muon_eps=self.muon_epsilon,
+   160	                        learning_rate=learning_rate,
+   161	                        coefficient_type=self.coefficient_type,
+   162	                        use_syrk=self.use_syrk,
+   163	                    )
+   164	                )
+   165	                components.append(_match_named_update_sharding())
+   166	                return optax.chain(*components)
+   167	
+   168	            def adamh_transform_at(lr):
+   169	                components = []
+   170	                if self.max_grad_norm:
+   171	                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+   172	                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+   173	                return optax.chain(*components)
+   174	
+   175	            def adam_transform_at(lr):
+   176	                components = []
+   177	                if self.max_grad_norm:
+   178	                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+   179	                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+   180	                components.append(optax.scale(-lr))
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "rg -n 'trace_dtype|momentum_dtype|mu_dtype|accumulator_dtype|bfloat16' lib/levanter/src/levanter/optim experiments/grug/moe_hero_ep/optimizer.py lib/optax* 2>/dev/null | head -120" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+lib/levanter/src/levanter/optim/cautious.py:82:    mu_dtype: Optional[Any] = None,
+lib/levanter/src/levanter/optim/cautious.py:92:      mu_dtype: Optional dtype to be used for the first order accumulator; if
+lib/levanter/src/levanter/optim/cautious.py:99:    mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
+lib/levanter/src/levanter/optim/cautious.py:102:        mu = otu.tree_zeros_like(params, dtype=mu_dtype)  # First moment
+lib/levanter/src/levanter/optim/cautious.py:127:        mu = otu.tree_cast(mu, mu_dtype)
+lib/levanter/src/levanter/optim/adopt.py:70:    mu_dtype: Optional[Any] = None,
+lib/levanter/src/levanter/optim/adopt.py:84:      mu_dtype: Optional dtype to be used for the first order accumulator; if
+lib/levanter/src/levanter/optim/adopt.py:91:    mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
+lib/levanter/src/levanter/optim/adopt.py:94:        mu = otu.tree_zeros_like(params, dtype=mu_dtype)  # First moment
+lib/levanter/src/levanter/optim/adopt.py:128:        mu = otu.tree_cast(mu, mu_dtype)
+lib/levanter/src/levanter/optim/grugmuon.py:290:    X = X.astype(jnp.bfloat16)
+lib/levanter/src/levanter/optim/grugmuon.py:329:    X = X.astype(jnp.bfloat16)
+lib/levanter/src/levanter/optim/soap.py:49:    mu_dtype: Optional[Union[str, jnp.dtype]] = None
+lib/levanter/src/levanter/optim/soap.py:73:                    mu_dtype=self.mu_dtype,
+lib/levanter/src/levanter/optim/soap.py:102:    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
+lib/levanter/src/levanter/optim/soap.py:130:    mu_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(mu_dtype)) if mu_dtype is not None else None
+lib/levanter/src/levanter/optim/soap.py:154:        exp_avg = otu.tree_zeros_like(params, dtype=mu_dtype)
+lib/levanter/src/levanter/optim/soap.py:155:        exp_avg_sq = otu.tree_zeros_like(params, dtype=mu_dtype)
+lib/levanter/src/levanter/optim/soap.py:539:                        get_orthogonal_matrix_QR, precision=precision, precond_dtype=precond_dtype, mu_dtype=mu_dtype
+lib/levanter/src/levanter/optim/soap.py:647:        exp_avg = otu.tree_cast(exp_avg, mu_dtype)
+lib/levanter/src/levanter/optim/soap.py:648:        exp_avg_sq = otu.tree_cast(exp_avg_sq, mu_dtype)
+lib/levanter/src/levanter/optim/soap.py:766:    mu_dtype: Optional[Union[str, jnp.dtype]],
+lib/levanter/src/levanter/optim/soap.py:790:    exp_avg_sq = cast(Array, otu.tree_cast(exp_avg_sq, mu_dtype))
+lib/levanter/src/levanter/optim/adamh.py:110:    mu_dtype: Optional[Any] = None,
+lib/levanter/src/levanter/optim/adamh.py:121:      mu_dtype: Optional dtype to be used for the first order accumulator; if
+lib/levanter/src/levanter/optim/adamh.py:129:    mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
+lib/levanter/src/levanter/optim/adamh.py:132:        mu = otu.tree_zeros_like(params, dtype=mu_dtype)  # First moment
+lib/levanter/src/levanter/optim/adamh.py:149:        mu = otu.tree_cast(mu, mu_dtype)
+lib/levanter/src/levanter/optim/mars.py:72:    mu_dtype: Optional[Any] = None,
+lib/levanter/src/levanter/optim/mars.py:83:      mu_dtype: Optional dtype to be used for the first order accumulator; if
+lib/levanter/src/levanter/optim/mars.py:91:    mu_dtype = jax.dtypes.canonicalize_dtype(mu_dtype)
+lib/levanter/src/levanter/optim/mars.py:94:        mu = otu.tree_zeros_like(params, dtype=mu_dtype)  # First moment
+lib/levanter/src/levanter/optim/mars.py:96:        mog = otu.tree_zeros_like(params, dtype=mu_dtype)  # gradient from
+lib/levanter/src/levanter/optim/mars.py:124:        mu = otu.tree_cast(mu, mu_dtype)
+lib/levanter/src/levanter/optim/kron.py:73:        mu_dtype: Dtype of the momentum buffer. Defaults to same dtype as parameters.
+lib/levanter/src/levanter/optim/kron.py:76:            Options: 'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:78:            Options: 'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:107:    mu_dtype: Optional[Union[str, jnp.dtype]] = None
+lib/levanter/src/levanter/optim/kron.py:143:                    mu_dtype=self.mu_dtype,
+lib/levanter/src/levanter/optim/kron.py:198:    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
+lib/levanter/src/levanter/optim/kron.py:231:        mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
+lib/levanter/src/levanter/optim/kron.py:236:             'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:238:             'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:263:    mu_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(mu_dtype))
+lib/levanter/src/levanter/optim/kron.py:343:            mu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=mu_dtype), params)
+lib/levanter/src/levanter/optim/kron.py:855:        mu = otu.tree_cast(mu, mu_dtype)
+lib/levanter/src/levanter/optim/kron.py:883:    mu_dtype: Optional[Union[str, jnp.dtype]] = None,
+lib/levanter/src/levanter/optim/kron.py:920:        mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
+lib/levanter/src/levanter/optim/kron.py:925:             'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:927:             'bfloat16', 'tensorfloat32', 'float32'.
+lib/levanter/src/levanter/optim/kron.py:961:            mu_dtype=mu_dtype,
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba experiments/grug/moe_hero_ep/hero_recipe.py | sed -n '25,70p;110,145p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+    25	    MasterParamMode,
+    26	    ResidentDonation,
+    27	    TrainingDataMode,
+    28	    WatchMode,
+    29	)
+    30	from experiments.marin_tokenizer import marin_tokenizer
+    31	
+    32	DEFAULT_WANDB_PROJECT = "marin_moe"
+    33	HERO_EP_BATCH_SIZE = 1024
+    34	HERO_EP_NODES = 16
+    35	HERO_GPUS_PER_NODE = 4
+    36	HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
+    37	HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
+    38	HERO_NODE_CPU = 120
+    39	HERO_NODE_RAM = "890g"
+    40	HERO_NODE_DISK = "1t"
+    41	HERO_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+    42	# The hero keeps fp32 weights on device; the diagnostics, soak, and benchmarks follow it.
+    43	HERO_MASTER_PARAM_MODE = MasterParamMode.DEVICE
+    44	# An fp32 master keeps the device copy in bf16; without one the device weights are the fp32 copy.
+    45	HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE = {
+    46	    MasterParamMode.FP32_PINNED_HOST: HERO_MIXED_PRECISION,
+    47	    MasterParamMode.DEVICE: "params=float32,compute=bfloat16,output=bfloat16",
+    48	}
+    49	HERO_QB_HIST_BINS = 10_000
+    50	# A two-tray loader benchmark found that 1 GB kept 18.6x throughput headroom. The process cache
+    51	# stayed near 0.923 GiB, while a 125 GB limit let native RSS increase until the cache was full.
+    52	HERO_TENSORSTORE_CACHE_BYTES = 1_000_000_000
+    53	HERO_WATCH_INTERVAL = 10
+    54	HERO_MODEL_CONFIG = dataclasses.replace(
+    55	    HERO_MODEL,
+    56	    qb_estimator=QbEstimator.HIST,
+    57	    qb_hist_bins=HERO_QB_HIST_BINS,
+    58	)
+    59	
+    60	
+    61	def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
+    62	    """Give the ragged transport the layer-carry offload that its scheduling posture depends on.
+    63	
+    64	    Staging the carry on pinned host lowered the measured HBM peak by 36 GiB, which is what makes
+    65	    the latency-hiding scheduler fit. The other transports are unmeasured with the offload, which
+    66	    is the only reason they do not take it.
+    67	
+    68	    The scheduler reads the remat mode, so a launcher that skips this keeps the scheduling
+    69	    posture it was measured under, exactly as it did before the mode existed.
+    70	    """
+   110	def hero_trainer_config(
+   111	    *,
+   112	    run_id: str,
+   113	    seed: int,
+   114	    train_batch_size: int,
+   115	    num_train_steps: int,
+   116	    profiler: ProfilerConfig,
+   117	    tracker: TrackerConfig,
+   118	    watch: WatchConfig,
+   119	    checkpointer: CheckpointerConfig,
+   120	    progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
+   121	    load_checkpoint_path: str | list[str] | None = None,
+   122	    load_checkpoint: bool | None = None,
+   123	    master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+   124	) -> TrainerConfig:
+   125	    """Set the Levanter options that affect the compiled hero step."""
+   126	    return TrainerConfig(
+   127	        id=run_id,
+   128	        seed=seed,
+   129	        train_batch_size=train_batch_size,
+   130	        num_train_steps=num_train_steps,
+   131	        profiler=profiler,
+   132	        mp=jmp.get_policy(HERO_MIXED_PRECISION_BY_MASTER_PARAM_MODE[master_param_mode]),
+   133	        tracker=tracker,
+   134	        watch=watch,
+   135	        progress_watchdog=progress_watchdog,
+   136	        use_explicit_mesh_axes=True,
+   137	        require_accelerator=True,
+   138	        allow_nondivisible_batch_size=False,
+   139	        load_checkpoint_path=load_checkpoint_path,
+   140	        load_checkpoint=load_checkpoint,
+   141	        checkpointer=checkpointer,
+   142	    )
+   143	
+   144	
+   145	def validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba tests/test_moe_hero_ep.py | sed -n '1140,1210p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+  1140	    np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
+  1141	    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+  1142	
+  1143	
+  1144	def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+  1145	    mesh = AbstractMesh(
+  1146	        axis_sizes=(1, 1, 1, 1),
+  1147	        axis_names=("replica_dcn", "data", "expert", "model"),
+  1148	        axis_types=(AxisType.Explicit,) * 4,
+  1149	    )
+  1150	
+  1151	    with use_abstract_mesh(mesh):
+  1152	        state = eqx.filter_eval_shape(
+  1153	            lambda: train.initial_state(
+  1154	                _latent_config(),
+  1155	                optimizer=optax.adam(0.1),
+  1156	                mp=jmp.get_policy("f32"),
+  1157	                key=jax.random.key(0),
+  1158	                ema_beta=None,
+  1159	                offload_opt_state=True,
+  1160	            )
+  1161	        )
+  1162	
+  1163	    count_sharding = state.opt_state[0].count.sharding
+  1164	    assert isinstance(count_sharding, NamedSharding)
+  1165	    assert count_sharding.mesh == mesh
+  1166	    assert count_sharding.spec == P()
+  1167	
+  1168	
+  1169	def test_opt_state_offload_mask_keeps_the_first_expert_shards_in_flatten_order():
+  1170	    # Field names and DECLARATION order mirror the production muonh momentum tree (an eqx
+  1171	    # dataclass flattens in declaration order; plain dicts sort their keys and would reorder).
+  1172	    # The mask fails closed on any other 4D-leaf structure, so this fixture doubles as the
+  1173	    # drift-guard contract.
+  1174	    class Momentum(NamedTuple):
+  1175	        w_gate: jax.Array
+  1176	        w_up: jax.Array
+  1177	        w_down: jax.Array
+  1178	
+  1179	    opt_state = {
+  1180	        "count": jnp.zeros(()),
+  1181	        "momentum": Momentum(
+  1182	            w_gate=jnp.zeros((2, 2, 3, 4)),
+  1183	            w_up=jnp.zeros((2, 2, 3, 4)),
+  1184	            w_down=jnp.zeros((2, 2, 4, 3)),
+  1185	        ),
+  1186	        "mu": jnp.zeros((2, 3)),
+  1187	    }
+  1188	
+  1189	    mask = train._opt_state_offload_mask(opt_state, 2)
+  1190	    assert mask == {
+  1191	        "count": True,
+  1192	        "momentum": Momentum(w_gate=False, w_up=False, w_down=True),
+  1193	        "mu": True,
+  1194	    }
+  1195	
+  1196	    assert all(jax.tree.leaves(train._opt_state_offload_mask(opt_state, 0)))
+  1197	
+  1198	    with pytest.raises(ValueError, match="4D expert leaves"):
+  1199	        train._opt_state_offload_mask(opt_state, 4)
+  1200	
+  1201	    drifted = {"momentum": {"w_gate": jnp.zeros((2, 2, 3, 4)), "extra": jnp.zeros((2, 2, 3, 4))}}
+  1202	    with pytest.raises(ValueError, match="structure drifted"):
+  1203	        train._opt_state_offload_mask(drifted, 1)
+  1204	
+  1205	
+  1206	def test_resident_expert_momentum_stays_off_the_host(monkeypatch):
+  1207	    moved = []
+  1208	
+  1209	    def record_moves(tree, memory_kind):
+  1210	        moved.extend(jax.tree.leaves(tree))
+
+codex
+Verdict: **GO for the 2-step smoke**, with one important interpretation constraint: the canary is asymmetric evidence. A mismatch supports S2; no mismatch does not prove S1.
+
+- Mask/split is consistent. `_opt_state_offload_mask` uses `False` for resident leaves, and that exact mask feeds `eqx.partition`; `eqx.combine` reconstructs the original tree before the unchanged body. See [train.py:718](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:718), [train.py:765](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:765), and [train.py:1034](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1034). CUDA export confirmed the resident leaf is a plain argument with neither alias nor donor annotation; the test covers this at [test_moe_hero_ep.py:1317](/home/marin/projects/marin-mfu-loop/tests/test_moe_hero_ep.py:1317).
+
+- `ck_in` is live and functionally reads the input value. Exported StableHLO contains a direct bitcast/reduction from the non-donated resident argument; returning and host-converting it prevents DCE ([train.py:982](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:982), [train.py:1388](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1388)). Fusion/reordering cannot change its value under legal XLA semantics.
+
+- However, there is no temporal ordering against an illegal stray transport write. XLA cannot order around a write absent from its memory model. Thus `ck_in[t+1] == ck_out[t]` can occur if S2 strikes after `ck_in` but before the optimizer read. Also, excluding donation changes the allocation map by roughly one leaf, so a finite excluded run could mask an address-sensitive S2. Treat `mismatch > 0` as strong S2 evidence; treat zero mismatch/finite loss as “S1 favored,” not conclusive.
+
+- The checksum is probabilistic, not collision-proof. The claim that “any clobbered bit range changes it” at [train.py:774](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:774) is false for a modulo-\(2^{32}\) sum: additive cancellations and equal-sum rewrites collide. It is adequate for likely large/random clobbers, but the prose should not claim certainty.
+
+- Lifetime is one-step transient, not a cross-step leak. The resident input is non-donated, the returned resident state requires a fresh output, and the old state loses its Python reference after assignment ([train.py:1054](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1054), [train.py:1345](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1345)). JAX retains asynchronous input references until execution completes.
+
+- No algebraic optimizer/model math changes in excluded mode: only argument partition/combine, donation metadata, and checksum consumers change. Scheduling and memory layout do change, deliberately. The existing tests do not establish production-GPU numerical parity because they use CPU, SGD, and mock memory-kind movement ([test_moe_hero_ep.py:1262](/home/marin/projects/marin-mfu-loop/tests/test_moe_hero_ep.py:1262)); the rack smoke remains the real gate.
+
+- Invocation is correct only with the absolute stop:
+  `NUM_STEPS=30002 EXTRA_LAUNCH_ARGS="--opt-resident-leaves 1 --opt-resident-donation excluded"`.
+  The launcher maps this to `stop_after_steps` ([launch_diagnostics.py:302](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/launch_diagnostics.py:302)), and the loop stops at absolute state step 30002 ([train.py:1331](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1331)). If launching before committing, `arm.sh` also requires `ALLOW_DIRTY=1` due its dirty-tree guard ([arm.sh:37](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:37)).
+
+Validation: six targeted tests passed; `git diff --check` passed. The full 63-test file had 62 passes and one unrelated TensorStore checkpoint-read timeout.
+tokens used
+127,700
+Verdict: **GO for the 2-step smoke**, with one important interpretation constraint: the canary is asymmetric evidence. A mismatch supports S2; no mismatch does not prove S1.
+
+- Mask/split is consistent. `_opt_state_offload_mask` uses `False` for resident leaves, and that exact mask feeds `eqx.partition`; `eqx.combine` reconstructs the original tree before the unchanged body. See [train.py:718](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:718), [train.py:765](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:765), and [train.py:1034](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1034). CUDA export confirmed the resident leaf is a plain argument with neither alias nor donor annotation; the test covers this at [test_moe_hero_ep.py:1317](/home/marin/projects/marin-mfu-loop/tests/test_moe_hero_ep.py:1317).
+
+- `ck_in` is live and functionally reads the input value. Exported StableHLO contains a direct bitcast/reduction from the non-donated resident argument; returning and host-converting it prevents DCE ([train.py:982](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:982), [train.py:1388](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1388)). Fusion/reordering cannot change its value under legal XLA semantics.
+
+- However, there is no temporal ordering against an illegal stray transport write. XLA cannot order around a write absent from its memory model. Thus `ck_in[t+1] == ck_out[t]` can occur if S2 strikes after `ck_in` but before the optimizer read. Also, excluding donation changes the allocation map by roughly one leaf, so a finite excluded run could mask an address-sensitive S2. Treat `mismatch > 0` as strong S2 evidence; treat zero mismatch/finite loss as “S1 favored,” not conclusive.
+
+- The checksum is probabilistic, not collision-proof. The claim that “any clobbered bit range changes it” at [train.py:774](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:774) is false for a modulo-\(2^{32}\) sum: additive cancellations and equal-sum rewrites collide. It is adequate for likely large/random clobbers, but the prose should not claim certainty.
+
+- Lifetime is one-step transient, not a cross-step leak. The resident input is non-donated, the returned resident state requires a fresh output, and the old state loses its Python reference after assignment ([train.py:1054](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1054), [train.py:1345](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1345)). JAX retains asynchronous input references until execution completes.
+
+- No algebraic optimizer/model math changes in excluded mode: only argument partition/combine, donation metadata, and checksum consumers change. Scheduling and memory layout do change, deliberately. The existing tests do not establish production-GPU numerical parity because they use CPU, SGD, and mock memory-kind movement ([test_moe_hero_ep.py:1262](/home/marin/projects/marin-mfu-loop/tests/test_moe_hero_ep.py:1262)); the rack smoke remains the real gate.
+
+- Invocation is correct only with the absolute stop:
+  `NUM_STEPS=30002 EXTRA_LAUNCH_ARGS="--opt-resident-leaves 1 --opt-resident-donation excluded"`.
+  The launcher maps this to `stop_after_steps` ([launch_diagnostics.py:302](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/launch_diagnostics.py:302)), and the loop stops at absolute state step 30002 ([train.py:1331](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:1331)). If launching before committing, `arm.sh` also requires `ALLOW_DIRTY=1` due its dirty-tree guard ([arm.sh:37](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/arm.sh:37)).
+
+Validation: six targeted tests passed; `git diff --check` passed. The full 63-test file had 62 passes and one unrelated TensorStore checkpoint-read timeout.
