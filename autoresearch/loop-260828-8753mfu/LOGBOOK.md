@@ -311,3 +311,57 @@ double-use force CopyInsertion to copy every iteration.
   attribution lost). If both keep, back-ablate per the re-ablation rule;
   --xla_gpu_experimental_parallel_async_compute_limit=4 is a stacking
   refinement only.
+
+## H9/H10 review dispositions (fable + codex, transcripts: review-codex-h9h10.txt)
+
+Verdicts: H9 conditionally runnable; H10 STOP-SHIPPED pending stronger
+correctness gates. Actions taken now:
+
+- score.py emits mfu_median + stall_steps as the primary statistic (F3:
+  protocol drift — the mean field was the only emitted statistic while
+  DESIGN had switched to medians; draw-b gap was 0.37, >2x the keep bar).
+- arm.sh TF_CPP_VMODULE extended (uniformly, all arms) with
+  execution_stream_assignment=1 (H9 engagement: #async_start_instructions
+  count, control vs treatment — also counts UNINTENDED wrapped copies,
+  since GpuCopyAsyncWrapper is a global >=1GB transformation, codex-3) and
+  collective_pipeliner=1 (H10 engagement: "Pipelinable while"/"Transforming
+  DUS" lines). Profile-free engagement is primary; one tail draw per
+  treatment remains for runtime stream placement.
+- DESIGN stale decision rules rewritten (codex-2): no single-pair keeps,
+  guard excursions within ~2x band trigger draws/investigation not kills,
+  attribution freeze across kept-stack changes, task-log read before
+  crash classification.
+- arm.sh refuses submissions with JAX_OPTIMIZATION_LEVEL set (codex-6:
+  this fork enables pipelined host offloading at O1+ regardless of flag).
+
+H9 OUTCOME TREE (pre-declared, F4/F5/codex-4):
+- Engagement first: #async_start_instructions delta = +9 expected; 0 = 
+  predicate no-op (no dead call); >>9 = collateral wraps (attribute before
+  scoring).
+- Null + remat-count UP vs control's 325 = BUDGET-BLOCKED on slop-85, not
+  dead; retest only if the slop stack ever changes.
+- Null + remat flat: profile tail must confirm copies left the compute
+  stream AND offload-copy exposure did not worsen (H9 shares the limit-2
+  async-compute resource with the offload copies; starving them mimics a
+  null). Only then engaged-null-dead.
+- Crash/OOM = negative memory-budget interaction, not dead-lever;
+  consider --xla_gpu_experimental_parallel_async_compute_limit=4 as an
+  H9-alone refinement arm.
+- Positive: >=2 T draws vs frozen slop-85 controls, median bar 0.16; if
+  keep, COMMIT the flag into train.py flag_defaults before any further
+  arm (F6: env-only keeps break the control machinery — the TREATMENT
+  guard would reject a kept-flag control).
+
+H10 REVISED GATES (F1/F2 + codex-1; still stop-shipped until implemented):
+- The overlap-limit pin is NOT a safety argument (offload copies ride the
+  UNPINNED async-compute resource; the #8317 race was never root-caused;
+  pipelining shifts reload timing a whole iteration). Spec language fixed.
+- Required before running: a small committed observability change logging
+  per-rank nonfinite/grad-norm (or rank-local loss terms) — the global
+  loss psum dilutes a one-rank error ~64x below the null band; gate on max
+  rank delta. Loss comparison from step 30001 (the #8317 signature step is
+  OUTSIDE the +5..+19 window), both draws to natural completion (30 
+  points), plus a T-T pointwise comparison against the C-C band
+  (timing races show as T-T excess; bitwise T-T equality is NOT expected).
+- An H10 keep cannot be race-bounded by this protocol: pre-declared as
+  needing user sign-off + a longer soak before any hero promotion.

@@ -3,8 +3,10 @@
 
 """Score one arm of the ragged EP64 tuning loop from its W&B history.
 
-The metric is mean ``throughput/mfu`` over a fixed step window. The window is fixed for the whole
-loop: comparing arms scored over different windows compares warmup fractions, not transports.
+The primary metric is the run MEDIAN of ``throughput/mfu`` over a fixed step window (sparse
+environmental stall steps dominate means; see DESIGN "Metric and guards"); the mean and a stall
+count are emitted alongside. The window is fixed for the whole loop: comparing arms scored over
+different windows compares warmup fractions, not transports.
 
 Also emits the two guard quantities that come from the same run -- the worst drop fraction and the
 loss at the window's last step -- so a faster arm that quietly dropped tokens or changed the model
@@ -81,6 +83,13 @@ def main() -> None:
         # A window with holes in it is not the window the loop agreed to compare, so say so loudly
         # rather than averaging whatever happens to be there.
         "window_complete": len(mfu) == hi - lo + 1,
+        # The PRIMARY decision statistic (DESIGN, calibrated at iteration 0): sparse environmental
+        # stall steps swing the mean by >2x the keep bar while medians hold; stall count guards
+        # the median's blind spot (a treatment that CAUSES stalls must not hide behind it).
+        "mfu_median": round(statistics.median(mfu), 4) if mfu else None,
+        "stall_steps": (
+            sum(1 for v in mfu if v < statistics.median(mfu) * 0.97) if mfu else None
+        ),
         "mfu_mean": round(statistics.fmean(mfu), 4) if mfu else None,
         "mfu_stdev": round(statistics.stdev(mfu), 4) if len(mfu) > 1 else None,
         "tokens_per_second_mean": round(statistics.fmean(tokens), 1) if tokens else None,

@@ -2,9 +2,10 @@
 # Submit one hero EP64 arm for the 8753-mfu loop (research/mcwitt/8753-mfu-loop, #8753 head base).
 #
 # Protocol (fixed for every iteration so arms stay comparable; see DESIGN.md):
-#   - one NVL72 rack on cw-us-east-08a, PRODUCTION priority allowed with job runtime <1h
-#     (user 2026-08-28): ARM_TIMEOUT 3500s outer backstop, watchdog.sh COMPILE_CEILING=1800 +
-#     STEP_BUDGET=1200 inner caps (20-min post-compile cap)
+#   - one NVL72 rack on cw-us-east-08a, PRODUCTION priority allowed with job RUNTIME <1h
+#     (user 2026-08-28): ARM_TIMEOUT 28800s covers Kueue queue wait plus run (occupancy is
+#     intrinsically bounded by the absolute NUM_STEPS stop); watchdog.sh COMPILE_CEILING=1800 +
+#     STEP_BUDGET=1200 enforce the runtime cap from admission
 #   - restore from the live hero's step-30000 checkpoint, mixture data (trained-router routing);
 #     NUM_STEPS is the ABSOLUTE stop step (checkpoint step + window), never a relative count
 #   - no checkpoints, no eval; profiler off on SCORED arms (a profile tail on an otherwise-scored
@@ -99,7 +100,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e JAX_COMPILATION_CACHE_DIR "s3://marin-us-east-02a/marin/tmp/ttl=30d/jaxcache/${RID}" \
   -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
   -e TF_CPP_MIN_LOG_LEVEL 0 \
-  -e TF_CPP_VMODULE "hlo_rematerialization=1" \
+  -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1" \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
      --run-id "${RID}" \
      --dp-racks 1 --num-steps "${NUM_STEPS}" --schedule-steps "${SCHEDULE_STEPS}" \
