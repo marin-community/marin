@@ -59,11 +59,7 @@ def find_coscheduled_requeue_siblings(
     completes. Include those siblings so a retriable peer failure can revive
     their tasks without rewriting the succeeded attempt.
     """
-    active_siblings = state.active_tasks_for_job(
-        job_id,
-        states=ACTIVE_TASK_STATES,
-        exclude=exclude_task_id,
-    )
+    active_siblings = find_coscheduled_siblings(state, job_id, exclude_task_id)
     succeeded_siblings = state.task_details_for_job(
         job_id,
         states={job_pb2.TASK_STATE_SUCCEEDED},
