@@ -346,13 +346,11 @@ def build_workload_priority_class(name: str, value: int) -> dict:
 
 
 def build_cluster_queue(name: str, *, nominal_quotas: Mapping[str, str] | None = None) -> dict:
-    """Return the cluster-scoped, admin-owned ClusterQueue.
+    """Return a cluster-scoped ClusterQueue with covered-resource quota overrides.
 
-    Covers every resource Iris pods request (COVERED_RESOURCES). Resources omitted
-    from ``nominal_quotas`` keep their non-binding sentinel. Production supplies
-    accelerator quota from the configured scale-group maxima so accelerator pressure
-    enters Kueue's quota-driven priority preemption path. One flavor covers all
-    resources and nodes so TAS can simulate removal of compatible victims.
+    Every resource in ``COVERED_RESOURCES`` appears once. Resources omitted from
+    ``nominal_quotas`` use their ``NON_BINDING_QUOTA`` value. Unknown resources
+    are rejected.
     """
     nominal_quotas = nominal_quotas or {}
     unknown_resources = nominal_quotas.keys() - NON_BINDING_QUOTA.keys()

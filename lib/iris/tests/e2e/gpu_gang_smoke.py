@@ -116,6 +116,7 @@ _KIND_NODE_LABELS = {
     CW_LABEL_LEAFGROUP: "leafgroup-0",
     CW_LABEL_NVLINK_DOMAIN: "nvlink-domain-0",
 }
+_CLIENT_TIMEOUT_MS = 300_000
 _PREEMPTION_BATCH_SECONDS = 3600
 
 
@@ -565,7 +566,7 @@ def submit_gang(controller_url: str, target: ControllerTarget, args: SmokeArgs, 
         extras=extras,
         env_vars={"GANG_SMOKE_STEPS": str(args.steps), "GANG_SMOKE_PDB": str(args.per_device_batch)},
     )
-    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=300_000)
+    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=_CLIENT_TIMEOUT_MS)
     logger.info(
         "submitting gang %r: %d replicas, %s, group_by=%s, extras=%s",
         job_name,
@@ -602,7 +603,7 @@ def kueue_preemption_events(target: ControllerTarget) -> dict[str, str]:
 def validate_priority_preemption(controller_url: str, target: ControllerTarget, args: SmokeArgs) -> bool:
     """Fill kind's binding CPU quota with batch, then require interactive to reclaim it."""
     resources, _ = target.job_resources()
-    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=300_000)
+    client = IrisClient.remote(controller_url, workspace=repo_root(), timeout_ms=_CLIENT_TIMEOUT_MS)
     environment = EnvironmentSpec(setup_scripts=[])
     batch = client.submit(
         entrypoint=Entrypoint.from_command("python", "-c", f"import time; time.sleep({_PREEMPTION_BATCH_SECONDS})"),
