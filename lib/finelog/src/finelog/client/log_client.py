@@ -26,7 +26,6 @@ from connectrpc.interceptor import Interceptor
 from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
-from finelog.client.object_query_client import ObjectQueryClient, QueryMode
 from finelog.errors import (
     InvalidNamespaceError,
     NamespaceNotFoundError,
@@ -633,26 +632,13 @@ class LogClient:
         sql: str,
         *,
         max_rows: int = 100_000,
-        mode: QueryMode = QueryMode.SERVER,
-        object_store_root: str | None = None,
-        namespaces: Iterable[str] = (),
     ) -> pa.Table:
-        """Run SQL through the server or directly over a pinned object catalog.
+        """Run SQL through the server.
 
         Unlike :meth:`Table.query`, this does not require a local Table
-        handle. Client mode requires ``object_store_root`` and the exact
-        ``namespaces`` referenced by the SQL. Raises
-        :class:`QueryResultTooLargeError` if the row count exceeds
-        ``max_rows``.
+        handle. Raises :class:`QueryResultTooLargeError` if the row count
+        exceeds ``max_rows``.
         """
-        if mode is QueryMode.CLIENT:
-            if object_store_root is None:
-                raise ValueError("client query mode requires object_store_root")
-            return self.object_query_client(object_store_root).query(
-                sql,
-                namespaces=namespaces,
-                max_rows=max_rows,
-            )
         result = self._stats_query(sql)
         if result.num_rows > max_rows:
             raise QueryResultTooLargeError(
@@ -660,10 +646,6 @@ class LogClient:
                 f"(add a LIMIT or pass a higher max_rows)"
             )
         return result
-
-    def object_query_client(self, object_store_root: str) -> ObjectQueryClient:
-        """Create a direct object-store query client."""
-        return ObjectQueryClient(object_store_root)
 
     def list_namespaces(self) -> list[NamespaceInfo]:
         """Return every queryable namespace with its schema and storage statistics."""

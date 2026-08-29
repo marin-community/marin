@@ -224,22 +224,10 @@ fn relative_path(root: &Path, relative_key: &str) -> Result<PathBuf, StatsError>
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
     use crate::store::object_store::build_remote_object_store;
     use crate::store::object_store::ObjectVersion;
-
-    fn tempdir(tag: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!("finelog_object_cache_{tag}_{nonce}"));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
+    use crate::test_support::unique_dir;
 
     fn reference(table: &str, key: &str, bytes: &[u8]) -> ObjectReference {
         ObjectReference {
@@ -255,8 +243,8 @@ mod tests {
 
     #[tokio::test]
     async fn local_path_materializes_validates_and_deletes_with_the_object() {
-        let remote_root = tempdir("remote");
-        let cache_root = tempdir("local");
+        let remote_root = unique_dir("object_cache_remote");
+        let cache_root = unique_dir("object_cache_local");
         let source = Arc::new(
             build_remote_object_store(remote_root.to_str().unwrap())
                 .unwrap()

@@ -10,7 +10,6 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import PurePosixPath
 
 import duckdb
@@ -19,13 +18,6 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
-
-
-class QueryMode(StrEnum):
-    """Where a Finelog SQL query executes."""
-
-    SERVER = "server"
-    CLIENT = "client"
 
 
 @dataclass(frozen=True)

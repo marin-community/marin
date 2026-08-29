@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use futures::StreamExt;
 use object_store::path::Path as OsPath;
-use object_store::{ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
+use object_store::{ObjectStoreExt, PutMode, PutOptions};
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
@@ -27,7 +27,6 @@ use crate::store::object_store::{
     FINELOG_ROOT_COMPONENT, TABLES_COMPONENT,
 };
 
-use super::local_file::compare_and_swap as local_compare_and_swap;
 use super::provider::{is_remote_url, Provider};
 
 /// A configured remote object store plus the bucket-relative prefix the store
@@ -112,37 +111,9 @@ impl RemoteObjectStore {
     }
 
     async fn read_object(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
-        self.get_path(self.canonical_path(id), "object").await
-    }
-
-    async fn get_path(
-        &self,
-        path: OsPath,
-        description: &str,
-    ) -> Result<Option<StoredObject>, StatsError> {
-        let result = match self.provider.backend().get(&path).await {
-            Ok(result) => result,
-            Err(object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(error) => {
-                return Err(StatsError::Internal(format!(
-                    "read {description} {path}: {error}"
-                )))
-            }
-        };
-        let e_tag = result.meta.e_tag.clone();
-        let provider_version = result.meta.version.clone();
-        let bytes = result.bytes().await.map_err(|error| {
-            StatsError::Internal(format!("read {description} body {path}: {error}"))
-        })?;
-        Ok(Some(StoredObject {
-            version: ObjectVersion {
-                e_tag,
-                provider_version,
-                content_sha256: Sha256::digest(&bytes).into(),
-                byte_size: bytes.len() as u64,
-            },
-            bytes,
-        }))
+        self.provider
+            .get_path(self.canonical_path(id), "object")
+            .await
     }
 
     /// Create an immutable object, accepting an identical retry.
@@ -197,57 +168,19 @@ impl RemoteObjectStore {
         expected: Option<&ObjectVersion>,
         bytes: bytes::Bytes,
     ) -> Result<ObjectVersion, StatsError> {
-        if let Some(local_root) = self.provider.local_root() {
-            let path = local_object_path(local_root, id);
-            let expected_hash = expected.map(|version| version.content_sha256);
-            return tokio::task::spawn_blocking(move || {
-                local_compare_and_swap(&path, expected_hash, &bytes)
-            })
-            .await
-            .map_err(|error| StatsError::Internal(format!("local object CAS task: {error}")))?;
-        }
-
-        let path = self.canonical_path(id);
-        let mode = match expected {
-            None => PutMode::Create,
-            Some(version) => PutMode::Update(UpdateVersion {
-                e_tag: version.e_tag.clone(),
-                version: version.provider_version.clone(),
-            }),
-        };
-        let content_sha256 = Sha256::digest(&bytes).into();
-        let byte_size = bytes.len() as u64;
-        match self
+        let local_path = self
             .provider
-            .backend()
-            .put_opts(
-                &path,
-                bytes.into(),
-                PutOptions {
-                    mode,
-                    ..Default::default()
-                },
+            .local_root()
+            .map(|root| local_object_path(root, id));
+        self.provider
+            .compare_and_swap_path(
+                self.canonical_path(id),
+                local_path,
+                expected,
+                bytes,
+                "object",
             )
             .await
-        {
-            Ok(result) => Ok(ObjectVersion {
-                e_tag: result.e_tag,
-                provider_version: result.version,
-                content_sha256,
-                byte_size,
-            }),
-            // A precondition failure is the one outcome the backend states
-            // definitively: the swap did not apply. Every other failure leaves
-            // the pointer's state unknown, so it is reported as ambiguous and
-            // the caller resolves it by re-reading the pointer.
-            Err(object_store::Error::AlreadyExists { .. })
-            | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
-                format!("object pointer {path} changed concurrently"),
-            )),
-            Err(error) => Err(StatsError::AmbiguousCommit(format!(
-                "update object pointer {path}: {error}"
-            ))),
-        }
     }
 
     async fn list_objects(&self, prefix: &ObjectPrefix) -> Result<Vec<ObjectMetadata>, StatsError> {
@@ -327,18 +260,7 @@ fn local_object_path(root: &Path, id: &ObjectId) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn tempdir(tag: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("finelog_remote_{tag}_{nanos}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
+    use crate::test_support::unique_dir;
 
     #[test]
     fn empty_remote_dir_disables_sync() {
@@ -377,7 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_objects_round_trip_by_typed_id() {
-        let remote_dir = tempdir("objects");
+        let remote_dir = unique_dir("remote_objects");
         let store = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
@@ -408,7 +330,7 @@ mod tests {
     async fn streamed_write_uses_the_same_object_contract() {
         use futures::stream;
 
-        let remote_dir = tempdir("stream");
+        let remote_dir = unique_dir("remote_stream");
         let store = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();

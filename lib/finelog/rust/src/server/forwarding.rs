@@ -63,7 +63,10 @@ use tokio::task::JoinHandle;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::provider::NamespaceProvider;
-use crate::query::{make_ctx, query_deadline, run_query_over, QueryResult, RegisteredProvider};
+use crate::query::{
+    make_ctx, query_timeout, run_query_over, run_within_query_timeout, QueryResult,
+    RegisteredProvider,
+};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
@@ -636,20 +639,18 @@ where
         // bounds it by the same non-disableable effective deadline.
         let query_ctx = make_ctx();
         let read = run_query_over(&query_ctx, providers, &sql);
-        let result = match query_deadline(None, self.store.object_query_bound()) {
-            Some(deadline) => tokio::time::timeout(deadline, read)
-                .await
-                .map_err(|_| {
-                    StatsError::DeadlineExceeded(format!(
-                        "forward read of {name:?} exceeded deadline of {} ms",
-                        deadline.as_millis()
-                    ))
-                })?
-                .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?,
-            None => read
-                .await
-                .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?,
-        };
+        let result = run_within_query_timeout(
+            query_timeout(None, self.store.object_query_bound()),
+            read,
+            |timeout| {
+                StatsError::DeadlineExceeded(format!(
+                    "forward read of {name:?} exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
+            },
+            |e| StatsError::Internal(format!("read {name:?} failed: {e}")),
+        )
+        .await?;
 
         Ok(Batch {
             rows: self.ship_batch(result)?,

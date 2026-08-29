@@ -1,12 +1,20 @@
-//! Private provider configuration shared by canonical and legacy layouts.
+//! Private provider configuration and physical-path operations shared by the
+//! canonical and legacy layouts.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use object_store::local::LocalFileSystem;
-use object_store::ObjectStore as BackendObjectStore;
+use object_store::path::Path as OsPath;
+use object_store::{
+    ObjectStore as BackendObjectStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion,
+};
+use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
+use crate::store::object_store::{ObjectVersion, StoredObject};
+
+use super::local_file::compare_and_swap as local_compare_and_swap;
 
 const GCS_SCHEME: &str = "gs://";
 const S3_SCHEME: &str = "s3://";
@@ -76,6 +84,101 @@ impl Provider {
 
     pub(super) fn local_root(&self) -> Option<&Path> {
         self.local_root.as_deref()
+    }
+
+    /// Read the object at `path`, or `None` when it does not exist.
+    /// `description` names the object in error messages.
+    pub(super) async fn get_path(
+        &self,
+        path: OsPath,
+        description: &str,
+    ) -> Result<Option<StoredObject>, StatsError> {
+        let result = match self.backend.get(&path).await {
+            Ok(result) => result,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => {
+                return Err(StatsError::Internal(format!(
+                    "read {description} {path}: {error}"
+                )))
+            }
+        };
+        let e_tag = result.meta.e_tag.clone();
+        let provider_version = result.meta.version.clone();
+        let bytes = result.bytes().await.map_err(|error| {
+            StatsError::Internal(format!("read {description} body {path}: {error}"))
+        })?;
+        Ok(Some(StoredObject {
+            version: ObjectVersion {
+                e_tag,
+                provider_version,
+                content_sha256: Sha256::digest(&bytes).into(),
+                byte_size: bytes.len() as u64,
+            },
+            bytes,
+        }))
+    }
+
+    /// Swap the pointer at `path` from `expected` to `bytes`.
+    ///
+    /// `local_path` is the filesystem path backing `path` when the provider is a
+    /// local directory, in which case the swap goes through the content-hash
+    /// comparison in [`local_compare_and_swap`].
+    ///
+    /// A precondition failure is the one outcome the backend states
+    /// definitively: the swap did not apply, reported as `SchemaConflict`. Every
+    /// other failure leaves the pointer's state unknown, so it is reported as
+    /// `AmbiguousCommit` and the caller resolves it by re-reading the pointer.
+    pub(super) async fn compare_and_swap_path(
+        &self,
+        path: OsPath,
+        local_path: Option<PathBuf>,
+        expected: Option<&ObjectVersion>,
+        bytes: bytes::Bytes,
+        description: &str,
+    ) -> Result<ObjectVersion, StatsError> {
+        if let Some(local_path) = local_path {
+            let expected_hash = expected.map(|version| version.content_sha256);
+            return tokio::task::spawn_blocking(move || {
+                local_compare_and_swap(&local_path, expected_hash, &bytes)
+            })
+            .await
+            .map_err(|error| StatsError::Internal(format!("{description} CAS task: {error}")))?;
+        }
+        let mode = match expected {
+            None => PutMode::Create,
+            Some(version) => PutMode::Update(UpdateVersion {
+                e_tag: version.e_tag.clone(),
+                version: version.provider_version.clone(),
+            }),
+        };
+        let content_sha256 = Sha256::digest(&bytes).into();
+        let byte_size = bytes.len() as u64;
+        match self
+            .backend
+            .put_opts(
+                &path,
+                bytes.into(),
+                PutOptions {
+                    mode,
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(result) => Ok(ObjectVersion {
+                e_tag: result.e_tag,
+                provider_version: result.version,
+                content_sha256,
+                byte_size,
+            }),
+            Err(object_store::Error::AlreadyExists { .. })
+            | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
+                format!("{description} pointer {path} changed concurrently"),
+            )),
+            Err(error) => Err(StatsError::AmbiguousCommit(format!(
+                "update {description} pointer {path}: {error}"
+            ))),
+        }
     }
 }
 

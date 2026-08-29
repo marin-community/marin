@@ -22,6 +22,7 @@ pub mod trigram_prune;
 pub mod udf;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -360,7 +361,7 @@ fn earliest_timeout(
 /// so a read allowed to outlive that window could scan bytes the table no
 /// longer promises. `FINELOG_QUERY_TIMEOUT_MS=0` therefore removes only the
 /// environment ceiling; a read over an object-backed table is still bounded.
-pub(crate) fn query_deadline(
+pub(crate) fn query_timeout(
     request_timeout: Option<Duration>,
     table_bound: Option<Duration>,
 ) -> Option<Duration> {
@@ -368,10 +369,10 @@ pub(crate) fn query_deadline(
     let server_timeout = *TIMEOUT.get_or_init(|| {
         parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
     });
-    effective_deadline(server_timeout, request_timeout, table_bound)
+    effective_query_timeout(server_timeout, request_timeout, table_bound)
 }
 
-fn effective_deadline(
+fn effective_query_timeout(
     server_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
     table_bound: Option<Duration>,
@@ -383,6 +384,28 @@ fn effective_deadline(
         (Some(bound), Some(configured)) => Some(bound.min(configured)),
         (Some(bound), None) => Some(bound),
         (None, configured) => configured,
+    }
+}
+
+/// Await one server read under `timeout`, folding both failure modes into the
+/// caller's error type.
+///
+/// `timeout` is the budget from [`query_timeout`]; `None` runs the read
+/// unbounded. On elapse the read future is dropped, aborting its scan, and
+/// `on_elapsed` builds the error from the budget that was exceeded. A read that
+/// finishes but fails goes through `on_error`.
+pub(crate) async fn run_within_query_timeout<T, ReadError, Error>(
+    timeout: Option<Duration>,
+    read: impl Future<Output = Result<T, ReadError>>,
+    on_elapsed: impl FnOnce(Duration) -> Error,
+    on_error: impl FnOnce(ReadError) -> Error,
+) -> Result<T, Error> {
+    let Some(timeout) = timeout else {
+        return read.await.map_err(on_error);
+    };
+    match tokio::time::timeout(timeout, read).await {
+        Ok(result) => result.map_err(on_error),
+        Err(_elapsed) => Err(on_elapsed(timeout)),
     }
 }
 
@@ -668,24 +691,24 @@ mod tests {
     #[test]
     fn a_table_bound_survives_a_disabled_server_ceiling() {
         let bound = Some(Duration::from_secs(30));
-        assert_eq!(effective_deadline(None, None, bound), bound);
+        assert_eq!(effective_query_timeout(None, None, bound), bound);
         assert_eq!(
-            effective_deadline(None, Some(Duration::from_secs(600)), bound),
+            effective_query_timeout(None, Some(Duration::from_secs(600)), bound),
             bound,
             "a longer caller deadline cannot lift the table bound"
         );
         assert_eq!(
-            effective_deadline(None, Some(Duration::from_secs(5)), bound),
+            effective_query_timeout(None, Some(Duration::from_secs(5)), bound),
             Some(Duration::from_secs(5)),
             "a shorter caller deadline still applies"
         );
         assert_eq!(
-            effective_deadline(Some(Duration::from_secs(10)), None, bound),
+            effective_query_timeout(Some(Duration::from_secs(10)), None, bound),
             Some(Duration::from_secs(10)),
             "the server ceiling still applies when it is tighter"
         );
         assert_eq!(
-            effective_deadline(None, None, None),
+            effective_query_timeout(None, None, None),
             None,
             "a read over no object-backed table keeps the configured ceiling"
         );

@@ -33,6 +33,7 @@ use crate::proto::finelog::stats::{
 };
 use crate::query::{make_ctx, run_query_over};
 use crate::store::catalog::object_state_store::ObjectTableStateStore;
+use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
 use crate::store::object_store::{build_remote_object_store, ObjectId, ObjectStore};
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, schema_to_proto_owned, Column, Schema};
@@ -431,7 +432,7 @@ async fn a_crash_during_migration_backfill_resumes_and_rejects_the_stale_lease()
     let orphan = store
         .tables()
         .controller(TABLE)
-        .write_staged_object("objects", "parquet", &staged)
+        .write_staged_object(OBJECTS_PREFIX, "parquet", &staged)
         .await
         .unwrap();
     let orphan_id = orphan.source.object_id.clone().unwrap();

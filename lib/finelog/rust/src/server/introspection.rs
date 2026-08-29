@@ -444,11 +444,19 @@ async fn get_segments(
     // them, so the whole listing runs off the async runtime.
     let listed = tokio::task::spawn_blocking(move || {
         // A segment's artifacts come from the query snapshot that advertises
-        // them, so the admin view reports exactly what a scan would open.
-        let artifacts = store
-            .query_snapshot(&q.namespace)
-            .map(|snapshot| snapshot.artifacts)
-            .unwrap_or_default();
+        // them, so the admin view reports exactly what a scan would open. A
+        // snapshot failure still lists segments, with every artifact absent.
+        let artifacts = match store.query_snapshot(&q.namespace) {
+            Ok(snapshot) => snapshot.artifacts,
+            Err(error) => {
+                tracing::warn!(
+                    namespace = %q.namespace,
+                    %error,
+                    "query snapshot failed; reporting segments without artifacts"
+                );
+                Default::default()
+            }
+        };
         store.list_segments(&q.namespace).map(|rows| {
             rows.into_iter()
                 .map(|row| to_segment_info(row, q.physical, &indices, &artifacts))

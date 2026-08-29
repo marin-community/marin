@@ -34,8 +34,10 @@ pub const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// How often an object-backed table collects superseded state documents.
 pub const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-/// How long an object unreferenced by any retained state is kept before it is
-/// collectible. Conservative: remote deletion is disabled in this rollout.
+/// How long an object must have been unreferenced by every retained state
+/// before object GC deletes it. A sweep deletes an object only once it is both
+/// unreferenced and older than this, so a reader that opened a stale state, or
+/// a writer whose commit raced the sweep, still finds its bytes.
 pub const OBJECT_ORPHAN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Wall-clock budget one maintenance cycle spends re-encoding segments whose

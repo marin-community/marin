@@ -40,10 +40,7 @@ pub fn projection_spec_id(projection: &CoveringProjection) -> String {
     let digest = format::fingerprint(
         &serde_json::to_vec(projection).expect("projection serialization never fails"),
     );
-    digest
-        .iter()
-        .map(|byte| std::format!("{byte:02x}"))
-        .collect()
+    crate::hex::encode(&digest)
 }
 
 /// Local file a built projection was staged to.

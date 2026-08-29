@@ -22,7 +22,9 @@ use crate::proto::finelog::stats::{
     OwnedWriteRowsRequestView, QueryResponse, RegisterTableResponse, StatsService,
     WriteRowsResponse,
 };
-use crate::query::{make_ctx, query_deadline, run_query_over, truncate_sql_for_log};
+use crate::query::{
+    make_ctx, query_timeout, run_query_over, run_within_query_timeout, truncate_sql_for_log,
+};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::catalog::TableSpecStatus;
@@ -321,23 +323,23 @@ impl StatsService for StatsServiceImpl {
         // scan), so a timed-out caller cannot leave CPU work behind.
         let query_ctx = make_ctx();
         let query = run_query_over(&query_ctx, providers, &sql);
-        let result = match query_deadline(ctx.time_remaining(), table_bound) {
-            Some(deadline) => match tokio::time::timeout(deadline, query).await {
-                Ok(r) => r.map_err(map_query_error)?,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        deadline_ms = deadline.as_millis() as u64,
-                        sql = %truncate_sql_for_log(&sql),
-                        "query aborted: exceeded deadline",
-                    );
-                    return Err(ConnectError::deadline_exceeded(format!(
-                        "query exceeded deadline of {} ms",
-                        deadline.as_millis()
-                    )));
-                }
+        let result = run_within_query_timeout(
+            query_timeout(ctx.time_remaining(), table_bound),
+            query,
+            |timeout| {
+                tracing::warn!(
+                    deadline_ms = timeout.as_millis() as u64,
+                    sql = %truncate_sql_for_log(&sql),
+                    "query aborted: exceeded deadline",
+                );
+                ConnectError::deadline_exceeded(format!(
+                    "query exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
             },
-            None => query.await.map_err(map_query_error)?,
-        };
+            map_query_error,
+        )
+        .await?;
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result

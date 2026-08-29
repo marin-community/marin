@@ -22,6 +22,8 @@ use crate::store::table_state::{TableRevision, WriterFence};
 pub const TABLE_STATE_FORMAT_VERSION: u64 = 1;
 const HEAD_KEY: &str = "HEAD.json";
 const STATES_PREFIX: &str = "catalogs";
+/// Key prefix under a table for the data objects its states reference.
+pub(crate) const OBJECTS_PREFIX: &str = "objects";
 
 #[derive(Clone)]
 pub struct ObjectTableStateStore {
@@ -386,7 +388,7 @@ impl ObjectTableStateStore {
                 })?;
             referenced.extend(referenced_object_keys(&catalog));
         }
-        for (key, meta) in self.table_objects(table, "objects").await? {
+        for (key, meta) in self.table_objects(table, OBJECTS_PREFIX).await? {
             let id = ObjectId::table(table, &key)?;
             if referenced.contains(id.as_str()) || meta.modified_at_ms > orphan_cutoff {
                 continue;
@@ -539,10 +541,7 @@ fn validate_state(
 }
 
 fn short_hex(bytes: &[u8; 32]) -> String {
-    bytes[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::hex::encode(&bytes[..8])
 }
 
 fn state_revision_from_key(key: &str) -> Option<u64> {

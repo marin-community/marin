@@ -13,7 +13,7 @@ callers can ``from finelog.client import SchemaConflictError`` etc.
 """
 
 from finelog.client.log_client import FlushResult, LogClient, NamespaceInfo, Table, schema_from_dataclass
-from finelog.client.object_query_client import ObjectQueryClient, QueryMode
+from finelog.client.object_query_client import ObjectQueryClient
 from finelog.client.remote_log_handler import RemoteLogHandler
 from finelog.errors import (
     InvalidNamespaceError,

@@ -14,7 +14,7 @@ use crate::proto::finelog::logging::{
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
 use crate::query::provider::NamespaceProvider;
-use crate::query::query_deadline;
+use crate::query::{query_timeout, run_within_query_timeout};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::store::log_read::{
     add_cluster_filter, add_common_filters, add_seq_upper_bound, build_log_predicates,
@@ -278,20 +278,18 @@ impl LogService for LogServiceImpl {
             tail,
             max_lines,
         );
-        let rows = match query_deadline(ctx.time_remaining(), table_bound) {
-            Some(deadline) => tokio::time::timeout(deadline, read)
-                .await
-                .map_err(|_| {
-                    ConnectError::deadline_exceeded(format!(
-                        "log read exceeded deadline of {} ms",
-                        deadline.as_millis()
-                    ))
-                })?
-                .map_err(|e| ConnectError::internal(format!("log read failed: {e}")))?,
-            None => read
-                .await
-                .map_err(|e| ConnectError::internal(format!("log read failed: {e}")))?,
-        };
+        let rows = run_within_query_timeout(
+            query_timeout(ctx.time_remaining(), table_bound),
+            read,
+            |timeout| {
+                ConnectError::deadline_exceeded(format!(
+                    "log read exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
+            },
+            |e| ConnectError::internal(format!("log read failed: {e}")),
+        )
+        .await?;
 
         let shaped = shape_log_read_result(
             rows,

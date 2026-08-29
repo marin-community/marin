@@ -30,6 +30,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef;
+use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
 use crate::store::catalog::projection::namespace_catalog;
 use crate::store::catalog::state_store::{StoredTableState, TableStateStore};
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
@@ -480,7 +481,7 @@ impl TableController {
         let sha256: [u8; 32] = Sha256::digest(&bytes).into();
         let id = ObjectId::table(
             &self.table,
-            &format!("objects/{}.parquet", full_hex(&sha256)),
+            &format!("{OBJECTS_PREFIX}/{}.parquet", crate::hex::encode(&sha256)),
         )?;
         let version = objects.store.write(&id, bytes).await?;
         let reference = ObjectReference {
@@ -510,7 +511,7 @@ impl TableController {
         let sha256 = file_sha256(staged)?;
         let id = ObjectId::table(
             &self.table,
-            &format!("{kind}/{}.{extension}", full_hex(&sha256)),
+            &format!("{kind}/{}.{extension}", crate::hex::encode(&sha256)),
         )?;
         let version = objects
             .store
@@ -885,10 +886,6 @@ pub fn file_sha256(path: &Path) -> Result<[u8; 32], StatsError> {
     std::io::copy(&mut file, &mut hasher)
         .map_err(|error| StatsError::Internal(format!("hash {}: {error}", path.display())))?;
     Ok(hasher.finalize().into())
-}
-
-fn full_hex(bytes: &[u8; 32]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

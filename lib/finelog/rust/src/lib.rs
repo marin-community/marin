@@ -5,6 +5,7 @@ pub mod proto {
 }
 
 pub mod errors;
+pub(crate) mod hex;
 pub mod indices;
 pub(crate) mod ingestion_policy;
 pub(crate) mod json;

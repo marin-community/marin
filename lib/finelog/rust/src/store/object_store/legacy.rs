@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use futures::StreamExt;
 use object_store::path::Path as OsPath;
-use object_store::{ObjectMeta, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
+use object_store::{ObjectMeta, ObjectStoreExt};
 use sha2::{Digest, Sha256};
 
 use crate::errors::StatsError;
@@ -16,7 +16,6 @@ use crate::store::object_store::{
     ObjectId, ObjectMetadata, ObjectPrefix, ObjectStore, ObjectVersion, StoredObject,
 };
 
-use super::local_file::compare_and_swap as local_compare_and_swap;
 use super::provider::Provider;
 use super::remote::RemoteObjectStore;
 
@@ -76,32 +75,6 @@ impl LegacyObjectStore {
         Some(path)
     }
 
-    async fn get_path(&self, path: OsPath) -> Result<Option<StoredObject>, StatsError> {
-        let result = match self.provider.backend().get(&path).await {
-            Ok(result) => result,
-            Err(object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(error) => {
-                return Err(StatsError::Internal(format!(
-                    "read legacy object {path}: {error}"
-                )))
-            }
-        };
-        let e_tag = result.meta.e_tag.clone();
-        let provider_version = result.meta.version.clone();
-        let bytes = result.bytes().await.map_err(|error| {
-            StatsError::Internal(format!("read legacy object body {path}: {error}"))
-        })?;
-        Ok(Some(StoredObject {
-            version: ObjectVersion {
-                e_tag,
-                provider_version,
-                content_sha256: Sha256::digest(&bytes).into(),
-                byte_size: bytes.len() as u64,
-            },
-            bytes,
-        }))
-    }
-
     async fn list_objects(
         &self,
         prefix: &ObjectPrefix,
@@ -153,7 +126,7 @@ impl ObjectStore for LegacyObjectStore {
     }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {
-        self.get_path(self.path(id)).await
+        self.provider.get_path(self.path(id), "legacy object").await
     }
 
     async fn compare_and_swap(
@@ -162,51 +135,15 @@ impl ObjectStore for LegacyObjectStore {
         expected: Option<&ObjectVersion>,
         bytes: bytes::Bytes,
     ) -> Result<ObjectVersion, StatsError> {
-        if let Some(path) = self.local_pointer_path(id) {
-            let expected_hash = expected.map(|version| version.content_sha256);
-            return tokio::task::spawn_blocking(move || {
-                local_compare_and_swap(&path, expected_hash, &bytes)
-            })
-            .await
-            .map_err(|error| StatsError::Internal(format!("legacy object CAS task: {error}")))?;
-        }
-        let path = self.path(id);
-        let mode = match expected {
-            None => PutMode::Create,
-            Some(version) => PutMode::Update(UpdateVersion {
-                e_tag: version.e_tag.clone(),
-                version: version.provider_version.clone(),
-            }),
-        };
-        let content_sha256 = Sha256::digest(&bytes).into();
-        let byte_size = bytes.len() as u64;
-        let result = self
-            .provider
-            .backend()
-            .put_opts(
-                &path,
-                bytes.into(),
-                PutOptions {
-                    mode,
-                    ..Default::default()
-                },
+        self.provider
+            .compare_and_swap_path(
+                self.path(id),
+                self.local_pointer_path(id),
+                expected,
+                bytes,
+                "legacy object",
             )
-            .await;
-        match result {
-            Ok(result) => Ok(ObjectVersion {
-                e_tag: result.e_tag,
-                provider_version: result.version,
-                content_sha256,
-                byte_size,
-            }),
-            Err(object_store::Error::AlreadyExists { .. })
-            | Err(object_store::Error::Precondition { .. }) => Err(StatsError::SchemaConflict(
-                format!("legacy object pointer {path} changed concurrently"),
-            )),
-            Err(error) => Err(StatsError::Internal(format!(
-                "update legacy object pointer {path}: {error}"
-            ))),
-        }
+            .await
     }
 
     async fn delete(&self, id: &ObjectId) -> Result<(), StatsError> {
@@ -235,25 +172,13 @@ impl ObjectStore for LegacyObjectStore {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
     use crate::store::object_store::build_remote_object_store;
-
-    fn tempdir() -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!("finelog_legacy_object_store_{nonce}"));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
+    use crate::test_support::unique_dir;
 
     #[tokio::test]
     async fn logical_object_id_uses_the_legacy_physical_layout() {
-        let root = tempdir();
+        let root = unique_dir("legacy_object_store_layout");
         let canonical = build_remote_object_store(root.to_str().unwrap())
             .unwrap()
             .unwrap();
@@ -279,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn trait_operations_share_one_physical_mapping() {
-        let root = tempdir();
+        let root = unique_dir("legacy_object_store_mapping");
         let canonical = build_remote_object_store(root.to_str().unwrap())
             .unwrap()
             .unwrap();

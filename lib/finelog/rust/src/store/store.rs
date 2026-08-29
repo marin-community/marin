@@ -1491,82 +1491,91 @@ mod tests {
         .unwrap()
     }
 
-    fn object_backed_spec(version: u64) -> ValidatedTableSpec {
-        object_backed_spec_with_query_time(version, 0)
+    /// Builds every object-store-backed table spec these tests register. All
+    /// such specs run L0 in object-store mode and retain remote data forever;
+    /// callers vary the schema, the source layout, and the timing policy.
+    struct ObjectSpec {
+        version: u64,
+        schema: Schema,
+        source_layout: SourceLayout,
+        max_query_time_ms: u64,
+        rollback_window_ms: u64,
     }
 
-    fn object_backed_spec_with_query_time(
-        version: u64,
-        max_query_time_ms: u64,
-    ) -> ValidatedTableSpec {
-        let schema = worker_schema();
-        let spec = TableSpec {
-            version: Some(version),
-            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
-            operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
-                remote_retention: MessageField::some(RemoteRetentionPolicy {
-                    retain_forever: Some(true),
+    impl ObjectSpec {
+        fn new(version: u64) -> Self {
+            Self {
+                version,
+                schema: worker_schema(),
+                source_layout: SourceLayout::default(),
+                max_query_time_ms: 0,
+                rollback_window_ms: 0,
+            }
+        }
+
+        fn schema(mut self, schema: Schema) -> Self {
+            self.schema = schema;
+            self
+        }
+
+        fn source_layout(mut self, source_layout: SourceLayout) -> Self {
+            self.source_layout = source_layout;
+            self
+        }
+
+        fn max_query_time_ms(mut self, max_query_time_ms: u64) -> Self {
+            self.max_query_time_ms = max_query_time_ms;
+            self
+        }
+
+        fn rollback_window_ms(mut self, rollback_window_ms: u64) -> Self {
+            self.rollback_window_ms = rollback_window_ms;
+            self
+        }
+
+        fn validated(self) -> ValidatedTableSpec {
+            let spec = TableSpec {
+                version: Some(self.version),
+                logical_schema: MessageField::some(schema_to_proto_owned(&self.schema)),
+                source_layout: MessageField::some(self.source_layout),
+                operating_policy: MessageField::some(OperatingPolicy {
+                    l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
+                    remote_retention: MessageField::some(RemoteRetentionPolicy {
+                        retain_forever: Some(true),
+                        ..Default::default()
+                    }),
+                    max_query_time_ms: (self.max_query_time_ms > 0)
+                        .then_some(self.max_query_time_ms),
+                    rollback_window_ms: (self.rollback_window_ms > 0)
+                        .then_some(self.rollback_window_ms),
                     ..Default::default()
                 }),
-                max_query_time_ms: (max_query_time_ms > 0).then_some(max_query_time_ms),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let encoded = spec.encode_to_vec();
-        let view = TableSpecView::decode_view(&encoded).unwrap();
-        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+            };
+            let encoded = spec.encode_to_vec();
+            let view = TableSpecView::decode_view(&encoded).unwrap();
+            ValidatedTableSpec::from_view(&view, &self.schema, &StoragePolicy::default()).unwrap()
+        }
+    }
+
+    fn object_backed_spec(version: u64) -> ValidatedTableSpec {
+        ObjectSpec::new(version).validated()
     }
 
     /// The same logical schema under a different physical object size: a
     /// compatible rewrite that changes no schema and so needs no engine rebuild.
     fn retargeted_object_backed_spec(version: u64) -> ValidatedTableSpec {
-        object_layout_spec(
-            version,
-            SourceLayout {
+        ObjectSpec::new(version)
+            .source_layout(SourceLayout {
                 target_object_bytes: Some(8 * 1024 * 1024),
                 ..Default::default()
-            },
-            0,
-            0,
-        )
-    }
-
-    fn object_layout_spec(
-        version: u64,
-        source_layout: SourceLayout,
-        max_query_time_ms: u64,
-        rollback_window_ms: u64,
-    ) -> ValidatedTableSpec {
-        let schema = worker_schema();
-        let spec = TableSpec {
-            version: Some(version),
-            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
-            source_layout: MessageField::some(source_layout),
-            operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
-                remote_retention: MessageField::some(RemoteRetentionPolicy {
-                    retain_forever: Some(true),
-                    ..Default::default()
-                }),
-                max_query_time_ms: (max_query_time_ms > 0).then_some(max_query_time_ms),
-                rollback_window_ms: (rollback_window_ms > 0).then_some(rollback_window_ms),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let encoded = spec.encode_to_vec();
-        let view = TableSpecView::decode_view(&encoded).unwrap();
-        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+            })
+            .validated()
     }
 
     fn partitioned_object_backed_spec(version: u64) -> ValidatedTableSpec {
-        let schema = worker_schema();
-        let spec = TableSpec {
-            version: Some(version),
-            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
-            source_layout: MessageField::some(SourceLayout {
+        ObjectSpec::new(version)
+            .source_layout(SourceLayout {
                 partition: MessageField::some(PartitionSpec {
                     spec_id: Some(1),
                     fields: vec![PartitionField {
@@ -1578,44 +1587,18 @@ mod tests {
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
-                remote_retention: MessageField::some(RemoteRetentionPolicy {
-                    retain_forever: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let encoded = spec.encode_to_vec();
-        let view = TableSpecView::decode_view(&encoded).unwrap();
-        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+            })
+            .validated()
     }
 
     fn sorted_object_backed_spec(version: u64) -> ValidatedTableSpec {
-        let schema = worker_schema().with_sort_columns(["mem_bytes"]);
-        let spec = TableSpec {
-            version: Some(version),
-            logical_schema: MessageField::some(schema_to_proto_owned(&schema)),
-            source_layout: MessageField::some(SourceLayout {
+        ObjectSpec::new(version)
+            .schema(worker_schema().with_sort_columns(["mem_bytes"]))
+            .source_layout(SourceLayout {
                 sort_columns: vec!["mem_bytes".to_string()],
                 ..Default::default()
-            }),
-            operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
-                remote_retention: MessageField::some(RemoteRetentionPolicy {
-                    retain_forever: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let encoded = spec.encode_to_vec();
-        let view = TableSpecView::decode_view(&encoded).unwrap();
-        ValidatedTableSpec::from_view(&view, &schema, &StoragePolicy::default()).unwrap()
+            })
+            .validated()
     }
 
     struct PublishedObjectTableFixture {
@@ -2022,7 +2005,10 @@ mod tests {
         .unwrap();
         store.bootstrap_maintenance();
         store
-            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(1, 100))
+            .register_versioned_table(
+                "iris.worker",
+                ObjectSpec::new(1).max_query_time_ms(100).validated(),
+            )
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
 
@@ -2171,7 +2157,10 @@ mod tests {
         assert!(!legacy_paths[0].contains("/_finelog/"));
 
         let registration = store
-            .register_versioned_table("iris.worker", object_backed_spec_with_query_time(1, 1))
+            .register_versioned_table(
+                "iris.worker",
+                ObjectSpec::new(1).max_query_time_ms(1).validated(),
+            )
             .unwrap();
         assert_eq!(registration.table_spec_status.active_version(), 0);
         assert_eq!(registration.table_spec_status.desired_version(), 1);
@@ -2292,7 +2281,7 @@ mod tests {
         let registration = store
             .register_versioned_table(
                 "iris.worker",
-                object_layout_spec(2, SourceLayout::default(), 30_000, 0),
+                ObjectSpec::new(2).max_query_time_ms(30_000).validated(),
             )
             .unwrap();
         assert_eq!(registration.table_spec_status.active_version(), 2);
@@ -2354,25 +2343,10 @@ mod tests {
             .await
             .unwrap();
 
-        let rekeyed = worker_schema_keyed_on("mem_bytes");
-        let spec = TableSpec {
-            version: Some(2),
-            logical_schema: MessageField::some(schema_to_proto_owned(&rekeyed)),
-            operating_policy: MessageField::some(OperatingPolicy {
-                l0_mode: Some(L0Mode::L0_MODE_OBJECT_STORE.into()),
-                remote_retention: MessageField::some(RemoteRetentionPolicy {
-                    retain_forever: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let encoded = spec.encode_to_vec();
-        let view = TableSpecView::decode_view(&encoded).unwrap();
-        let validated =
-            ValidatedTableSpec::from_view(&view, &rekeyed, &StoragePolicy::default()).unwrap();
-        let error = match store.register_versioned_table("iris.worker", validated) {
+        let rekeyed = ObjectSpec::new(2)
+            .schema(worker_schema_keyed_on("mem_bytes"))
+            .validated();
+        let error = match store.register_versioned_table("iris.worker", rekeyed) {
             Ok(_) => panic!("an incompatible key change must not register"),
             Err(error) => error,
         };
@@ -2407,7 +2381,10 @@ mod tests {
         store
             .register_versioned_table(
                 "iris.worker",
-                object_layout_spec(1, SourceLayout::default(), 50, 3_600_000),
+                ObjectSpec::new(1)
+                    .max_query_time_ms(50)
+                    .rollback_window_ms(3_600_000)
+                    .validated(),
             )
             .unwrap();
         store.publish_object_catalog("iris.worker").await.unwrap();
@@ -2433,15 +2410,14 @@ mod tests {
         store
             .register_versioned_table(
                 "iris.worker",
-                object_layout_spec(
-                    2,
-                    SourceLayout {
+                ObjectSpec::new(2)
+                    .source_layout(SourceLayout {
                         target_object_bytes: Some(8 * 1024 * 1024),
                         ..Default::default()
-                    },
-                    50,
-                    3_600_000,
-                ),
+                    })
+                    .max_query_time_ms(50)
+                    .rollback_window_ms(3_600_000)
+                    .validated(),
             )
             .unwrap();
         store

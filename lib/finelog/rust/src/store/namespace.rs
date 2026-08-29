@@ -52,6 +52,7 @@ use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for
 use crate::proto::finelog::stats::{
     partition_field, ColumnType, L0Mode, MigrationPhase, SourceLayout, TableMigrationStatus,
 };
+use crate::store::catalog::object_state_store::OBJECTS_PREFIX;
 use crate::store::catalog::{Catalog, ObjectSegmentRecord, TableSpecStatus};
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
@@ -304,10 +305,6 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
-}
-
-fn full_hex(bytes: &[u8; 32]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Insertion-lock-guarded mutable state.
@@ -586,7 +583,7 @@ async fn migration_source_id(
     digest.update(row.min_seq.to_be_bytes());
     digest.update(row.max_seq.to_be_bytes());
     digest.update(row.row_count.to_be_bytes());
-    Ok(full_hex(&digest.finalize().into()))
+    Ok(crate::hex::encode(&digest.finalize()))
 }
 
 /// The physical partitioning one table specification's source layout declares.
@@ -1296,14 +1293,13 @@ impl Namespace {
         Ok(true)
     }
 
-    /// Rewrite one migration source into the target layout and checkpoint it.
+    /// Rewrite the segment `row`, localized at `localized`, into
+    /// `target_layout` at table spec version `to_version`, and checkpoint the
+    /// result against `migration_source_id`.
     ///
-    /// This is the ordinary object-compaction path with a single input and a
-    /// forced rewrite: the executor decodes under the merge memory ceiling and
-    /// writes into bounded local staging, the outputs upload as immutable
-    /// objects with their derived artifacts, and one controller commit records
-    /// them against the source they cover. There is no migration-specific write
-    /// path.
+    /// On success the rewritten objects are committed and the source is
+    /// recorded as migrated; the migration will not revisit it. An error leaves
+    /// the source unmigrated and any uploaded outputs unreferenced.
     async fn rewrite_migration_source(
         &self,
         staging: &CompactionStaging,
@@ -1374,7 +1370,7 @@ impl Namespace {
             let staged_path = PathBuf::from(&staged.path);
             let stored = self
                 .controller
-                .write_staged_object("objects", "parquet", &staged_path)
+                .write_staged_object(OBJECTS_PREFIX, "parquet", &staged_path)
                 .await?;
             let (references, local) = self
                 .publish_segment_artifacts(&staged_path, &stored)
@@ -1411,17 +1407,13 @@ impl Namespace {
     /// Compact one planner-issued run of immutable objects and commit the
     /// replacement under a maintenance lease.
     ///
-    /// This runs the same executor as a local table: inputs are localized by
-    /// exact reference, decoded under the merge memory ceiling one input at a
-    /// time, and written to bounded local staging. The object-native part is at
-    /// the ends — inputs arrive through `ObjectStore::local_path`, and outputs
-    /// plus their derived artifacts are uploaded as immutable objects and
-    /// advertised in the same commit that retires the inputs.
+    /// `force_compact_l0` makes an L0 run eligible regardless of the size
+    /// threshold the planner would otherwise apply.
     ///
     /// Returns `true` when a run was replaced and `false` when nothing is
-    /// eligible. A commit that loses a real conflict leaves its uploaded
-    /// outputs unreferenced and returns `false`: the table keeps running and
-    /// object GC collects them after the orphan grace.
+    /// eligible or the commit lost a conflict; a lost commit leaves the
+    /// uploaded outputs unreferenced for object GC to collect after the orphan
+    /// grace, and the table keeps running.
     async fn object_compaction_step(&self, force_compact_l0: bool) -> Result<bool, StatsError> {
         let status = self.catalog.table_spec_status(&self.name)?;
         let active_version = status.active_version();
@@ -1578,7 +1570,7 @@ impl Namespace {
             let staged_path = PathBuf::from(&staged.path);
             let stored = self
                 .controller
-                .write_staged_object("objects", "parquet", &staged_path)
+                .write_staged_object(OBJECTS_PREFIX, "parquet", &staged_path)
                 .await?;
             let (references, local) = self
                 .publish_segment_artifacts(&staged_path, &stored)
@@ -2234,9 +2226,9 @@ impl Namespace {
                 .await
                 .map_err(|error| StatsError::Internal(format!("flush task panicked: {error}")))?;
         }
-        let Some(dir) = self.data_dir.clone() else {
+        if self.data_dir.is_none() {
             return Ok(());
-        };
+        }
         let _flush_guard = self.object_flush_lock.lock().await;
         let policy = self.runtime_policy();
         let sealed = {
@@ -2247,7 +2239,7 @@ impl Namespace {
             return Ok(());
         };
 
-        match self.write_sealed_object(&dir, &sealed, &policy).await {
+        match self.write_sealed_object(&sealed, &policy).await {
             Ok(()) => {
                 self.persisted_seq.send_replace(sealed.max_seq);
                 Ok(())
@@ -2269,7 +2261,6 @@ impl Namespace {
 
     async fn write_sealed_object(
         &self,
-        _namespace_dir: &Path,
         sealed: &SealedBuffer,
         policy: &TableRuntimePolicy,
     ) -> Result<(), SealedCommit> {
