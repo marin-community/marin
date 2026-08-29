@@ -51,6 +51,7 @@ from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,
     GrugRunConfig,
     MasterParamMode,
+    ResidentDonation,
     TrainingDataMode,
     WatchMode,
     _compute_flops,
@@ -80,6 +81,7 @@ def build_diagnostic_run(
     remat_save: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     opt_resident_leaves: int = 0,
+    opt_resident_donation: ResidentDonation = ResidentDonation.DONATED,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -116,6 +118,10 @@ def build_diagnostic_run(
         raise ValueError(f"profile_start_step must be non-negative, got {profile_start_step}")
     if profile_steps > 0 and profile_start_step >= num_steps:
         raise ValueError(f"profile_start_step must be less than num_steps={num_steps}, got {profile_start_step}")
+    # Fail before the rack is allocated: the donation-exclusion diagnostic is defined only for
+    # device-resident momentum leaves.
+    if opt_resident_donation is ResidentDonation.EXCLUDED and opt_resident_leaves == 0:
+        raise ValueError("--opt-resident-donation excluded requires --opt-resident-leaves > 0")
     # `schedule_steps` sets the whole learning-rate schedule; `num_steps` is the absolute step the
     # run stops at (a restore resumes mid-schedule, so it must lie past the restored step).
     # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
@@ -185,6 +191,7 @@ def build_diagnostic_run(
         save_checkpoints=save_checkpoints,
         master_param_mode=master_param_mode,
         opt_state_resident_expert_leaves=opt_resident_leaves,
+        opt_state_resident_donation=opt_resident_donation,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -410,6 +417,20 @@ def build_diagnostic_run(
     ),
 )
 @click.option(
+    "--opt-resident-donation",
+    type=click.Choice([mode.value for mode in ResidentDonation]),
+    default=ResidentDonation.DONATED.value,
+    show_default=True,
+    help=(
+        "Diagnostic donation policy for the resident momentum leaves; needs --opt-resident-leaves > 0. "
+        "'excluded' keeps them out of the train step's donated state (no input/output aliasing) and "
+        "logs per-step debug/resident_ck_in and debug/resident_ck_out canary checksums. Costs one "
+        "extra device copy per resident leaf per step (+10.87 GiB transient at d6144 EP64; predicted "
+        "peak ~134 GiB at k=1, near the 138.2 GiB threshold -- watch for #8490 allocator churn). "
+        "'donated' is the previous, bit-identical behavior."
+    ),
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1),
     default=HERO_PROCESSES_PER_TASK,
@@ -526,6 +547,7 @@ def main(
     remat_save: str | None,
     master_params: str,
     opt_resident_leaves: int,
+    opt_resident_donation: str,
     processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -556,6 +578,7 @@ def main(
         remat_save=remat_save,
         master_param_mode=MasterParamMode(master_params),
         opt_resident_leaves=opt_resident_leaves,
+        opt_resident_donation=ResidentDonation(opt_resident_donation),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),

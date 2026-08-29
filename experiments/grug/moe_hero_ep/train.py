@@ -130,6 +130,25 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
+class ResidentDonation(StrEnum):
+    """Donation policy for the device-resident expert momentum leaves (diagnostic).
+
+    DONATED donates the whole train state into the step, the original behavior. EXCLUDED passes
+    the resident momentum leaves as a separate, non-donated argument, so XLA can neither alias
+    them to an output nor reuse their buffers as scratch, and adds a per-step canary checksum of
+    each resident leaf (``debug/resident_ck_in`` / ``debug/resident_ck_out``). This discriminates
+    the k=1 NaN hypotheses: S1 (donation-enabled buffer reuse clobbers the leaf under the async
+    offload schedule) from S2 (a stray transport write lands in the leaf's address range
+    regardless of donation). EXCLUDED costs one extra device copy of each resident leaf per step
+    (the un-donated input and the fresh output coexist: +10.87 GiB transient per leaf at d6144
+    EP64, predicted peak ~134 GiB at k=1 -- near the 138.2 GiB threshold; watch for #8490
+    allocator churn).
+    """
+
+    DONATED = "donated"
+    EXCLUDED = "excluded"
+
+
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -290,6 +309,10 @@ class GrugTrainerConfig:
     # host round-trip copies in the optimizer tail. 0 offloads everything, as before.
     # See `_opt_state_offload_mask` for which leaves "first N" names and why that is stable.
     opt_state_resident_expert_leaves: int = 0
+    # Diagnostic donation policy for the resident leaves; only meaningful with
+    # opt_state_resident_expert_leaves > 0. DONATED is bit-identical to the previous behavior.
+    # See `ResidentDonation` for what EXCLUDED changes and its +10.87 GiB/leaf transient cost.
+    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE
     training_data_mode: TrainingDataMode = TrainingDataMode.MIXTURE
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
@@ -739,6 +762,44 @@ def _opt_state_to_memory_kind(opt_state, memory_kind: str, offload_mask):
     )
 
 
+def _split_resident_opt_state(opt_state, resident_expert_leaves: int):
+    """Partition ``opt_state`` into (offloaded-only, resident-only) trees with None placeholders."""
+    offload_mask = _opt_state_offload_mask(opt_state, resident_expert_leaves)
+    return eqx.partition(opt_state, offload_mask)
+
+
+_UNSIGNED_BY_ITEMSIZE = {2: jnp.uint16, 4: jnp.uint32}
+
+
+def _bitcast_u32_checksum(leaf: jax.Array) -> jax.Array:
+    """Wraparound uint32 sum of the leaf's raw bits.
+
+    Exact integer addition mod 2**32 is associative and commutative, so the result is
+    deterministic across shardings and reduction orders. Detection is probabilistic, not
+    certain: a modulo sum admits additive cancellations and equal-sum rewrites, which is
+    acceptable for the large or random clobbers this canary exists to catch.
+    """
+    bits = jax.lax.bitcast_convert_type(leaf, _UNSIGNED_BY_ITEMSIZE[leaf.dtype.itemsize])
+    return jnp.sum(bits.astype(jnp.uint32), dtype=jnp.uint32)
+
+
+def _resident_canary_metrics(prefix: str, opt_state, offload_mask) -> dict[str, jax.Array]:
+    """Checksum each device-resident optimizer leaf (False in ``offload_mask``) under ``prefix``.
+
+    In-graph cost is one memory-bound reduce per resident leaf (~10.9 GiB per device shard at
+    d6144 EP64, roughly 2-3 ms per leaf per direction).
+    """
+    paths_and_leaves, _ = jax.tree_util.tree_flatten_with_path(opt_state)
+    mask_leaves = jax.tree.leaves(offload_mask)
+    metrics: dict[str, jax.Array] = {}
+    for (path, leaf), offloaded in zip(paths_and_leaves, mask_leaves, strict=True):
+        if offloaded:
+            continue
+        tail = str(path[-1]).strip("'.[]")
+        metrics[f"{prefix}/{tail}"] = _bitcast_u32_checksum(leaf)
+    return metrics
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -867,10 +928,14 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
     opt_state_resident_expert_leaves: int = 0,
+    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ):
     if opt_state_resident_expert_leaves and not offload_opt_state:
         raise ValueError("opt_state_resident_expert_leaves requires offload_opt_state=True")
+    resident_excluded = opt_state_resident_donation is ResidentDonation.EXCLUDED
+    if resident_excluded and not opt_state_resident_expert_leaves:
+        raise ValueError("opt_state_resident_donation=excluded requires opt_state_resident_expert_leaves > 0")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -881,7 +946,6 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,))
     def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
@@ -916,6 +980,16 @@ def _make_train_step(
             updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
             params = optax.apply_updates(qb_params, updates)
             master_params = None
+
+        if resident_excluded:
+            # Canary: checksum of each resident momentum leaf as read by this step (ck_in) and as
+            # produced by it (ck_out). ck_in[t+1] != ck_out[t] is strong evidence of a stray
+            # BETWEEN-step write (S2). Matching checksums while training still corrupts mean an
+            # in-step external write or a generic bug -- NOT S1: donation is off in this mode, so
+            # the S1 verdict can only come from the arm-level outcome (excluded runs clean), and
+            # even that is suggestive rather than conclusive, since exclusion relocates the leaf.
+            metrics.update(_resident_canary_metrics("debug/resident_ck_in", state.opt_state, opt_offload_mask))
+            metrics.update(_resident_canary_metrics("debug/resident_ck_out", opt_state, opt_offload_mask))
 
         if ema_beta is None:
             ema_params = None
@@ -958,7 +1032,33 @@ def _make_train_step(
 
         return next_state, metrics, watch_stats
 
-    return train_step
+    if not resident_excluded:
+        return jax.jit(train_step, donate_argnums=(0,))
+
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def resident_excluded_train_step(state: GrugTrainState, resident_opt_leaves, batch):
+        merged = dataclasses.replace(state, opt_state=eqx.combine(state.opt_state, resident_opt_leaves))
+        return train_step(merged, batch)
+
+    return _ResidentExcludedTrainStep(resident_excluded_train_step, opt_state_resident_expert_leaves)
+
+
+class _ResidentExcludedTrainStep:
+    """Train step that passes the resident momentum leaves as a separate, non-donated argument.
+
+    Donation is per-argument, so splitting the resident leaves out of the donated state is what
+    removes them from XLA's input/output alias set; ``jit_train_step`` is exposed so tests and
+    diagnostics can inspect the lowering's aliasing directly.
+    """
+
+    def __init__(self, jit_train_step, resident_expert_leaves: int):
+        self.jit_train_step = jit_train_step
+        self._resident_expert_leaves = resident_expert_leaves
+
+    def __call__(self, state: GrugTrainState, batch):
+        offloaded_opt, resident_opt = _split_resident_opt_state(state.opt_state, self._resident_expert_leaves)
+        donated = dataclasses.replace(state, opt_state=offloaded_opt)
+        return self.jit_train_step(donated, resident_opt, batch)
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -995,6 +1095,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
         opt_state_resident_expert_leaves=config.trainer.opt_state_resident_expert_leaves,
+        opt_state_resident_donation=config.trainer.opt_state_resident_donation,
         master_param_mode=config.trainer.master_param_mode,
     )
 
@@ -1224,6 +1325,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        # Host-side memory of the previous step's resident-leaf checksums (excluded-donation
+        # canary): a ck_in that differs from the prior ck_out means the buffer changed between
+        # steps.
+        previous_resident_ck_out: dict[str, int] = {}
 
         # Main optimization loop.
         try:
@@ -1250,7 +1355,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
-                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
+                    # The NaN step's canary is the single most discriminating datum for the
+                    # resident-leaf corruption investigation; surface it before dying.
+                    nan_canary = {
+                        key: int(value) for key, value in metrics.items() if key.startswith("debug/resident_ck_")
+                    }
+                    canary_note = f" resident canary: {nan_canary} previous_out: {previous_resident_ck_out}" if nan_canary else ""
+                    raise RuntimeError(
+                        f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.{canary_note}"
+                    )
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
@@ -1283,6 +1396,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             num_layers=config.model.num_layers,
                         )
                         levanter.tracker.log(drop_metrics, step=step)
+
+                    resident_canary = {
+                        key: int(value) for key, value in metrics.items() if key.startswith("debug/resident_ck_")
+                    }
+                    if resident_canary:
+                        if previous_resident_ck_out:
+                            resident_canary["debug/resident_ck_mismatch"] = sum(
+                                1
+                                for key, value in resident_canary.items()
+                                if key.startswith("debug/resident_ck_in/")
+                                and previous_resident_ck_out[key.replace("_ck_in/", "_ck_out/")] != value
+                            )
+                        previous_resident_ck_out = {
+                            key: value
+                            for key, value in resident_canary.items()
+                            if key.startswith("debug/resident_ck_out/")
+                        }
+                        levanter.tracker.log(resident_canary, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
@@ -1349,6 +1480,7 @@ __all__ = [
     "GrugTrainState",
     "GrugTrainerConfig",
     "MasterParamMode",
+    "ResidentDonation",
     "initial_state",
     "run_grug",
 ]

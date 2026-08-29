@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import re
@@ -1238,6 +1239,135 @@ def test_resident_expert_leaves_require_the_offload():
             ema_beta=None,
             opt_state_resident_expert_leaves=1,
         )
+
+
+def test_resident_donation_excluded_requires_resident_leaves():
+    with pytest.raises(ValueError, match="requires opt_state_resident_expert_leaves"):
+        train._make_train_step(
+            optax.sgd(0.1),
+            jmp.get_policy("f32"),
+            z_loss_weight=0,
+            ema_beta=None,
+            offload_opt_state=True,
+            opt_state_resident_donation=train.ResidentDonation.EXCLUDED,
+        )
+
+
+class _ExpertMomentumParams(NamedTuple):
+    w_gate: jax.Array
+    w_up: jax.Array
+    w_down: jax.Array
+
+
+def _expert_momentum_train_step(monkeypatch, *, resident_donation):
+    """Tiny train step whose optimizer state carries the production 4D expert-momentum layout."""
+
+    def loss_and_grads(params, batch, mp, z_loss):
+        del mp, z_loss
+        loss = sum(jnp.sum(leaf * leaf) for leaf in jax.tree.leaves(params)) + 0.0 * jnp.sum(batch)
+        grads = jax.tree.map(lambda leaf: 2.0 * leaf, params)
+        return (loss, {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model_tree, betas: model_tree)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, kind: tree)  # no pinned_host on CPU
+    params = _ExpertMomentumParams(
+        w_gate=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 3, 4) / 7,
+        w_up=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 3, 4) / 11,
+        w_down=jnp.arange(24, dtype=jnp.float32).reshape(1, 2, 4, 3) / 13,
+    )
+    optimizer = optax.sgd(0.1, momentum=0.9)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        offload_opt_state=True,
+        opt_state_resident_expert_leaves=1,
+        opt_state_resident_donation=resident_donation,
+    )
+    return train_step, state, jnp.zeros((2, 2), dtype=jnp.float32)
+
+
+def _cuda_arg_annotations(jit_fn, *args) -> list[str]:
+    """Per-argument donation annotation of the CUDA lowering.
+
+    CPU lowering drops donation entirely, so the aliasing facts must come from a CUDA export:
+    "aliased" arguments carry ``tf.aliasing_output`` (donated and paired with an output buffer),
+    "donor" ones carry ``jax.buffer_donor`` (donated, unpaired), and "plain" ones are not donated.
+    """
+    text = jax.export.export(jit_fn, platforms=["cuda"])(*args).mlir_module()
+    main = text[text.index("func.func public @main") :]
+    signature = main[: main.index("{\n")]
+    chunks = signature.split("%arg")[1:]
+    return [
+        "aliased" if "tf.aliasing_output" in chunk else ("donor" if "jax.buffer_donor" in chunk else "plain")
+        for chunk in chunks
+    ]
+
+
+def test_resident_donation_excluded_removes_the_leaf_from_the_alias_set(monkeypatch):
+    donated_step, state, batch = _expert_momentum_train_step(
+        monkeypatch, resident_donation=train.ResidentDonation.DONATED
+    )
+    resident_leaf = next(leaf for leaf in jax.tree.leaves(state.opt_state) if leaf.ndim == 4)
+
+    annotations = _cuda_arg_annotations(donated_step, state, batch)
+    flat_args = jax.tree.leaves((state, batch))
+    position = next(index for index, leaf in enumerate(flat_args) if leaf is resident_leaf)
+    assert annotations[position] == "aliased"
+
+    excluded_step, state, batch = _expert_momentum_train_step(
+        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+    )
+    offloaded_opt, resident_opt = train._split_resident_opt_state(state.opt_state, 1)
+    donated_state = dataclasses.replace(state, opt_state=offloaded_opt)
+    annotations = _cuda_arg_annotations(excluded_step.jit_train_step, donated_state, resident_opt, batch)
+    flat_args = jax.tree.leaves((donated_state, resident_opt, batch))
+    resident_leaves = jax.tree.leaves(resident_opt)
+    resident_positions = [
+        index for index, leaf in enumerate(flat_args) if any(leaf is resident for resident in resident_leaves)
+    ]
+    assert len(resident_positions) == 1
+    # The resident momentum leaf is no longer donated at all: neither aliased nor a buffer donor.
+    assert annotations[resident_positions[0]] == "plain"
+    # The donated state still aliases as before, e.g. the still-offloaded momentum leaves.
+    offloaded_momentum = [leaf for leaf in jax.tree.leaves(offloaded_opt) if leaf.ndim == 4]
+    for leaf in offloaded_momentum:
+        position = next(index for index, arg in enumerate(flat_args) if arg is leaf)
+        assert annotations[position] == "aliased"
+
+
+def test_resident_donation_excluded_canary_checksums_track_the_momentum(monkeypatch):
+    train_step, state, batch = _expert_momentum_train_step(
+        monkeypatch, resident_donation=train.ResidentDonation.EXCLUDED
+    )
+    first_state, first_metrics, _ = train_step(state, batch)
+    _, second_metrics, _ = train_step(first_state, batch)
+
+    assert {key for key in first_metrics if key.startswith("debug/")} == {
+        "debug/resident_ck_in/w_gate",
+        "debug/resident_ck_out/w_gate",
+    }
+    assert first_metrics["debug/resident_ck_in/w_gate"].dtype == jnp.uint32
+    # The momentum update changes the leaf, so the checksum tracks the value.
+    assert int(first_metrics["debug/resident_ck_out/w_gate"]) != int(first_metrics["debug/resident_ck_in/w_gate"])
+    # Nothing clobbers the buffer between steps here: the value read at t+1 is the value produced at t.
+    assert int(second_metrics["debug/resident_ck_in/w_gate"]) == int(first_metrics["debug/resident_ck_out/w_gate"])
+
+
+def test_resident_donation_donated_emits_no_canary(monkeypatch):
+    train_step, state, batch = _expert_momentum_train_step(monkeypatch, resident_donation=train.ResidentDonation.DONATED)
+    _, metrics, _ = train_step(state, batch)
+    assert not any(key.startswith("debug/") for key in metrics)
 
 
 def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):

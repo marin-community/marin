@@ -23,6 +23,7 @@ from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
     GrugTrainerConfig,
     MasterParamMode,
+    ResidentDonation,
     TrainingDataMode,
     WatchMode,
 )
@@ -84,6 +85,7 @@ def hero_grug_trainer_config(
     save_checkpoints: bool,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     opt_state_resident_expert_leaves: int = 0,
+    opt_state_resident_donation: ResidentDonation = ResidentDonation.DONATED,
 ) -> GrugTrainerConfig:
     """Set the Grug options that affect the compiled hero step."""
     return GrugTrainerConfig(
@@ -94,6 +96,7 @@ def hero_grug_trainer_config(
         # Keep the MuonH state on pinned host memory so the transport buffers have sufficient HBM.
         offload_opt_state=True,
         opt_state_resident_expert_leaves=opt_state_resident_expert_leaves,
+        opt_state_resident_donation=opt_state_resident_donation,
         master_param_mode=master_param_mode,
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
