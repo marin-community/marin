@@ -968,7 +968,10 @@ def _hydrate_graphql(
 
     comments_by_review: dict[int, int] = {}
     for _, comment in thread_comments:
-        review_id = int((comment.get("pullRequestReview") or {})["databaseId"])
+        review = comment.get("pullRequestReview")
+        if not review or review.get("databaseId") is None:
+            raise RuntimeError(f"PR #{number} thread comment {comment['databaseId']} has no review")
+        review_id = int(review["databaseId"])
         comments_by_review[review_id] = comments_by_review.get(review_id, 0) + 1
     for review in review_nodes:
         expected = int(review["comments"]["totalCount"])

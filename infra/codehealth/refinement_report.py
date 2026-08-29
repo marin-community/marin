@@ -28,8 +28,6 @@ from .review_corpus import (
 from .review_tables import parse_utc
 
 REPORT_SCHEMA_VERSION = 1
-REPORT_ARTIFACT_NAME = "codehealth-refinement-report"
-ANALYSIS_ARTIFACT_NAME = "codehealth-refinement-analysis"
 PRODUCTION_TOOL = "pre-commit-review"
 RETIREMENT_DAYS = 30
 

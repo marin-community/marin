@@ -175,6 +175,7 @@ def test_load_telemetry_bounds_automation_and_keeps_only_matching_annotations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bundle = _bundle()
+    review_event = bundle.events[0].model_copy(update={"event_id": "review:55", "kind": "review", "database_id": 55})
     queries: list[tuple[str, str]] = []
 
     @contextmanager
@@ -189,17 +190,21 @@ def test_load_telemetry_bounds_automation_and_keeps_only_matching_annotations(
             return [{"invocation_id": "run-1", "code": "ml-example"}]
         return [
             {"comment_type": "inline", "comment_id": 102, "reason": "matching"},
+            {"comment_type": "review_body", "comment_id": 55, "reason": "matching review"},
             {"comment_type": "issue", "comment_id": 999, "reason": "unrelated"},
         ]
 
     monkeypatch.setattr(review_corpus, "open_tables_client", fake_client)
     monkeypatch.setattr(review_corpus, "query_rows", fake_query)
 
-    telemetry = review_corpus.load_telemetry("test", START, END, bundle.events)
+    telemetry = review_corpus.load_telemetry("test", START, END, (*bundle.events, review_event))
 
     assert telemetry.invocations == ({"invocation_id": "run-1"},)
     assert telemetry.findings == ({"invocation_id": "run-1", "code": "ml-example"},)
-    assert telemetry.annotations == ({"comment_type": "inline", "comment_id": 102, "reason": "matching"},)
+    assert telemetry.annotations == (
+        {"comment_type": "inline", "comment_id": 102, "reason": "matching"},
+        {"comment_type": "review_body", "comment_id": 55, "reason": "matching review"},
+    )
     for namespace, sql in queries[:2]:
         assert namespace in {review_corpus.INVOCATIONS_NAMESPACE, review_corpus.FINDINGS_NAMESPACE}
         assert "2026-08-21 00:00:00" in sql
@@ -291,6 +296,13 @@ def test_validate_corpus_rejects_tampered_evidence(corpus_export: CorpusExport) 
     with (corpus_export.output / "review_events.jsonl").open("a") as stream:
         stream.write("{}\n")
     with pytest.raises(ValueError, match="corpus file hash mismatch"):
+        review_corpus.validate_corpus(corpus_export.output)
+
+
+def test_validate_corpus_rejects_nested_manifest(corpus_export: CorpusExport) -> None:
+    (corpus_export.output / "diffs" / review_corpus.MANIFEST_FILENAME).write_text("{}\n")
+
+    with pytest.raises(ValueError, match="corpus contains undeclared files"):
         review_corpus.validate_corpus(corpus_export.output)
 
 

@@ -358,6 +358,26 @@ def test_collect_corpus_paginates_complete_review_threads() -> None:
     assert [event.database_id for event in bundle.events if event.kind == "inline_comment"] == [101, 102]
 
 
+def test_collect_corpus_rejects_thread_comment_without_review() -> None:
+    review = _review(55, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
+    review["comments"]["totalCount"] = 1
+    comment = _thread_comment(101, 55, updated="2026-08-20T00:00:00Z")
+    comment["pullRequestReview"] = None
+    scan = _pull()
+    scan.update(
+        {
+            "comments": _page([]),
+            "reviews": _page([review]),
+            "reviewThreads": {"totalCount": 1},
+            "commits": {"totalCount": 1},
+        }
+    )
+    hydrated = _hydrated_pull(review=review, thread=_thread(comment))
+
+    with pytest.raises(RuntimeError, match="thread comment 101 has no review"):
+        github.collect_corpus(REPOSITORY, START, END, bot_logins=set(), client=FakeGitHub(scan, hydrated))
+
+
 def test_collect_corpus_paginates_exact_changed_file_metadata() -> None:
     review = _review(1, _actor("reviewer"), "2026-08-01T00:00:00Z", body="Review this.")
     scan = _pull(changed_files=2)

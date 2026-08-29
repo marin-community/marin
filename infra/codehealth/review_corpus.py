@@ -367,7 +367,7 @@ def load_telemetry(
     annotation_start_sql = (start - dt.timedelta(days=30)).astimezone(dt.UTC).strftime(SQL_TIMESTAMP_FORMAT)
     event_kinds = {
         "inline_comment": "inline",
-        "review": "review",
+        "review": "review_body",
         "issue_comment": "issue",
     }
     event_keys = {(event_kinds[event.kind], event.database_id) for event in events}
@@ -544,7 +544,7 @@ def validate_corpus(path: Path, *, require_complete: bool = True) -> CorpusManif
     actual_paths = sorted(
         candidate.relative_to(root).as_posix()
         for candidate in root.rglob("*")
-        if candidate.is_file() and candidate.name != MANIFEST_FILENAME
+        if candidate.is_file() and candidate != root / MANIFEST_FILENAME
     )
     if actual_paths != declared_paths:
         raise ValueError("corpus contains undeclared files")
