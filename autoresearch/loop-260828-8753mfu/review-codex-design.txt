@@ -1,0 +1,18 @@
+Reading additional input from stdin...
+OpenAI Codex v0.149.0
+--------
+workdir: /home/marin/projects/marin-mfu-loop
+model: gpt-5.6-sol
+provider: openai
+approval: on-request
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: high
+reasoning summaries: none
+session id: 01a04bf2-6fc2-7c83-8e14-d56904750171
+--------
+user
+Adversarially review the research-campaign design in autoresearch/loop-260828-8753mfu/ (DESIGN.md, arm.sh, watchdog.sh, score.py) together with experiments/grug/moe_hero_ep/launch_diagnostics.py, BEFORE any GPU rack time is spent. This is a read-only review: report findings, change nothing.
+
+Context: campaign optimizes MFU of a MoE hero training run on one GB200 NVL72 rack. Arms restore from the hero's step-30000 checkpoint (--num-steps 30030 is an ABSOLUTE stop step), score mean throughput/mfu over relative steps +5..+19 from W&B, guard on moe/drop_fraction and train/loss. Hard constraints: production-priority jobs must run <1 hour (iris --timeout 3500); 20 minutes max post-compile runtime (watchdog STEP_BUDGET=1200, COMPILE_CEILING=1800); no added quantization; loss trajectory must be equivalent; keeps must hot-swap into the live hero and restore from its checkpoints. Same-night interleaved A/B pairs required for keep decisions; cross-night placement variance is +/-2pp MFU.
+
+Probe specifically: (1) bash bugs in arm.sh/watchdog.sh under these parameter values, including deadline arithmetic, early-release at +19 steps, cancel paths orphaning a 16-node gang, and the interaction of iris --timeout with the watchdog; (2) any way an arm exceeds the 1h or 20-min-post-compile caps; (3) any way arms perturb the live hero run (W&B run-id collisions, checkpoint dirs, compile-cache paths); (4) statistical validity of a 15-step scoring window for claiming +0.15 MFU improvements; (5) score.py windowing and guard logic for silent mis-scoring; (6) flaws or dead entries in the DESIGN.md hypothesis ledger. Rank findings by severity with file:line anchors. Verify claims against the actual code, not the design prose.
