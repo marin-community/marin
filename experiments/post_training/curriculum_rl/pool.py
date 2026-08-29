@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -23,6 +24,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.execution.remote import remote
 from rigging.filesystem.storage_path import prefix_join
+from transformers import AutoTokenizer
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,14 @@ BOXED_INSTRUCTION = " Please reason step by step, and end your response with a f
 
 GSM8K_TRAIN_ROWS = 2000
 GSM8K_VALIDATION_ROWS = 256
+
+QWEN3_MODEL = "Qwen/Qwen3-0.6B"
+QWEN3_REVISION = "c1899de"
+# The trainer skips generation for prompts above max_input_length
+# (request_window_tokens - max_new_tokens = 1024 in both presets), and a fully
+# skipped GRPO group fails group admission. Drop over-length train prompts at
+# pool build with a margin for chat-template variants.
+MAX_PROMPT_TOKENS = 1000
 
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
@@ -209,13 +219,33 @@ def _math500_records() -> list[dict[str, object]]:
     ]
 
 
+def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Drop rows whose templated prompt would be skipped by the trainer."""
+    tokenizer = AutoTokenizer.from_pretrained(QWEN3_MODEL, revision=QWEN3_REVISION)
+    kept = []
+    dropped: Counter[str] = Counter()
+    for record in records:
+        tokens = tokenizer.apply_chat_template(
+            record["prompt"], add_generation_prompt=True, tokenize=True, enable_thinking=False
+        )
+        if len(tokens) > MAX_PROMPT_TOKENS:
+            dropped[str(record["data_source"])] += 1
+        else:
+            kept.append(record)
+    if dropped:
+        logger.info("Dropped over-length prompts per bin: %s", dict(dropped))
+    return kept
+
+
 def write_pool_parquet(config: PoolParquetConfig) -> None:
     """Write the graded train pool and the fixed validation set."""
-    train = [
-        *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
-        *_math_records(),
-        *_aime_records(),
-    ]
+    train = _drop_over_length_records(
+        [
+            *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
+            *_math_records(),
+            *_aime_records(),
+        ]
+    )
     validation = [
         *_gsm8k_records("test", GSM8K_VALIDATION_ROWS, data_source=VALIDATION_GSM8K_SOURCE),
         *_math500_records(),

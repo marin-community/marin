@@ -55,13 +55,17 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.post_training.curriculum_rl.pool import TRAIN_FILENAME, VALIDATION_FILENAME, pool_step
+from experiments.post_training.curriculum_rl.pool import (
+    QWEN3_MODEL,
+    QWEN3_REVISION,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
+    pool_step,
+)
 
 logger = logging.getLogger(__name__)
 
 EXPERIMENT_NAME = "curriculum-rl"
-QWEN3_MODEL = "Qwen/Qwen3-0.6B"
-QWEN3_REVISION = "c1899de"
 HF_EXPORT_SUBDIR = "hf"
 POOL_ARTIFACT_NAME = f"documents/{EXPERIMENT_NAME}-pool"
 MODEL_ARTIFACT_NAME = f"models/{EXPERIMENT_NAME}-qwen3-0.6b"
