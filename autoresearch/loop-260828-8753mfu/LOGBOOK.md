@@ -500,3 +500,24 @@ value_and_grad); acknowledged limitation, documented in-code.
 Codex found NO other divergence: operand/offset order matches, output_t
 dead, every tie nonempty+nonnegative, offload_carry re-trace keeps the
 wrappers. Awaiting the fable review before GO.
+
+## 2026-08-29 ~16:30Z: iteration 4 (T-H9-2) — engagement complete, keep pending bracket
+
+Draws: mfl-h92-a median 23.680 (0 stalls, sd 0.127 — cleanest run of the
+campaign), mfl-h92-b median 23.779 (4 stalls). Controls 23.240-23.384.
+Median delta +0.36/+0.44 — 2x the 0.18 bar, consistent.
+
+Engagement trio all green (the anti-H9 signature):
+- compute-stream MemcpyD2D 785 -> ~4 ms/step (draw-b trace);
+- NO relocation: the only big memcpys anywhere are the pre-existing
+  layer-carry offload pinned<->device staging (10.87 GB copy-start.4x/9x
+  on streams 76/77, present in control) — zero multi-GB D2D on any
+  stream;
+- #async_start_instructions 275, UNCHANGED from control (H9's failure
+  showed +10 here).
+Peak 113.5 (-3.1 GiB: the hoisted const buffers are gone); remat
+restructured 275/1379-net. Fidelity: pointwise loss vs ctrl-d over 24
+steps max 9.1e-5 / median 1.2e-5 (C-C levels); drops identical 3.3e-5.
+
+Bracketing control mfl-ctrl-e submitted from the pre-change tree
+(REPO-override worktree at 5324007f19). KEEP decision on its return.

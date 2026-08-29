@@ -1,0 +1,20 @@
+12:51:17 t=0s train=none step=-2
+12:52:25 gang up (wandb run exists), compile ceiling 1800s starts now
+12:52:26 t=68s train=running step=-1
+12:53:31 t=135s train=running step=-1
+12:54:37 t=200s train=running step=-1
+12:55:43 t=266s train=running step=-1
+12:56:48 t=331s train=running step=-1
+12:57:54 t=397s train=running step=-1
+12:58:59 t=463s train=running step=-1
+13:00:05 t=529s train=running step=-1
+13:01:11 t=594s train=running step=-1
+13:02:23 t=660s train=running step=30001
+13:02:23 first observed step=30001, step budget 1200s starts now
+13:03:35 t=732s train=running step=30005
+13:04:46 t=804s train=running step=30009
+13:05:58 t=875s train=running step=30014
+13:07:10 t=948s train=running step=30018
+13:08:22 t=1019s train=running step=30022
+13:09:34 t=1091s train=running step=30026
+WATCHDOG terminal train=succeeded step=30026
