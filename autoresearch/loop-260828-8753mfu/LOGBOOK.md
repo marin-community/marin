@@ -249,3 +249,32 @@ Fidelity null band (first C-C pair, a2 vs b, steps 30005-30019):
 pointwise |dloss| max 4.1e-5, median 1.6e-5. Draw c adds the second pair.
 Trace analysis delegated (ranked lever table incl. remat-cost estimate for
 H6, marshal leg check, ragged transport exposure).
+
+## 2026-08-29 ~08:40Z: draw-b trace analysis (lever table refresh)
+
+Merged-interval methodology (overlap artifact avoided); step wall 17.17s avg,
+compute stream busy 14.76s (86%), exposed-under-collective 1807ms, pure
+starvation 20ms. Ranked levers (ms/step, % of 17168):
+
+1. Remat recompute ~1470 (8.6%) — all cheap elementwise/concat fusions
+   (*_remat*), stable across steps, zero GEMM/attention remat. H6's target;
+   headroom bound confirmed real.
+2. Exposed ragged a2a 1133 (6.6%) — 2021 total, 56% exposed, 12 chunk ops x
+   48 launches; transport is SM-bound (prior campaign) so HIDE, don't speed.
+3. Loop-carry D2D copies on the compute stream 785 (4.6%) — nine copy.7xx
+   ops at 1.85-3.22 GB x 48 launches; buffer donation/aliasing candidate.
+   NEW -> H9.
+4. Exposed layer-carry offload copies 576 (3.4%) — D2H 316 + H2D 260 while
+   compute idles; prefetch-earlier/writeback-later scheduling. NEW -> H10.
+5. Straggler all-gather.101.1: +1.2s in 1 of 3 profiled steps — cross-node
+   skew at a sync point. Same phenomenon as draw b's 4 in-window stall
+   steps (environment, not profiler). Informs noise model: stall steps are
+   real campaign noise; runs differ mainly by how many stalls they catch.
+6. H2 marshal leg: GONE (zero marshal events, 20ms starvation). H2 DEAD on
+   this stack — the dk-hero-era prior no longer applies.
+7. Dense GEMM mass 8.3s busy (48%) — only kernel-efficiency/quantization
+   moves it; excluded by fidelity constraint.
+
+Optimistic ceiling from this trace: ~28.5% MFU if levers 1-5 fully
+reclaimed. Near-term stack: H6 (remat) + H10 (offload prefetch), both
+compute-stream-freeing without touching transport.

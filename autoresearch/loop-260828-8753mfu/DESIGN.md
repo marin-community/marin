@@ -150,11 +150,26 @@ anything breaking hero restore.
   (dk-hero, pre-offload) showed marshal 2.55 s as top lever and a dense-MLP
   leg that turned out to be architecture (2 shared experts + remat) — both
   priors need re-confirmation on the offload/LHS/tile stack.
-- H2 marshal-step levers (SO-H2): reduce the ~2.55 s marshal leg — kernel or
-  layout changes in the dispatch/marshal path. Needs H1 to confirm the leg
-  survived the offload/LHS stack.
-- H3 shared-expert/dense leg scheduling: overlap the shared-expert compute
-  with ragged transport more aggressively; profile-informed.
+- H2 marshal-step levers (SO-H2): DEAD 2026-08-29 — the draw-b trace shows
+  zero marshal events and 20 ms/step pure starvation; the 2.55 s leg was
+  eliminated somewhere in the offload/LHS/tile stack. Do not re-run.
+- H3 transport-exposure hiding: the draw-b trace shows 1133 ms/step of
+  ragged-a2a EXPOSED (56% of its 2021 ms; 12 chunk ops x 48 launches).
+  Transport is SM-bound (prior campaign), so the lever is overlap/
+  pipelining of chunk ops with expert GEMMs, not a faster transport.
+  Needs a concrete treatment + engagement check before it can run.
+- H9 loop-carry D2D copies (NEW, from draw-b trace): 785 ms/step of
+  compute-stream MemcpyD2D — nine copy.7xx ops moving 1.85-3.22 GB, 48
+  launches each, per-layer while-loop buffer copies. Candidate: buffer
+  donation/aliasing in the layer loop, or moving them off the compute
+  stream. Code-level XLA/jax lever; needs investigation of which HLO
+  buffers these are before a treatment exists.
+- H10 offload-copy prefetch (NEW, from draw-b trace): 576 ms/step of
+  layer-carry D2H/H2D exposed while compute idles (~4-5 ms x ~90-140
+  copies/stream). Candidate: earlier prefetch / later writeback in the
+  offload schedule; interacts with H6 (slop-90 may change remat around the
+  offload names). Engagement check: exposed-memcpy time in a repeat
+  profile tail.
 - H4 capacity-factor titration at the restored router: hero drops at cf 1.15
   are ~5e-5 — far under any budget; cf 1.10/1.05 shrinks transport+GEMM
   buffers. GATE (review finding): a cf keep changes training dynamics and
