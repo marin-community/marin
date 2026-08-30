@@ -6,7 +6,7 @@ Frozen reconstruction refs:
 - merge base: `684f46c91aaf4737bcd15f755a2405285205f2fe`
 - old fork `main`: `83709b4aa03c2b9a92d8d78a8c12157b31d1e461`
 - upstream `main`: `389bd4f8ce796ef4a97de4b62675021e262c8e76`
-- rebuilt candidate: `71098f2b5cd877e358d5e0f48fe5687ec94fe84e`
+- rebuilt candidate: `45c84843976aa06364855d57532cfe7dd1cb53a9`
 
 Non-merge summary: **9 carry, 65 fix, 76 drop; 150 total.** All nine merge commits are dropped because the candidate is a linear replay.
 The replacement column uses short hashes from the rebuilt candidate above. `upstream` means the behavior is already owned by the frozen upstream base.
@@ -119,7 +119,7 @@ The replacement column uses short hashes from the rebuilt candidate above. `upst
 | 102 | `725fc069` | 2026-07-27 | drop | upstream 389bd4f8 | [deps] Keep Tinker out of default Harbor installs (#45) | Current upstream owns both the optional harbor[tinker] extra and the Tinker backend. |
 | 103 | `74d76ecb` | 2026-07-29 | fix | 6d797ced, d0af9405 | [verifier] Return the test script's stdout and stderr on VerifierResult (#47) | Verifier output fields and persistence are folded into the current models and trial implementation. |
 | 104 | `4d8baf7a` | 2026-07-29 | fix | 849cb73b | Make Daytona SDK upload primitives UPath-aware for s3 trial dirs (#50) | Daytona upload staging is ported onto current UPath and SDK primitives. |
-| 105 | `9ffd6fb5` | 2026-07-29 | fix | d0af9405 | Bound artifact writer uploads and submit backpressure (#46) | Writer backpressure and setup-file upload are retained in the current trial artifact pipeline. |
+| 105 | `9ffd6fb5` | 2026-07-29 | fix | d0af9405, 45c84843 | Bound artifact writer uploads and submit backpressure (#46) | Writer backpressure and setup-file upload are retained; the final review correction preserves per-destination order after an uncancellable upload timeout. |
 | 106 | `f2dd505f` | 2026-07-30 | fix | d0af9405 | feat: wire up setup_files upload (#51) | Writer backpressure and setup-file upload are retained in the current trial artifact pipeline. |
 | 107 | `1b02e70c` | 2026-07-31 | fix | 6d797ced, 849cb73b | Stop treating Daytona cache kwargs as resume identity (#53) | Resume identity and Daytona cache semantics are ported to current configuration and backend owners. |
 | 108 | `1ffb4003` | 2026-07-31 | fix | 8050b33b | Make terminus-2 context recovery safe and retryable (#54) | Retryable context recovery and summary-prompt budgeting are retained in current Terminus 2. |
