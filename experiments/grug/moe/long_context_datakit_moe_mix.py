@@ -12,7 +12,7 @@ from marin.execution.types import ExecutorStep, InputName
 from experiments.grug.moe.launch_datakit_moe_mix import _TAIL_BUCKETS, _phase_weights
 
 LONG_CONTEXT_STORE_PREFIX = "datakit/store/june-67b-a2b-length64k/2026.08.24"
-LONG_CONTEXT_SKEW = 2
+LONG_CONTEXT_SKEW = 4
 
 _LTE_64K = "lte_64k"
 _GT_64K = "gt_64k"
