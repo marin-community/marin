@@ -172,6 +172,8 @@ sequenceDiagram
 
 Reads plan from immutable pinned snapshots and localize only what pruning selected. Index artifacts are opened by the content-addressed references the state advertises — never by deriving a sidecar path. Direct clients (Python/DuckDB) read HEAD and the published projection from object storage without the server.
 
+`local_path` is a read-through cache (`cached.rs`): a verified hit (size + SHA-256, corrupt files self-heal) returns the local file and refreshes its recency; a miss downloads under a store-wide concurrency bound and lands the file by atomic rename. Writes are dual-ported — an upload's bytes also seed the cache, streamed uploads spool to the cache file while they transfer — so the flush → query path never re-downloads its own output. With `FINELOG_OBJECT_CACHE_GB` set, maintenance evicts least-recently-used cache files beyond the capacity, unlinking only behind the query-visibility write lock; unset retains everything.
+
 ### Maintenance dispatch
 
 ```mermaid

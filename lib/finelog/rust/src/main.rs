@@ -80,6 +80,13 @@ struct Args {
     )]
     index_cache_mb: NonZeroUsize,
 
+    /// Local object-cache capacity in GiB. When set, maintenance evicts
+    /// least-recently-used cached objects beyond this size; unset retains
+    /// everything (an evicted object re-materializes from the remote on the
+    /// next read that selects it).
+    #[arg(long, env = "FINELOG_OBJECT_CACHE_GB")]
+    object_cache_gb: Option<NonZeroUsize>,
+
     /// Mount the NON-proto test-only `/debug/*` admin routes (maintain/segments).
     /// Off the frozen contract; used only by the parity harness. Never set in
     /// production.
@@ -160,6 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.index_cache_mb.get(),
             mode,
             telemetry_root_write_mode,
+            args.object_cache_gb
+                .map(|gib| gib.get() as u64 * 1024 * 1024 * 1024),
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );

@@ -301,6 +301,7 @@ mod tests {
             None,
             WriterFence::UNCLAIMED,
             crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            Arc::new(tokio::sync::RwLock::new(())),
         );
         manager
             .register(TABLE, worker_schema(), StoragePolicy::default())

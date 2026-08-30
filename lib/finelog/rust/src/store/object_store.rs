@@ -228,8 +228,9 @@ pub trait ObjectStore: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Reclaim implementation-owned state. Implementations may choose to retain
-    /// everything; `CachedObjectStore` does so until an eviction policy exists.
+    /// Reclaim implementation-owned state. Implementations may retain
+    /// everything; `CachedObjectStore` evicts least-recently-used cache files
+    /// when a capacity is configured.
     async fn gc(&self) -> Result<(), StatsError> {
         Ok(())
     }

@@ -139,6 +139,7 @@ impl TableManager {
         object_state_store: Option<Arc<dyn TableStateStore>>,
         fence: WriterFence,
         index_cache_mb: usize,
+        query_visibility: Arc<RwLock<()>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             data_dir,
@@ -151,7 +152,7 @@ impl TableManager {
             runtimes: Mutex::new(HashMap::new()),
             controllers: Mutex::new(HashMap::new()),
             registration_locks: Mutex::new(HashMap::new()),
-            query_visibility: Arc::new(RwLock::new(())),
+            query_visibility,
             indices: Arc::new(IndexRegistry::new(Arc::new(IndexCache::new(
                 index_cache_mb,
             )))),
@@ -528,9 +529,15 @@ mod tests {
         let provider = build_remote_object_store(remote_dir.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let object_store =
-            Arc::new(CachedObjectStore::new(Arc::new(provider.clone()), data_dir.clone()).unwrap())
-                as Arc<dyn ObjectStore>;
+        let object_store = Arc::new(
+            CachedObjectStore::new(
+                Arc::new(provider.clone()),
+                data_dir.clone(),
+                Arc::new(RwLock::new(())),
+                None,
+            )
+            .unwrap(),
+        ) as Arc<dyn ObjectStore>;
         // The controller parks inside the HEAD swap its publication performs.
         let publication = FaultGate::new();
         let faults = FaultInjectingObjectStore::new(Arc::clone(&object_store));
@@ -553,6 +560,7 @@ mod tests {
             Some(Arc::clone(&state_store) as Arc<dyn TableStateStore>),
             WriterFence::new(11),
             crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            Arc::new(RwLock::new(())),
         );
         manager
             .register(TABLE, worker_schema(), StoragePolicy::default())

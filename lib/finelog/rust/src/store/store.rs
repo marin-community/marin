@@ -263,6 +263,7 @@ impl Store {
             index_cache_mb,
             mode,
             TelemetryRootWriteMode::SemanticOnly,
+            None,
         )
     }
 
@@ -272,6 +273,7 @@ impl Store {
         index_cache_mb: usize,
         mode: ServeMode,
         telemetry_root_write_mode: TelemetryRootWriteMode,
+        object_cache_bytes: Option<u64>,
     ) -> Result<Store, StatsError> {
         Self::open(
             data_dir,
@@ -279,6 +281,7 @@ impl Store {
             index_cache_mb,
             mode,
             telemetry_root_write_mode,
+            object_cache_bytes,
             None,
         )
     }
@@ -301,6 +304,7 @@ impl Store {
             index_cache_mb,
             mode,
             TelemetryRootWriteMode::SemanticOnly,
+            None,
             Some(interpose),
         )
     }
@@ -311,6 +315,7 @@ impl Store {
         index_cache_mb: usize,
         mode: ServeMode,
         telemetry_root_write_mode: TelemetryRootWriteMode,
+        object_cache_bytes: Option<u64>,
         interpose: Option<ObjectStoreInterposer>,
     ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
@@ -338,10 +343,13 @@ impl Store {
                 Some(interpose) => interpose(store),
                 None => store,
             });
+        let query_visibility = Arc::new(tokio::sync::RwLock::new(()));
         let object_store = match (&provider, &data_dir) {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
                 root.clone(),
+                Arc::clone(&query_visibility),
+                object_cache_bytes,
             )?) as Arc<dyn ObjectStore>),
             _ => None,
         };
@@ -376,6 +384,7 @@ impl Store {
             object_state_store.clone(),
             fence,
             index_cache_mb,
+            query_visibility,
         );
         let scheduler = MaintenanceScheduler::new(Arc::clone(&tables));
         let store = Store {
