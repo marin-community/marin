@@ -5,10 +5,10 @@ cluster. Each `Pulumi.<cluster>.yaml` stack loads the matching configuration fro
 `lib/finelog/config/<cluster>.yaml`. The reusable resource component lives in
 `iac.kubernetes.finelog`.
 
-Pulumi owns the image, PersistentVolumeClaim, Deployment, and Service. The
-`<config.name>-env` Kubernetes Secret (for example, `finelog-cw-use02a-env`)
-stays outside Pulumi state. Create or rotate it with `finelog deploy sync-secret`
-before updating a stack.
+Pulumi owns the image, Deployment, Service, and, for persistent caches, the
+PersistentVolumeClaim. The `<config.name>-env` Kubernetes Secret (for example,
+`finelog-cw-use02a-env`) stays outside Pulumi state. Create or rotate it with
+`finelog deploy sync-secret` before updating a stack.
 
 ## Update a server
 
@@ -40,8 +40,31 @@ identity from the checkout's content-addressed Git tree SHA and stamps the tree
 SHA, base commit, and dirty status into the image. Run the deploy from the
 intended checkout; there is no rollout counter in Pulumi configuration.
 
-Set `deployment.k8s.cache_pvc_name` to adopt and mount an existing replacement
-claim. Enable the stack's `import` option when Pulumi first adopts that claim.
+`deployment.k8s.cache_storage` selects the cache lifetime:
+
+- `persistent-volume` is the default. Pulumi creates a protected PVC, or adopts
+  the existing claim named by `cache_pvc_name`.
+- `node-local` mounts an `emptyDir` backed by the node's ephemeral disk. Pulumi
+  requests and limits ephemeral storage to `storage_gb`, and normally creates
+  no PVC.
+  It survives container restarts but not pod replacement. All bundled regional
+  senders use this mode because forwarding is best-effort and the hub becomes
+  the read source for rows it accepts.
+
+With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
+an existing replacement claim. Enable the stack's `import` option when Pulumi
+first adopts that claim.
+
+Changing an existing Pulumi-managed `persistent-volume` stack directly to
+`node-local` is intentionally not automatic: Pulumi refuses to remove the
+protected claim. Decide whether to recover or retain that data, then explicitly
+remove the claim from Pulumi state before updating the Deployment. The bundled
+regional stacks were adopted in `node-local` mode, so their prior claims never
+entered the new stack state.
+
+Do not mount an object store as the cache filesystem. Finelog's SQLite catalog
+and active segments require local filesystem semantics; object storage belongs
+behind `remote_log_dir` until the server owns that storage path natively.
 
 For a read-only preview, run `pulumi preview --stack <cluster>` from
 `infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic
@@ -68,9 +91,10 @@ Pass `--to-revision N` to select an exact revision shown by `kubectl rollout
 history deployment/<name>`. The command waits for the exact revision created by
 the rollback, verifies ingest health, and refreshes Pulumi state. If the target
 fails verification, it restores and verifies the revision that was serving when
-the command started. This rolls back the Pod template and image only; it does
-not restore PVC contents or an older value of the out-of-band environment
-Secret. A later deploy from a newer checkout rolls forward again.
+the command started. This rolls back the Pod template and image only. It does
+not restore PVC contents, a discarded node-local cache, or an older value of
+the out-of-band environment Secret. A later deploy from a newer checkout rolls
+forward again.
 
 ## Adopt an existing server
 
@@ -86,10 +110,10 @@ pulumi up
 pulumi config rm finelog:import
 ```
 
-The import pass adopts the existing PVC, Deployment, and Service. Inspect the
-preview before applying: the PVC must import without replacement. The component
-protects the PVC after adoption, so a later `pulumi destroy` cannot delete the
-cache accidentally.
+The import pass always adopts the existing Deployment and Service. A
+`persistent-volume` deployment also adopts and protects its existing PVC;
+inspect the preview before applying to ensure that claim imports without
+replacement. A `node-local` deployment does not adopt an old PVC.
 
 The stack does not own the `iris-system` PriorityClass. The cluster substrate
 stack in `infra/pulumi` remains its canonical owner.

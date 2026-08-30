@@ -8,19 +8,31 @@ from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
     ForwardingConfig,
+    K8sCacheStorage,
     K8sDeployment,
 )
 from iac.kubernetes.finelog import FinelogServerArgs, finelog_resource_args
 from rigging.provenance import Provenance
 
 
-def _args() -> FinelogServerArgs:
+def _args(
+    cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME,
+    *,
+    cache_pvc_name: str | None = None,
+) -> FinelogServerArgs:
     config = FinelogConfig(
         name="finelog-cw",
         port=10001,
         image="ghcr.io/marin-community/finelog:latest",
         remote_log_dir="s3://logs/finelog/cw",
-        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
+        deployment=Deployment(
+            k8s=K8sDeployment(
+                namespace="iris",
+                cache_storage=cache_storage,
+                cache_pvc_name=cache_pvc_name,
+                storage_gb=250,
+            )
+        ),
         auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
         forwarding=ForwardingConfig(
             target="https://finelog.oa.dev",
@@ -72,3 +84,23 @@ def test_finelog_retains_deployment_history_for_rollback() -> None:
     assert resources.deployment.spec is not None
 
     assert resources.deployment.spec.revision_history_limit == 10
+
+
+def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
+    resources = finelog_resource_args(_args(K8sCacheStorage.NODE_LOCAL), "image@sha256:digest")
+    assert resources.pvc is None
+    assert resources.deployment.spec is not None
+    pod_spec = resources.deployment.spec.template.spec
+    assert pod_spec is not None
+
+    volume = pod_spec.volumes[0]
+    assert volume.empty_dir is not None
+    assert volume.empty_dir.size_limit == "250Gi"
+    assert volume.persistent_volume_claim is None
+
+    container = pod_spec.containers[0]
+    assert container.resources is not None
+    assert container.resources.requests is not None
+    assert container.resources.limits is not None
+    assert container.resources.requests["ephemeral-storage"] == "250Gi"
+    assert container.resources.limits["ephemeral-storage"] == "250Gi"
