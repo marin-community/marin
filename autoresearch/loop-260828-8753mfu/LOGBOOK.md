@@ -1249,3 +1249,72 @@ Also corroborated independently: _clip_receiver_group_sizes compiles to
 293 ms/step on one SM of 148. Two agents reaching that from different
 directions raises my confidence that the metadata path is real work
 worth attacking, though 72% of it is currently hidden.
+
+## 2026-08-31 ~15:00Z: literature survey REOPENS three dead levers
+
+A systems/kernel survey (2025-26 MoE reports + vendor measurements)
+overturned three ledger entries. Recording the reframes, because two of
+my recorded negatives were measured in a configuration the reference
+work identifies as the losing one.
+
+REOPENED-1: H10 (pipelined host offloading) was measured WITHOUT
+--xla_gpu_experimental_parallel_async_compute_limit=8. NVIDIA's GB200
+NVL72 / DeepSeek-V3 measurement (908 TFLOP/s/device, 57% over remat)
+names a three-flag set: LHS=true + pipelined_host_offloading=true +
+parallel_async_compute_limit=8, and attributes 67.7% of the gain to LHS.
+My stack has the first two (offload_carry forces LHS on -- note the
+survey's claim that this branch runs LHS=false is true of MAIN, not of
+the campaign stack) but ran the default async-compute limit of 2. So
+H10's -0.25 was measured one flag short of the published recipe.
+Bandwidth math supports the reopening: 805 MB carry against an ~83 ms
+per-layer window is a 19x margin at the measured ~185 GB/s per die, so
+0.6 s of EXPOSED offload is anomalous, not inherent. -> H19.
+
+REOPENED-2: command buffers. The ledger entry covers the FULL disable
+after COLLECTIVES capture broke (#5675, independently reproduced as a
+30% degradation in openxla/xla#35360). The safe subset
+--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL was NEVER tried, and
+jax#27988 notes pallas_call is not captured by default at all, leaving
+144 ShortConv Triton launches/forward exposed on a platform whose own
+guidance warns GB200 exposes launch overhead earlier than H100. One-line
+env change. -> H20.
+
+REOPENED-3: transport SM cap. H11 capped CTAs PER SM (1/SM = 152 CTAs
+spread across all 152 SMs). The literature bar is different in kind:
+MoK reports TMA saturating bandwidth with <1/3 of SMs and tunes
+comm SMs over 4-52; DeepEP V2 needs 4-6; HybridEP 8-16. Capping the
+TOTAL grid to 8-16 CTAs would free ~136 SMs ENTIRELY rather than
+leaving one resident CTA on each -- a materially different allocation
+than what I measured. -> H21 (needs a small patch change: absolute CTA
+count, not a per-SM multiplier).
+
+NEW, strongest single code candidate -> H22: fold the combine-weight
+multiply into the expert down-projection epilogue. Three independent
+sources: Megatron-Core's memory-efficient permutation ("eliminates the
+saved tensors for the router backward outright, at zero compute cost"),
+ERNIE 4.5 (frees the second a2a output earlier), and Ling 2.0 (+7-10%
+end-to-end). Deletes a full [TK,3072] elementwise pass AND the router
+backward residual. Our combine_weights are applied after the return
+a2a (model.py:978-983), so this is not done here.
+
+CHEAP DIAGNOSTICS (hours, env-only) -> H23: jax_compiler_enable_remat_pass
+defaults TRUE, so an implicit XLA remat pass fires ON TOP of our explicit
+eqx.filter_checkpoint -- A/B it off to separate XLA-forced remat (slop
+factor) from policy-forced remat, which decides whether H19 or a
+microbatch change is the right lever. And xla_gpu_triton_gemm_any
+defaults FALSE; turning it on lets the Triton emitter absorb elementwise
+epilogues, the structural reason norm/router chains do not fuse into
+GEMMs (openxla/xla#6407).
+
+KILLED by the survey before costing anything: token rounding to the
+M-tile (SonicMoE Algorithm 4, +15.9% at E=256) -- the gain scales as
+M_tile/M_e and our M_e is ~87,000 rows, so the padding waste is 0.15%.
+DeepEP dedup: 5% ceiling inside one NVLink domain. Also demoted: C18
+norm fusion (Snider & Liang: fusion gives ~10% once outputs exceed
+registers, because memory movement, not launch overhead, is the
+bottleneck -- reduce bytes, do not chase fusion), and C17/NS work (four
+independent measurements put Muon at 1-3% of step time; a 6x optimizer
+speedup buys ~1-2.5% at best, so treat it as a profiling check).
+
+Ceiling: best published fine-grained-MoE MFU without quantization is
+28.8% (Megatron, 64 experts top-8, H100, full stack). We are at 24.0.
