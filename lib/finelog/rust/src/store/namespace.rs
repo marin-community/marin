@@ -798,7 +798,7 @@ impl Namespace {
         }
     }
 
-    /// Drain the in-RAM buffer to a new L0 segment, synchronously.
+    /// Drain one bounded prefix of the in-RAM buffer to a new L0 segment.
     ///
     /// Test/close sync-point and the body the flush task runs. Returns `Ok(())`
     /// when there was nothing to flush. On parquet-write failure the in-flight
@@ -825,6 +825,13 @@ impl Namespace {
                 // Durability-before-ack: the file is renamed and the catalog row
                 // is committed before we publish the new high-water seq.
                 self.persisted_seq.send_replace(sealed.max_seq);
+                let buffered_bytes = self.inner.lock().unwrap().buffers.ram_bytes();
+                if buffered_bytes >= SEGMENT_TARGET_BYTES {
+                    // A bounded flush can leave another complete segment in RAM.
+                    // Keep draining without waiting for the periodic tick.
+                    self.flush_notify.notify_one();
+                    self.force_flush.notify_one();
+                }
                 Ok(())
             }
             Err(e) => {
@@ -833,6 +840,20 @@ impl Namespace {
                 tracing::warn!(namespace = %self.name, error = %e, "flush failed; restored RAM buffer");
                 Err(e)
             }
+        }
+    }
+
+    /// Drain every bounded RAM prefix, stopping on the first write failure.
+    fn flush_all(&self) -> Result<(), StatsError> {
+        if self.data_dir.is_none() {
+            return Ok(());
+        }
+        loop {
+            let has_chunks = self.inner.lock().unwrap().buffers.has_chunks();
+            if !has_chunks {
+                return Ok(());
+            }
+            self.flush_once()?;
         }
     }
 
@@ -2240,15 +2261,15 @@ impl Namespace {
     /// Cooperatively shut the namespace down.
     ///
     /// Stops + JOINs the flush + maintenance tasks (bounded by `timeout`), then
-    /// does a final `flush_once` (no RAM-only rows survive; durability is already
-    /// preserved — an acked write was on a sealed segment) and, for a
+    /// drains every bounded RAM prefix (no RAM-only rows survive unless a write
+    /// fails) and, for a
     /// remote-configured namespace, a final bounded `sync_step` so the bucket
     /// matches the catalog at shutdown.
     pub async fn shutdown(&self, timeout: Duration) {
         self.stop_and_join(timeout).await;
         // Final drain so no acked-but-still-RAM rows are lost (best-effort;
         // failures are already logged inside flush_once).
-        let _ = self.flush_once();
+        let _ = self.flush_all();
         // Final reconcile so the bucket matches the catalog at shutdown.
         // Best-effort + bounded by the same per-namespace `timeout`; if it
         // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
@@ -2657,6 +2678,12 @@ mod tests {
         }
     }
 
+    fn half_segment_aligned() -> AlignedBatch {
+        let mut batch = aligned(1);
+        batch.byte_size = SEGMENT_TARGET_BYTES / 2 + 1;
+        batch
+    }
+
     fn metrics_aligned(run_ids: &[&str]) -> AlignedBatch {
         let schema = schema_to_arrow(&levanter_metrics_schema());
         let rows = run_ids.len();
@@ -2765,6 +2792,69 @@ mod tests {
             "shutdown hung on a wedged task instead of aborting it: {:?}",
             start.elapsed()
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_every_bounded_flush() {
+        let dir = tempdir();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        ns.stop_and_join(Duration::from_secs(1)).await;
+        for _ in 0..3 {
+            ns.append_aligned_batch(&half_segment_aligned());
+        }
+
+        ns.shutdown(Duration::from_secs(1)).await;
+
+        assert_eq!(ns.memory_summary(), (0, 0));
+        assert_eq!(ns.inner.lock().unwrap().local_segments.len(), 3);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn partial_flush_rearms_full_backlog() {
+        let dir = tempdir();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        ns.stop_and_join(Duration::from_secs(1)).await;
+        for _ in 0..3 {
+            ns.append_aligned_batch(&half_segment_aligned());
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ns.flush_notify.notified())
+                .await
+                .is_ok()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ns.force_flush.notified())
+                .await
+                .is_ok()
+        );
+
+        ns.flush_once().unwrap();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ns.flush_notify.notified())
+                .await
+                .is_ok()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ns.force_flush.notified())
+                .await
+                .is_ok()
+        );
+        ns.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(&dir).ok();
     }
 
