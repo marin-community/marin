@@ -45,7 +45,9 @@ use crate::store::compaction::executor::{
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
-use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
+use crate::store::ram_buffer::{
+    stamp_seq_and_build, RamBuffers, SealedBuffer, SEGMENT_TARGET_BYTES,
+};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{
@@ -65,8 +67,6 @@ use crate::store::segment_index::{
 use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
-
-pub use crate::store::ram_buffer::SEGMENT_TARGET_BYTES;
 
 /// Best-effort removal of a segment's derived index files, co-located with every
 /// parquet unlink. Missing artifacts are not errors.

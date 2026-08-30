@@ -15,11 +15,12 @@ use std::sync::Arc;
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 
 use crate::store::schema::{AlignedBatch, IMPLICIT_SEQ_COLUMN};
 
 /// Buffered-byte target for one L0 segment and one Arrow concatenation.
-pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
+pub(crate) const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
 
 #[derive(Debug)]
 struct BufferedChunk {
@@ -144,17 +145,20 @@ impl RamBuffers {
                 .collect();
             match concat_batches(&self.arrow_schema, &tables) {
                 Ok(batch) => batch,
-                Err(error) => {
+                Err(ArrowError::OffsetOverflowError(offset)) => {
                     tracing::warn!(
-                        %error,
+                        offset,
                         chunks = selected_count,
                         bytes = sealed_bytes,
-                        "failed to concatenate sealed RAM chunks; sealing oldest chunk"
+                        "sealed RAM chunks exceeded Arrow's offset limit; sealing oldest chunk"
                     );
                     selected_count = 1;
                     sealed_bytes = self.chunks[0].nbytes;
                     sealed_rows = self.chunks[0].batch.num_rows() as i64;
                     self.chunks[0].batch.clone()
+                }
+                Err(error) => {
+                    panic!("bounded same-schema RAM chunks failed to concatenate: {error}")
                 }
             }
         };
@@ -238,14 +242,15 @@ fn maintain_chunk_invariant(chunks: &mut Vec<BufferedChunk>, arrow_schema: &Sche
         let tables = [chunks[len - 2].batch.clone(), chunks[len - 1].batch.clone()];
         let merged = match concat_batches(arrow_schema, &tables) {
             Ok(batch) => batch,
-            Err(error) => {
+            Err(ArrowError::OffsetOverflowError(offset)) => {
                 tracing::warn!(
-                    %error,
+                    offset,
                     bytes = merged_bytes,
-                    "failed to coalesce RAM chunks; preserving separate chunks"
+                    "RAM chunks exceeded Arrow's offset limit; preserving separate chunks"
                 );
                 break;
             }
+            Err(error) => panic!("bounded same-schema RAM chunks failed to concatenate: {error}"),
         };
         chunks.pop();
         chunks.pop();
@@ -455,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn seal_splits_chunks_that_exceed_the_segment_target() {
+    fn seal_splits_combined_chunks_at_the_segment_target() {
         let schema = worker_arrow();
         let mut buffers = RamBuffers::new(Arc::clone(&schema), 1);
         let chunk_bytes = SEGMENT_TARGET_BYTES / 2 + 1;
