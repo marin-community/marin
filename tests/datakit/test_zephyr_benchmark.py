@@ -12,6 +12,7 @@ import pytest
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit import reference_pipeline, zephyr_benchmark
+from experiments.datakit.benchmark_sample import BENCHMARK_SAMPLE_INPUTS_DIR
 from experiments.datakit.reference_pipeline import SMOKE_SCALE, SOURCE_DISCOVERY_DEPTHS, pool_zephyr_context
 from experiments.datakit.zephyr_benchmark import (
     BenchmarkTarget,
@@ -56,6 +57,7 @@ def test_source_shard_stats_groups_parquet_by_source(monkeypatch):
             f"{_ROOT_KEY}/hplt_v3/outputs/main/shard-0001.parquet": 50,
             f"{_ROOT_KEY}/cp/wikiteam/outputs/main/a.parquet": 500,
             f"{_ROOT_KEY}/hplt_v3/.artifact.json": 10,
+            f"{_ROOT_KEY}/{BENCHMARK_SAMPLE_INPUTS_DIR}/datakit/minhash/hplt_abc123/outputs/shard.parquet": 25,
         },
     )
 
@@ -170,7 +172,7 @@ def _patch_benchmark_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         zephyr_benchmark,
         "sample_sources",
-        lambda sample_prefix, names, run_tag: {
+        lambda sample_prefix, names, run_tag="": {
             name: StepSpec(
                 name=f"sample/{name}",
                 override_output_path=f"{sample_prefix}/{name}",
@@ -186,7 +188,7 @@ def _patch_benchmark_graph(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_shuffle_target_reads_completed_map_run_and_writes_fresh_output(monkeypatch):
+def test_shuffle_target_reads_sample_minhash_and_writes_fresh_output(monkeypatch):
     _patch_benchmark_graph(monkeypatch)
     monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: True)
     requested_paths: list[str] = []
@@ -203,30 +205,29 @@ def test_shuffle_target_reads_completed_map_run_and_writes_fresh_output(monkeypa
         selected_sources=["a"],
         run_tag="shuffle-v2",
         target=BenchmarkTarget.SHUFFLE,
-        shuffle_input_run_tag="map-v1",
         scale=SMOKE_SCALE,
         zephyr_context=context,
     )
 
     assert steps.fuzzy_dedup.output_path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/shuffle-v2/")
-    assert all(step.output_path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/map-v1/") for step in steps.fuzzy_dedup.deps)
+    sample_inputs = f"{_SAMPLE_PREFIX}/{BENCHMARK_SAMPLE_INPUTS_DIR}/"
+    assert all(step.output_path.startswith(sample_inputs) for step in steps.fuzzy_dedup.deps)
     assert steps.fuzzy_dedup.fn is not None
     steps.fuzzy_dedup.fn(steps.fuzzy_dedup.output_path)
     assert requested_paths
-    assert all(path.startswith(f"{_SAMPLE_PREFIX}/benchmarks/map-v1/") for path in requested_paths)
+    assert all(path.startswith(sample_inputs) for path in requested_paths)
 
 
-def test_shuffle_target_requires_every_map_artifact(monkeypatch):
+def test_shuffle_target_requires_every_sample_minhash_artifact(monkeypatch):
     _patch_benchmark_graph(monkeypatch)
     monkeypatch.setattr(zephyr_benchmark, "step_is_built", lambda _step: False)
 
-    with pytest.raises(RuntimeError, match="run the same source selection with --target map first"):
+    with pytest.raises(RuntimeError, match="materialize_zephyr_benchmark_sample in minhash mode"):
         _benchmark_steps(
             sample_prefix=_SAMPLE_PREFIX,
             selected_sources=["a"],
             run_tag="shuffle-v2",
             target=BenchmarkTarget.SHUFFLE,
-            shuffle_input_run_tag="map-v1",
             scale=SMOKE_SCALE,
             zephyr_context=pool_zephyr_context("test-benchmark", SMOKE_SCALE),
         )

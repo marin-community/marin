@@ -161,8 +161,9 @@ also available for benchmarks that run in us-central1:
 
 `experiments.datakit.materialize_zephyr_benchmark_sample` creates a benchmark
 sample in the region where it will run. It either copies an existing normalized
-sample or rebuilds it from the source Hugging Face datasets. Neither mode is
-part of the A/B benchmark workflow.
+sample or rebuilds it from the source Hugging Face datasets, then computes the
+sample-owned MinHash artifacts used by shuffle-only benchmarks. Sample
+materialization is not part of the timed A/B benchmark workflow.
 
 Copying preserves the normalized Parquet payloads and writes destination-local
 `NormalizedData` artifacts. Run the job in the destination region, keep
@@ -179,7 +180,10 @@ uv run iris --cluster=marin job run --no-wait \
     --mode copy \
     --source-prefix gs://marin-us-central1/datakit/sample_100b_8ae7a94f \
     --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
-    --max-concurrent 4
+    --max-concurrent 4 \
+    --minhash-max-concurrent 80 \
+    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
 ```
 
 To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
@@ -205,8 +209,30 @@ uv run iris --cluster=marin job run --no-wait \
     --data-prefix gs://marin-eu-west4 \
     --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
     --target-total-tokens-b 100 \
-    --max-concurrent 4
+    --max-concurrent 4 \
+    --minhash-max-concurrent 80 \
+    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
 ```
+
+To add the reusable MinHash artifacts to an existing regional sample without
+copying or regenerating its normalized shards, use `--mode minhash`:
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region europe-west4 --memory=2G --disk=5G --cpu=1 --extra=cpu \
+  --priority batch \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode minhash \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
+    --minhash-max-concurrent 80 \
+    --pool-workers 12 --pool-cpu 8 --pool-ram 64g --pool-disk 32g \
+    --map-task-cpu 1 --map-task-ram 8g --map-task-disk 4g
+```
+
+The MinHash artifacts live under `_benchmark_inputs/` inside the sample. The
+benchmark validates all selected sources before starting a shuffle or fuzzy
+run and asks the operator to backfill the sample if any artifact is missing.
 
 The original samples remain available under
 `s3://marin-us-east-02a/marin/datakit/` in CoreWeave `us-east-02a`:

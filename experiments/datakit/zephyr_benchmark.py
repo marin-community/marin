@@ -34,9 +34,9 @@ the reduced ``--pool-workers`` still has enough parquet shards to fill:
         --dedup-max-parallelism 500 --dedup-cc-max-iterations 3
 
 Use ``--target map`` to run tokenization and MinHash only. A shuffle-only run
-uses ``--target shuffle --shuffle-input-run-tag <completed-map-run-tag>``;
-the benchmark verifies that every MinHash input from that map run exists before
-starting the worker pool, then runs exact and fuzzy dedup with a fresh run tag.
+uses ``--target shuffle``; the benchmark verifies that every sample-owned
+MinHash input exists before starting the worker pool, then runs exact and fuzzy
+dedup with a fresh run tag.
 """
 
 import argparse
@@ -55,6 +55,10 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 
+from experiments.datakit.benchmark_sample import (
+    BENCHMARK_SAMPLE_INPUTS_DIR,
+    benchmark_sample_fuzzy_steps,
+)
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     SOURCE_DISCOVERY_DEPTHS,
@@ -136,6 +140,8 @@ def _source_shard_stats(sample_prefix: str) -> dict[str, SourceShardStats]:
         if not path.endswith(".parquet"):
             continue
         relative = StoragePath(f"{root.scheme}://{path}").relative_to(root)
+        if relative.startswith(f"{BENCHMARK_SAMPLE_INPUTS_DIR}/"):
+            continue
         source_name, marker, _ = relative.partition("/outputs/main/")
         if not marker or not source_name:
             raise ValueError(
@@ -237,7 +243,6 @@ def _benchmark_steps(
     selected_sources: list[str] | None,
     run_tag: str,
     target: BenchmarkTarget,
-    shuffle_input_run_tag: str | None,
     scale: PipelineScale,
     zephyr_context: ZephyrContext,
 ) -> ZephyrDatakitSteps:
@@ -247,16 +252,13 @@ def _benchmark_steps(
 
     if target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY):
         return steps
-    if shuffle_input_run_tag is None:
-        raise ValueError(f"--shuffle-input-run-tag is required with --target {target}")
 
-    input_prefix = _benchmark_output_prefix(sample_prefix, shuffle_input_run_tag)
-    input_sources = sample_sources(sample_prefix, selected_sources, shuffle_input_run_tag)
-    input_steps = zephyr_datakit_steps(
+    input_sources = sample_sources(sample_prefix, selected_sources)
+    input_steps = benchmark_sample_fuzzy_steps(
+        sample_prefix,
         input_sources,
         scale,
         zephyr_context,
-        output_path_prefix=input_prefix,
     )
     missing = [name for name, step in input_steps.minhash.items() if not step_is_built(step)]
     if missing:
@@ -267,8 +269,8 @@ def _benchmark_steps(
             else ""
         )
         raise RuntimeError(
-            f"shuffle input run {shuffle_input_run_tag!r} is missing MinHash artifacts for {shown}{remainder}; "
-            "run the same source selection with --target map first"
+            f"benchmark sample {sample_prefix!r} is missing MinHash artifacts for {shown}{remainder}; "
+            "run experiments.datakit.materialize_zephyr_benchmark_sample in minhash mode"
         )
 
     return replace(
@@ -307,10 +309,6 @@ def main() -> None:
     parser.add_argument("--reduce-task-ram", required=True)
     parser.add_argument("--reduce-task-disk", required=True)
     parser.add_argument("--target", required=True, type=BenchmarkTarget, choices=list(BenchmarkTarget))
-    parser.add_argument(
-        "--shuffle-input-run-tag",
-        help="Completed map benchmark whose MinHash artifacts feed --target shuffle/fuzzy.",
-    )
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
     parser.add_argument(
@@ -327,11 +325,6 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
-    if args.target in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY) and args.shuffle_input_run_tag is None:
-        parser.error(f"--shuffle-input-run-tag is required with --target {args.target}")
-    if args.target not in (BenchmarkTarget.SHUFFLE, BenchmarkTarget.FUZZY) and args.shuffle_input_run_tag is not None:
-        parser.error("--shuffle-input-run-tag is only valid with --target shuffle or fuzzy")
-
     selected_sources = _resolve_sources(args.sample_prefix, args.sources, args.source_fraction, args.pool_workers)
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
     map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
@@ -358,7 +351,6 @@ def main() -> None:
         selected_sources=selected_sources,
         run_tag=args.run_tag,
         target=args.target,
-        shuffle_input_run_tag=args.shuffle_input_run_tag,
         scale=scale,
         zephyr_context=zephyr_context,
     )

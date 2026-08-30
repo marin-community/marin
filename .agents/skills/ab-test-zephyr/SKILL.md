@@ -192,12 +192,15 @@ task admitted per worker, and the default connected-components budget. Finelog
 map-only comparison, use `--target map`; it runs tokenization and MinHash with a
 fresh run tag.
 
-A shuffle comparison requires completed MinHash inputs. First run
-`--target map --run-tag <MAP_RUN_TAG>`, then run
-`--target shuffle --shuffle-input-run-tag <MAP_RUN_TAG>` with a fresh output
-run tag. The benchmark checks every selected source's MinHash artifact before
-starting the pool. `shuffle` runs global exact and fuzzy dedup; `exact`,
+A shuffle comparison reads the permanent MinHash inputs stored under the
+normalized sample's `_benchmark_inputs/` subtree. Use `--target shuffle` with a
+fresh run tag; no preparatory map benchmark is required. The benchmark checks
+every selected source's MinHash artifact before starting the pool and directs
+the operator to `materialize_zephyr_benchmark_sample --mode minhash` if the
+sample needs a backfill. `shuffle` runs global exact and fuzzy dedup; `exact`,
 `tokenize`, `minhash`, and `fuzzy` are also available for a single-stage run.
+Map-only outputs remain temporary benchmark results and are not inputs to a
+later shuffle run.
 
 Set exactly one data-locality argument before launching:
 
@@ -244,7 +247,6 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
     --reduce-task-ram <RAM_PER_REDUCE_TASK> \
     --reduce-task-disk <DISK_PER_REDUCE_TASK> \
     --target <all|map|shuffle|exact|tokenize|minhash|fuzzy> \
-    `# add --shuffle-input-run-tag <MAP_RUN_TAG> for shuffle or fuzzy` \
     --max-concurrent <PIPELINES> \
     --dedup-max-parallelism <SHARDS> \
     --dedup-cc-max-iterations <ROUNDS>
@@ -254,7 +256,7 @@ Record this workload fingerprint for every arm:
 
 - commit SHA and Iris job ID
 - sample prefix and source selection
-- benchmark target and shuffle input run tag, when present
+- benchmark target
 - pool worker and per-task CPU, RAM, and disk
 - maximum concurrent pipelines, dedup parallelism, and dedup CC max iterations
 - Iris controller, data-local target cluster or region, priority, and preemptibility
