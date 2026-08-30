@@ -66,6 +66,8 @@ use crate::store::types::{
     basename, segment_relative_key, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow,
 };
 
+pub use crate::store::ram_buffer::SEGMENT_TARGET_BYTES;
+
 /// Best-effort removal of a segment's derived index files, co-located with every
 /// parquet unlink. Missing artifacts are not errors.
 fn remove_index_artifacts(parquet_path: &str) {
@@ -127,11 +129,6 @@ fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
         );
     }
 }
-
-/// Buffered-byte size at which an append forces an early flush, short-circuiting
-/// the flush-rate cooldown so a write burst can't buffer unboundedly (and bounds
-/// a single L0's size).
-pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
 
 /// Maximum idle gap before the flush task wakes on its own. With steady writes
 /// the per-append nudge drives flushes; this is the ceiling for a quiet namespace.
