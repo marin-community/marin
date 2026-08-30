@@ -76,9 +76,24 @@ real fork release, which is a production act left to you.
   optimizer-state residency plus a corruption canary. **Do not enable** — see the
   hazard below. Kept as reusable forensics; defaults are byte-identical.
 - `--expert-chunks` (`30b100e9a1`): makes the chunk count configurable and corrects
-  a wrong in-code rationale. The chunks=1 arm is a capacity-policy change, not a
-  fidelity-preserving optimization, and was deliberately not run as a keep
-  candidate.
+  a wrong in-code rationale.
+
+## A validated option you may want, separate from the keeps
+
+`--expert-chunks 1` makes the hero **exactly dropless** — 0.0 token drops on both
+measured draws, against 3.3e-5 today — at a cost of about **0.45 MFU (~1.9%
+throughput)**. Losses stay in family, peak rises only 5 GiB, and rematerialization
+pressure actually falls. The accepted token set at one chunk is provably a superset
+of the chunked one (the capacity gate is a lexicographic greedy and the chunk
+capacities divide exactly), so nothing routed today is dropped there; it is strictly
+less clipping, not different clipping.
+
+It is not a campaign keep because the mandate was throughput at equal fidelity, and
+this trades the other way. But if drop-freedom is ever worth ~1.9% to the hero, the
+knob is committed, reviewed, and measured. Mechanism for the cost: one chunk moves
+twice the rows per transport op, so each op runs ~2x longer and is correspondingly
+harder to hide — and the transport is link-bound at that size, so the CTA cap cannot
+recover it.
 
 ## Hazard found, worth fixing regardless of this campaign
 
