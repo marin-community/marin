@@ -50,8 +50,8 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 A per-cluster finelog ships its rows to a hub finelog itself; no other process
 relays them. `forwarding:` in its deploy config names the hub, this cluster's
 name, and a `rigging.secrets` reference to its Ed25519 private key; the hub adds
-one `jwt` key entry per sender. Each server therefore owns a keypair, distinct
-from the iris controller's signing key.
+one `jwt` key entry per sender. Each sending Finelog therefore owns a keypair,
+distinct from the iris controller's signing key; the hub stores its public key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
 logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
@@ -77,13 +77,22 @@ Forwarding is **best-effort by construction**: the sending store holds the recor
 the hub a convenience copy. A backlog is a durable cursor into the sender's bounded
 local retention rather than a separate queue, so the forwarder drains it without an
 age or row-count cap. Non-log chunks from one read turn may wait for hub durability
-concurrently; log chunks stay serial to preserve line order. Rows are skipped only
-after local eviction makes them unreadable. A rejected write preserves its cursor and
+concurrently; log chunks stay serial to preserve line order. Rows are skipped after
+local eviction makes them unreadable or after the hub returns `invalid_argument` for
+permanently invalid content. A `failed_precondition` write preserves its cursor and
 invalidates the cached hub registration; the next sweep re-registers the current source
 schema and retries while other namespaces continue forwarding. Transient failures get
 three attempts before the namespace yields for the sweep, without advancing its cursor.
 A hub outage therefore cannot consume extra sender memory, but a long enough outage can
 still outlive local retention.
+
+Every five minutes the sender writes delta counters to `telemetry_v1.finelog`. A later
+successful forwarding sweep can copy them to the hub. `forwarding_batches` labels accepted,
+permanently rejected, schema-conflicting, and retryable batches by namespace.
+`forwarding_seq_positions` labels accepted positions and positions skipped after a
+permanent rejection or retention eviction. Hub copies can be stale during the failure
+they diagnose, so operators check metric freshness and query the regional namespace
+when the hub or network is unavailable.
 
 Only the k8s backend can forward — it projects the key through a Secret. The gcp
 backend refuses, because its only channel to the server is world-readable

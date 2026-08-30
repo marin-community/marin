@@ -1,0 +1,82 @@
+{
+  "type": "timeseries",
+  "title": "Finelog forwarding failed batches",
+  "description": "Five-minute delta counters from each regional forwarder. Permanent rejections are dropped; schema conflicts and retryable failures keep their cursor for another sweep. No data is not proof of health: hub or network failures can delay these counters too.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "custom": {
+        "drawStyle": "bars",
+        "lineWidth": 1,
+        "fillOpacity": 35,
+        "showPoints": "never",
+        "spanNulls": false
+      },
+      "min": 0
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "table",
+      "placement": "right",
+      "calcs": [
+        "sum",
+        "max"
+      ]
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') || ' · ' || json_get(attributes_json, 'outcome') || ' · ' || json_get(attributes_json, 'namespace') AS series, SUM(value) AS value FROM \"telemetry_v1.finelog\" WHERE service = 'finelog' AND name = 'forwarding_batches' AND json_get(attributes_json, 'outcome') <> 'accepted' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "series",
+          "text": "series",
+          "type": "string"
+        },
+        {
+          "selector": "value",
+          "text": "value",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}
