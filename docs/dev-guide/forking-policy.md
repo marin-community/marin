@@ -88,11 +88,13 @@ needs one requirement. Before the physical gate, resolve that requirement in a
 fresh uv environment and repeat with an explicit tpu-inference HEAD override;
 the latter is the nightly compatibility shape.
 
-The refresh freezes the vLLM producer commit, both source commits, the dependency
-cutoff, and the Marin consumer head before it builds. It publishes the pair once
-as a prerelease and records the workflow, assets, commits, and digests. After the
-producer change merges, mark that same release final without rebuilding or
-replacing its assets.
+The refresh selects a stable tpu-inference upstream release and the vLLM LKG it
+names, then replays and reviews each fork's retained Marin overlay. Those two
+exact source tips, not the bare upstream bases, are passed to the producer. The
+refresh freezes the producer commit, source tips, dependency cutoff, and Marin
+consumer head before it builds. It publishes the pair once as a prerelease and
+records the workflow, assets, commits, and digests. After the producer change
+merges, mark that same release final without rebuilding or replacing its assets.
 
 ## The vLLM GPU release pipeline
 

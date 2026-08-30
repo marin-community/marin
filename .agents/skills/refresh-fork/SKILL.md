@@ -17,6 +17,8 @@ issue. The required end-to-end test needs no extra confirmation.
 
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
+- `repository` — the Marin fork cloned as `origin`. When omitted, derive it from
+  the pin source.
 - `upstream` — the repo we rebase onto. Every fork has one.
 - `group` — if present, refresh every section in the group together in one PR
   (read them all now); if absent, this pin refreshes alone.
@@ -57,9 +59,10 @@ revision.
 - Scratch dir: `/tmp/marin-fork-refresh/<run-id>` (run id:
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus a
   short label).
-- Clone the fork and add its `upstream` remote. The fork URL is the
+- Clone the section's `repository` as `origin` and add the section's canonical
+  `upstream` as a separate remote. If `repository` is omitted, derive it from the
   `[tool.uv.sources]` git entry for isolated projects or the release-asset host
-  for release pins; `<upstream>` is this section's `upstream`.
+  for release pins.
 
 ```sh
 git clone <repository> <fork>
@@ -73,31 +76,68 @@ git -C <fork> remote set-head upstream -a                # so upstream/HEAD reso
 
 ## Refresh the TPU vLLM release
 
-This is the complete procedure for the `tpu-vllm` group. Do not stage a
-temporary source descriptor or add a second tpu-inference requirement.
+This is the source-selection and release procedure for the `tpu-vllm` group. Do
+not stage a temporary source descriptor, add a second tpu-inference requirement,
+or promote a TPU stable branch.
 
-1. Select the newest stable tpu-inference release. Resolve its exact fork commit
-   and read its `.buildkite/vllm_lkg.version`. Resolve that exact vLLM commit in
-   `marin-community/vllm`. If either fork needs an overlay change, review and land
-   that change through `docs/overlay-only-pr.md` before selecting the commit.
-2. Record the full vLLM and tpu-inference commits. Inspect their dependency files
-   together, including the tpu-inference torch constraints and vLLM TPU
-   requirements. These commits are release evidence, not Marin inputs.
-3. Select one unused full `marin-vllm-tpu-...` release tag. Freeze that tag, the
-   vLLM workflow producer commit, both source commits, the dependency cutoff, and
+Use these names throughout:
+
+```text
+tpu_base       = selected stable upstream tpu-inference release
+tpu_source_tip = reviewed tpu-inference overlay replayed onto tpu_base
+
+vllm_base       = LKG selected by that tpu-inference release
+vllm_source_tip = reviewed vLLM overlay replayed onto vllm_base
+```
+
+The bases are inputs to the replay. The source tips are the producer inputs.
+
+1. Read `config/external/vllm/tpu.toml`, then read the currently selected GitHub
+   release notes and producer receipt. Record the exact current
+   `tpu_source_tip` and `vllm_source_tip`, and verify each resolves in its Marin
+   fork. Identify and verify the exact upstream base beneath each current source
+   tip. Stop with a blocker if the current source tips or their bases cannot be
+   established exactly; do not reconstruct an overlay from a net diff.
+2. Select the newest stable release from canonical upstream tpu-inference as
+   `tpu_base`. Read `.buildkite/vllm_lkg.version` at that base and resolve the
+   named commit in canonical upstream vLLM as `vllm_base`.
+3. Replay each current Marin overlay onto its corresponding new base:
+   - Inventory `current_base..current_source_tip` in logical order with
+     `git log --reverse --no-merges`, retaining the original SHAs.
+   - Classify every meaningful delta as `carry`, `drop`, or `fix`. Compare it
+     with the new base first: drop changes upstream absorbed or made obsolete;
+     carry changes still needed; rewrite a `fix` when the intent remains but the
+     upstream API or layout moved. Merge commits are not replayed.
+   - Replay only `carry` and `fix` in logical order. Audit every touched API and
+     dependency against the new base, resolve incompatibilities, and run that
+     fork's ordinary checks before proceeding.
+   - Run `git range-diff` from the old overlay range to the new one. Record every
+     original commit and its carry/drop/fix result, with the reason for each drop
+     or rewrite. If an independent fixed-base overlay change is needed, land its
+     review through `docs/overlay-only-pr.md` before freezing either source tip;
+     that workflow is not a substitute for this replay.
+4. Review both replayed ranges and preserve their exact commits on reviewable
+   branches in the Marin forks. Record the resulting full SHAs as
+   `tpu_source_tip` and `vllm_source_tip`. Do not substitute the bare
+   `tpu_base` or `vllm_base` commits.
+5. Inspect the two source tips' dependency files together, including the
+   tpu-inference torch constraints and vLLM TPU requirements. These commits are
+   release evidence, not separate Marin runtime inputs.
+6. Select one unused full `marin-vllm-tpu-...` release tag. Freeze that tag, the
+   vLLM workflow producer commit, both source tips, the dependency cutoff, and
    the Marin consumer head. Dispatch the TPU lane of `marin-gpu-candidate.yaml`
-   at that producer commit with the tag, two source commits, and cutoff as
-   explicit inputs. Dispatch it once.
-4. Read back the public prerelease. It must contain exactly the vLLM wheel and its
+   at that producer commit with `vllm_source_tip`, `tpu_source_tip`, the tag, and
+   the cutoff as explicit inputs. Dispatch it once.
+7. Read back the public prerelease. It must contain exactly the vLLM wheel and its
    tpu-inference companion. Inspect the built vLLM wheel's `METADATA` and confirm
    its direct requirement names the companion's public release URL. Record the
-   workflow run, producer commit, source commits, cutoff, tag, asset names, sizes,
-   and digests as evidence.
-5. Before using hardware, resolve the public vLLM requirement in a fresh uv tool
+   workflow run, producer commit, source tips, upstream bases, cutoff, tag, asset
+   names, sizes, and digests as evidence.
+8. Before using hardware, resolve the public vLLM requirement in a fresh uv tool
    environment. Confirm it installs both selected wheel versions. Repeat with an
    explicit `tpu-inference @ git+https://github.com/marin-community/tpu-inference@<head>`
    override and confirm uv selects that HEAD instead of the transitive release.
-6. Edit only `config/external/vllm/tpu.toml`: the public release tag, dependency
+9. Edit only `config/external/vllm/tpu.toml`: the public release tag, dependency
    cutoff, and one vLLM requirement. Regenerate and check the typed object:
 
    ```sh
@@ -105,12 +145,14 @@ temporary source descriptor or add a second tpu-inference requirement.
    uv run config/update-external.py vllm --check
    ```
 
-7. Run focused Marin checks, then run the sole physical gate in **Validate**.
-   Open one draft Marin PR with the release and validation receipt. Do not add a
-   second physical qualification or exact-byte protocol.
-8. After validation and the producer change merges, mark the same GitHub release
-   final without rebuilding or replacing either asset. Read back the unchanged
-   asset IDs and digests before landing the Marin consumer.
+10. Run focused Marin checks, then run the sole physical gate in **Validate**.
+    Skip **Select the base**, **Rebase the overlay**, **Pin at the staged tip**,
+    and **Prepare the protected-branch promotion**. Resume at **Review and Open
+    the PR** with the TPU release and validation receipt. Do not add a second
+    physical qualification or exact-byte protocol.
+11. After validation and the producer change merges, mark the same GitHub release
+    final without rebuilding or replacing either asset. Read back the unchanged
+    asset IDs and digests before landing the Marin consumer.
 
 Rebuild and rerun the physical gate only after a change that can affect the
 wheel bytes or metadata, selected assets, producer path, Marin requirement, or
@@ -198,8 +240,8 @@ blocker issue.
 
 ## Pin at the staged tip
 
-This section applies only to non-TPU refreshes. The TPU group already stopped
-after **Refresh the TPU vLLM release**.
+This section applies only to non-TPU refreshes. The TPU group skips it and the
+protected-branch promotion section, then resumes at **Review and Open the PR**.
 
 Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
 `uv run config/update-external.py` to regenerate
@@ -316,8 +358,12 @@ refresh, and no text overclaims validation evidence.
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, then read back its title,
 body, labels, base, head, and draft state. Take one non-blocking snapshot of CI,
-comments, and reviews; do not start a monitoring loop. PR body: above the fold, the fork,
-selected base, the staged tip SHA, its rollback and date tags, the pending admin
-promotion (and the wheel release tag for `vllm-gpu`), e2e outcome, and unresolved
-risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
-dropped-patch reasons.
+comments, and reviews; do not start a monitoring loop.
+
+For TPU, keep the body to the upstream bases, reviewed source tips, producer and
+release tag, dependency cutoff, immutable asset evidence, e2e outcome, and
+unresolved risks. Include the carry/drop/fix record without branch-promotion,
+rollback-tag, or staged-tip fields. For another refresh, put the fork, selected
+base, staged tip SHA, rollback and date tags, pending admin promotion (and wheel
+release tag for `vllm-gpu`), e2e outcome, and unresolved risks above the fold;
+put detailed base-selection evidence and the carry/drop/fix table in `<details>`.

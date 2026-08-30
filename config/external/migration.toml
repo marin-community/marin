@@ -18,9 +18,11 @@
 # Weaver to run that skill weekly for each supported pin or group. Keep every section consistent with
 # its pin source and with EXTERNAL_PROJECTS in config/update-external.py.
 #
-# A section's name is the pin; its pin source holds the fork's repository URL and pinned revision. A
-# fork with more than one pin has one section per pin (the vllm fork has `vllm` and `vllm-gpu`).
+# A section's name is the pin; `repository` or its pin source identifies the Marin fork, while the
+# pin source holds the selected revision. A fork with more than one pin has one section per pin (the
+# vllm fork has `vllm` and `vllm-gpu`).
 # Fields:
+#   repository       Marin fork cloned as `origin`. If omitted, derive it from the pin source.
 #   upstream         Repo we rebase our commits onto. Every fork has one.
 #   group            Sections sharing a refresh move together and land in one Marin PR. The
 #                    vllm/tpu-inference pair produces one vLLM release: vLLM's base derives from the
@@ -45,6 +47,7 @@
 #   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
 
 [tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
 pin = "release:vllm/tpu.toml"
@@ -57,6 +60,7 @@ nuances = [
 ]
 
 [vllm]
+repository = "https://github.com/marin-community/vllm.git"
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
 pin = "release:vllm/tpu.toml"
