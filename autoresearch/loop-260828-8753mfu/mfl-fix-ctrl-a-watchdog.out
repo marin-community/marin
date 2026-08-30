@@ -1,0 +1,26 @@
+06:21:07 t=0s train=none step=-2
+06:22:15 t=69s train=running step=-2
+06:23:00 gang up (wandb run exists), compile ceiling 1800s starts now
+06:23:23 t=137s train=running step=-1
+06:24:28 t=202s train=running step=-1
+06:25:34 t=268s train=running step=-1
+06:26:39 t=334s train=running step=-1
+06:27:45 t=399s train=running step=-1
+06:28:50 t=465s train=running step=-1
+06:29:56 t=530s train=running step=-1
+06:31:02 t=596s train=running step=-1
+06:32:07 t=662s train=running step=-1
+06:33:13 t=727s train=running step=-1
+06:34:25 t=793s train=running step=30004
+06:34:25 first observed step=30004, step budget 1200s starts now
+06:35:37 t=865s train=running step=30008
+06:36:48 t=936s train=running step=30013
+06:38:00 t=1008s train=running step=30017
+06:39:12 t=1080s train=running step=30021
+06:40:24 t=1152s train=running step=30026
+06:40:24 cancelling /mwittmann/mfl-fix-ctrl-a-coord: scored through step 30026 (19 past first)
+Cancelled jobs:
+  /mwittmann/mfl-fix-ctrl-a-coord/grug-train-mfl-fix-ctrl-a
+Cancelled jobs:
+  /mwittmann/mfl-fix-ctrl-a-coord
+WATCHDOG scored step=30026 first=30004
