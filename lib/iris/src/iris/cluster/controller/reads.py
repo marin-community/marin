@@ -70,6 +70,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import (
+    LOCAL_ADMIN_SUBMITTER,
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
     AttemptUid,
@@ -552,6 +553,15 @@ def get_job_state(tx: Tx, job_id: JobName) -> int | None:
     return int(row.state) if row is not None else None
 
 
+def get_job_submitting_user(tx: Tx, job_id: JobName) -> str | None:
+    """Return the authenticated submitter stored for ``job_id``, or None if absent."""
+    row = tx.execute(
+        select(jobs_table.c.submitting_user).where(jobs_table.c.job_id == bindparam("job_id")),
+        {"job_id": job_id},
+    ).first()
+    return str(row.submitting_user) if row is not None else None
+
+
 def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timestamp) -> JobName | None:
     """Return one terminal *local* job finished before ``before_ts``, or None.
 
@@ -858,6 +868,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        submitting_user=str(row.submitting_user),
         backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
@@ -886,6 +897,7 @@ _PENDING_TASKS_STMT = (
         *PENDING_TASK_COLS,
         # job columns (label job_state to avoid clash with tasks.state)
         jobs_table.c.state.label("job_state"),
+        jobs_table.c.submitting_user,
         jobs_table.c.scheduling_deadline_epoch_ms,
         # job_config columns
         job_config_table.c.scheduling_timeout_ms,
@@ -954,24 +966,29 @@ def running_task_band_rows(tx: Tx) -> Sequence[Row]:
 _USER_SPEND_STMT = (
     select(
         local_tasks.c.job_id,
+        jobs_table.c.submitting_user,
         job_config_table.c.res_cpu_millicores,
         job_config_table.c.res_memory_bytes,
         job_config_table.c.res_device_json,
         func.count().label("task_count"),
     )
-    .select_from(local_tasks.join(job_config_table, job_config_table.c.job_id == local_tasks.c.job_id))
+    .select_from(
+        local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id).join(
+            job_config_table, job_config_table.c.job_id == local_tasks.c.job_id
+        )
+    )
     .where(hint_rare_state(local_tasks.c.state.in_(bindparam("states", expanding=True))))
     .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
-    .group_by(local_tasks.c.job_id)
+    .group_by(local_tasks.c.job_id, jobs_table.c.submitting_user)
 )
 
 
 def user_spend_rows(tx: Tx) -> Sequence[Row]:
     """Return per-job resource rows for active, non-BATCH tasks (budget spend basis).
 
-    Each row carries ``(job_id, res_cpu_millicores, res_memory_bytes,
-    res_device_json, task_count)``. ``job_config.priority_band`` (the user's
-    requested band) drives the BATCH exclusion, not the stamped
+    Each row carries ``(job_id, submitting_user, res_cpu_millicores,
+    res_memory_bytes, res_device_json, task_count)``. ``job_config.priority_band``
+    (the user's requested band) drives the BATCH exclusion, not the stamped
     ``tasks.priority_band``, so scheduler-downgraded jobs still count.
     """
     return tx.execute(_USER_SPEND_STMT, {"states": list(ACTIVE_TASK_STATES)}).all()
@@ -1435,13 +1452,20 @@ def list_active_tasks_for_jobs(
     return result
 
 
-def count_active_tasks_for_user(tx: Tx, user_id: str) -> int:
-    """Return the number of non-terminal tasks across all jobs owned by ``user_id``."""
+def count_active_tasks_for_budget_user(tx: Tx, user_id: str) -> int:
+    """Return non-terminal local tasks attributed to the budget identity ``user_id``."""
+    budget_user = case(
+        (
+            jobs_table.c.submitting_user.in_(("", LOCAL_ADMIN_SUBMITTER)),
+            jobs_table.c.user_id,
+        ),
+        else_=jobs_table.c.submitting_user,
+    )
     return int(
         tx.execute(
             select(func.count())
             .select_from(local_tasks.join(jobs_table, jobs_table.c.job_id == local_tasks.c.job_id))
-            .where(jobs_table.c.user_id == bindparam("user_id"))
+            .where(budget_user == bindparam("user_id"))
             .where(local_tasks.c.state.in_(bindparam("states", expanding=True))),
             {"user_id": user_id, "states": list(NON_TERMINAL_TASK_STATES)},
         ).scalar()

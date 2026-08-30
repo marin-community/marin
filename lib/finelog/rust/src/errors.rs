@@ -2,7 +2,7 @@
 //!
 //! The mapping is load-bearing:
 //!
-//! - `SchemaConflict` -> `failed_precondition` (NOT `already_exists`)
+//! - `SchemaConflict` / `BatchSchemaConflict` -> `failed_precondition`
 //! - `SchemaValidation` / `InvalidNamespace` -> `invalid_argument`
 //! - `NamespaceNotFound` -> `not_found`
 //! - `QueryResultTooLarge` -> `resource_exhausted`
@@ -16,6 +16,9 @@ pub enum StatsError {
     /// Requested schema differs from the registered one in a non-additive way
     /// (type change, new non-nullable column).
     SchemaConflict(String),
+    /// A well-formed write batch conflicts with the namespace's registered schema.
+    /// Re-registering or upgrading the receiver can make the same bytes valid.
+    BatchSchemaConflict(String),
     /// A schema or write batch is structurally invalid (missing ordering key,
     /// unknown column type, reserved column).
     SchemaValidation(String),
@@ -36,6 +39,7 @@ impl std::fmt::Display for StatsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StatsError::SchemaConflict(m) => write!(f, "{m}"),
+            StatsError::BatchSchemaConflict(m) => write!(f, "{m}"),
             StatsError::SchemaValidation(m) => write!(f, "{m}"),
             StatsError::InvalidNamespace(m) => write!(f, "{m}"),
             StatsError::NamespaceNotFound(m) => write!(f, "{m}"),
@@ -52,6 +56,7 @@ impl From<StatsError> for ConnectError {
     fn from(err: StatsError) -> ConnectError {
         match err {
             StatsError::SchemaConflict(m) => ConnectError::failed_precondition(m),
+            StatsError::BatchSchemaConflict(m) => ConnectError::failed_precondition(m),
             StatsError::SchemaValidation(m) => ConnectError::invalid_argument(m),
             StatsError::InvalidNamespace(m) => ConnectError::invalid_argument(m),
             StatsError::NamespaceNotFound(m) => ConnectError::not_found(m),
@@ -75,6 +80,10 @@ mod tests {
     fn schema_conflict_maps_to_failed_precondition_not_already_exists() {
         assert_eq!(
             code_of(StatsError::SchemaConflict("x".into())),
+            ErrorCode::FailedPrecondition
+        );
+        assert_eq!(
+            code_of(StatsError::BatchSchemaConflict("x".into())),
             ErrorCode::FailedPrecondition
         );
     }

@@ -440,6 +440,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    submitting_user: str
     backend_id: str
     state: int
     current_attempt_id: int

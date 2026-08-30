@@ -155,11 +155,10 @@ fn validate_metric_batch(
             )));
         }
 
-        let summary_values: [&dyn Array; 9] = [
+        let required_summary_values: [&dyn Array; 8] = [
             minima,
             maxima,
             counts,
-            nonzero_counts,
             sums,
             sum_squares,
             means,
@@ -169,17 +168,20 @@ fn validate_metric_batch(
         match kinds.value(row) {
             "scalar" => {
                 require_non_null(values, VALUE_COLUMN, row)?;
-                require_all_null(&summary_values, "summary", row)?;
+                require_all_null(&required_summary_values, "summary", row)?;
+                require_null(nonzero_counts, NONZERO_COUNT_COLUMN, row)?;
                 require_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
                 require_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
             }
             "summary" | "histogram" => {
                 require_null(values, VALUE_COLUMN, row)?;
-                require_all_non_null(&summary_values, "summary", row)?;
+                // Legacy seven-stat summaries have no nonzero count to reconstruct.
+                require_all_non_null(&required_summary_values, "summary", row)?;
                 if kinds.value(row) == "summary" {
                     require_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
                     require_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
                 } else {
+                    require_non_null(nonzero_counts, NONZERO_COUNT_COLUMN, row)?;
                     require_non_null(bucket_limits, BUCKET_LIMITS_COLUMN, row)?;
                     require_non_null(bucket_counts, BUCKET_COUNTS_COLUMN, row)?;
                     if bucket_limits.value_length(row) != bucket_counts.value_length(row) + 1 {

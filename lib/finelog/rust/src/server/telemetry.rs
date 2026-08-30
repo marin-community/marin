@@ -890,6 +890,55 @@ fn normalize_record_batch(
     .map_err(|error| ApiError::bad_request(format!("could not normalize telemetry: {error}")))
 }
 
+/// One process-internal delta counter written through the ordinary telemetry policy.
+pub(crate) struct CounterSample {
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Normalize trusted process-internal counters into the same batch shape as
+/// `POST /v1/telemetry`.
+pub(crate) fn counter_batch(
+    service: &str,
+    timestamp_ms: i64,
+    samples: Vec<CounterSample>,
+) -> Result<RecordBatch, StatsError> {
+    let batch_id = Uuid::new_v4().to_string();
+    let records = samples
+        .into_iter()
+        .map(|sample| TelemetryRecord {
+            timestamp_ms,
+            kind: RecordKind::Counter,
+            name: sample.name,
+            value: Some(sample.value),
+            body: None,
+            unit: Some(sample.unit),
+            attributes: sample.attributes,
+        })
+        .collect::<Vec<_>>();
+    let batch = TelemetryBatch {
+        version: TELEMETRY_VERSION,
+        batch_id,
+        resource: Resource {
+            service: service.to_string(),
+            run_id: None,
+            job_id: None,
+            execution_uid: None,
+            region: None,
+            node_name: None,
+            process_index: None,
+            attributes: BTreeMap::new(),
+        },
+        records,
+    };
+    let indexed = batch.records.iter().enumerate().collect::<Vec<_>>();
+    normalize_record_batch(&batch, &indexed).map_err(|error| {
+        StatsError::Internal(format!("normalizing internal telemetry: {}", error.message))
+    })
+}
+
 pub(crate) fn telemetry_schema() -> Schema {
     Schema::new(
         vec![
