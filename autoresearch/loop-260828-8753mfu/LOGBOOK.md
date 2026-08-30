@@ -1001,3 +1001,21 @@ remat count within ~2x of 325; peak_gib <= ~125; drop_fraction down ~10x
 (this is the engagement check); cta_count=152 and the wheel install line
 present. Failing 1-3 closes C13 at desk+smoke cost with the mechanism
 named; failing 4 means the knob did not reach the backend.
+
+## 2026-08-31 ~07:50Z: ITERATION 10 CLOSED — C13 discarded for throughput, kept as an option
+
+Pair 23.614/23.730 (mean 23.67) vs same-night control 24.161 (and the
+deployment record 24.04): -0.40 to -0.49, well outside the -0.17
+non-inferiority bar, so chunks=1 is NOT a throughput keep. What it IS:
+the only configuration this campaign measured that is EXACTLY DROPLESS
+(0.0 both draws vs 3.3e-5 baseline), with loss in family, peak only
++5.0 GiB, remat pressure DOWN (325->218 instructions), and the accepted
+set provably a superset of the chunked one. That is a validated trade,
+recorded for whoever prices drop-freedom against ~1.9% throughput.
+Mechanism for the loss: at one chunk each transport op moves twice the
+rows, so ops run ~2x longer and are correspondingly harder to hide; the
+transport is link-bound at that size, so the CTA cap cannot recover it.
+C14 (pooled gate + lowered capacity factor) remains open in principle --
+the memory headroom exists (+5 not +12-16) -- but it would have to beat
+a -0.45 starting deficit, so it is not the near-term prize the review
+hoped; recorded as a lead, not a queued arm.
