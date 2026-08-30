@@ -678,22 +678,26 @@ def test_an_expert_chunk_count_that_does_not_divide_the_local_bank_is_rejected_i
 
 
 def test_the_receiver_alignment_is_inert_unless_it_is_set():
-    """Leaving the alignment off must not perturb the lowered step by a single byte.
+    """The default transport must lower to the module it lowered to before the option existed.
 
-    The aligned layout is an arm, not a migration: it is meant to be compared against the runs
-    that came before it, so the default has to lower to the module it lowered to before the
-    option existed. The treatment then shows up only as the transport buffer's row count --
-    two chunk experts over a 148-row chunk capacity become `align_up(148, 256) + 256 = 512`
-    rows, the same size `pad_grouped_rows` would have allocated for its copy.
+    The aligned layout is an arm, not a migration: it is meant to be compared against runs that
+    came before it. Comparing the unset config against the same config with an explicit `None`
+    would prove nothing, so this pins the concrete transport facts recorded on the pre-C15 tree
+    (commit d771086e7c): six 148-row receiver buffers over twelve ragged all-to-alls, at two
+    chunks of two experts each. The out-of-tree check that the whole lowered module matches that
+    commit byte for byte is what this stands in for; these are the values it would move.
+
+    The treatment then shows up only as the buffer's row count -- two chunk experts over a 148-row
+    chunk capacity become `align_up(148, 256) + 256 = 512` rows, the size `pad_grouped_rows` would
+    have allocated for its copy -- and in nothing else.
     """
     default_hlo = _lower_hero_loss_grad(_remat_probe_config(), debug_info=False)
-    unset_hlo = _lower_hero_loss_grad(_remat_probe_config(ragged_receiver_alignment=None), debug_info=False)
     aligned_hlo = _lower_hero_loss_grad(
         _remat_probe_config(ragged_receiver_alignment=ragged_backend.RAGGED_CUDNN_RECEIVER_ALIGNMENT),
         debug_info=False,
     )
 
-    assert unset_hlo == default_hlo
+    assert default_hlo.count(" ragged-all-to-all(") == 12
     assert default_hlo.count("bf16[148,64]{1,0} ragged-all-to-all") == 6
     assert aligned_hlo.count("bf16[512,64]{1,0} ragged-all-to-all") == 6
     # Only the layout moves: the same collectives, in the same number, over the same axis.

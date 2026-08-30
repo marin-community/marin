@@ -113,18 +113,21 @@ def aligned_group_capacity(rows: int, groups: int, alignment: int = _GROUP_ALIGN
     return -(-rows // alignment) * alignment + alignment * (groups - 1)
 
 
-def full_partition_offsets(rows: int, group_sizes: jax.Array) -> jax.Array:
+def full_partition_offsets(rows: int, leading_group_sizes: jax.Array) -> jax.Array:
     """Per-group end rows that partition all ``rows``, giving the last group the leftover.
 
-    The kernel's contract is not only that every extent divides `_GROUP_ALIGNMENT`; the final
-    offset must also equal the operand's physical row count, since the kernel walks its groups
-    across one TMA descriptor over the whole buffer. Charging the residual rows to the last group
-    satisfies the second half. They contribute nothing to its product as long as they are zero in
-    one of the two operands, which is what every caller here guarantees.
+    Takes the first ``groups - 1`` extents, because the last one is not a free choice: the
+    kernel's contract is not only that every extent divides `_GROUP_ALIGNMENT`, but that the final
+    offset equals the operand's physical row count, since the kernel walks its groups across one
+    TMA descriptor over the whole buffer. So the last group gets every remaining row, and a
+    signature that cannot be handed a different value is the honest one.
+
+    Those leftover rows contribute nothing to the last group's product as long as they are zero in
+    both operands, which is what every caller here guarantees.
     """
-    group_sizes = jnp.asarray(group_sizes, dtype=jnp.int32)
-    residual = rows - jnp.sum(group_sizes, dtype=jnp.int32)
-    return jnp.cumsum(group_sizes.at[-1].add(residual), dtype=jnp.int32)
+    leading_group_sizes = jnp.asarray(leading_group_sizes, dtype=jnp.int32)
+    tail_size = rows - jnp.sum(leading_group_sizes, dtype=jnp.int32)
+    return jnp.cumsum(jnp.concatenate([leading_group_sizes, tail_size[None]]), dtype=jnp.int32)
 
 
 def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -148,9 +151,9 @@ def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Arr
     # and adding one alignment per preceding group is always enough for the rounded extents.
     padded_capacity = aligned_group_capacity(values.shape[0], groups)
 
-    aligned_sizes = ((group_sizes + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
+    head_sizes = ((group_sizes[:-1] + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
     active_offsets = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    padded_offsets = full_partition_offsets(padded_capacity, aligned_sizes)
+    padded_offsets = full_partition_offsets(padded_capacity, head_sizes)
     active_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), active_offsets[:-1]])
     padded_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), padded_offsets[:-1]])
 
@@ -184,19 +187,20 @@ def cudnn_grouped_wgrad_prealigned(lhs: jax.Array, rhs: jax.Array, group_sizes: 
     The caller guarantees that group ``i`` occupies rows
     ``[sum(group_sizes[:i]), sum(group_sizes[:i+1]))`` of both operands, that every entry of
     ``group_sizes`` is a multiple of `_GROUP_ALIGNMENT` (so every group starts on an aligned
-    row), and that any row inside a group that carries no data is zero in at least one operand.
+    row), and that every row of both operands not covered by an arrival is zero.
 
-    Any rows past the last group are folded into it by `full_partition_offsets`, because the
-    kernel requires the final offset to equal the operand's row count -- it addresses every group
-    through one descriptor over the whole buffer, so a group that ends short reads on into
-    whatever follows. The buffer's own slack is what gets folded in, and it is zero.
+    ``group_sizes[-1]`` is ignored: rows past the last group are folded into it by
+    `full_partition_offsets`, because the kernel requires the final offset to equal the operand's
+    row count -- it addresses every group through one descriptor over the whole buffer, so a group
+    that ends short reads on into whatever follows. That leftover is the buffer's own slack, which
+    the caller has zeroed, so it contributes nothing.
 
     Under that contract this is `cudnn_grouped_wgrad` with the pad pass removed: `pad_grouped_rows`
     applied to such a layout reproduces it row for row and returns the same offsets, so the kernel
     sees byte-identical operands and offsets either way.
     """
     _assert_group_alignment_matches_kernel()
-    offsets = full_partition_offsets(lhs.shape[0], group_sizes)
+    offsets = full_partition_offsets(lhs.shape[0], group_sizes[:-1])
     return _grouped_wgrad(lhs, rhs, offsets, expert_count=group_sizes.shape[0])
 
 

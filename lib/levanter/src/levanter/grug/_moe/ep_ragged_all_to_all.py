@@ -150,26 +150,26 @@ def _cute_expert_mlp_prealigned(
 ) -> Float[Array, "C H"]:
     """`_cute_expert_mlp` for a receiver buffer already in the cuDNN kernel's aligned layout.
 
-    This one takes the *physical* sizes, which are the aligned group extents with the buffer's
-    leftover rows charged to the last expert. Two reasons, and they are the same reason:
+    This takes the same *active* sizes `_cute_expert_mlp` does, so the QuACK GEMMs cover the rows
+    they always covered: the aligned extents, which exceed the arrival counts by less than one
+    alignment per expert. Handing them the physical sizes instead -- the extents with the buffer's
+    leftover charged to the last expert -- would put every unused capacity row through every
+    grouped GEMM, tens of thousands of them, which costs far more than the operand copy this path
+    exists to delete.
 
-    * The weight-gradient kernel walks its groups through one descriptor over the whole operand,
-      so its final offset has to be the operand's row count. `full_partition_offsets` would fold
-      the leftover in anyway; handing it in already folded keeps one layout in play.
-    * Because every row is then inside some group, the forward's grouped GEMMs write every row of
-      their outputs. Rows past the last group would otherwise keep whatever the freshly allocated
-      buffer held, and the weight gradients read those rows once the leftover is folded in. Their
-      partner operand is zero there, so a finite value would cancel -- but a stale NaN would not.
+    The weight-gradient kernel does need a partition of its whole operand, so
+    `cudnn_grouped_wgrad_prealigned` folds that leftover in itself, and the pre-aligned expert-MLP
+    build zeroes the two operands the QuACK GEMMs leave unwritten out there.
 
-    The rows a group covers past its arrivals are the buffer's zeros either way, and every kernel
-    here is a grouped GEMM over rows, so they contribute zero and produce zero.
+    The rows a group covers past its arrivals are the buffer's zeros, and every kernel here is a
+    grouped GEMM over rows, so they contribute zero and produce zero.
     """
-    del activation_fn, active_group_sizes
+    del activation_fn, physical_group_sizes
 
     from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn_prealigned  # noqa: PLC0415
 
     return _run_cute_expert_mlp(
-        _expert_mlp_cudnn_prealigned, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes
+        _expert_mlp_cudnn_prealigned, x_dispatch, moe_w13_local, moe_w2_local, active_group_sizes
     )
 
 

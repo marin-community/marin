@@ -89,7 +89,13 @@ def _expert_mlp_bwd(res, dy):
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
-def _build_expert_mlp_cudnn(grouped_wgrad):
+def _padded_operand_rows(values: jax.Array, cu: jax.Array) -> jax.Array:
+    """`pad_grouped_rows` rebuilds the operand anyway, so the padding path masks nothing."""
+    del cu
+    return values
+
+
+def _build_expert_mlp_cudnn(grouped_wgrad, wgrad_operand_rows, name: str):
     """``_expert_mlp`` with the two weight-gradient GEMMs on ``grouped_wgrad``.
 
     The forward output is masked past the last expert group: the grouped GEMMs write only
@@ -102,18 +108,31 @@ def _build_expert_mlp_cudnn(grouped_wgrad):
     describe an aligned layout. Both compute the same function; the second is the same kernel
     call on the same bytes without the pre-pass.
 
-    A pre-aligned caller passes ``group_sizes`` that partition the whole buffer, so ``cu`` covers
-    every row, nothing here is masked, and no output row is left holding what its buffer held.
+    ``wgrad_operand_rows`` is what has to happen to a weight-gradient operand first, and it is the
+    price of skipping the pad. The pre-aligned kernel call must cover every row of its operands
+    (its last group absorbs the buffer's leftover), so it reads rows past ``cu[-1]`` -- rows the
+    QuACK GEMMs never write, which hold whatever the freshly allocated buffer held. Of the four
+    operands, ``dy`` and ``x_dispatch`` are already zero there, but ``h`` and ``d_gu`` are not: a
+    stale NaN in either would survive multiplication by its zero partner. So the pre-aligned build
+    extends the existing `_zero_inactive_grouped_rows` masking to exactly those two, and the
+    padding build passes them straight through because `pad_grouped_rows` re-zeroes them itself.
+
+    ``h`` is masked in the forward rather than the backward: the mask has to materialize either
+    way (its consumer is an opaque kernel call), and doing it where ``h`` is produced keeps one
+    copy of it live instead of two. ``d_gu``'s mask is free -- it fuses into the elementwise
+    SwiGLU backward that already reads and writes that whole buffer.
     """
 
     @jax.custom_vjp
     def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
         _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
+        h = wgrad_operand_rows(h, cu)
         y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
         return _zero_inactive_grouped_rows(y, cu)
 
     def _expert_mlp_cudnn_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
         gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
+        h = wgrad_operand_rows(h, cu)
         y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
         return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
@@ -124,7 +143,9 @@ def _build_expert_mlp_cudnn(grouped_wgrad):
         dy = _zero_inactive_grouped_rows(dy, cu)
         dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
         dw2 = grouped_wgrad(h, dy, group_sizes)
-        d_gu = _swiglu_gate_up_backward(gu, dh)
+        # Masked before the dx GEMM, not between it and the weight gradient, so one d_gu is built.
+        # The GEMM reads only rows inside `cu`, so the mask cannot change dx.
+        d_gu = wgrad_operand_rows(_swiglu_gate_up_backward(gu, dh), cu)
         dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
         dx = _zero_inactive_grouped_rows(dx, cu)
         dw13_il = grouped_wgrad(x_dispatch, d_gu, group_sizes)
@@ -133,13 +154,18 @@ def _build_expert_mlp_cudnn(grouped_wgrad):
         return dx, dw13_il, dw2, gs_ct, cu_ct
 
     _expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
+    # Distinct names so a jaxpr, an HLO metadata line, or a profile says which build ran.
+    _expert_mlp_cudnn.__name__ = name
+    _expert_mlp_cudnn.__qualname__ = name
     return _expert_mlp_cudnn
 
 
-_expert_mlp_cudnn = _build_expert_mlp_cudnn(cudnn_grouped_wgrad)
+_expert_mlp_cudnn = _build_expert_mlp_cudnn(cudnn_grouped_wgrad, _padded_operand_rows, "_expert_mlp_cudnn")
 # For a receiver buffer whose expert groups already start on the kernel's aligned rows, with the
 # slack between them zero. The transport builds that layout, so the pad pass is pure copy traffic.
-_expert_mlp_cudnn_prealigned = _build_expert_mlp_cudnn(cudnn_grouped_wgrad_prealigned)
+_expert_mlp_cudnn_prealigned = _build_expert_mlp_cudnn(
+    cudnn_grouped_wgrad_prealigned, _zero_inactive_grouped_rows, "_expert_mlp_cudnn_prealigned"
+)
 
 
 def _moe_mlp_local_sonic_cute(

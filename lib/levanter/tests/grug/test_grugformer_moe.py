@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1264,9 +1265,9 @@ def test_aligned_receiver_layout_is_what_the_wgrad_pad_would_have_built():
         padded, padded_offsets = pad_grouped_rows(jnp.asarray(buffers[1][receiver]), jnp.asarray(active))
         aligned = buffers[alignment][receiver]
 
-        # What the backend hands the pre-aligned entry point: the rounded extents with the
-        # buffer's leftover rows charged to the last group, which is the full partition the
-        # kernel requires. `pad_grouped_rows` builds the same partition of the same-sized buffer.
+        # The backend hands the pre-aligned entry point the rounded extents; the kernel wrapper
+        # then charges the buffer's leftover rows to the last group, which is the full partition
+        # the kernel requires. `pad_grouped_rows` builds the same partition of a same-sized buffer.
         extents = np.asarray(_align_up_rows(jnp.asarray(active), alignment))
         physical = extents.copy()
         physical[-1] += receiver_rows - extents.sum()
@@ -1275,7 +1276,7 @@ def test_aligned_receiver_layout_is_what_the_wgrad_pad_would_have_built():
         np.testing.assert_array_equal(np.asarray(padded), aligned)
         np.testing.assert_array_equal(np.asarray(padded_offsets), np.cumsum(physical))
         np.testing.assert_array_equal(
-            np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents))), np.cumsum(physical)
+            np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents[:-1]))), np.cumsum(physical)
         )
         assert int(padded_offsets[-1]) == padded.shape[0]
 
@@ -1356,12 +1357,16 @@ def test_prealigned_offsets_are_a_full_aligned_partition_of_the_receiver_buffer(
     extents = np.asarray(_align_up_rows(jnp.asarray(arrivals, jnp.int32), alignment))
     assert extents.sum() <= receiver_rows, "the static buffer must cover every rounding of the routing"
 
-    offsets = np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents)))
+    offsets = np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents[:-1])))
     sizes = np.diff(np.concatenate([[0], offsets]))
 
     assert int(offsets[-1]) == receiver_rows
     assert all(int(size) % alignment == 0 for size in sizes)
     assert all(int(size) >= arrival for size, arrival in zip(sizes, arrivals, strict=True))
+
+    # The QuACK GEMMs run over the extents, not over this partition: their row count must stay
+    # within one alignment per expert of the arrivals, or the aligned arm buys the copy back.
+    assert extents.sum() - sum(arrivals) < alignment * groups
 
 
 def test_receiver_alignment_must_satisfy_the_wgrad_kernels_group_alignment():
@@ -1390,6 +1395,51 @@ def test_receiver_alignment_routes_the_expert_mlp_to_the_prealigned_wgrad(monkey
     assert select(jax.nn.silu, receiver_alignment=_GROUP_ALIGNMENT) is ep_ragged_all_to_all._cute_expert_mlp_prealigned
     # The portable path reads group sizes off whatever buffer it is handed, aligned or not.
     assert select(jax.nn.gelu, receiver_alignment=_GROUP_ALIGNMENT) is _ragged_dot_expert_mlp
+    # The harness records which entry point ran off this name, so the two must not share one.
+    assert select(jax.nn.silu).__name__ != select(jax.nn.silu, receiver_alignment=_GROUP_ALIGNMENT).__name__
+
+
+def test_the_prealigned_cute_path_runs_the_gemms_over_the_arrivals_not_the_whole_buffer(monkeypatch):
+    """The aligned arm must not buy its copy saving back in grouped-GEMM row work.
+
+    The weight-gradient kernel needs a partition of the whole receiver buffer, but the QuACK
+    GEMMs do not: driving them off the physical sizes instead of the arrival extents would put
+    every unused capacity row through every grouped GEMM. At the hero that is ~302k rows against
+    ~262k, a 15% inflation of a 4 s/step leg, against 365 ms of copy saved. So the ``cu`` this
+    path builds must end at the arrivals' aligned extents, exactly as the packed path's does.
+    """
+    recorded = {}
+
+    def fake_expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+        recorded["group_sizes"] = np.asarray(group_sizes)
+        recorded["cu"] = np.asarray(cu)
+        return x_dispatch
+
+    monkeypatch.setitem(
+        sys.modules,
+        "levanter.grug._moe.sonic_cute",
+        SimpleNamespace(
+            _expert_mlp_cudnn=fake_expert_mlp_cudnn,
+            _expert_mlp_cudnn_prealigned=fake_expert_mlp_cudnn,
+        ),
+    )
+
+    experts, hidden, intermediate = 3, 8, 16
+    arrivals = np.array([300, 400, 200], np.int32)
+    receiver_rows = aligned_group_capacity(1024, experts, _GROUP_ALIGNMENT)
+    extents = _align_up_rows(jnp.asarray(arrivals), _GROUP_ALIGNMENT)
+    physical = extents.at[-1].add(receiver_rows - int(np.asarray(extents).sum()))
+
+    x = jnp.zeros((receiver_rows, hidden), jnp.bfloat16)
+    w13 = jnp.zeros((experts, hidden, 2 * intermediate), jnp.bfloat16)
+    w2 = jnp.zeros((experts, intermediate, hidden), jnp.bfloat16)
+    ep_ragged_all_to_all._cute_expert_mlp_prealigned(x, w13, w2, physical, extents, jax.nn.silu)
+
+    np.testing.assert_array_equal(recorded["group_sizes"], np.asarray(extents))
+    assert int(recorded["cu"][-1]) == int(np.asarray(extents).sum())
+    # ...which is strictly less than the buffer, and within one alignment per expert of arrivals.
+    assert int(recorded["cu"][-1]) < receiver_rows == int(np.asarray(physical).sum())
+    assert int(recorded["cu"][-1]) - int(arrivals.sum()) < _GROUP_ALIGNMENT * experts
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
