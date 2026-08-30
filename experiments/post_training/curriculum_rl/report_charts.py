@@ -67,7 +67,10 @@ def responses_per_generate(arm: str) -> int:
 def arm_of(run_name: str) -> str | None:
     if VERSION_TAG not in run_name or "smoke" in run_name:
         return None
-    return run_name.split("curriculum-rl-")[1].split("-2026")[0]
+    arm = run_name.split("curriculum-rl-")[1].split("-2026")[0]
+    # Snowball checkpoint names carry the scale label (launch.py only drops the
+    # suffix for the Qwen FULL preset): snowball-naive-snowball-full -> snowball-naive.
+    return arm.removesuffix("-snowball-full")
 
 
 def pick_runs(api: wandb.Api) -> dict[str, list]:
