@@ -1,0 +1,9 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/marin/.cache/uv/builds-v0/.tmpBhsmEz/bin/python
+cachedir: .pytest_cache
+rootdir: /tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-audit
+configfile: pyproject.toml
+plugins: timeout-2.4.0, anyio-4.12.1, jaxtyping-0.3.5
+collecting ... collected 1 item
+
+tests/cluster/grug/test_ragged_ep_check.py::test_the_ragged_ep_transport_matches_a_dense_reference Not all requested scopes were granted by the authorization server, missing scopes email.

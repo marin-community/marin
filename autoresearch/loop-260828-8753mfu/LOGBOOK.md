@@ -1107,3 +1107,46 @@ MFU lever and the correctness fix are the same mechanism.
 ### Two clean-room audits (a fresh opus agent and codex, neither told the
 ### diagnosis) are running; an empirical GB200 check is being prepared as a
 ### third, independent line of evidence.
+
+## 2026-08-31 ~12:30Z: SCOPE CORRECTION — the suspicion does NOT reach the live hero
+
+The user corrected a premise I had wrong: the deployed hero predates the
+ragged migration. Verified from the RUNNING job's own W&B config rather
+than from the source tree:
+  model.moe_implementation = fixed_pooled_wave_all_to_all
+  model.remat_mode = recompute_all, expert_chunks = 1, cf 1.15
+  (run created 2026-08-20, state=running, step ~38,093)
+And the pooled-wave backend computes the expert MLP with plain
+jnp.einsum over a compacted [E,R,H] layout
+(ep_fixed_pooled_wave_all_to_all.py:457-460) -- no grouped GEMM, no
+cuDNN kernel; its weight gradients come from XLA's own einsum
+transpose. The only reachable callers of cudnn_grouped_wgrad /
+_expert_mlp_cudnn anywhere in the tree are ep_ragged_all_to_all.py and
+sonic_cute.py itself.
+
+CONCLUSION: the live hero does NOT execute the suspect kernel. There is
+no production emergency and nothing to raise. My earlier framing ("the
+hero is very likely training with corrupted expert weight gradients")
+was WRONG ON SCOPE -- I traced _select_expert_mlp inside the RAGGED
+module and assumed the hero's config selected it, without checking the
+deployed run's actual backend. That is exactly the wrong-conclusion
+class this campaign is built to avoid, and I made it in the alarm
+direction.
+
+WHAT REMAINS TRUE AND STILL MATTERS: the suspect path is the RAGGED
+backend -- the one #8753 and this whole campaign are preparing the hero
+to migrate onto, and the one every arm in this campaign ran. So it is
+not a production incident; it is a MIGRATION BLOCKER to settle before
+the hero moves to ragged. Also unchanged: the 4-GPU dense-reference
+gradient gate that would catch this is not run by anything (#8605
+deleted the cluster-smoke workflow; #8704 tracks a replacement).
+Implication for this campaign's own results: every arm ran the same
+(possibly wrong) wgrad on both sides, so the A/B deltas stand; what
+would be affected is the absolute fidelity claim for ragged training,
+not the +0.70 measurement.
+
+Note for the reconciliation: I gave both auditors a prompt describing
+the hero configuration as ragged_all_to_all. That premise is wrong for
+the DEPLOYED hero (right for the campaign branch). Their audit of the
+ragged path is still valid and on-point; I must correct the framing when
+we compare notes rather than let it stand.
