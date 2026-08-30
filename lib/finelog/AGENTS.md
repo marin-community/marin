@@ -38,10 +38,9 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   policy schema lives in `deploy/config.py`.
 - **The admitting layer names the caller.** A `jwt` layer's matched key binds the
   request to that key's `cluster`; a `cidr` match binds to nothing (see
-  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` stamps each row with the
-  authenticated cluster. Cross-cluster forwarding instead writes through the generic
-  `WriteRows` path and stamps the origin into the row itself, so the `cluster` column
-  is a label, not a trust boundary — any admitted sender can write any cluster's rows.
+  `AuthIdentity` in `rust/src/server/auth.rs`). `PushLogs` and `WriteRows` overwrite
+  each row's `cluster` with the authenticated JWT cluster. Network-authenticated
+  writers stamp no cluster.
 - Keys are opaque strings. Any structure (`/system/...`, `/user/<job>/<task>:<attempt>`)
   is iris-side convention; finelog does not parse keys.
 

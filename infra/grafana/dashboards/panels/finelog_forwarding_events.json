@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Finelog forwarding dropped seq positions",
-  "description": "Sequence positions dropped after a permanent hub rejection or after local retention evicted the source rows. Values are five-minute deltas and may exceed the exact row count when the source scan filtered relayed rows. No data is not proof of health: hub or network failures can delay these counters too.",
+  "title": "Finelog forwarding failures and drops",
+  "description": "Five-minute delta counters from each regional forwarder. Failed batches include permanent rejections, schema conflicts, and retryable failures. Dropped positions include permanent rejections and retention evictions, and may exceed the exact row count when the source scan filtered relayed rows. No data is not proof of health: hub or network failures can delay these counters too.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -48,7 +48,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') || ' · ' || json_get(attributes_json, 'outcome') || ' · ' || json_get(attributes_json, 'namespace') AS series, SUM(value) AS value FROM \"telemetry_v1.finelog\" WHERE service = 'finelog' AND name = 'forwarding_seq_positions' AND json_get(attributes_json, 'outcome') IN ('permanent_rejection', 'retention_eviction') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') || ' · ' || name || ' · ' || json_get(attributes_json, 'outcome') || ' · ' || json_get(attributes_json, 'namespace') AS series, SUM(value) AS value FROM \"telemetry_v1.finelog\" WHERE service = 'finelog' AND ((name = 'forwarding_batches' AND json_get(attributes_json, 'outcome') <> 'accepted') OR (name = 'forwarding_seq_positions' AND json_get(attributes_json, 'outcome') IN ('permanent_rejection', 'retention_eviction'))) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
           },
           {
             "key": "from",

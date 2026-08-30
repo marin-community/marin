@@ -135,6 +135,8 @@ const OUTCOME_PERMANENT_REJECTION: &str = "permanent_rejection";
 const OUTCOME_RETENTION_EVICTION: &str = "retention_eviction";
 const OUTCOME_RETRYABLE_FAILURE: &str = "retryable_failure";
 const OUTCOME_SCHEMA_CONFLICT: &str = "schema_conflict";
+const ATTRIBUTE_NAMESPACE: &str = "namespace";
+const ATTRIBUTE_OUTCOME: &str = "outcome";
 
 /// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING` JSON;
 /// the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it never rides
@@ -1084,10 +1086,7 @@ impl ForwardingDeltas {
                 name: "forwarding_batches".to_string(),
                 value: *value as f64,
                 unit: "batches".to_string(),
-                attributes: BTreeMap::from([
-                    ("namespace".to_string(), namespace.clone()),
-                    ("outcome".to_string(), (*outcome).to_string()),
-                ]),
+                attributes: forwarding_attributes(namespace, outcome),
             })
             .chain(
                 self.seq_positions
@@ -1096,10 +1095,7 @@ impl ForwardingDeltas {
                         name: "forwarding_seq_positions".to_string(),
                         value: *value as f64,
                         unit: "positions".to_string(),
-                        attributes: BTreeMap::from([
-                            ("namespace".to_string(), namespace.clone()),
-                            ("outcome".to_string(), (*outcome).to_string()),
-                        ]),
+                        attributes: forwarding_attributes(namespace, outcome),
                     }),
             )
             .collect()
@@ -1113,6 +1109,13 @@ impl ForwardingDeltas {
             *self.seq_positions.entry(key).or_default() += value;
         }
     }
+}
+
+fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ATTRIBUTE_NAMESPACE.to_string(), namespace.to_string()),
+        (ATTRIBUTE_OUTCOME.to_string(), outcome.to_string()),
+    ])
 }
 
 /// Start the forward loop on the runtime, returning its handle. The caller latches

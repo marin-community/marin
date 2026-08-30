@@ -492,17 +492,15 @@ def test_clusters_dashboard_shows_finelog_fleet_health():
 
 def test_clusters_dashboard_shows_finelog_forwarding_failures_and_drops():
     panels = {panel.get("title"): panel for panel in _all_panels(_stitched_dashboards()["clusters.json"])}
-    failed_sql = _panel_sql({"panels": [panels["Finelog forwarding failed batches"]]})[0]
-    dropped_sql = _panel_sql({"panels": [panels["Finelog forwarding dropped seq positions"]]})[0]
+    panel = panels["Finelog forwarding failures and drops"]
+    sql = _panel_sql({"panels": [panel]})[0]
 
-    assert 'FROM "telemetry_v1.finelog"' in failed_sql
-    assert "name = 'forwarding_batches'" in failed_sql
-    assert "json_get(attributes_json, 'outcome') <> 'accepted'" in failed_sql
-    assert 'FROM "telemetry_v1.finelog"' in dropped_sql
-    assert "name = 'forwarding_seq_positions'" in dropped_sql
-    assert "'permanent_rejection', 'retention_eviction'" in dropped_sql
-    for title in ("Finelog forwarding failed batches", "Finelog forwarding dropped seq positions"):
-        assert panels[title]["datasource"]["uid"] == "finelog-marin"
+    assert 'FROM "telemetry_v1.finelog"' in sql
+    assert "name = 'forwarding_batches'" in sql
+    assert "json_get(attributes_json, 'outcome') <> 'accepted'" in sql
+    assert "name = 'forwarding_seq_positions'" in sql
+    assert "'permanent_rejection', 'retention_eviction'" in sql
+    assert panel["datasource"]["uid"] == "finelog-marin"
 
 
 def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():

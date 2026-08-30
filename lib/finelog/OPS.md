@@ -483,10 +483,9 @@ import flag: the live PVC must be adopted, not recreated.
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
 
-Confirm the hub is receiving. The sender stamps the `cluster` column, and a row
-only lands after some sender's token verified, so a row carrying the sender's name is
-evidence that authenticated forwarding wrote that label. It does not authenticate the
-label itself. Bound the scan by time — an unbounded `GROUP BY` over
+Confirm the hub is receiving. The hub overwrites the `cluster` column with the
+cluster bound to the verified JWT, so a row carrying the sender's name proves that
+sender's forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
 the whole `log` namespace will time out. An empty `cluster` is the hub's own rows;
 a sender missing from this list is a sender whose rows are not arriving.
 

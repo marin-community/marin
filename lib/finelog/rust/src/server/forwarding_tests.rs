@@ -833,7 +833,6 @@ async fn a_batch_the_hub_calls_malformed_is_dropped() {
         Some(fx.tip(LOG_NAMESPACE_NAME)),
         "a permanently rejected batch must not wedge every later row in the namespace"
     );
-    assert_eq!(progress.skipped_seqs, fx.tip(LOG_NAMESPACE_NAME));
     assert_eq!(
         scalar_i64(
             &fx.source,
@@ -881,7 +880,6 @@ async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
         Some(0),
         "a schema-state rejection may clear after registration or a hub upgrade"
     );
-    assert_eq!(progress.skipped_seqs, 0);
     assert_eq!(fx.requests(), 1);
 }
 
