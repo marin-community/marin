@@ -21,3 +21,6 @@
 01:52:48 cancelling /mwittmann/mfl-e2e-zero-b-coord: scored through step 30022 (19 past first)
 Cancelled jobs:
   /mwittmann/mfl-e2e-zero-b-coord/grug-train-mfl-e2e-zero-b
+Cancelled jobs:
+  /mwittmann/mfl-e2e-zero-b-coord
+WATCHDOG scored step=30022 first=30002
