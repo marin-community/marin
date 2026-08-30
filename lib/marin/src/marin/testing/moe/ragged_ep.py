@@ -33,9 +33,9 @@ from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug._moe.ep_ragged_all_to_all import (
-    _EXPERT_CHUNKS,
     RAGGED_REQUIRED_XLA_FLAGS,
     _quack_grouped_gemm_available,
+    _resolve_expert_chunks,
     _select_expert_mlp,
 )
 from levanter.grug.grug_moe import moe_mlp
@@ -71,7 +71,7 @@ def _no_drop_capacity() -> float:
     a property of how a seed happens to route rather than of the capacity.
     """
     local_experts = NUM_EXPERTS // EP_SIZE
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunks = _resolve_expert_chunks(None, local_experts)
     return float(EP_SIZE * chunks)
 
 
@@ -210,12 +210,12 @@ def _inputs(key, tokens, *, skew):
 def _accepted_counts(group_sizes: np.ndarray, capacity_factor: float, assignments_per_shard: int) -> np.ndarray:
     """Rows each (sender, global expert) pair gets to keep, summed over the backend's chunks.
 
-    Mirrors the backend's per-chunk gate: local experts are split into ``_EXPERT_CHUNKS`` groups
+    Mirrors the backend's per-chunk gate: local experts are split into ``RAGGED_DEFAULT_EXPERT_CHUNKS`` groups
     processed in sequence, each with its own share of the receiver buffer, so an expert competes
     for capacity only with the other experts in its chunk.
     """
     local_experts = NUM_EXPERTS // EP_SIZE
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunks = _resolve_expert_chunks(None, local_experts)
     chunk_experts = local_experts // chunks
     local_capacity = max(local_experts, math.ceil(capacity_factor * assignments_per_shard))
     chunk_capacity = max(chunk_experts, math.ceil(local_capacity / chunks))

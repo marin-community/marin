@@ -44,9 +44,9 @@ logger = logging.getLogger(__name__)
 # QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
 
-# Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
-# back to a single chunk when the local expert count is not divisible.
-_EXPERT_CHUNKS = 2
+# Sequential local-expert chunks per MoE layer when a caller does not name one; capacity splits
+# evenly across chunks. Falls back to a single chunk when the local expert count is not divisible.
+RAGGED_DEFAULT_EXPERT_CHUNKS = 2
 
 # Named dispatch products a remat policy can keep for the backward instead of recomputing.
 # Both are local (pre-collective) values: saving them deletes the recompute of the expert
@@ -381,6 +381,23 @@ def _return_ragged_a2a_bwd(
 _return_ragged_a2a.defvjp(_return_ragged_a2a_fwd, _return_ragged_a2a_bwd)
 
 
+def _resolve_expert_chunks(expert_chunks: int | None, local_experts: int) -> int:
+    """Sequential chunk count for a bank of ``local_experts``.
+
+    ``None`` takes `RAGGED_DEFAULT_EXPERT_CHUNKS` and falls back to one chunk on a bank the
+    default does not divide, which is how a mesh holding a single local expert runs. An explicit
+    count is a measurement knob, so an indivisible one raises instead of quietly running -- and
+    reporting -- a different chunk count than the one that was asked for.
+    """
+    if expert_chunks is None:
+        return RAGGED_DEFAULT_EXPERT_CHUNKS if local_experts % RAGGED_DEFAULT_EXPERT_CHUNKS == 0 else 1
+    if expert_chunks < 1:
+        raise ValueError(f"expert_chunks must be positive, got {expert_chunks}")
+    if local_experts % expert_chunks != 0:
+        raise ValueError(f"expert_chunks={expert_chunks} must divide the local expert count={local_experts}")
+    return expert_chunks
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -391,6 +408,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    expert_chunks: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -406,12 +424,17 @@ def _moe_mlp_ep_ragged_a2a_local(
     local_capacity = int(math.ceil(capacity_factor * assignments_per_shard))
     local_capacity = max(local_experts, local_capacity)
 
-    # Local experts are processed in sequential chunks so only one chunk's transport buffers
-    # are live at a time. The a2a outputs cannot be rematerialized (XLA never recomputes
-    # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
-    # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
-    # which also makes drop clipping per-chunk.
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    # Local experts are processed in sequential chunks so only one chunk's buffers are live at a
+    # time: capacity splits evenly across chunks, so two chunks halve the [C, H] transport
+    # buffers and the expert MLP's [C, I2] gate-up intermediate that sit between them. It also
+    # makes drop clipping per-chunk, which is a routing difference, not just a memory one.
+    #
+    # What chunking does not change is what crosses the forward/backward boundary. The block's
+    # remat policy re-runs this function in the backward, so the lowered module carries every
+    # ragged all-to-all three times at any chunk count -- primal, backward recompute, transpose,
+    # verified in the lowered StableHLO: 12 ops at two chunks, 6 at one. The a2a outputs are
+    # transient inside a chunk, not residuals pinned across the block window.
+    chunks = _resolve_expert_chunks(expert_chunks, local_experts)
     chunk_experts = local_experts // chunks
     chunk_capacity = max(chunk_experts, int(math.ceil(local_capacity / chunks)))
     hidden_dim = x_local.shape[1]

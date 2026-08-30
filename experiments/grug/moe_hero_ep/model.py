@@ -251,6 +251,11 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
+    ragged_expert_chunks: int | None = None
+    """Sequential local-expert chunks in the ragged all-to-all transport, each taking its own
+    share of the receiver capacity. None takes the backend default
+    (`RAGGED_DEFAULT_EXPERT_CHUNKS`, falling back to one chunk on a local bank it does not
+    divide); an explicit count must divide the local bank. Other transports ignore it."""
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
     report_capacity_overflow: bool = False
@@ -307,6 +312,8 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if self.ragged_expert_chunks is not None and self.ragged_expert_chunks <= 0:
+            raise ValueError("ragged_expert_chunks must be positive")
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
         if self.moe_implementation == "fixed_pooled_wave_all_to_all":
@@ -1037,6 +1044,7 @@ class MoEMLP(eqx.Module):
                 capacity_factor=cfg.capacity_factor,
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                ragged_expert_chunks=cfg.ragged_expert_chunks,
                 num_expert_waves=cfg.num_expert_waves,
             ),
             cfg=cfg,

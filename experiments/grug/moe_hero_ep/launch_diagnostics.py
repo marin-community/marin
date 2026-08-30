@@ -12,6 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
+from levanter.grug.grug_moe import RAGGED_DEFAULT_EXPERT_CHUNKS
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -78,6 +79,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
+    ragged_expert_chunks: int | None = None,
     remat_save: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     opt_resident_leaves: int = 0,
@@ -151,6 +153,7 @@ def build_diagnostic_run(
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
+            ("ragged_expert_chunks", ragged_expert_chunks),
             ("remat_save_names", REMAT_SAVE_BUNDLES[remat_save] if remat_save is not None else None),
         )
         if value is not None
@@ -166,6 +169,12 @@ def build_diagnostic_run(
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+    # The ragged backend raises on an indivisible chunk count inside the traced step, which is
+    # after the rack is allocated. Reject it here instead.
+    if model.ragged_expert_chunks is not None and local_experts % model.ragged_expert_chunks != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by expert_chunks={model.ragged_expert_chunks}"
         )
     # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
     if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
@@ -183,6 +192,8 @@ def build_diagnostic_run(
     wave_tag = f"expert-waves-{model.num_expert_waves}"
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     remat_save_tags = (f"remat-save-{remat_save.replace('_', '-')}",) if remat_save is not None else ()
+    # Only tag a named chunk count; the default arm keeps the tag set it has always had.
+    chunk_tags = (f"expert-chunks-{model.ragged_expert_chunks}",) if model.ragged_expert_chunks is not None else ()
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
@@ -248,6 +259,7 @@ def build_diagnostic_run(
                     *transport_capacity_tags,
                     wave_tag,
                     size_tag,
+                    *chunk_tags,
                     *remat_save_tags,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
@@ -386,6 +398,17 @@ def build_diagnostic_run(
     "--moe-implementation",
     default=None,
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--expert-chunks",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Sequential local-expert chunks in the ragged all-to-all transport, each taking its own "
+        "share of the receiver capacity, which also makes capacity clipping per-chunk. Must divide "
+        f"the local expert count. Default keeps the backend's {RAGGED_DEFAULT_EXPERT_CHUNKS}. "
+        "Other transports ignore it."
+    ),
 )
 @click.option(
     "--remat-save",
@@ -544,6 +567,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    expert_chunks: int | None,
     remat_save: str | None,
     master_params: str,
     opt_resident_leaves: int,
@@ -575,6 +599,7 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
+        ragged_expert_chunks=expert_chunks,
         remat_save=remat_save,
         master_param_mode=MasterParamMode(master_params),
         opt_resident_leaves=opt_resident_leaves,

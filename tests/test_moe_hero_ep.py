@@ -105,6 +105,24 @@ def test_full_bank_top_k_is_rejected_before_launch():
         )
 
 
+def test_expert_chunks_override_reaches_the_model_config():
+    step = launch.build_diagnostic_run(
+        run_id="one-chunk", dp_racks=1, num_steps=1, ragged_expert_chunks=1, version="dev"
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.ragged_expert_chunks == 1
+    # The override goes in before the transport's remat-mode rewrite and survives it.
+    assert config.model.remat_mode == "offload_carry"
+
+
+def test_an_expert_chunk_count_that_cannot_divide_the_local_bank_is_rejected_before_launch():
+    # 384 experts over the 64-wide expert axis leave 6 local experts, which 4 does not divide.
+    # Without this the run dies inside the traced step, after the 16-node gang is allocated.
+    with pytest.raises(ValueError, match="must be divisible by expert_chunks=4"):
+        launch.build_diagnostic_run(run_id="bad-chunks", dp_racks=1, num_steps=1, ragged_expert_chunks=4, version="dev")
+
+
 def test_checkpoint_path_overrides_the_step_output_path():
     """A run that only exercises the checkpoint write sends it to disposable storage."""
     temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
@@ -609,6 +627,30 @@ def test_remat_save_bundle_deletes_recompute_without_touching_collectives():
     # (num_layers=2, 512 local tokens, top-2), instead of being rematerialized.
     assert "s32[2,512,2]" not in default_hlo
     assert "s32[2,512,2]" in bundle_hlo
+
+
+def test_one_expert_chunk_halves_the_ragged_transport_collectives():
+    """The chunk count is a knob on the lowered transport, and leaving it unset changes nothing.
+
+    The probe holds 4 local experts (8 over a 2-wide expert axis) and 256 assignments per shard
+    at capacity factor 1.15, so two chunks take a 148-row receiver buffer each where one chunk
+    takes all 295 rows. Each transport op is emitted three times -- primal, backward recompute,
+    transpose -- so the module's op count tracks the chunk count rather than pinning residuals.
+    """
+    default_hlo = _lower_hero_loss_grad(_remat_probe_config(), debug_info=False)
+    named_default_hlo = _lower_hero_loss_grad(_remat_probe_config(ragged_expert_chunks=2), debug_info=False)
+    single_chunk_hlo = _lower_hero_loss_grad(_remat_probe_config(ragged_expert_chunks=1), debug_info=False)
+
+    assert named_default_hlo == default_hlo
+    assert default_hlo.count(" ragged-all-to-all(") == 12
+    assert single_chunk_hlo.count(" ragged-all-to-all(") == 6
+    assert default_hlo.count("bf16[148,64]{1,0} ragged-all-to-all") == 6
+    assert single_chunk_hlo.count("bf16[295,64]{1,0} ragged-all-to-all") == 3
+
+
+def test_an_expert_chunk_count_that_does_not_divide_the_local_bank_is_rejected_in_the_backend():
+    with pytest.raises(ValueError, match="must divide the local expert count=4"):
+        _lower_hero_loss_grad(_remat_probe_config(ragged_expert_chunks=3), debug_info=False)
 
 
 def test_remat_save_names_reject_unknown_and_carry_names():
