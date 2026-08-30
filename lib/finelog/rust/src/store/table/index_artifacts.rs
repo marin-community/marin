@@ -385,7 +385,6 @@ mod tests {
     use crate::indices::legacy_artifact_paths;
     use crate::levanter_metrics_policy::levanter_metrics_schema;
     use crate::proto::finelog::stats::ColumnType;
-    use crate::store::catalog::object_state_store::{INDICES_PREFIX, PROJECTIONS_PREFIX};
     use crate::store::catalog::Catalog;
     use crate::store::schema::{stored_form, with_implicit_seq, AlignedBatch, Column, Schema};
     use crate::store::segment::discover_segments;
