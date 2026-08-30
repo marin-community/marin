@@ -66,6 +66,15 @@ const MEBIBYTE: usize = 1024 * 1024;
 /// represented hundreds of thousands of rows across several files.
 const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
 
+/// Floor for the session's scan/exec parallelism. DataFusion defaults
+/// `target_partitions` to the CPU count, which also caps how many files a scan
+/// reads concurrently — the right bound for CPU work, but a remote cold scan
+/// is round-trip bound, and on a small host it serializes into
+/// `files / cpus` sequential footer+page fetches. Measured on a 4-CPU host:
+/// a 36-object, 3 MB table cost ~10 s cold at 4-way. The floor buys I/O
+/// overlap; extra partitions cost only smaller per-partition work locally.
+const MIN_TARGET_PARTITIONS: usize = 16;
+
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
 /// `MemTotal`. `None` when neither is readable/finite.
@@ -245,6 +254,8 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
     cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let default_partitions = cfg.options().execution.target_partitions;
+    cfg = cfg.with_target_partitions(default_partitions.max(MIN_TARGET_PARTITIONS));
     let state = SessionStateBuilder::new_with_default_features()
         .with_config(cfg)
         .with_runtime_env(shared_runtime_env())
