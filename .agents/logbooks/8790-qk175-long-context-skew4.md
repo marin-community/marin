@@ -38,9 +38,9 @@ author: held
 - Commit Hash: `3c82e92a3d4c0d6b286038811dc7c330a2253017`
 - Command: `iris --config /home/held/marin-lcr/lib/iris/config/marin.yaml job run --no-wait --region us-central2 --priority production --no-preemptible --max-retries 100 -e WANDB_API_KEY <redacted> -- python -m experiments.grug.moe.moe_67b_a2b_d2560_ctxext_step156k_seq262k_bs256_ctx4_muon_qk175_long_context_skew`
 - Iris job: `/held/iris-run-job-20260830-073840`
-- W&B run ID: `moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4`
+- W&B: `https://wandb.ai/held/marin_moe/runs/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4`
 - Output: `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c`
-- Result: submitted in `us-central2` with production priority and non-preemptible v4-2048 resources.
-- Interpretation: no training task has started. The coordinator is initializing the experiment graph.
+- Result: 256 of 256 workers are running. JAX process 0 initialized the online W&B run on Iris task 57, and the workers started loading the step-156000 source checkpoint.
+- Interpretation: the allocation and tracker are healthy. `dummy-*` W&B names on other Iris tasks are expected because Levanter disables W&B on non-primary JAX processes.
 - Caveat: the pinned branch contains an older Iris config schema. Submission used the current checkout's controller config while bundling the pinned worktree.
-- Next action: verify 256-worker allocation, W&B initialization, and the first training step.
+- Next action: verify the first training step after checkpoint loading.
