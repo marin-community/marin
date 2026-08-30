@@ -55,7 +55,9 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
+from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.models import snowball_67b_a2b_sft
 from experiments.post_training.curriculum_rl.pool import (
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
@@ -71,12 +73,54 @@ EXPERIMENT_NAME = "curriculum-rl"
 HF_EXPORT_SUBDIR = "hf"
 POOL_ARTIFACT_NAME = f"documents/{EXPERIMENT_NAME}-pool"
 MODEL_ARTIFACT_NAME = f"models/{EXPERIMENT_NAME}-qwen3-0.6b"
-CLUSTER = "cw-rno2a"
-CLUSTER_CONFIG = f"lib/iris/config/{CLUSTER}.yaml"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
 SEED = 17
+MARIN_TOKENIZER = "marin-community/marin-tokenizer"
+MARIN_TOKENIZER_REVISION = "a5ca45f"
+
+
+@dataclass(frozen=True)
+class PolicySpec:
+    """Which policy model arms train, where it runs, and its model-specific overrides."""
+
+    label: str
+    cluster: str
+    tokenizer_uri: str
+    tokenizer_revision: str
+    model_relative_path: str
+    overrides: tuple[str, ...]
+
+
+QWEN_POLICY = PolicySpec(
+    label="qwen",
+    cluster="cw-rno2a",
+    tokenizer_uri=QWEN3_MODEL,
+    tokenizer_revision=QWEN3_REVISION,
+    model_relative_path=HF_EXPORT_SUBDIR,
+    # Thinking mode ate the whole generation budget at 0.6B (85% truncation in
+    # the round-1 smoke); Qwen arms train and roll out in non-thinking mode.
+    overrides=("++generator.chat_template_kwargs.enable_thinking=false",),
+)
+
+# The Snowball SFT trains where its export lives (us-east-02a) so 134GB of
+# shards never stream cross-region. Rollout engines mirror the export's
+# serving profile: one node-sized vLLM instance, tensor_parallel_size=1,
+# experts sharded across the node's eight ranks (ep = dp * tp). The frozen
+# query-bias router is the pinned MarinSkyRL default.
+SNOWBALL_POLICY = PolicySpec(
+    label="snowball",
+    cluster="cw-us-east-02a",
+    tokenizer_uri=MARIN_TOKENIZER,
+    tokenizer_revision=MARIN_TOKENIZER_REVISION,
+    model_relative_path="",
+    overrides=(
+        "generator.inference_engine_data_parallel_size=8",
+        "generator.inference_engine_expert_parallel_size=8",
+    ),
+)
+POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
 
 
 class SamplerKind(StrEnum):
@@ -95,14 +139,10 @@ class SamplerKind(StrEnum):
 
 # The launcher auto-defaults trainer.hf_hub_repo_id to laion/<job_name>, and the
 # export job then needs create access to that org. Exports stay in object storage.
-# enable_thinking goes through a ++ override because the config flattener emits
-# bare keys and hydra rejects new children under the empty chat_template_kwargs.
-# Thinking mode ate the whole generation budget at 0.6B (85% truncation in the
-# smoke run); every arm trains and rolls out in non-thinking mode.
-BASE_OVERRIDES = (
-    "++trainer.hf_hub_repo_id=null",
-    "++generator.chat_template_kwargs.enable_thinking=false",
-)
+# (enable_thinking rides on the Qwen policy's overrides through ++ because the
+# config flattener emits bare keys and hydra rejects new children under the
+# empty chat_template_kwargs.)
+BASE_OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
 
 
 # DAPO-style dynamic sampling: drop zero-advantage GRPO groups and keep
@@ -135,7 +175,7 @@ ARMS = {
 }
 
 
-def arm_overrides(spec: ArmSpec) -> tuple[str, ...]:
+def arm_overrides(spec: ArmSpec, policy: PolicySpec) -> tuple[str, ...]:
     """Per-arm hydra overrides; curriculum arms select a data.sampling policy.
 
     The naive sampler keeps ``data.sampling.kind`` at its null default, i.e. the
@@ -143,7 +183,7 @@ def arm_overrides(spec: ArmSpec) -> tuple[str, ...]:
     defaults for decay, priors, and adaptive thresholds so arms differ only in
     kind.
     """
-    overrides = BASE_OVERRIDES
+    overrides = (*BASE_OVERRIDES, *policy.overrides)
     if spec.sampler is not SamplerKind.NAIVE:
         overrides = (*overrides, f"data.sampling.kind={spec.sampler.value}")
     if spec.dapo:
@@ -216,7 +256,34 @@ FULL = ScalePreset(
     evals="math500,gsm8k-0shot",
 )
 
-SCALES = {preset.label: preset for preset in (SMOKE, FULL)}
+# The 67B-A2B smoke: four FSDP2 policy nodes hold the sharded parameters and
+# AdamW state (~34GB/GPU), one node-sized expert-parallel engine generates.
+# The #7786 campaign's NCCL rank-drop failure mode appeared only at 32k
+# contexts; this preset stays at the 2k window.
+SNOWBALL_SMOKE = ScalePreset(
+    label="snowball-smoke",
+    num_nodes=5,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=32,
+        policy_mini_batch_size=32,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=4,
+    ),
+    max_steps=4,
+    eval_interval=-1,
+    ckpt_interval=4,
+    request_window_tokens=2048,
+    max_new_tokens=1024,
+    micro_forward_batch_size_per_gpu=2,
+    evals="gsm8k-smoke",
+)
+
+SCALES = {preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE)}
 
 # The pool filter must keep every retained prompt under each preset's
 # max_input_length (request window minus generation budget), or retained rows
@@ -340,16 +407,59 @@ class CurriculumArm:
     evaluation: ArtifactStep[EvaluationResult]
 
 
+def _evaluation_serving(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
+    """Serving profile for the trained policy: single-GPU for Qwen, a full
+    expert-parallel node for the Snowball export (see evaluation/models.py)."""
+    max_model_len = preset.request_window_tokens + preset.max_new_tokens
+    if policy is SNOWBALL_POLICY:
+        return ModelConfig(
+            name=name,
+            location=SKYRL_POLICY_LOCATION,
+            tokenizer=policy.tokenizer_uri,
+            apply_chat_template=True,
+            resource_hint=ResourceHint(gpu={GPU_VARIANT: GPUS_PER_NODE}, memory="512g"),
+            serve=ServeConfig(
+                tensor_parallel_size=1,
+                data_parallel_size=GPUS_PER_NODE,
+                max_model_len=max_model_len,
+                max_num_seqs=64,
+                vllm_extra_args=SNOWBALL_VLLM_ARGS,
+            ),
+            generation=GenerationConfig(
+                max_gen_toks=preset.max_new_tokens,
+                extra_gen_kwargs={"skip_special_tokens": "false", "repetition_penalty": "1.1"},
+            ),
+        )
+    return ModelConfig(
+        name=name,
+        location=SKYRL_POLICY_LOCATION,
+        tokenizer=policy.tokenizer_uri,
+        apply_chat_template=True,
+        resource_hint=ResourceHint(gpu={GPU_VARIANT: 1}),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            max_model_len=max_model_len,
+            max_num_seqs=64,
+        ),
+        generation=GenerationConfig(max_gen_toks=preset.max_new_tokens),
+    )
+
+
 def build_arm(
     *,
     spec: ArmSpec,
     preset: ScalePreset,
+    policy: PolicySpec,
     version: str | None,
     model: ArtifactStep[LevanterCheckpoint],
     pool: ArtifactStep,
 ) -> CurriculumArm:
     suffix = "" if preset is FULL else f"-{preset.label}"
-    rl_base_name = f"checkpoints/{EXPERIMENT_NAME}/{spec.name}{suffix}"
+    # Qwen arm names predate the policy axis and stay unprefixed so round-2
+    # artifacts keep their addresses.
+    policy_prefix = "" if policy is QWEN_POLICY else f"{policy.label}-"
+    cluster_config = f"lib/iris/config/{policy.cluster}.yaml"
+    rl_base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy_prefix}{spec.name}{suffix}"
     rl = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(rl_base_name),
@@ -358,9 +468,9 @@ def build_arm(
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=model,
-                tokenizer_uri=QWEN3_MODEL,
-                tokenizer_revision=QWEN3_REVISION,
-                relative_path=HF_EXPORT_SUBDIR,
+                tokenizer_uri=policy.tokenizer_uri,
+                tokenizer_revision=policy.tokenizer_revision,
+                relative_path=policy.model_relative_path,
             ),
             train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
@@ -372,11 +482,11 @@ def build_arm(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
-            overrides=arm_overrides(spec),
+            overrides=arm_overrides(spec, policy),
         ),
         IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=CLUSTER_CONFIG,
+            cluster=policy.cluster,
+            cluster_config=cluster_config,
             cpu=16,
             memory="128GB",
             disk="2TB",
@@ -390,39 +500,39 @@ def build_arm(
     # The eval artifact is keyed on the model name; include the owner so two
     # users at the same fixed version evaluate their own checkpoints rather
     # than sharing one cached result (the RL step is already user-owned).
-    evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{spec.name}{suffix}"
+    evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy_prefix}{spec.name}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation = eval_step(
         SkyRLEvaluationModel(
             step=rl,
-            model=ModelConfig(
-                name=evaluation_model_name,
-                location=SKYRL_POLICY_LOCATION,
-                tokenizer=QWEN3_MODEL,
-                apply_chat_template=True,
-                resource_hint=ResourceHint(gpu={GPU_VARIANT: 1}),
-                serve=ServeConfig(
-                    tensor_parallel_size=1,
-                    max_model_len=preset.request_window_tokens + preset.max_new_tokens,
-                    max_num_seqs=64,
-                ),
-                generation=GenerationConfig(max_gen_toks=preset.max_new_tokens),
-            ),
+            model=_evaluation_serving(policy, preset, evaluation_model_name),
         ),
         preset.evals,
         version=version or resolve_version(evaluation_base_name, None),
-        accelerator=f"{GPU_VARIANT}x1",
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
+        accelerator=f"{GPU_VARIANT}x{GPUS_PER_NODE if policy is SNOWBALL_POLICY else 1}",
+        submission_cluster=policy.cluster,
+        federated_cluster=policy.cluster,
     )
     return CurriculumArm(spec=spec, rl=rl, evaluation=evaluation)
 
 
-def build_arms(*, specs: tuple[ArmSpec, ...], scale: str, version: str | None = None) -> dict[str, CurriculumArm]:
+def build_arms(
+    *,
+    specs: tuple[ArmSpec, ...],
+    scale: str,
+    policy: PolicySpec = QWEN_POLICY,
+    version: str | None = None,
+) -> dict[str, CurriculumArm]:
     preset = SCALES[scale]
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
-    model = model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
-    return {spec.name: build_arm(spec=spec, preset=preset, version=version, model=model, pool=pool) for spec in specs}
+    if policy is SNOWBALL_POLICY:
+        model = snowball_67b_a2b_sft
+    else:
+        model = model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
+    return {
+        spec.name: build_arm(spec=spec, preset=preset, policy=policy, version=version, model=model, pool=pool)
+        for spec in specs
+    }
 
 
 @click.command(help=__doc__)
@@ -435,6 +545,7 @@ def build_arms(*, specs: tuple[ArmSpec, ...], scale: str, version: str | None = 
     show_default=True,
 )
 @click.option("--scale", type=click.Choice(sorted(SCALES)), default="smoke", show_default=True)
+@click.option("--model", "model_label", type=click.Choice(sorted(POLICIES)), default="qwen", show_default=True)
 @click.option(
     "--stage",
     type=click.Choice(("rl", "evaluation")),
@@ -443,8 +554,8 @@ def build_arms(*, specs: tuple[ArmSpec, ...], scale: str, version: str | None = 
     help="Terminal stage per arm; dependencies are included automatically.",
 )
 @build_options
-def main(arms: tuple[str, ...], scale: str, stage: str) -> dict[str, ArtifactStep]:
-    built = build_arms(specs=tuple(ARMS[arm] for arm in arms), scale=scale)
+def main(arms: tuple[str, ...], scale: str, model_label: str, stage: str) -> dict[str, ArtifactStep]:
+    built = build_arms(specs=tuple(ARMS[arm] for arm in arms), scale=scale, policy=POLICIES[model_label])
     return {name: getattr(arm, stage) for name, arm in built.items()}
 
 

@@ -22,7 +22,7 @@ MODEL_CATALOG_DIR = Path(__file__).parent / "serve" / "models"
 
 # The 256-expert Grug MoE fork serves data-parallel + expert-parallel with tensor_parallel_size=1; the
 # per-head TP heuristic cannot infer this, and the loader streams shards distributed across the ranks.
-_SNOWBALL_VLLM_ARGS = ("--enable-expert-parallel", "--model-loader-extra-config", '{"distributed":true}')
+SNOWBALL_VLLM_ARGS = ("--enable-expert-parallel", "--model-loader-extra-config", '{"distributed":true}')
 
 
 def _snowball(
@@ -45,7 +45,7 @@ def _snowball(
             tensor_parallel_size=1,
             data_parallel_size=8,
             chat_template=chat_template,
-            vllm_extra_args=_SNOWBALL_VLLM_ARGS,
+            vllm_extra_args=SNOWBALL_VLLM_ARGS,
         ),
         generation=generation or GenerationConfig(),
     )
