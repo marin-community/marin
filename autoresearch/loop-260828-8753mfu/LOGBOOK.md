@@ -1019,3 +1019,37 @@ C14 (pooled gate + lowered capacity factor) remains open in principle --
 the memory headroom exists (+5 not +12-16) -- but it would have to beat
 a -0.45 starting deficit, so it is not the near-term prize the review
 hoped; recorded as a lead, not a queued arm.
+
+## 2026-08-31 ~09:30Z: fusion pool decomposed — C15 minted (365 ms, 100% critical path)
+
+The 3.3 s/step pool is now mapped, and the long-unidentified
+loop_select_fusion_12_remat2 family is RESOLVED: it is pad_grouped_rows
+from cudnn_wgrad_cute.py:74-101, the 8-row alignment pre-pass the cuDNN
+grouped-wgrad wrapper applies to BOTH operands. Proof is exact: observed
+grids 3,617,844 and 1,808,922 at block 128, 4 elem/thread =
+(301,466+21) x 6144 and (301,466+21) x 3072, and +21 == (8-1) x 3
+experts/chunk. No other buffer in the model has that row count. Both
+kernels are the immediate predecessors of the cuDNN dW13 wgrad ffi_call
+in every occurrence. The .remat2 suffix is a rescheduling sink, not a
+duplicate (single use, ~3.7 GB, no non-remat twin) -- which also kills
+the "live select + clone" hypothesis.
+
+C15 = delete the pad. Mechanism: have _clip_receiver_group_sizes emit
+8-ALIGNED group offsets so the a2a writes an already-aligned layout; the
+inter-group slack rows are already zero (the output buffer is
+zero-initialised and the a2a writes only valid prefixes), so the GEMM
+sees zeros there and the pad copy becomes the identity. The slack is
+<= 21 rows of 301,466 -- and the buffer ALREADY carries exactly that
++21 headroom today, which is what makes this a layout change rather
+than a capacity change. Fidelity: zero rows contribute zero to the
+grouped GEMM; no token is accepted or dropped differently. Expected
+~365 ms/step = ~+0.55 MFU, the largest lever since H11, and it is the
+deletion class that has won twice.
+Runners-up recorded: fold _zero_inactive_grouped_rows into the QuACK
+epilogue (228 ms, 173 unshadowed, medium confidence); parallelise the
+ragged-a2a metadata kernels (293 ms but 72% already hidden -- the real
+prize there is second-order, since the a2a cannot launch until its
+offsets exist and 986 ms of a2a is exposed). Also corrected: the
+grouped-GEMM family is 4,028 ms/step (QuACK 3,036 + cuDNN wgrad 992),
+not ~1,628, and 886 ms of it is jax-checkpoint recompute of the forward
+expert MLP. Total remat tax ~2.17 s/step = 13.5% of the step.
