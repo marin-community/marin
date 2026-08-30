@@ -124,8 +124,8 @@ The bases are inputs to the replay. The source tips are the producer inputs.
    tpu-inference torch constraints and vLLM TPU requirements. These commits are
    release evidence, not separate Marin runtime inputs.
 6. Select one unused full `marin-vllm-tpu-...` release tag. Freeze that tag, the
-   vLLM workflow producer commit, both source tips, the dependency cutoff, and
-   the Marin consumer head. Dispatch the TPU lane of `marin-gpu-candidate.yaml`
+   vLLM workflow producer commit, both source tips, and the dependency cutoff.
+   Dispatch the TPU lane of `marin-gpu-candidate.yaml`
    at that producer commit with `vllm_source_tip`, `tpu_source_tip`, the tag, and
    the cutoff as explicit inputs. Dispatch it once.
 7. Read back the public prerelease. It must contain exactly the vLLM wheel and its
@@ -145,11 +145,12 @@ The bases are inputs to the replay. The source tips are the producer inputs.
    uv run config/update-external.py vllm --check
    ```
 
-10. Run focused Marin checks, then run the sole physical gate in **Validate**.
-    Skip **Select the base**, **Rebase the overlay**, **Pin at the staged tip**,
-    and **Prepare the protected-branch promotion**. Resume at **Review and Open
-    the PR** with the TPU release and validation receipt. Do not add a second
-    physical qualification or exact-byte protocol.
+10. Run focused Marin checks, commit the final consumer diff, and freeze its full
+    SHA as the Marin consumer head. Run the sole physical gate in **Validate**
+    against that exact SHA. Skip **Select the base**, **Rebase the overlay**,
+    **Pin at the staged tip**, and **Prepare the protected-branch promotion**.
+    Resume at **Review and Open the PR** with the TPU release and validation
+    receipt. Do not add a second physical qualification or exact-byte protocol.
 11. After validation and the producer change merges, mark the same GitHub release
     final without rebuilding or replacing either asset. Read back the unchanged
     asset IDs and digests before landing the Marin consumer.
@@ -357,8 +358,8 @@ refresh, and no text overclaims validation evidence.
 
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, then read back its title,
-body, labels, base, head, and draft state. Take one non-blocking snapshot of CI,
-comments, and reviews; do not start a monitoring loop.
+body, labels, base, head, and draft state. Follow the commit skill's required
+monitoring behavior, then read back CI, comments, and reviews.
 
 For TPU, keep the body to the upstream bases, reviewed source tips, producer and
 release tag, dependency cutoff, immutable asset evidence, e2e outcome, and
