@@ -1053,3 +1053,50 @@ offsets exist and 986 ms of a2a is exposed). Also corrected: the
 grouped-GEMM family is 4,028 ms/step (QuACK 3,036 + cuDNN wgrad 992),
 not ~1,628, and 886 ms of it is jax-checkpoint recompute of the forward
 expert MLP. Total remat tax ~2.17 s/step = 13.5% of the step.
+
+## 2026-08-31 ~11:00Z: LIVE CORRECTNESS EXPOSURE FOUND (outranks the MFU work)
+
+While implementing C15 the agent surfaced, and I verified, that the hero
+is very likely training with corrupted expert weight gradients RIGHT NOW.
+
+Chain of evidence (each link checked, not relayed):
+1. lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py is ON
+   ORIGIN/MAIN with _GROUP_ALIGNMENT = 8 (git show origin/main:...).
+2. Issue #8339 (marin-community/marin, CLOSED) documents that the
+   internal MoEGroupedGemmWgradBF16Kernel silently corrupts BF16
+   grouped-Wgrad unless group offsets are 64-aligned: measured on GB200
+   at production dims, 0.269 relative error at 8-aligned starts, 0.217
+   at 32, 0 at 64 -- against a bf16 accumulation floor of ~0.003. Its
+   closing comment reframes it as an integration-contract violation:
+   cuDNN Frontend 1.27.0 (the exact pin in lib/levanter/pyproject.toml)
+   requires every expert token count divisible by 256, and Marin
+   bypassed the public facade to call the internal kernel with 8-row
+   padding. CLOSED != FIXED: main still pads to 8.
+3. The hero's path reaches it: silu activation + SM100 => 
+   _select_expert_mlp returns _cute_expert_mlp => _expert_mlp_cudnn =>
+   cudnn_grouped_wgrad at _GROUP_ALIGNMENT 8.
+4. My own hero-shaped trace (xprof-c1) contains
+   MoEGroupedGemmWgradBF16Kernel, with pad_grouped_rows (the 8-row
+   padder) as its immediate predecessor -- i.e. the exact configuration
+   #8339 measured.
+5. The hero W&B run hero-12d8b6f0-dee637 is state=running at step
+   37,750 as of this entry, on 177 pods.
+
+What I did NOT do: change the hero, change the alignment on this branch,
+or touch anything outside my research branch. Raising the alignment
+CHANGES gradients (for the better, presumably) and is a training-
+affecting decision that belongs to the user.
+
+Honest caveats: I did not independently reproduce the numerical error
+(that needs a GB200 plus a reference reduction); I am confirming a
+documented, measured finding and proving the code path is live. Training
+has not visibly diverged -- loss at the restore point is sane -- so this
+is "expert weight gradients ~90x above the bf16 noise floor", not
+"obviously broken".
+
+SYNERGY WORTH NOTING: C15 makes the fix nearly free. Today, raising the
+alignment raises the COST of pad_grouped_rows (more padded rows to copy,
+365 ms/step already). With C15 the pad copy does not exist at all -- the
+transport lays the receiver out aligned -- so alignment 64 or even 256
+costs only slack ROWS (<=765 of 301,466 = 0.25% at 256), no copy. The
+MFU lever and the correctness fix are the same mechanism.
