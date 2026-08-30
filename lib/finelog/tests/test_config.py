@@ -14,6 +14,7 @@ from finelog.deploy.config import (
     ForwardingConfig,
     GcpDeployment,
     JwtAuthLayer,
+    K8sCacheStorage,
     K8sDeployment,
     _bundled_config_dir,
     auth_policy_json,
@@ -325,9 +326,11 @@ def test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts() -> None:
         assert cluster in trusted, f"{name}: forwards as {cluster!r}, which no bundled hub's jwt layer trusts"
 
 
-def test_bundled_forwarding_configs_deploy_on_k8s() -> None:
-    """The gcp backend refuses forwarding — it can only reach the server through
-    world-readable startup-script metadata, which is no place for a signing key."""
+def test_bundled_forwarding_configs_use_node_local_k8s_storage() -> None:
+    """Keep every regional forwarder's best-effort buffer on node-local storage."""
     for name, cfg in _bundled_configs().items():
         if cfg.forwarding is not None:
             assert cfg.deployment.k8s is not None, f"{name}: forwards but deploys on gcp"
+            assert (
+                cfg.deployment.k8s.cache_storage is K8sCacheStorage.NODE_LOCAL
+            ), f"{name}: forwarding cache uses shared persistent storage"

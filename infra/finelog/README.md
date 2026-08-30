@@ -47,18 +47,17 @@ intended checkout; there is no rollout counter in Pulumi configuration.
 - `node-local` mounts an `emptyDir` backed by the node's ephemeral disk. Pulumi
   requests and limits ephemeral storage to `storage_gb`, and normally creates
   no PVC.
-  Pod replacement discards the cache, so use this only for a regional sender
-  whose forwarded hub copy may become the read source after a restart.
+  It survives container restarts but not pod replacement. All bundled regional
+  senders use this mode because forwarding is best-effort and the hub becomes
+  the read source for rows it accepts.
 
 With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
 an existing replacement claim. Enable the stack's `import` option when Pulumi
 first adopts that claim.
 
-To move an existing Pulumi stack to `node-local`, first change `cache_storage`
-but retain `cache_pvc_name` for the rollout. Pulumi keeps the named claim
-unmounted, clears its deletion protection, and marks it for retention. After
-verifying the node-local pod, remove `cache_pvc_name` in a second update; Pulumi
-then removes the claim from its state without deleting the Kubernetes PVC.
+Do not mount an object store as the cache filesystem. Finelog's SQLite catalog
+and active segments require local filesystem semantics; object storage belongs
+behind `remote_log_dir` until the server owns that storage path natively.
 
 For a read-only preview, run `pulumi preview --stack <cluster>` from
 `infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic
@@ -104,10 +103,51 @@ pulumi up
 pulumi config rm finelog:import
 ```
 
-The import pass adopts the existing PVC, Deployment, and Service. Inspect the
-preview before applying: the PVC must import without replacement. The component
-protects the PVC after adoption, so a later `pulumi destroy` cannot delete the
-cache accidentally.
+The import pass always adopts the existing Deployment and Service. A
+`persistent-volume` deployment also adopts and protects its existing PVC;
+inspect the preview before applying to ensure that claim imports without
+replacement. A `node-local` deployment does not adopt an old PVC.
 
 The stack does not own the `iris-system` PriorityClass. The cluster substrate
 stack in `infra/pulumi` remains its canonical owner.
+
+## Reproduce shared-VAST SQLite stalls
+
+`reproduce_vast_sqlite.py` creates an isolated namespace with 100 one-GiB
+`shared-vast` claims and one lightweight SQLite writer per claim. Each writer
+uses `journal_mode=PERSIST` and `synchronous=FULL`, retains a small rolling row
+set, and commits once per second. A separate thread emits heartbeats with commit
+phase, latency, and the SQLite thread's kernel wait channel, so a blocked NFS
+operation remains observable as `rpc_wait_bit_killable` rather than making the
+pod appear silent. The pod becomes Ready only after SQLite initialization.
+
+Render the resource list locally, or explicitly apply it to one CoreWeave
+cluster:
+
+```bash
+uv run python infra/finelog/reproduce_vast_sqlite.py manifest > /tmp/finelog-vast-sqlite.json
+
+uv run python infra/finelog/reproduce_vast_sqlite.py apply \
+  --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-gpu_US-EAST-02A
+
+uv run python infra/finelog/reproduce_vast_sqlite.py status \
+  --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-gpu_US-EAST-02A
+```
+
+The default workload requests 1 CPU and 3.2 GiB of memory in aggregate, plus
+100 GiB of logical VAST capacity. It runs until deleted. An uneventful run does
+not rule out an external VAST endpoint outage; capture heartbeat age and wait
+channels alongside node-problem-detector's `NFSNotResponding` event and the
+affected mount endpoint when reporting a stall.
+
+Delete only the isolated reproduction namespace and its claims with an exact
+name confirmation:
+
+```bash
+uv run python infra/finelog/reproduce_vast_sqlite.py delete \
+  --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-gpu_US-EAST-02A \
+  --confirm finelog-vast-sqlite-repro
+```

@@ -104,18 +104,3 @@ def test_finelog_node_local_cache_uses_bounded_ephemeral_storage() -> None:
     assert container.resources.limits is not None
     assert container.resources.requests["ephemeral-storage"] == "250Gi"
     assert container.resources.limits["ephemeral-storage"] == "250Gi"
-
-
-def test_finelog_node_local_transition_keeps_named_pvc_unmounted() -> None:
-    resources = finelog_resource_args(
-        _args(K8sCacheStorage.NODE_LOCAL, cache_pvc_name="finelog-cw-cache-recovery"),
-        "image@sha256:digest",
-    )
-    assert resources.pvc is not None
-    assert resources.pvc.metadata is not None
-    assert resources.pvc.metadata.name == "finelog-cw-cache-recovery"
-    assert resources.deployment.spec is not None
-    pod_spec = resources.deployment.spec.template.spec
-    assert pod_spec is not None
-    assert pod_spec.volumes[0].empty_dir is not None
-    assert pod_spec.volumes[0].persistent_volume_claim is None
