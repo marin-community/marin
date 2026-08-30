@@ -267,10 +267,10 @@ class Table:
         self._arrow_schema = schema_to_arrow(schema)
         self._flusher = flusher
         self._querier = querier
-        # When set, the flush thread calls this once before its first send to
-        # register the namespace; the returned effective schema replaces the
-        # locally-requested one for Arrow encoding. ``None`` means the
-        # namespace is already registered server-side (e.g. ``log``).
+        # When set, the flush thread calls this before its first send and again
+        # after WriteRows reports a missing namespace. The returned effective
+        # schema replaces the locally-requested one for Arrow encoding. ``None``
+        # means the namespace is registered server-side (e.g. ``log``).
         self._registrar = registrar
         self._registered = registrar is None
         self._flush_interval = flush_interval

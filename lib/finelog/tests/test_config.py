@@ -137,7 +137,7 @@ def test_derive_endpoint_uri_k8s() -> None:
     assert metadata == {"port": "10001"}
 
 
-def test_load_config_allows_pvc_retention_during_node_local_transition(tmp_path: Path) -> None:
+def test_load_config_rejects_pvc_name_with_node_local_storage(tmp_path: Path) -> None:
     cfg_path = tmp_path / "node-local.yaml"
     _write_config(
         cfg_path,
@@ -155,10 +155,8 @@ def test_load_config_allows_pvc_retention_during_node_local_transition(tmp_path:
         """,
     )
 
-    cfg = load_finelog_config(str(cfg_path))
-
-    assert cfg.deployment.k8s is not None
-    assert cfg.deployment.k8s.cache_pvc_name == "finelog-cache"
+    with pytest.raises(ValueError, match="cache_pvc_name cannot be set with node-local cache storage"):
+        load_finelog_config(str(cfg_path))
 
 
 def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
