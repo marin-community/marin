@@ -1100,3 +1100,10 @@ alignment raises the COST of pad_grouped_rows (more padded rows to copy,
 transport lays the receiver out aligned -- so alignment 64 or even 256
 costs only slack ROWS (<=765 of 301,466 = 0.25% at 256), no copy. The
 MFU lever and the correctness fix are the same mechanism.
+
+### HOLD (user instruction, 2026-08-31): the entry above is a SUSPICION under
+### independent audit, not a confirmed defect. No issue, comment, or external
+### communication of any kind until the audit concludes and the user decides.
+### Two clean-room audits (a fresh opus agent and codex, neither told the
+### diagnosis) are running; an empirical GB200 check is being prepared as a
+### third, independent line of evidence.

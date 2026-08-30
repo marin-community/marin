@@ -1,0 +1,526 @@
+Reading additional input from stdin...
+OpenAI Codex v0.150.1
+--------
+workdir: /home/marin/projects/marin-mfu-loop
+model: gpt-5.6-sol
+provider: openai
+approval: on-request
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: high
+reasoning summaries: none
+session id: 01a05128-623c-7f30-b22e-719afeeaad0d
+--------
+user
+Independent correctness audit of production ML training code. Work from evidence only; nothing in this prompt is a hint about what you will find, and 'this path is correct' is an equally valid conclusion. Read-only: probe scripts in a scratch dir are fine, but change no repository files and commit nothing.
+
+SCOPE: the Mixture-of-Experts expert-MLP compute path -- forward and backward INCLUDING WEIGHT GRADIENTS -- as it actually executes in the production 'hero' training configuration: experiments/grug/moe_hero_ep/ (heuristic.py for the model shape, hero_recipe.py, train.py), MoE implementation ragged_all_to_all, bf16 compute, SiLU activation, GB200/SM100 GPUs, 64-way expert parallelism. Implementation lives under lib/levanter/src/levanter/grug/_moe/ -- start at ep_ragged_all_to_all.py and follow the path the hero actually takes into whatever expert-MLP and gradient kernels it selects at runtime.
+
+TASK: determine whether the gradients this path computes are correct. (a) Establish which kernels the hero configuration actually dispatches to at runtime, not which ones exist, and say how you established it. (b) For each kernel or library call on that path, check whether the code satisfies the contract of what it calls -- including any external library's documented requirements on inputs (shapes, alignment, layout, group sizes, dtypes, and whether the code is entitled to call that API surface at all). Wrappers around external kernels are a common source of contract violations that produce silently wrong numbers instead of errors. (c) Search the repo history and issue tracker for evidence about this code's correctness (gh issue list --repo marin-community/marin --search ..., git log) and judge it critically: a closed issue is not necessarily fixed, and a fix on one branch is not a fix on another. (d) Verify numerically where you can; there is no GPU here, so state plainly what you could not execute and never present a CPU result as evidence about a GPU kernel.
+
+DELIVERABLE: verdict (correct / incorrect / undetermined) with specific evidence, blast radius if wrong (which runs, which tensors, error magnitude), and confidence with reasons for uncertainty. If nothing is wrong, say so plainly and show what you checked. Cite file:line and command output for every load-bearing claim.
+codex
+I’m treating this as an evidence audit, not a change request: I’ll trace the hero dispatch from configuration through forward and autodiff/weight-gradient paths, validate every reached contract, inspect prior work and history, then run only CPU/reference probes that answer portable semantics. I’ll label GPU-only behavior as unexecuted. The repo’s prior-work policy applies, so I’m using its Echo consultation workflow; the breadth also matches the Marin corpus research workflow.
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '1,240p' /home/marin/.codex/skills/mumwelt/SKILL.md && sed -n '1,260p' .agents/skills/consult-echo/SKILL.md" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+---
+name: mumwelt
+description: Answer a broad, ambiguous, or multi-part question about Marin by decomposing it into parallel searches (across subagents) over the local marinmirror corpus and weekly summaries, then synthesizing a cited answer. Use for "give me the full picture of X", literature-review-style asks, retros, or anything one search query won't cover. For a single "where is X / how is Y implemented" code lookup, reach for the lighter mumwelt-code first.
+---
+
+# mumwelt — multi-subagent research over the Marin corpus
+
+For questions too broad or multi-faceted for a single `mum search`. The pattern is
+**decompose → fan out → verify → synthesize**. *You* (the agent) do the reasoning and
+writing; the `mum` CLI does fast retrieval.
+
+## 0. Fresh mirror
+
+```
+mum status
+```
+If the corpus is missing, `mum refresh` (required). If it's **>1 day old**, refresh before
+relying on it. **Within 1 day, don't auto-pull** — proceed as-is, or *ask* the user first
+when the question is time-sensitive. If the user says "don't repull", honor that and use
+what's on disk. (The 1-day window is configurable via `MARIN_MAX_AGE_DAYS`.)
+
+**If refresh reports an auth failure**, stop and bring it to the user — the command prints
+which of two cases it is. *No token found*: they need `gh auth login` (or
+`MARINMIRROR_TOKEN`), then a re-run. *Token rejected*: authorization is a one-time browser
+step — sign in at the marinmirror site, submit an access request, re-run once approved.
+**Never open the browser yourself**; explain the situation and *offer* to run
+`mum refresh --open`, which opens the page for them. The public weekly summaries refresh
+either way, so you can still answer from those — say explicitly that you're doing so and
+that corpus-backed sources are unavailable, rather than presenting a thinner answer as
+though it were complete.
+
+## 1. Orient, then decompose
+
+**Orient first — it's a vocabulary bootstrap, not a formality.** A generic question ("how is
+GPU training going") only matches generically-titled docs; it will **never** surface the
+specifically-titled engineering threads (`Drive 90B MoE MFU from 3% to ~25%`, `Speed up Grug
+MoE Muon`) — you can't search for terms you don't know yet, and a broad scout search stays
+stuck in that generic basin. The **weekly summaries** are the escape: they're *recency-
+structured* (not query-matched), so they're saturated with the **current subsystem vocabulary**
+and the live issue numbers.
+
+Read the **last ~2–3 weekly summaries** — one is *not* enough for an ongoing topic (it spans
+weeks, and a single week's snapshot reads as current and misleads):
+```
+mum summaries list                 # see the periods
+mum summaries show <latest>        # and the 1–2 weeks before it for anything ongoing
+```
+From them, **harvest (a) the recurring subsystem TERMS** (specific optimizers, parallelism
+strategies, perf metrics, cluster names) **and (b) the issue/PR #numbers named** — then
+`mum show` the most relevant of those issues directly.
+
+**Pick the entry point by topic shape.** Summaries are the bootstrap for a *diffuse* state
+whose vocabulary you can't guess ("how is X going" — the subsystem names live only in the
+summary). But for a **strongly-named or just-filed** topic — a milestone, run name, `#issue`,
+"the July hero run" — a **keyword scout** (`mum search "<the name>"`) or a milestone/issue
+browse is the better and sometimes *only* entry, because the thing may be **newer than the
+latest summary**. Either way the goal is identical: **discover the real structure + vocabulary
+before decomposing** — never decompose from generic words.
+
+Then break the question into **focused sub-queries built from the harvested vocabulary,
+not generic words** — a facet named "Muon optimizer cost / pipeline parallelism" surfaces the
+right thread; "performance and blockers" does not.
+
+**Use 8–12 facets, and MORE for a genuinely complex question — do not stop at 5.** This is
+the single biggest lever measured on a live A/B, and it is bigger than any routing choice.
+Three arms answered "what happened in June and July so far?"; the one that used **10** facets
+found material the two that used **8** never saw — 18 documents an independent review graded
+genuinely useful, including a whole subsystem's story. The 8-facet arms did not lose them by
+routing badly; they had **no facet at all** for MarinFold, long-context work, the month's
+milestones, or storage. An unasked facet cannot be retrieved by any amount of clever
+filtering, and each facet is cheap: one parallel subagent.
+
+A two-month or multi-subsystem question needs a facet per *subsystem*, not per *theme*. If
+your facet list has fewer entries than the project has active workstreams, it is too short.
+
+Useful facets:
+- **decisions / discussion** (*why* was X chosen?), **code / PRs** (*what landed, by whom?*),
+  **runs / results** (*the numbers?*), **people** (*who owns it?*), **timeline** (*what changed
+  when?*).
+
+## 1.5 Route facets to threads; give code its own lane
+
+**A facet is a SUBJECT, not a source.** Name the facet after the thing you want to know
+about — "Iris cross-cluster federation", "vLLM GrugMoE serving" — and send it where the
+*discussion* lives: `--source github,discord`. Do this **even when the subject is code.**
+
+| facet shape                            | `--source`       | why                                     |
+|----------------------------------------|------------------|-----------------------------------------|
+| *why* / *what happened* — any subject   | `github,discord` | decisions and events live in threads     |
+| *what did the run produce* (numbers)    | `wandb`          | config + final numbers                   |
+| *what happened this week* / orient      | `narrative`      | recency-structured, vocabulary-rich      |
+| *how is X implemented* (only)           | `code` (`-k 30`) | see the carve-out below                  |
+
+**Never spend a facet slot on `--source code` for a "what happened" question.** Measured
+on a live A/B of "what happened in June and July": routing two of eight facets to `code`
+cost **18 genuinely useful documents** — the entire Iris/CoreWeave infrastructure
+narrative (the federation refactor landing, a datakit OOM root-caused to a gcsfs
+regression, an NFS-lock fix) — because the *story* of that work is in issue threads while
+`--source code` returns source files. The code citations it bought were fine; they just
+answered a different question than the one asked.
+
+### The standing code lane
+
+**Always search code — but deliberately, in its own lane, never incidentally.** In the same
+test, the unrouted arm retrieved **53 code documents and cited zero**; the ones it uniquely
+saw graded 6 noise / 1 marginal / 0 valuable (auth tests, a controller `main.py`). Code that
+turns up as a by-product of a mixed search is buried at ranks nobody reads. The routed arm
+retrieved 46 and cited 5, four of them judged solid.
+
+**This is now enforced by the tool, not left to your discipline.** `mum search` no longer
+mixes code into the main results at all — code and prose are ranked separately and never
+compete for the same slots. Two consequences:
+
+- **Every `mum search` already gives you the code lanes, free.** Output ends with
+  `--- code · main (25) ---` and `--- code · in-flight branches (10) ---`. You do not
+  have to spend a facet slot to *see* whether code has anything; you only spend one when
+  it does. Read those sections and judge them yourself — no relevance threshold gates
+  them, which is deliberate, because you can tell "this symbol answers the question" from
+  "this merely contains the word `gpu`" and a cosine score cannot.
+
+- **main and branches are separate lanes because they have different truth status.**
+  `main` is how the system works. A branch symbol is what someone is *trying* — it may
+  never land. Answering "how does X work" from branch code is not a worse answer, it is a
+  **wrong** one. Cite `main` for how things work; cite a branch **only** for claims about
+  what is in flight, and say so explicitly. They are budgeted separately because branch
+  symbols exist only when they *differ* from the merge base, so the corpus selects for
+  actively-edited code and they crowd: measured, 39% of code chunks but 48–84% of an
+  undifferentiated top-25, and 21 of 25 on "how do we compute MFU".
+- **When the question really is about code, go deep:** `mum search "<subject>" --source
+  code -k 30`. With an explicit `--source code` the code lane is primary and gets the
+  whole budget, so 20–30 hits is the right ask, not 10.
+
+Why they were separated: fusing the two rankings is zero-sum for a fixed result budget, and
+measured across all 9 harness questions, code in the mixed ranking cost **1.9pp of gold
+recall at both @10 and @20** while adding nothing at @50. It also could never *gain*
+anything on that metric — which counts only issue/PR citations — so mixing cost prose and
+could not be credited for code. Split, code costs prose exactly zero.
+
+So run **one** extra subagent (two only if the question genuinely spans systems) alongside
+the facet agents — in parallel, fanning in to synthesis like any other digest. Do NOT make
+the other agents wait on it; that would serialize the fan-out. Give it the question's main
+subjects and have it run keyword+vector+HyDE against `--source code`, then return a SHORT
+digest of the few symbols that actually establish something.
+
+**Budget the lane at 3–5 searches, not more.** An arm that spent 10 of its 18 searches on
+the code lane starved its facet coverage and still cited nothing from code — the lane was
+doing lead generation at the price of an entire subsystem's thread coverage.
+
+**Cite what the lane finds when it is relevant — and only then.** The lane is not merely a
+lead generator: a symbol, a module docstring or a branch is a legitimate primary source for
+a claim about how something is built or who is building it. If you assert that work is
+happening on a branch, **cite the branch chunk itself**, not a general issue that merely
+mentions the topic (a review caught exactly that substitution). Equally, do not cite code to
+look thorough — if the lane's findings do not support a claim you are actually making,
+report them as nothing and move on.
+
+**It must be allowed to come back empty.** Plenty of questions have no code dimension —
+on the eval harness's `april` and `classifier` questions, code takes 0% of top-10 slots.
+"Nothing relevant in code" is a valid, useful answer; a lane that manufactures relevance
+just gets its findings cited to look thorough.
+
+### Read the active branches
+
+Branches are the best available signal for *what is being worked on right now*, and they
+are usually ahead of both the threads and the weekly summaries. The code lane should
+explicitly mine them:
+
+```
+mum search "<subject>" --source code --kind branch-window
+```
+
+Each hit carries the **branch name** and its **last committer**, and the set of files a
+branch touches sketches what it is trying to do. Three things to exploit:
+
+- **Branch names encode intent and often an issue number** — `codex/6597-moe-mgpu`,
+  `agent/20260624-fix-6614`, `rav/iris-gpu-image`. Pull the `#number` out and `mum show`
+  that issue: it links in-flight code to the thread that motivated it.
+- **Who is committing** tells you who owns the work right now, which the thread may not.
+- **Which files changed** tells you the shape of the change before any of it is written up.
+
+**Always attribute it as in-flight.** `kind=branch-window` is work on someone's branch, not
+what `main` does — say "on branch `x`, <person> is doing Y". Reporting a branch symbol as
+current behaviour is the §3 temporal trap in a new costume.
+
+### The carve-out
+
+`--source code` may own a facet when the question is genuinely about *implementation*
+("how does Iris federation actually work", "where is the LR clamped"). There, code is the
+primary source and threads are the supplement — the reverse of the default above. Decide by
+question type: **"what happened" → threads; "how does it work" → code.**
+
+Two more code notes: a `module` chunk lists its resolved imports, so "where does
+`ExecutorStep` come from" is answerable with a path. And identifier search splits camelCase
+both ways, so `ExecutorStep`, `executor_step`, and "executor step" all reach each other.
+
+Leave `--source` off when a facet genuinely spans sources, or when you are still orienting.
+
+## 2. Fan out — two modes
+
+**If your host has subagents (e.g. Claude's Task/Agent tool):** spawn **one subagent per
+sub-query**, in parallel. Give each subagent its sub-query and tell it to:
+1. **Write 3 short hypothetical-answer paragraphs** (2–3 sentences each) — plausible answers
+   to its sub-query, as if excerpted from a Marin issue / Discord thread / weekly summary.
+   Invent concrete-sounding specifics; this is **HyDE**, so the text only needs to sit in the
+   right *semantic neighborhood*, not be true.
+2. Run `mum search "<sub-query>" --json --vec-text "<doc1>" --vec-text "<doc2>" --vec-text "<doc3>"`
+   — the three docs are mean-pooled to drive the **semantic (vector)** leg, while the literal
+   sub-query still drives the **keyword (FTS)** leg, so exact identifiers (`#1234`, run names)
+   aren't diluted.
+   `-k` now defaults to **50** (gold-citation recall runs 32% @10 → 45% @20 → 58% @50 on the
+   eval harness, and raising it is close to free because the vector leg scores every chunk
+   regardless), so you only pass `-k` to go *narrower*. Add `--source` when the facet has an
+   obvious home (see §1.5).
+3. `mum show <url>` on its **top ~20 best hits** to read full context. Keep this bound at ~20
+   even though you searched 50 — `show` expands a whole thread and is what actually consumes
+   context. The other 30 are not wasted: a search hit already carries `url`, `title`, `date`
+   and a snippet, so it is **citable as a lead** without being expanded. Expand for depth,
+   scan the tail for coverage.
+4. Return a short digest of findings **with URLs**.
+
+Collect the digests and **dedupe by URL** across sub-queries (overlap collapses the real
+expansion count well below 20 × #sub-queries). HyDE earns its keep on broad "how/what's
+going" sub-queries; on a pure-identifier sub-query it adds little, but the FTS leg still
+nails the identifier, so it's harmless — hence n=3 by default.
+
+**If single-process (no subagent framework):** use the built-in parallel primitive —
+```
+mum search-multi "<sub-query 1>" "<sub-query 2>" "<sub-query 3>" … --json
+```
+It runs all queries concurrently and returns a merged, de-duplicated candidate set
+(each hit annotated with which sub-queries surfaced it). `-k` is candidates **per query**
+(default 50) and `--total` caps the merged set (default 60). Then `mum show` the most
+promising URLs. Note: `search-multi` doesn't take `--vec-text`, so this path is
+keyword+vector on the **literal** queries (no HyDE). To get HyDE without subagents, run
+individual `mum search "<sub-query>" --vec-text "<doc1>" --vec-text "<doc2>" --vec-text "<doc3>"`
+calls instead.
+
+## 3. Verify
+
+Before asserting something important, confirm it against its source: re-`mum show` the
+---
+name: consult-echo
+description: Search or cite Echo when Marin's prior-work policy applies, another selected workflow requires it, or the user explicitly asks; do not substitute it for local code search.
+---
+
+# Consult Echo
+
+Search Echo before rediscovering prior work. Cite canonical Echo, GitHub, or
+Discord URLs for the evidence you use.
+
+## Search
+
+Use a natural-language federated search:
+
+```bash
+uv run infra/echo/cli.py search "how do I diagnose a stalled TPU collective" --limit 10
+```
+
+Search covers `wiki`, `file`, `pr`, and `issue` by default. Repeat `--domain` to
+select a subset.
+
+File search infers the configured Marin-community repository from the current
+Git checkout, including ordinary contributor forks. Pass `--repository
+<owner/repo>` to choose one configured repository or `--repository all` to
+search all six. The CLI prints the resolved file scope once. Searches that omit
+the file domain work outside a Git checkout.
+
+Discord is excluded by default because messages may be noisy or untrusted. Add
+`--domain discord` only when discussion history is relevant, and open the
+canonical URL when surrounding thread context matters.
+
+Fetch a result's full detail with its printed ID:
+
+```bash
+uv run infra/echo/cli.py get <domain:id>
+```
+
+Grade evaluated results with the exact query and printed keys:
+
+```bash
+uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
+  --grade wiki:730=0 --grade file:731=10 \
+  <<< "The file result answered the task; wiki results were off-topic."
+```
+
+Use 0 for irrelevant and 10 for directly useful. Grade only evaluated results
+and always explain overall quality on stdin, including for an empty result set.
+
+Use `grep` for exact strings in GitHub or Discord activity, narrowing with
+`--source` or `--kind` when needed:
+
+```bash
+uv run infra/echo/cli.py grep "FAILED_PRECONDITION" --source github
+```
+
+Use `rg` for exact identifiers in the current checkout. Echo's file index
+follows the periodically refreshed GitHub head, so it does not contain
+branch-only or uncommitted files. Use `wiki search --tag <tag>` when tags, rather
+than federated relevance, define the desired synthesis. Authentication reuses
+the shared Marin login via `iris login`; see
+[Echo setup and access](../../../infra/echo/README.md).
+
+Run this search sequence before adding or editing a wiki note.
+
+## Choose the durable home
+
+Every incident gets a standalone Echo record through `write-ops-log`, linked
+from its associated PR or issue. Also use the narrowest reusable home when the
+incident or other work changes durable guidance:
+
+- Update `OPS.md` for a recurring operational procedure, diagnostic workflow,
+  or guardrail in one subsystem.
+- Update `docs/` for reusable product or user guidance that belongs with the
+  repository.
+- Edit an existing Echo wiki note for a cross-cutting pattern or synthesis that
+  has no single repository home.
+- Add a wiki note only when the searches find no near-duplicate.
+
+Create one incident entry per incident and edit it while the same incident
+continues. Keep raw logs and diffs in their source systems. Edit a near-duplicate
+synthesis instead of adding another.
+
+## Write or revise a wiki note
+
+Write the shortest entry that changes a future action:
+
+- Lead with an actionable value: a decision, command, diagnostic discriminator,
+  guardrail, or recovery step.
+- Include only the facts needed to support or apply that action. Link to the
+  canonical PR, issue, dashboard, log bundle, or report for chronology and raw
+  evidence instead of copying it into Echo.
+- Put the action in the title, `use_when`, or opening paragraph.
+- Keep chronology without a reusable decision in an issue, logbook, or source
+  artifact.
+
+Write an Open Knowledge Format document:
+
+```markdown
+---
+type: wiki-note
+title: Stalled TPU collectives can have several low-power causes
+use_when: when a distributed TPU job stalls before the first optimizer update
+tags:
+  - ops
+  - debugging
+  - iris
+---
+
+State the reusable pattern, how to distinguish its causes, and the evidence URLs.
+```
+
+Use lowercase kebab-case tags. Keep the title concrete and make `use_when`
+describe the future search trigger. Make the body stand alone. Cite canonical
+URLs inline. Concision still requires enough context to apply the guidance
+safely; do not omit a precondition, destructive-action warning, or material
+caveat.
+
+Create a note:
+
+```bash
+uv run infra/echo/cli.py wiki add --file note.md
+```
+
+Revise the closest existing note:
+
+```bash
+uv run infra/echo/cli.py wiki show <id> > note.md
+# Edit note.md.
+uv run infra/echo/cli.py wiki edit <id> --file note.md
+```
+
+Both write commands print the canonical Echo URL. Return and cite that URL
+after every add or edit.
+
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "sed -n '241,520p' /home/marin/.codex/skills/mumwelt/SKILL.md" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+cited chunk, or (with subagents) spawn a skeptic that tries to refute the claim from the
+corpus. Drop anything you can't ground in a URL.
+
+**Run these adversarial checks on every number/claim — they are the failure
+modes that bite hardest:**
+- **Target vs achieved.** Is this number a *measured result* or a stated *goal / target /
+  plan / "aim for X"*? **Never report a target as an achievement.** Prefer a thread's
+  **latest / close-out** comment over mid-thread proposals — an experiment log's final
+  verdict beats its opening hypothesis (e.g. the close-out "stuck at ~9% MFU" beats an
+  earlier "drive to ~25%" goal).
+- **Platform / config attribution.** Tag every metric with its hardware/config (GPU vs TPU,
+  which cluster, which model size) and **never carry a number across contexts** (a TPU MFU
+  reported as a GPU result is a classic inversion).
+- **Quote-or-omit.** If you can't tie a specific number / run-name / issue# to a quoted line
+  in a source, **drop it** rather than paraphrase it into existence.
+- **Quoted speech must link to its source.** When you quote someone ("Larry said X"), the
+  quoted text must be a markdown link to the specific message — Discord URL, GitHub comment,
+  etc. An attribution-by-name without a URL is not a citation. If you can't find the source
+  URL for a quote, paraphrase the claim with a link to the thread instead, or drop it.
+- **Temporal / staleness.** Establish *when* each fact was true and prefer the **latest**
+  state. A status true a week or two ago may be superseded (a run "still blocked on GPU" last
+  week may have **moved to TPU** since) — chase the close-out / most-recent comment before
+  reporting a state as current. Don't narrate an old snapshot as the present.
+- **A sealed failure may already have been superseded.** Reporting negative results honestly
+  is right, but a *stale* negative is worse than none: it tells the reader something was tried
+  and failed when the team has since made it work. An arm reported an Over-Encoding ladder as
+  "came back null" from a gate sealed as a failure one day earlier — while the same thread
+  showed a reformulated version **winning** at every matched checkpoint. Before reporting any
+  failure, dead end, or null result, **read to the END of the thread** and check for a pivot,
+  a reformulation, or a retry. Report the failure *and* what happened next.
+
+**Pre-publish self-check.** Before finalizing the writeup, scan your own draft for quoted
+speech (text in `"..."`) that is not a markdown link. Every such quote must either become
+`["quoted text"](url)` linking to the specific message, or be rewritten as a paraphrase
+with a link to the thread, or be dropped. Do not leave bare attributed quotes ("Larry said
+X") — the publish pipeline will warn about them, but by then it is too late to retrieve the
+URLs. Fix them while you still have the corpus open.
+
+## 4. Synthesize
+
+Merge the findings, **dedupe by URL**, and write a structured answer where **every claim
+cites a `url`**. Call out disagreements and gaps explicitly. Prefer **primary sources**
+(the actual PR / message / run) over the weekly-summary narrative, but use the summary's
+links as a map of what else to chase.
+
+**Fidelity guards — a confidently-wrong answer is worse than an incomplete one:** label
+numbers as *achieved / target / projected*; when sources disagree (e.g. 9% vs 25% MFU),
+surface the conflict and resolve to the **close-out** result rather than silently picking
+one; keep hardware/config attached to every metric; and if the corpus only supports a
+partial answer, **say so plainly** instead of padding with plausible-sounding specifics.
+
+## 5. Provenance footer
+
+End every answer with a lightweight **provenance footer**, set off from the body and in
+muted/de-emphasized text, so the reader can see *what was searched* and *how fresh it
+was*. Pull the freshness line straight from the `mum status` you already ran in §0 (run it
+again if you didn't). Two parts:
+
+1. **Data used & freshness** — corpus size + age, and the summaries period/latest week,
+   verbatim from `mum status` (e.g. "50231 chunks, built 8h ago · summaries through
+   2026-06-01_2026-06-07"). Note any refresh you triggered this run.
+2. **Query trace** — the user's **original question**, then the **sub-queries** you
+   fanned out on (the §1 decomposition).
+
+Render it after a `---` rule using a small/dim style: a blockquote of italic text, which
+the host shows muted in a terminal. Prefix it with the `<!--provenance-->` sentinel —
+invisible when the Markdown is rendered, but it tells **mumwelt-publish** where the trailer
+starts so it can style the whole block as gray footnote text (and drop the duplicate rule).
+Put a blank `>` line between the three parts so each lands on its own line. Shape:
+
+```
+---
+<!--provenance-->
+> *Data: marinmirror — 50231 chunks, built 8h ago · summaries through 2026-06-01_2026-06-07
+> (refreshed this run).*
+>
+> *Query: "<the user's original question>"*
+>
+> *Sub-queries: "<sub-query 1>" · "<sub-query 2>" · "<sub-query 3>" · …*
+```
+
+# Prose guidelines
+
+**Key writing principles**: Please use Orwell's writing tips:
+
+A scrupulous writer, in every sentence that he writes, will ask himself at least four questions, thus:
+
+1. What am I trying to say?
+2. What words will express it?
+3. What image or idiom will make it clearer? [do not overdo this!]
+4. Is this image fresh enough to have an effect?
+
+And he will probably ask himself two more:
+
+1. Could I put it more shortly?
+2. Have I said anything that is avoidably ugly?
+
+One can often be in doubt about the effect of a word or a phrase, and one needs rules that one can rely on when instinct fails. I think the following rules will cover most cases:
+
+1. Never use a metaphor, simile, or other figure of speech which you are used to seeing in print.
+2. Never use a long word where a short one will do.
+3. If it is possible to cut a word out, always cut it out.
+4. Never use the passive where you can use the active.
+5. Never use a foreign phrase, a scientific word, or a jargon word if you can think of an everyday English equivalent.
+
+Break any of these rules sooner than say anything outright barbarous.
+
+Otherwise, Williams' Style: Lessons in Clarity and Grace should be a model for our work.
+
+Further, avoid constrative sentences like "it's not this, it's that", and avoid the phrases "load-bearing", "smoking gun".
+
+---
+
+**Notes**
+- `mum search-multi` is the portable fallback — it parallelizes retrieval even with no
+  subagent framework, so this skill works on any host.
+- Keep sub-queries specific; vague sub-queries return noise. Identifiers (run names,
+  `#1234`, logins) and concept phrases both work.
+
+  → Read applicable Levanter guidance; establish checkout state, hero configuration, and exact runtime dispatch graph
+  • Validate every reached internal and external kernel contract for forward, input gradient, and weight gradient
+  • Search Marin corpus, Git history, GitHub issues/PRs, and authoritative external API documentation
+  • Run read-only reference/dispatch/numerical probes where portable, separating CPU evidence from GPU-only gaps
+  • Adversarially reconcile evidence and deliver a cited verdict, blast radius, magnitude, and confidence
