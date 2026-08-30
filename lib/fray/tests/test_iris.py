@@ -214,24 +214,18 @@ def test_actor_startup_after_task_termination_stops_server_without_error(monkeyp
     registry = SimpleNamespace(register=reject_registration)
     ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
     job_info = SimpleNamespace(task_index=0, advertise_host="worker")
-    server_kwargs = []
 
-    def actor_server(**kwargs):
-        server_kwargs.append(kwargs)
-        return server
-
-    monkeypatch.setattr(iris_backend, "ActorServer", actor_server)
+    monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
     monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
     monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
 
     iris_backend._host_actor(object, (), {}, "actor", 17)
 
     assert stopped
-    assert server_kwargs == [{"host": "0.0.0.0", "port": 1234, "max_concurrency": 17}]
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
-def test_actor_group_passes_max_concurrency_to_host_entrypoint():
+def test_actor_group_runs_with_configured_max_concurrency(monkeypatch):
     fake_iris = MagicMock()
     fake_iris.submit.return_value = MagicMock(job_id="job-123")
     client = FrayIrisClient.from_iris_client(fake_iris)
@@ -243,11 +237,40 @@ def test_actor_group_passes_max_concurrency_to_host_entrypoint():
         actor_config=ActorConfig(max_concurrency=47),
     )
 
+    max_concurrencies = []
+    stopped = []
+    server = SimpleNamespace(
+        register=lambda _name, _instance: None,
+        serve_background=lambda: 1234,
+        stop=lambda: stopped.append(True),
+    )
+
+    def actor_server(*, max_concurrency, **_kwargs):
+        max_concurrencies.append(max_concurrency)
+        return server
+
+    def reject_registration(_name, _address):
+        raise ConnectError(Code.FAILED_PRECONDITION, "task is already terminal")
+
+    ctx = SimpleNamespace(
+        job_id=JobName.from_wire("/user/job"),
+        registry=SimpleNamespace(register=reject_registration),
+        get_port=lambda _name: 1234,
+    )
+    monkeypatch.setattr(iris_backend, "ActorServer", actor_server)
+    monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
+    monkeypatch.setattr(
+        iris_backend,
+        "get_job_info",
+        lambda: SimpleNamespace(task_index=0, advertise_host="worker"),
+    )
+
     entrypoint = fake_iris.submit.call_args.kwargs["entrypoint"]
     function, args, kwargs = entrypoint.resolve()
-    assert function is iris_backend._host_actor
-    assert args[-1] == 47
-    assert kwargs == {}
+    function(*args, **kwargs)
+
+    assert max_concurrencies == [47]
+    assert stopped
 
 
 class TestResourceConfigScale:

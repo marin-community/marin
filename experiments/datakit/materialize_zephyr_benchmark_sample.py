@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 class SampleMode(StrEnum):
-    """How to create the benchmark sample."""
+    """Work performed by the benchmark sample materializer."""
 
     COPY = "copy"
     REGENERATE = "regenerate"
@@ -133,7 +133,7 @@ def _verify_source_set(expected_names: set[str], destination_prefix: str) -> Non
         )
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=list(SampleMode), type=SampleMode, default=SampleMode.COPY)
     parser.add_argument("--source-prefix", default=COREWEAVE_BENCHMARK_SAMPLE_PREFIX)
@@ -152,9 +152,10 @@ def main() -> None:
     parser.add_argument("--map-task-cpu", required=True, type=float)
     parser.add_argument("--map-task-ram", required=True)
     parser.add_argument("--map-task-disk", required=True)
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    configure_logging(logging.INFO)
+
+def _validate_args(args: argparse.Namespace) -> None:
     if args.max_concurrent < 1:
         raise ValueError(f"max concurrent must be positive: {args.max_concurrent}")
     if args.minhash_max_concurrent < 1:
@@ -163,6 +164,9 @@ def main() -> None:
         raise ValueError(f"pool workers must be positive: {args.pool_workers}")
     if args.mode is SampleMode.REGENERATE and args.target_total_tokens_b <= 0:
         raise ValueError(f"target total tokens must be positive: {args.target_total_tokens_b}")
+
+
+def _materialize_normalized_sources(args: argparse.Namespace) -> set[str]:
     if args.destination_prefix.startswith("s3://") or (
         args.mode is not SampleMode.MINHASH and args.source_prefix.startswith("s3://")
     ):
@@ -191,11 +195,15 @@ def main() -> None:
     if steps:
         source_names = {step.name.removeprefix(f"{MATERIALIZE_STEP_PREFIX}/") for step in steps}
         _verify_source_set(source_names, args.destination_prefix)
-    else:
-        source_names = set(sample_sources(args.destination_prefix))
-        if not source_names:
-            raise ValueError(f"no normalized source artifacts found under {args.destination_prefix}")
+        return source_names
 
+    source_names = set(sample_sources(args.destination_prefix))
+    if not source_names:
+        raise ValueError(f"no normalized source artifacts found under {args.destination_prefix}")
+    return source_names
+
+
+def _materialize_minhash(args: argparse.Namespace, source_names: set[str]) -> None:
     worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
     map_task = ResourceConfig(cpu=args.map_task_cpu, ram=args.map_task_ram, disk=args.map_task_disk)
     scale = replace(
@@ -227,6 +235,14 @@ def main() -> None:
         args.destination_prefix,
         args.mode,
     )
+
+
+def main() -> None:
+    args = _parse_args()
+    configure_logging(logging.INFO)
+    _validate_args(args)
+    source_names = _materialize_normalized_sources(args)
+    _materialize_minhash(args, source_names)
 
 
 if __name__ == "__main__":

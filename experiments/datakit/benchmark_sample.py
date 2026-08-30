@@ -23,7 +23,6 @@ class BenchmarkSampleFuzzySteps:
 
 
 def benchmark_sample_inputs_prefix(sample_prefix: str) -> str:
-    """Return the permanent artifact prefix inside a normalized sample."""
     return prefix_join(sample_prefix, BENCHMARK_SAMPLE_INPUTS_DIR)
 
 
