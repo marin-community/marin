@@ -932,3 +932,34 @@ evidence, not an arm: confirm the three-group structure in a GPU HLO
 dump and measure how much of the recompute group is EXPOSED before
 treating it as a lever. Also worth re-reading the chunking rationale
 against it.
+
+## 2026-08-31 ~03:00Z: C13 reclassified and deprioritized (codex scope finding)
+
+Codex P1b is decisive on classification: hero MFU is an analytic FLOPs
+constant over wall time (train.py:592, _metrics.py:50), so a chunks=1
+gain would be real wall-time -- but chunks=1 CHANGES THE CAPACITY GATE
+(6 local experts share one buffer instead of two rigid halves), i.e. it
+accepts assignments the current policy drops. That is a routing-policy
+change, not a fidelity-preserving optimization, and belongs in the same
+user-sign-off category the campaign already assigned to capacity-factor
+moves (H4). It can answer "is this gate faster", never "is the
+trajectory equivalent". P1a adds that no value/gradient oracle exists
+for explicit chunks=1 (the accelerator correctness harness hardcodes the
+default resolver), so a smoke loss delta could not distinguish the
+intended gate change from a one-chunk VJP bug. Prior-stack data also had
+chunks=1 LOSING 0.14; the re-pricing thesis needs to beat that.
+DECISION: knob stays committed (default-inert, byte-identical, and the
+falsified chunking comment is now corrected in-tree -- both worth
+keeping on their own); the ARM is deprioritized behind higher-value work
+and would need the oracle plus user sign-off. Not a keep candidate.
+
+## 2026-08-31 ~03:05Z: long-window validation pair (best remaining rack value)
+
+Both keeps are validated on 15-step windows. The user's binding
+constraint is "loss trajectory equivalent or better", and the strongest
+remaining evidence for the promotion dossier is a LONGER trajectory
+comparison. A ~60-step window fits the 20-min post-compile cap at 17
+s/step (~17 min). Running deployment stack vs campaign-zero over
+steps +5..+58, same night, same protocol: firmer MFU estimate (54
+scored points instead of 15) and a 60-step pointwise loss comparison
+against the calibrated ~1e-4 band.
