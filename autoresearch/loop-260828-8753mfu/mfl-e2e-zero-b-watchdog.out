@@ -17,3 +17,7 @@
 01:49:13 t=941s train=running step=30010
 01:50:24 t=1013s train=running step=30014
 01:51:36 t=1084s train=running step=30019
+01:52:48 t=1156s train=running step=30022
+01:52:48 cancelling /mwittmann/mfl-e2e-zero-b-coord: scored through step 30022 (19 past first)
+Cancelled jobs:
+  /mwittmann/mfl-e2e-zero-b-coord/grug-train-mfl-e2e-zero-b

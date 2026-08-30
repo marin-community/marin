@@ -9,12 +9,14 @@ series as guards.
 
 ## Headline
 
-**23.36 → 24.04 MFU (+0.68, +2.9% throughput), measured same-night, same protocol,
+**23.34 → 24.04 MFU (+0.70, +3.0% throughput), measured same-night, same protocol,
 both sides fidelity-clean.** Peak HBM also falls 116.57 → 112.75 GiB.
 
 That end-to-end number is a direct measurement (campaign-zero tree vs the full
-stack on the same night), not a sum of parts. The parts add to +0.81, so the two
-keeps are mildly sub-additive: they overlap in what they fix.
+stack on the same night), not a sum of parts: two zero draws at 23.356 / 23.326
+(sd 0.02) against three deployment draws at 24.081 / 24.073 / 23.969 (sd 0.06),
+a ~12σ separation. The parts add to +0.81, so the two keeps are mildly
+sub-additive — they overlap in what they fix.
 
 ## What to promote
 
