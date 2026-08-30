@@ -24,6 +24,10 @@ const HEAD_KEY: &str = "HEAD.json";
 const STATES_PREFIX: &str = "catalogs";
 /// Key prefix under a table for the data objects its states reference.
 pub(crate) const OBJECTS_PREFIX: &str = "objects";
+/// Key prefix under a table for segment index bundles.
+pub(crate) const INDICES_PREFIX: &str = "indices";
+/// Key prefix under a table for covering-projection artifacts.
+pub(crate) const PROJECTIONS_PREFIX: &str = "projections";
 
 #[derive(Clone)]
 pub struct ObjectTableStateStore {
@@ -388,13 +392,15 @@ impl ObjectTableStateStore {
                 })?;
             referenced.extend(referenced_object_keys(&catalog));
         }
-        for (key, meta) in self.table_objects(table, OBJECTS_PREFIX).await? {
-            let id = ObjectId::table(table, &key)?;
-            if referenced.contains(id.as_str()) || meta.modified_at_ms > orphan_cutoff {
-                continue;
+        for prefix in [OBJECTS_PREFIX, INDICES_PREFIX, PROJECTIONS_PREFIX] {
+            for (key, meta) in self.table_objects(table, prefix).await? {
+                let id = ObjectId::table(table, &key)?;
+                if referenced.contains(id.as_str()) || meta.modified_at_ms > orphan_cutoff {
+                    continue;
+                }
+                self.storage.delete(&id).await?;
+                removed += 1;
             }
-            self.storage.delete(&id).await?;
-            removed += 1;
         }
         Ok(removed)
     }
@@ -485,6 +491,30 @@ impl TableStateStore for ObjectTableStateStore {
     }
 }
 
+/// Every object ID a segment keeps alive: its data source, its index bundle,
+/// and each covering-projection artifact.
+fn segment_object_keys(
+    segment: &crate::proto::finelog::stats::CatalogSegment,
+) -> impl Iterator<Item = String> + '_ {
+    segment
+        .source
+        .as_option()
+        .and_then(|source| source.object_id.clone())
+        .into_iter()
+        .chain(
+            segment
+                .index_bundle
+                .as_option()
+                .and_then(|bundle| bundle.object_id.clone()),
+        )
+        .chain(segment.projections.iter().filter_map(|projection| {
+            projection
+                .object
+                .as_option()
+                .and_then(|object| object.object_id.clone())
+        }))
+}
+
 fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashSet<String> {
     catalog
         .version_segments
@@ -495,18 +525,8 @@ fn referenced_object_keys(catalog: &NamespaceCatalog) -> std::collections::HashS
                 .iter()
                 .chain(version.retired_segments.iter())
         })
-        .filter_map(|segment| {
-            segment
-                .source
-                .as_option()
-                .and_then(|source| source.object_id.clone())
-        })
-        .chain(catalog.direct_query_segments.iter().filter_map(|segment| {
-            segment
-                .source
-                .as_option()
-                .and_then(|source| source.object_id.clone())
-        }))
+        .chain(catalog.direct_query_segments.iter())
+        .flat_map(segment_object_keys)
         .collect()
 }
 
