@@ -38,6 +38,13 @@ class TelemetryMigrationMode(StrEnum):
     DUAL_WRITE = "dual-write"
 
 
+class K8sCacheStorage(StrEnum):
+    """Kubernetes cache storage backends."""
+
+    PERSISTENT_VOLUME = "persistent-volume"
+    NODE_LOCAL = "node-local"
+
+
 def _bundled_config_dir() -> Path:
     """Locate the `config/` directory adjacent to the `finelog` package source.
 
@@ -77,9 +84,12 @@ class K8sDeployment:
     # of the file's current-context.
     kubeconfig: str | None = None
     kube_context: str | None = None
+    cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME
     storage_class: str | None = None
     storage_gb: int = 200
     # Existing replacement claim to adopt and mount instead of `<name>-cache`.
+    # With node-local storage, keeps that claim managed but unmounted for one
+    # transition update so Pulumi can retain it safely.
     cache_pvc_name: str | None = None
     cpu_request: str = "2"
     cpu_limit: str = "8"
@@ -95,6 +105,12 @@ class K8sDeployment:
     # preempt it off the shared control node. The cluster substrate owns that
     # PriorityClass; the Finelog stack only references it.
     priority_class_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.storage_gb <= 0:
+            raise ValueError("deployment.k8s.storage_gb must be > 0")
+        if self.cache_storage is K8sCacheStorage.NODE_LOCAL and self.storage_class is not None:
+            raise ValueError("deployment.k8s.storage_class cannot be set with node-local cache storage")
 
 
 @dataclass(frozen=True)
@@ -327,6 +343,7 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         namespace=raw["namespace"],
         kubeconfig=raw.get("kubeconfig"),
         kube_context=raw.get("kube_context"),
+        cache_storage=K8sCacheStorage(raw.get("cache_storage", defaults.cache_storage)),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", defaults.storage_gb)),
         cache_pvc_name=raw.get("cache_pvc_name"),

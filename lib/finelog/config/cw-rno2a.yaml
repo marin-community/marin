@@ -9,8 +9,9 @@ deployment:
     namespace: iris
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-rn02a_RNO2A
-    # storage_class omitted -> cluster default (shared-vast, VAST CSI); sized
-    # generously to absorb ingest bursts before offload to object storage.
+    # The regional cache is disposable once rows reach the hub. Keep it on the
+    # node's local disk so VAST availability cannot block Finelog persistence.
+    cache_storage: node-local
     storage_gb: 250
     # CoreWeave AI Object Storage via LOTA (in-cluster cache endpoint).
     object_storage_endpoint: http://cwlota.com
