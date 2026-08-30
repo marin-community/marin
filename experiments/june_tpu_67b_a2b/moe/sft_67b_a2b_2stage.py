@@ -259,6 +259,14 @@ _AGENTIC_RUN_ID: str = "snowball_step105149_sft_grug_a2b_agentic_eot_5ep"
 _SECOND_COOLDOWN_CHAT_RUN_ID: str = "snowball_step105149_sft_s1_chat"
 _SECOND_COOLDOWN_THINKING_RUN_ID: str = "snowball_step105149_sft_s2_thinking"
 _SECOND_COOLDOWN_AGENTIC_RUN_ID: str = "snowball_step105149_sft_s3_agentic_eot_5ep"
+_SECOND_COOLDOWN_CHAT_CHECKPOINT: str = (
+    "s3://marin-us-east-02a/marin/grug/snowball_step105149_sft_s1_chat/"
+    "2026.08.13.1/checkpoints/"
+)
+_SECOND_COOLDOWN_THINKING_CHECKPOINT: str = (
+    "s3://marin-us-east-02a/marin/grug/snowball_step105149_sft_s2_thinking/"
+    "2026.08.13.1/checkpoints/"
+)
 _AGENTIC_TRAIN_RESOURCES: str = "agentic_train_resources"
 _AGENTIC_EPOCHS: int = 5
 
@@ -383,7 +391,7 @@ def build_second_cooldown_chat(version: str | None = None) -> ArtifactStep[Levan
 
 
 def build_second_cooldown_thinking(
-    chat: ArtifactStep[LevanterCheckpoint], version: str | None = None
+    chat: str | ArtifactStep[LevanterCheckpoint], version: str | None = None
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Thinking SFT initialized from the second-cooldown Chat stage."""
     step_name = f"grug/{_SECOND_COOLDOWN_THINKING_RUN_ID}"
@@ -528,6 +536,7 @@ def build_agentic(
                 append_run_id_to_base_path=False,
                 save_interval=timedelta(minutes=60),
                 keep=[{"every": 1000}],
+                timeout=timedelta(hours=2),
                 debug=CheckpointDebugConfig(
                     enabled=True,
                     dump_stacks_after=30 * 60,
@@ -578,6 +587,7 @@ def build_agentic(
             "2stage",
             "second-cooldown-chat",
             "second-cooldown-thinking",
+            "second-cooldown-agentic",
             "second-cooldown-3stage",
             "nemotron-terminal",
             "nemotron-terminal-gb200",
@@ -598,7 +608,12 @@ def main(stage: str) -> ArtifactStep[LevanterCheckpoint]:
     if stage == "second-cooldown-chat":
         return build_second_cooldown_chat()
     if stage == "second-cooldown-thinking":
-        return build_second_cooldown_thinking(build_second_cooldown_chat())
+        return build_second_cooldown_thinking(_SECOND_COOLDOWN_CHAT_CHECKPOINT)
+    if stage == "second-cooldown-agentic":
+        return build_agentic(
+            init_from=_SECOND_COOLDOWN_THINKING_CHECKPOINT,
+            run_id=_SECOND_COOLDOWN_AGENTIC_RUN_ID,
+        )
     if stage == "second-cooldown-3stage":
         chat = build_second_cooldown_chat()
         thinking = build_second_cooldown_thinking(chat)

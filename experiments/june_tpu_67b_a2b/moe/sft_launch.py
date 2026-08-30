@@ -137,6 +137,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=config.save_interval_minutes),
             keep=config.checkpoint_keep,
+            timeout=timedelta(hours=2),
         ),
         # First launch: output dir empty -> weights-only init from initialize_from. Once this
         # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
