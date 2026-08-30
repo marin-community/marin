@@ -13,10 +13,11 @@ curriculum samplers and per-source metrics.
 Round 3 arranges bins on one 0-13 ladder from single-digit sums to graduate
 mathematics, anchored to school grade and contest tier. Grades come from the
 strongest available signal per source: explicit per-problem school grades
-(ASDiv), dataset difficulty metadata (MATH levels), contest provenance
-(GSM8K, AIME), or generator knobs re-anchored to round-2 measured pass rates
-(reasoning-gym arithmetic). Grades g04, g09, and g11-g13 are reserved for the
-AMC, olympiad, Putnam, and graduate bins of the full ladder.
+(ASDiv), dataset difficulty metadata (MATH levels, Omni-MATH AoPS ratings),
+contest or curriculum provenance (GSM8K, NuminaMath source tags, AIME), or
+generator knobs re-anchored to round-2 measured pass rates (reasoning-gym
+arithmetic). The top rungs are university/graduate applied math with plain
+verifiable answers (TheoremQA, HARDMath).
 """
 
 from __future__ import annotations
@@ -64,6 +65,16 @@ ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
 ASDIV_XML_URL = f"https://raw.githubusercontent.com/chaochun/nlu-asdiv-dataset/{ASDIV_REVISION}/dataset/ASDiv.xml"
 SVAMP_DATASET = "ChilleD/SVAMP"
 SVAMP_REVISION = "5e0bf1e"
+NUMINA_DATASET = "AI-MO/NuminaMath-CoT"
+NUMINA_REVISION = "9d8d210"
+OMNI_MATH_DATASET = "KbsdJames/Omni-MATH"
+OMNI_MATH_REVISION = "40ba231"
+THEOREMQA_DATASET = "TIGER-Lab/TheoremQA"
+THEOREMQA_REVISION = "a340b17"
+# Community mirror of the original HARDMath generator output; the official
+# repo publishes no HF dataset.
+HARDMATH_DATASET = "pafitis/HARDMath_processed_training"
+HARDMATH_REVISION = "937e9f1"
 
 GSM8K_ENV = "gsm8k"
 ANSWER_LINE_ENV = "aime"
@@ -114,6 +125,33 @@ MATH_L5_BIN = PoolBin("g08-math-l5", grade=8, env_class=ANSWER_LINE_ENV)
 AIME_BIN = PoolBin("g10-aime", grade=10, env_class=ANSWER_LINE_ENV)
 # ASDiv school grades 1-3 form the elementary bin; 4-6 the upper bin.
 ASDIV_ELEM_GRADES = frozenset({"1", "2", "3"})
+
+# The top half of the ladder. NuminaMath source tags give contest tiers
+# (Chinese K-12 above GSM8K, synthetic AMC below AIME, olympiads above);
+# Omni-MATH carries per-problem AoPS-anchored difficulty ratings, split here
+# at 7.0 (hard olympiad) and 8.5 (the hardest band, standing in for Putnam:
+# every Putnam-AXIOM HF mirror is gated). TheoremQA and HARDMath carry
+# university/graduate applied math with plain verifiable answers.
+NUMINA_CNK12_BIN = PoolBin("g04-numina-cnk12", grade=4, env_class=ANSWER_LINE_ENV)
+NUMINA_AMC_BIN = PoolBin("g09-numina-amc", grade=9, env_class=ANSWER_LINE_ENV)
+NUMINA_OLY_BIN = PoolBin("g11-numina-oly", grade=11, env_class=ANSWER_LINE_ENV)
+OMNI_MID_BIN = PoolBin("g11-omni", grade=11, env_class=ANSWER_LINE_ENV)
+OMNI_TOP_BIN = PoolBin("g12-omni-top", grade=12, env_class=ANSWER_LINE_ENV)
+THEOREMQA_BIN = PoolBin("g13-theoremqa", grade=13, env_class=ANSWER_LINE_ENV)
+HARDMATH_BIN = PoolBin("g13-hardmath", grade=13, env_class=ANSWER_LINE_ENV)
+NUMINA_BINS_BY_SOURCE: Mapping[str, tuple[PoolBin, int]] = {
+    "cn_k12": (NUMINA_CNK12_BIN, 2000),
+    "synthetic_amc": (NUMINA_AMC_BIN, 1500),
+    "olympiads": (NUMINA_OLY_BIN, 1500),
+}
+OMNI_MID_DIFFICULTY = 7.0
+OMNI_TOP_DIFFICULTY = 8.5
+# Answers longer than this are proofs-in-disguise or multi-part results the
+# Answer-line verifier cannot check reliably.
+MAX_ANSWER_CHARS = 60
+VALIDATION_OMNI_SOURCE = "val-omni"
+OMNI_VALIDATION_ROWS = 128
+THEOREMQA_ANSWER_TYPES = frozenset({"integer", "float"})
 MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 1": MATH_L12_BIN,
     "Level 2": MATH_L12_BIN,
@@ -337,6 +375,101 @@ def _svamp_records() -> list[dict[str, object]]:
     return records
 
 
+def _numina_records() -> list[dict[str, object]]:
+    """Tiered NuminaMath slices: cn_k12, synthetic AMC, and olympiad sources."""
+    dataset = load_dataset(NUMINA_DATASET, split="train", revision=NUMINA_REVISION)
+    quotas = {pool_bin.name: quota for pool_bin, quota in NUMINA_BINS_BY_SOURCE.values()}
+    taken: Counter[str] = Counter()
+    records = []
+    for index, example in enumerate(dataset):
+        selected = NUMINA_BINS_BY_SOURCE.get(example["source"])
+        if selected is None:
+            continue
+        pool_bin, _ = selected
+        if taken[pool_bin.name] >= quotas[pool_bin.name]:
+            if sum(taken.values()) >= sum(quotas.values()):
+                break
+            continue
+        answer = boxed_answer(example["solution"])
+        if answer is None or len(answer) > MAX_ANSWER_CHARS:
+            continue
+        taken[pool_bin.name] += 1
+        records.append(
+            _pool_record(question=example["problem"], answer=answer, pool_bin=pool_bin, split="train", index=index)
+        )
+    logger.info("NuminaMath: kept rows per bin %s", dict(taken))
+    return records
+
+
+def _omni_math_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Omni-MATH difficulty bands: train bins at >=7.0 and >=8.5, plus a held-out slice."""
+    dataset = load_dataset(OMNI_MATH_DATASET, split="test", revision=OMNI_MATH_REVISION)
+    validation_bin = PoolBin(VALIDATION_OMNI_SOURCE, grade=11, env_class=ANSWER_LINE_ENV)
+    train, validation = [], []
+    for index, example in enumerate(dataset):
+        difficulty = example["difficulty"]
+        answer = (example["answer"] or "").strip()
+        if difficulty is None or float(difficulty) < OMNI_MID_DIFFICULTY:
+            continue
+        if not answer or len(answer) > MAX_ANSWER_CHARS:
+            continue
+        if float(difficulty) >= OMNI_TOP_DIFFICULTY:
+            pool_bin, split, out = OMNI_TOP_BIN, "train", train
+        elif index % 8 == 0 and len(validation) < OMNI_VALIDATION_ROWS:
+            pool_bin, split, out = validation_bin, "test", validation
+        else:
+            pool_bin, split, out = OMNI_MID_BIN, "train", train
+        out.append(_pool_record(question=example["problem"], answer=answer, pool_bin=pool_bin, split=split, index=index))
+    logger.info("Omni-MATH: %d train rows, %d validation rows", len(train), len(validation))
+    return train, validation
+
+
+def _theoremqa_records() -> list[dict[str, object]]:
+    dataset = load_dataset(THEOREMQA_DATASET, split="test", revision=THEOREMQA_REVISION)
+    records = []
+    for index, example in enumerate(dataset):
+        if example["Answer_type"] not in THEOREMQA_ANSWER_TYPES or str(example["Picture"]) not in ("None", ""):
+            continue
+        records.append(
+            _pool_record(
+                question=example["Question"],
+                answer=str(example["Answer"]),
+                pool_bin=THEOREMQA_BIN,
+                split="train",
+                index=index,
+            )
+        )
+    logger.info("TheoremQA: kept %d numeric no-picture rows", len(records))
+    return records
+
+
+def _hardmath_records() -> list[dict[str, object]]:
+    dataset = load_dataset(HARDMATH_DATASET, split="train", revision=HARDMATH_REVISION)
+    records = []
+    skipped = 0
+    for index, example in enumerate(dataset):
+        answer = boxed_answer(example["ground_truths"] or "")
+        # List-valued answers (asymptotic regime pairs) defeat the Answer-line
+        # equality check; keep single closed-form results.
+        if answer is None or "[" in answer or len(answer) > MAX_ANSWER_CHARS:
+            skipped += 1
+            continue
+        # Ground truths are statements ("\epsilon \approx 4.16"); the value the
+        # question asks for (with explicit rounding) is the right-hand side.
+        if "\\approx" in answer:
+            answer = answer.rsplit("\\approx", 1)[1].strip()
+        elif "=" in answer:
+            answer = answer.rsplit("=", 1)[1].strip()
+        if not answer:
+            skipped += 1
+            continue
+        records.append(
+            _pool_record(question=example["question"], answer=answer, pool_bin=HARDMATH_BIN, split="train", index=index)
+        )
+    logger.info("HARDMath: kept %d rows, skipped %d list/overlong answers", len(records), skipped)
+    return records
+
+
 def _math500_records() -> list[dict[str, object]]:
     dataset = load_dataset(MATH500_DATASET, split="test", revision=MATH500_REVISION)
     math500_bin = PoolBin(VALIDATION_MATH500_SOURCE, grade=5, env_class=ANSWER_LINE_ENV)
@@ -391,19 +524,25 @@ def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str
 
 def write_pool_parquet(config: PoolParquetConfig) -> None:
     """Write the graded train pool and the fixed validation set."""
+    omni_train, omni_validation = _omni_math_records()
     train = _drop_over_length_records(
         [
             *_asdiv_records(),
             *_svamp_records(),
             *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
+            *_numina_records(),
             *_math_records(),
             *_aime_records(),
+            *omni_train,
+            *_theoremqa_records(),
+            *_hardmath_records(),
             *(record for rg_bin in REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "train")),
         ]
     )
     validation = [
         *_gsm8k_records("test", GSM8K_VALIDATION_ROWS, data_source=VALIDATION_GSM8K_SOURCE),
         *_math500_records(),
+        *omni_validation,
         *(record for rg_bin in VALIDATION_REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "test")),
     ]
     for records, filename in ((train, TRAIN_FILENAME), (validation, VALIDATION_FILENAME)):
