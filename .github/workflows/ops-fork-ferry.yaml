@@ -72,7 +72,7 @@ jobs:
 
           # Launch one visible, self-reporting Weaver session for this fork unit. idempotency_key
           # keeps a rerun of the same weekly job from opening a second session.
-          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream. For tpu-vllm, publish and select one public vLLM release whose metadata installs its companion. For another unit, follow its existing branch or release pin. Run the declared e2e and on green open one draft Marin PR, or file the descriptor's blocker issue for a real external blocker."
+          goal="Use the refresh-fork skill to refresh ${FORKS} toward upstream. For tpu-vllm, publish and select one public vLLM release whose metadata installs its companion. For another unit, follow its existing branch or release pin. Finish with exactly one visible result in the final Loom response: link one draft Marin PR after a green e2e; link the descriptor's blocker issue for a real external blocker; or report an explicit no-op naming the current and selected upstream SHAs when no newer base or metadata repair exists."
           curl -sS --fail-with-body -X POST "${LOOM_URL}/api/runs" \
             -H "Authorization: Bearer $loom_token" \
             -H 'Content-Type: application/json' \
