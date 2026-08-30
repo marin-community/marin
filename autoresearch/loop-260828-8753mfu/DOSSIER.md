@@ -33,6 +33,24 @@ stack on the same night), not a sum of parts: two zero draws at 23.356 / 23.326
 a ~12σ separation. The parts add to +0.81, so the two keeps are mildly
 sub-additive — they overlap in what they fix.
 
+## Fidelity of the keeps, re-verified on the corrected stack
+
+The keeps' original fidelity evidence predates the wgrad fix, which changes
+gradients — so it was re-checked against the two zero and two control draws on
+the corrected tree, pointwise over the full scored window:
+
+| comparison | pointwise max |Δloss| |
+|---|---|
+| within-zero (z–z) | 5.08e-05 |
+| within-control (c–c) | 6.19e-05 |
+| across-arm (z–c) | **1.31e-04** |
+
+Across-arm sits at ~2.1x the same-arm noise floor, inside the campaign's
+calibrated ~1e-4 null band. The difference IS systematic — the keeps show lower
+loss at 15 of 15 steps (sign test p≈3e-5) — but at ~8e-5 on a loss of 1.28 that
+is bf16 reduction-order sensitivity from the changed output-init and CTA count,
+and it runs in the favorable direction. Drops are identical at 3.3e-5.
+
 ## What to promote
 
 ### 1. Ragged-a2a zero-init deletion — code, hot-swap safe (+0.41 measured alone)
