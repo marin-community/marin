@@ -32,3 +32,15 @@ author: held
 - Result: source checkpoint metadata is present and the resolved output path is unused.
 - Interpretation: the 4x treatment changes only long-document sampling relative to the completed 2x source.
 - Next action: submit with production priority and verify startup.
+
+### 2026-08-30 - Production launch
+
+- Commit Hash: `3c82e92a3d4c0d6b286038811dc7c330a2253017`
+- Command: `iris --config /home/held/marin-lcr/lib/iris/config/marin.yaml job run --no-wait --region us-central2 --priority production --no-preemptible --max-retries 100 -e WANDB_API_KEY <redacted> -- python -m experiments.grug.moe.moe_67b_a2b_d2560_ctxext_step156k_seq262k_bs256_ctx4_muon_qk175_long_context_skew`
+- Iris job: `/held/iris-run-job-20260830-073840`
+- W&B run ID: `moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4`
+- Output: `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew4-102e3c`
+- Result: submitted in `us-central2` with production priority and non-preemptible v4-2048 resources.
+- Interpretation: no training task has started. The coordinator is initializing the experiment graph.
+- Caveat: the pinned branch contains an older Iris config schema. Submission used the current checkout's controller config while bundling the pinned worktree.
+- Next action: verify 256-worker allocation, W&B initialization, and the first training step.
