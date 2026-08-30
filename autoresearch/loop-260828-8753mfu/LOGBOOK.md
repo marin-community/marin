@@ -1362,3 +1362,43 @@ files that changed; restate as value-identical, and brute-force
 evidence (50k draws, 0 mismatches) supports that weaker claim.
 Refuted: alignment>256 is sound, not unsound (F4) -- it just makes F1
 worse and breaks the byte-identity docstring.
+
+## Iteration 13 pre-work: two queued candidates desk-killed, zero rack time
+
+Both were closed by checking the premise against the actual code and the
+measured budget BEFORE arming -- the rule written after the H20 miss.
+
+**H22 (fold combine-weight multiply into the down-projection epilogue) --
+DESK-KILL, premise does not hold.** The Megatron-Core / ERNIE 4.5 / Ling 2.0
+optimization reporting +7-10% eliminates a standalone `expert_out * weight`
+elementwise pass plus a separate scatter. `_unpermute_from_global_expert`
+(ep_ragged_all_to_all.py:228-249) already fuses exactly that into one
+`sonic_gather_sum` kernel, materializing neither the `[TK, H]` unpermuted
+buffer nor the `[T, K, H]` view -- at top-8 that view is eight times the
+output. We do not have the pattern the papers delete. Reported speedups are
+against implementations unlike ours.
+
+**C16 (QB histogram allreduce deferral) -- DESK-KILL, bounded null by the
+measured budget.** The premise is real and confirmed: `_qb_beta_hist`
+(moe_hero_ep/model.py:970) psums an int32 `[384, 10000]` histogram per layer
+(HERO_QB_HIST_BINS = 10_000, so the survey's 15.36 MB/layer and 737 MB/step
+were right), beta is written only to `router_stats` and applied on the NEXT
+step via `pending_qb_betas` (train.py:1030, 916), and the TOPK branch already
+carries an explicit precedent comment for this exact deferral. But priced
+against our own trace (xprof-c1, 6 steps): the `AllReduce_Sum_u32` family --
+u32 is the int32 count payload, and nothing else here reduces unsigned ints --
+is 8.5 ms/step, and ALL scatter fusions combined (a superset of the bincount)
+are ~17 ms/step. Against a ~15-17 s step that is a ceiling of ~0.036 MFU,
+a fifth of the 0.18 keep bar, using sums that overstate stream time. Note the
+`cumsum` family is only 13 ms over 6 steps, so the "10,000-deep sequential
+scan" the survey flagged is not a cost at all.
+
+Trap avoided while pricing: a naive `scatter|bincount` regex charges C16 with
+599 ms/step that is almost entirely NCCL `ReduceScatter` (FSDP gradients).
+Attribute by kernel name before believing a family total.
+
+Step anatomy from the same trace, ms/step, for future candidate pricing
+(stream sums overlap; treat as upper bounds): ragged transport 1053, QuACK
+grouped GEMMs 1411 (814 + 597), nvjet dense GEMMs ~1919, FA4 attention 1149
+(703 bwd + 446 fwd), cuDNN grouped wgrad 496, Memcpy D2H+H2D 449, AllGather
+332, loop_select_fusion remat family ~183.
