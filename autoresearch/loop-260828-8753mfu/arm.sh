@@ -56,8 +56,12 @@ if [ -n "${ARM_XLA_FLAGS:-}" ] && [ -z "${TREATMENT:-}" ]; then
   echo "ARM_XLA_FLAGS is set but TREATMENT=1 is not; refusing (is this a contaminated control?)" >&2
   exit 1
 fi
-if [ -n "${DK_CTAS_PER_SM:-}" ] && [ -z "${TREATMENT:-}" ]; then
-  echo "DK_CTAS_PER_SM is set but TREATMENT=1 is not; refusing (is this a contaminated control?)" >&2
+# DK_CTAS_PER_SM became a KEPT setting (H11), so a control legitimately carries it. KEPT_FLAGS=1
+# says "this value is the kept stack, not a treatment"; without either marker a stray value is
+# still refused. An empty string reaches the plugin as atoi("")==0, which falls back to the
+# default 8/SM grid -- so an unset knob means "kept default", never "CTAS=1 silently lost".
+if [ -n "${DK_CTAS_PER_SM:-}" ] && [ -z "${TREATMENT:-}" ] && [ -z "${KEPT_FLAGS:-}" ]; then
+  echo "DK_CTAS_PER_SM is set but neither TREATMENT=1 nor KEPT_FLAGS=1 is; refusing (contaminated control?)" >&2
   exit 1
 fi
 
