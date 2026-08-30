@@ -116,7 +116,7 @@ def test_federated_tasks_excluded_from_budget_and_admission(state):
 
     with state._db.read_snapshot() as tx:
         spend_jobs = {row.job_id for row in reads.user_spend_rows(tx)}
-        active_count = reads.count_active_tasks_for_user(tx, "test-user")
+        active_count = reads.count_active_tasks_for_budget_user(tx, "test-user")
         active_by_job = reads.list_active_tasks_for_jobs(tx, [local_job, fed_job], states=NON_TERMINAL_TASK_STATES)
 
     # Budget spend and the admission cap count only the two local tasks.

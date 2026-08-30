@@ -340,14 +340,43 @@ def test_drain_deferred_gang_still_fills_same_band(state):
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
 
 
-def _submit_job_for_user(state, user: str, name: str, *, priority_band: int = 0) -> JobName:
+def _submit_job_for_user(
+    state, user: str, name: str, *, priority_band: int = 0, submitting_user: str | None = None
+) -> JobName:
     """Submit a single-task direct job owned by ``user`` and return its task id."""
     jid = JobName.root(user, name)
     req = make_direct_job_request(name, priority_band=priority_band)
     req.name = jid.to_wire()  # make_direct_job_request roots names at test-user
     with state._db.transaction() as cur:
-        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now(), submitting_user=submitting_user)
     return jid.task(0)
+
+
+def test_drain_uses_authenticated_email_for_nickname_job_budget(state):
+    email = "russell.power@openathena.ai"
+    _submit_job_for_user(
+        state,
+        "power",
+        "spend",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        submitting_user=email,
+    )
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)
+        set_user_budget(cur, email, 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+
+    pending = _submit_job_for_user(
+        state,
+        "power",
+        "pending",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        submitting_user=email,
+    )
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    [request] = [request for request in batch.tasks_to_run if request.task_id == pending.to_wire()]
+    assert request.priority == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_drain_interleaves_users_within_band(state):

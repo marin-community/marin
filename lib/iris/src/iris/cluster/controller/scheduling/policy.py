@@ -32,6 +32,7 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
+    budget_user_id,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
@@ -890,10 +891,13 @@ def compute_scheduling_order(
     requested_bands = ctx.requested_bands
     user_budget_limits = ctx.user_budget_limits
     defaults = ctx.user_budget_defaults
+    task_budget_users = {
+        task.task_id: budget_user_id(task.job_id, task.submitting_user) for task in ctx.pending_task_rows
+    }
     task_band_map: dict[JobName, int] = {
         task.task_id: compute_effective_band(
             requested_bands.get(task.job_id, task.priority_band),
-            task.task_id.user,
+            task_budget_users[task.task_id],
             user_spend,
             user_budget_limits,
             defaults,
@@ -908,7 +912,7 @@ def compute_scheduling_order(
     interleaved: list[JobName] = []
     for band_key in sorted(tasks_by_band, key=priority_band_rank):
         band_tasks = tasks_by_band[band_key]
-        user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
+        user_tasks = [UserTask(user_id=task_budget_users[tid], task=tid) for tid in band_tasks]
         interleaved.extend(interleave_by_user(user_tasks, user_spend))
 
     if trace:

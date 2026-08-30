@@ -57,7 +57,9 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
+    RDMA_RESOURCE,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -158,15 +160,14 @@ _LABEL_JOB_ID = "iris.job_id"
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
 
-# Extended resource name for NVIDIA GPUs in pod requests/limits.
-_GPU_RESOURCE = "nvidia.com/gpu"
-
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
 # controller never pulls pod logs through the apiserver.
 _LOGSHIP_CONTAINER_NAME = "log-shipper"
 _LOGSHIP_VOLUME_NAME = "varlogpods"
 _NODE_POD_LOG_DIR = "/var/log/pods"
+LOGSHIP_CPU_REQUEST = "50m"
+OUTPUT_UPLOADER_CPU_REQUEST = "100m"
 
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
@@ -657,7 +658,7 @@ def _build_logship_sidecar(
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.logship"],
         "env": env,
         "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
-        "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
+        "resources": {"requests": {"cpu": LOGSHIP_CPU_REQUEST, "memory": "64Mi"}},
     }
 
 
@@ -679,7 +680,7 @@ def _build_output_uploader(
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
         ],
-        "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}},
+        "resources": {"requests": {"cpu": OUTPUT_UPLOADER_CPU_REQUEST, "memory": "128Mi"}},
         "terminationMessagePolicy": "File",
     }
     if env_secret_name:
@@ -883,10 +884,10 @@ def _build_pod_manifest(
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 # K8s treats accelerator limits as implicit requests.
-                limits[_GPU_RESOURCE] = str(gpu_count)
+                limits[NVIDIA_GPU_RESOURCE] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
-                    limits["rdma/ib"] = str(gpu_count)
+                    limits[RDMA_RESOURCE] = str(gpu_count)
         if limits:
             resources["limits"] = limits
         if requests:
@@ -1435,7 +1436,9 @@ def _pod_gpu_request(pod: dict) -> int:
     total = 0
     for container in pod.get("spec", {}).get("containers", []):
         resources = container.get("resources", {})
-        value = resources.get("requests", {}).get(_GPU_RESOURCE) or resources.get("limits", {}).get(_GPU_RESOURCE)
+        value = resources.get("requests", {}).get(NVIDIA_GPU_RESOURCE) or resources.get("limits", {}).get(
+            NVIDIA_GPU_RESOURCE
+        )
         if value:
             total += parse_k8s_quantity(str(value))
     return total
@@ -1869,7 +1872,7 @@ def _node_disk_bytes(node: dict) -> int:
 
 
 def _node_gpu_count(node: dict) -> int:
-    gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+    gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
     return int(parse_k8s_quantity(str(gpu))) if gpu else 0
 
 
@@ -1973,7 +1976,7 @@ class ClusterState:
             pods = self._pods[:]
         allocatable = 0
         for node in nodes:
-            gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+            gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
             if gpu:
                 allocatable += int(parse_k8s_quantity(str(gpu)))
         held = 0

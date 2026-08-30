@@ -14,8 +14,8 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
-    client, disk_store, serve, serve_rejecting, serve_unavailable, stats_client, RequestStats,
-    TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
+    client, disk_store, serve, serve_rejecting, serve_schema_conflict, serve_unavailable,
+    stats_client, RequestStats, TestTransport, PRIV_A, PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{Column, Schema};
@@ -93,6 +93,11 @@ impl Fixture {
 
     async fn with_unavailable_hub(tag: &str) -> Self {
         let (target_addr, target_requests) = serve_unavailable().await;
+        Self::with_hub(tag, None, target_addr, target_requests).await
+    }
+
+    async fn with_schema_conflict_hub(tag: &str) -> Self {
+        let (target_addr, target_requests) = serve_schema_conflict().await;
         Self::with_hub(tag, None, target_addr, target_requests).await
     }
 
@@ -294,6 +299,16 @@ async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<
         values.extend(col.iter().map(|v| v.map(str::to_string)));
     }
     values
+}
+
+async fn scalar_i64(store: &Store, sql: &str) -> i64 {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let result = run_query_over(&make_ctx(), providers, sql).await.unwrap();
+    result.batches[0]
+        .column(0)
+        .as_primitive::<Int64Type>()
+        .value(0)
 }
 
 /// Every log row the server behind `client` holds, newest last, as `(key, data)` — read
@@ -802,8 +817,56 @@ async fn a_bearer_the_hub_does_not_trust_forwards_nothing_and_loses_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
+async fn a_batch_the_hub_calls_malformed_is_dropped() {
     let fx = Fixture::with_rejecting_hub("poison").await;
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME);
+
+    let forwarder = fx.forwarder(PRIV_A);
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
+    assert_eq!(
+        fx.cursor(LOG_NAMESPACE_NAME),
+        Some(fx.tip(LOG_NAMESPACE_NAME)),
+        "a permanently rejected batch must not wedge every later row in the namespace"
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_batches'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        1,
+    );
+    assert_eq!(
+        scalar_i64(
+            &fx.source,
+            r#"SELECT CAST(sum(value) AS BIGINT)
+               FROM "telemetry_v1.finelog"
+               WHERE name = 'forwarding_seq_positions'
+                 AND json_get(attributes_json, 'namespace') = 'log'
+                 AND json_get(attributes_json, 'outcome') = 'permanent_rejection'"#,
+        )
+        .await,
+        fx.tip(LOG_NAMESPACE_NAME),
+    );
+    assert_eq!(
+        fx.requests(),
+        1,
+        "one namespace receives only one attempt in a forwarding sweep"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_batch_that_conflicts_with_the_hub_schema_stays_owed() {
+    let fx = Fixture::with_schema_conflict_hub("schema-conflict").await;
     push(&fx.source_client, "/user/job/t", &["hello"]).await;
     fx.forward_from_start(LOG_NAMESPACE_NAME);
 
@@ -815,12 +878,40 @@ async fn a_batch_the_hub_calls_malformed_preserves_its_cursor_for_retry() {
     assert_eq!(
         fx.cursor(LOG_NAMESPACE_NAME),
         Some(0),
-        "a rejected batch stays owed because a later schema registration may make it valid"
+        "a schema-state rejection may clear after registration or a hub upgrade"
     );
+    assert_eq!(fx.requests(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forwarding_progress_telemetry_reaches_the_hub() {
+    let fx = Fixture::new("forwarding-progress").await;
+    let forwarder = fx.forwarder(PRIV_A);
+    forwarder.ensure_progress_namespace().unwrap();
+    fx.forward_from_start(FINELOG_NAMESPACE);
+
+    push(&fx.source_client, "/user/job/t", &["hello"]).await;
+    fx.forward_from_start(LOG_NAMESPACE_NAME);
+    let mut progress = Progress::new();
+    progress.last_report = Instant::now() - PROGRESS_INTERVAL;
+    let (_stop_tx, mut stop) = watch::channel(false);
+    forwarder.forward_round(&mut progress, &mut stop).await;
+    forwarder.forward_round(&mut progress, &mut stop).await;
+
     assert_eq!(
-        fx.requests(),
+        scalar_i64(
+            fx.target_store(),
+            &format!(
+                r#"SELECT CAST(sum(value) AS BIGINT)
+                   FROM "telemetry_v1.finelog"
+                   WHERE cluster = '{SOURCE_CLUSTER}'
+                     AND name = 'forwarding_batches'
+                     AND json_get(attributes_json, 'namespace') = 'log'
+                     AND json_get(attributes_json, 'outcome') = 'accepted'"#
+            ),
+        )
+        .await,
         1,
-        "one namespace receives only one attempt in a forwarding sweep"
     );
 }
 
