@@ -2934,6 +2934,104 @@ mod tests {
         table.cleanup();
     }
 
+    /// A catalog row can claim a local file that exists nowhere — no file on
+    /// disk and no archive object (the production example is a nested
+    /// partitioned path left behind by an interrupted layout change). Such a
+    /// row is unserveable, so a version-0 import drops it and completes
+    /// instead of forever retrying a source nothing can supply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_version_zero_import_drops_a_source_with_no_bytes_anywhere() {
+        let data_dir = crate::test_support::unique_dir("import_drops_phantom_data");
+        let remote_dir = crate::test_support::unique_dir("import_drops_phantom_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        let phantom_path = format!(
+            "{}/iris.worker/run_id/31/seg_L2_0000000000000000900.parquet",
+            data_dir.display()
+        );
+        store
+            .catalog
+            .upsert_segments(&[crate::store::types::SegmentRow {
+                namespace: "iris.worker".to_string(),
+                path: phantom_path.clone(),
+                level: 2,
+                min_seq: 900,
+                max_seq: 909,
+                row_count: 10,
+                byte_size: 1234,
+                created_at_ms: 1,
+                min_key_value: None,
+                max_key_value: None,
+                partition: None,
+                location: SegmentLocation::Local,
+            }])
+            .unwrap();
+
+        let registration = store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        assert_eq!(
+            registration.table_spec_status.migration.unwrap().rows_total,
+            Some(11),
+            "the frozen total still counts the unserveable row"
+        );
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        let activated = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(activated.active_version(), 1);
+        assert_eq!(
+            activated.phase,
+            crate::proto::finelog::stats::MigrationPhase::MIGRATION_PHASE_OBSERVING
+        );
+        let progress = activated.migration.unwrap();
+        assert_eq!(
+            (progress.rows_completed, progress.rows_total),
+            (Some(1), Some(1)),
+            "the universe restates to the rows a source can supply"
+        );
+        assert!(
+            store
+                .list_segments("iris.worker")
+                .unwrap()
+                .iter()
+                .all(|row| row.path != phantom_path),
+            "the unserveable row is dropped from the catalog"
+        );
+        assert_eq!(scan_table(&store, "iris.worker").await, 1);
+        assert!(store.blocked_migration_error("iris.worker").is_none());
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
     /// Retirement is a catalog operation. It drops every pre-fence legacy row,
     /// the archive-only ones included, and deletes no file: the archived objects
     /// stay in the bucket where `finelog gcs-query` finds them by listing, just
@@ -3030,6 +3128,101 @@ mod tests {
             .unwrap()
             .is_empty());
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 1);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// An abort reverts the table to legacy authority, but its retained HEAD
+    /// keeps the table object-backed for maintenance, so the GC loop still
+    /// sweeps the objects the aborted migration wrote: superseded catalogs
+    /// after the retention window and unreferenced data after the orphan
+    /// grace. HEAD and the current catalog are the intended residue.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_aborted_migration_is_garbage_collected() {
+        let data_dir = crate::test_support::unique_dir("abort_gc_data");
+        let remote_dir = crate::test_support::unique_dir("abort_gc_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+            .unwrap();
+        let batch_schema = schema_to_arrow(&worker_schema());
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["legacy"])),
+                Arc::new(Int64Array::from(vec![128])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
+        let (_, seq) = store.write_rows("iris.worker", &ipc, None).unwrap();
+        store
+            .await_persisted("iris.worker", seq, Duration::from_secs(10))
+            .await
+            .unwrap();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        // One maintenance pass migrates the row into the object layout.
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+        store.abort_table_migration("iris.worker").await.unwrap();
+        let aborted = store.table_spec_status("iris.worker").unwrap();
+        assert_eq!(aborted.active_version(), 0);
+
+        let table_prefix = remote_dir.join("_finelog/tables/iris.worker");
+        let files_under = |dir: &str| -> Vec<String> {
+            std::fs::read_dir(table_prefix.join(dir))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert!(
+            !files_under("objects").is_empty(),
+            "the aborted migration wrote no objects; the test exercises nothing"
+        );
+        let controller = store.tables.controller("iris.worker");
+        assert!(
+            controller.is_object_backed(),
+            "the retained HEAD must keep the aborted table on the maintenance GC path"
+        );
+        let removed = controller
+            .gc_published(crate::store::table::now_ms(), 0, 0)
+            .await
+            .unwrap();
+        assert!(removed > 0, "GC removed nothing after the abort");
+        assert!(
+            files_under("objects").is_empty(),
+            "unreferenced data objects survive GC: {:?}",
+            files_under("objects")
+        );
+        assert!(
+            files_under("indices").is_empty(),
+            "unreferenced index bundles survive GC: {:?}",
+            files_under("indices")
+        );
+        assert_eq!(
+            files_under("catalogs").len(),
+            1,
+            "only the current catalog revision is retained"
+        );
+        assert!(table_prefix.join("HEAD.json").exists());
 
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();

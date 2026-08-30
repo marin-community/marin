@@ -299,7 +299,19 @@ async fn backfill(
             break;
         }
         let record = object_records.get(&row.path);
-        let localized = migration.controller.localize_source(row, record).await?;
+        let Some(localized) = migration.controller.localize_source(row, record).await? else {
+            // The row's bytes exist neither locally nor in the archive: no
+            // reader can serve them and no source can supply them. Drop the
+            // row so the restated universe stops owing rows nothing holds.
+            tracing::warn!(
+                namespace = %table,
+                path = %row.path,
+                rows = row.row_count,
+                "dropping a legacy migration source whose bytes are unrecoverable"
+            );
+            migration.catalog.remove_segment(table, &row.path)?;
+            continue;
+        };
         let source_id = source_identity(row, record, &localized).await?;
         if covered.contains(&source_id) {
             continue;

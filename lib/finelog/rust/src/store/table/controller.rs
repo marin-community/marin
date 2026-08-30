@@ -628,7 +628,8 @@ impl TableController {
         objects.store.local_path(&reference).await
     }
 
-    /// The local file holding the rows a migration rewrites.
+    /// The local file holding the rows a migration rewrites, or `None` when
+    /// nothing holds them.
     ///
     /// An object-backed source resolves by exact reference. A version-0 source
     /// is the Parquet file the table's own directory holds. Callers select
@@ -636,19 +637,21 @@ impl TableController {
     /// repairs a torn eviction — the file was unlinked but the catalog row still
     /// claims it, and the rows it holds are still query-visible and owed a
     /// rewrite. A segment the catalog itself reports as archived is never a
-    /// migration source and never reaches this path.
+    /// migration source and never reaches this path. `None` means the row's
+    /// bytes exist neither locally nor in the archive: no reader can serve them
+    /// and no source can supply them.
     pub async fn localize_source(
         &self,
         row: &SegmentRow,
         object_record: Option<&ObjectSegmentRecord>,
-    ) -> Result<PathBuf, StatsError> {
+    ) -> Result<Option<PathBuf>, StatsError> {
         let objects = self.require_objects()?;
         if let Some(record) = object_record {
-            return self.localize(&record.source).await;
+            return self.localize(&record.source).await.map(Some);
         }
         let path = PathBuf::from(&row.path);
         if path.exists() {
-            return Ok(path);
+            return Ok(Some(path));
         }
         let key = segment_relative_key(&objects.table_dir, &row.path).ok_or_else(|| {
             StatsError::Internal(format!(
@@ -657,16 +660,13 @@ impl TableController {
                 objects.table_dir.display()
             ))
         })?;
-        let object = objects
+        let Some(object) = objects
             .legacy_store
             .read(&ObjectId::table(&self.table, &key)?)
             .await?
-            .ok_or_else(|| {
-                StatsError::Internal(format!(
-                    "legacy migration source {key:?} is missing for {:?}",
-                    self.table
-                ))
-            })?;
+        else {
+            return Ok(None);
+        };
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
                 StatsError::Internal(format!(
@@ -683,7 +683,7 @@ impl TableController {
                     path.display()
                 ))
             })?;
-        Ok(path)
+        Ok(Some(path))
     }
 
     /// Collect whatever the object store's own retention allows.
