@@ -1402,3 +1402,52 @@ Step anatomy from the same trace, ms/step, for future candidate pricing
 grouped GEMMs 1411 (814 + 597), nvjet dense GEMMs ~1919, FA4 attention 1149
 (703 bwd + 446 fwd), cuDNN grouped wgrad 496, Memcpy D2H+H2D 449, AllGather
 332, loop_select_fusion remat family ~183.
+
+## Iteration 14: profiled control, and a correction to the C15 draw-1 reading
+
+**mfl-fix-ctrl-b: median 23.9059, peak 112.91, zero stalls.** Control pair is
+now 24.0164 / 23.9059 -> mean 23.961, sd 0.078. C15 draw 1 at 23.775 is
+**-0.186 against the pair**, not the -0.24 I first recorded against a single
+control. That is ~2.4 sigma, sitting ON the 0.18 bar rather than past it, so
+draw 2 decides it rather than one draw.
+
+**CORRECTION.** In the draw-1 note I explained peak HBM (+1.34 GiB) as the
+aligned receiver buffer being "302,080 rows vs 262,144 active, +15.2%". That
+is wrong, and it is the same misattribution the C15 reviewers caught before
+the arm: comparing the receiver buffer to ARRIVALS rather than to the control
+buffer. The shapes from the two profiles settle it -- control receiver is
+bf16[301466, 3072], C15 is bf16[302080, 3072]: **614 rows, +0.20%**, exactly
+the alignment x chunk_experts bound the corrected review predicted. 301,466 is
+the capacity-factor buffer and it is present in BOTH arms. 614 rows is 3.8 MB
+and cannot explain +1.34 GiB.
+
+**Same-stack family diff (2 profiled steps, identical commit, flag off vs on):**
+
+| category | control | C15 | delta |
+|---|---|---|---|
+| loop fusion | 5289.2 | 4928.8 | **-360.4** |
+| custom-call | 23038.9 | 23208.1 | +169.2 |
+| ragged-all-to-all | 4403.5 | 4559.5 | **+156.0** |
+| all-to-all | 216.0 | 110.5 | -105.6 |
+| total self | 37452.0 | 37334.8 | -117.2 |
+
+The mechanism WORKS: C15 deletes 360 ms/2steps (180 ms/step) of loop-fusion
+copies, as designed. It pays that back through +78 ms/step of transport and
++85 ms/step of custom-call. Net self-time is BETTER by 58 ms/step while
+measured MFU is WORSE -- consistent with the campaign's recurring finding that
+self-time sums overlap and only critical-path time is wall time. The transport
+is the exposed leg, so +78 ms/step there is worth about -0.12 MFU on its own,
+which covers the observed -0.186 within noise.
+
+Where the cost comes from, per the implementation: the prealigned kernel's
+last group absorbs the buffer's leftover, so it reads the ~40k rows past
+`cu[-1]` that the QuACK GEMMs never write -- uninitialized allocator memory.
+`dy` and `x_dispatch` are already zero there; `h` and `d_gu` are not, and a
+stale NaN would survive multiplication by its zero partner. Masking those two
+is a real requirement, not overcaution, and masking `h` materializes it.
+
+**Open question draw 2 decides:** +3.5% transport time on +0.20% payload is
+17x more than size explains. Either it is noise across a 2-step profile, or
+the alignment shifted per-peer message granularity -- which [[dk-native-branch-parity]]
+found dominates this kernel (wave quantization, not copy volume). Draw 2
+carries a profile tail so it answers both the MFU and the transport question.
