@@ -68,18 +68,30 @@ def merged_history(runs: list, keys: list[str], step_key: str = STEP_KEY) -> dic
 
 
 def arm_series(runs: list) -> dict[str, object]:
+    """Eval points aligned to cumulative generated tokens across all run entries.
+
+    A resumed run starts a new W&B entry whose ``_step`` restarts at zero, so
+    entries are walked chronologically and token spend accumulates across them
+    (redone steps after a resume are genuine spend). Within one entry, an eval
+    row maps to the cumulative total at the latest preceding token row.
+    """
     eval_keys = [STEP_KEY] + [f"eval/{v}/avg_score" for v in VAL_KEYS] + ["eval/all/avg_score"]
-    evals = merged_history(runs, eval_keys, step_key="_step")
-    tokens = merged_history(runs, [TOKENS_KEY], step_key="_step")
-    cumulative, total = {}, 0.0
-    for wandb_step in sorted(tokens):
-        total += tokens[wandb_step].get(TOKENS_KEY, 0.0) * RESPONSES_PER_GENERATE
-        cumulative[wandb_step] = total
-    token_steps = sorted(cumulative)
-    aligned = {}
-    for wandb_step, row in evals.items():
-        preceding = [s for s in token_steps if s <= wandb_step]
-        aligned[wandb_step] = {**row, "cumulative_tokens": cumulative[preceding[-1]] if preceding else 0.0}
+    aligned: dict[tuple[int, int], dict[str, float]] = {}
+    total = 0.0
+    for entry_index, run in enumerate(sorted(runs, key=lambda r: r.created_at)):
+        base = total
+        cumulative: dict[int, float] = {}
+        token_rows = merged_history([run], [TOKENS_KEY], step_key="_step")
+        for wandb_step in sorted(token_rows):
+            total += token_rows[wandb_step].get(TOKENS_KEY, 0.0) * RESPONSES_PER_GENERATE
+            cumulative[wandb_step] = total
+        token_steps = sorted(cumulative)
+        for wandb_step, row in merged_history([run], eval_keys, step_key="_step").items():
+            preceding = [s for s in token_steps if s <= wandb_step]
+            aligned[(entry_index, wandb_step)] = {
+                **row,
+                "cumulative_tokens": cumulative[preceding[-1]] if preceding else base,
+            }
     return {"evals": aligned, "total_tokens": total}
 
 
