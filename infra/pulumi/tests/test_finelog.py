@@ -14,13 +14,13 @@ from iac.kubernetes.finelog import FinelogServerArgs, finelog_resource_args
 from rigging.provenance import Provenance
 
 
-def _args(cache_pvc_name: str | None = None) -> FinelogServerArgs:
+def _args() -> FinelogServerArgs:
     config = FinelogConfig(
         name="finelog-cw",
         port=10001,
         image="ghcr.io/marin-community/finelog:latest",
         remote_log_dir="s3://logs/finelog/cw",
-        deployment=Deployment(k8s=K8sDeployment(namespace="iris", cache_pvc_name=cache_pvc_name)),
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
         auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
         forwarding=ForwardingConfig(
             target="https://finelog.oa.dev",
@@ -72,13 +72,3 @@ def test_finelog_retains_deployment_history_for_rollback() -> None:
     assert resources.deployment.spec is not None
 
     assert resources.deployment.spec.revision_history_limit == 10
-
-
-def test_finelog_can_mount_an_externally_managed_recovery_pvc() -> None:
-    resources = finelog_resource_args(_args(cache_pvc_name="finelog-cw-cache-recovery"), "image@sha256:digest")
-    assert resources.pvc is None
-    assert resources.deployment.spec is not None
-    assert resources.deployment.spec.template.spec is not None
-    volume = resources.deployment.spec.template.spec.volumes[0]
-    assert volume.persistent_volume_claim is not None
-    assert volume.persistent_volume_claim.claim_name == "finelog-cw-cache-recovery"

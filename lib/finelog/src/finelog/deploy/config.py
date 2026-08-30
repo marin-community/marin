@@ -79,8 +79,7 @@ class K8sDeployment:
     kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
-    # Override the PVC mounted by the Deployment without replacing the protected
-    # Pulumi-managed `<name>-cache` claim. The named claim must already exist.
+    # Existing replacement claim to adopt and mount instead of `<name>-cache`.
     cache_pvc_name: str | None = None
     cpu_request: str = "2"
     cpu_limit: str = "8"
@@ -258,14 +257,9 @@ def k8s_env_secret_name(config: FinelogConfig) -> str | None:
 
 
 def k8s_cache_pvc_name(config: FinelogConfig) -> str:
-    """Return the canonical Pulumi-managed PersistentVolumeClaim name."""
-    return f"{config.name}-cache"
-
-
-def k8s_mounted_cache_pvc_name(config: FinelogConfig) -> str:
-    """Return the existing PersistentVolumeClaim mounted by the Deployment."""
+    """Return the PersistentVolumeClaim name for a Kubernetes deployment."""
     assert config.deployment.k8s is not None
-    return config.deployment.k8s.cache_pvc_name or k8s_cache_pvc_name(config)
+    return config.deployment.k8s.cache_pvc_name or f"{config.name}-cache"
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:

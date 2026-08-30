@@ -586,12 +586,11 @@ restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
 failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
 ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
-A disk-backed namespace retains at most 200 MiB of raw Arrow data: one segment
-may be blocked in a flush while the next accumulates. Additional writes return
-Connect `resource_exhausted` or HTTP 429 `ingest_buffer_full` without appending
-any part of a routed request. Clients should retry these responses. A sustained
-stream of them means persistence is not keeping up; inspect the cache filesystem
-and storage backend before raising the limit.
+A disk-backed namespace rejects writes that would take its raw Arrow buffer
+above 200 MiB. Connect clients receive `resource_exhausted`; HTTP telemetry
+clients receive the existing 503 `storage_unavailable` response. Sustained
+rejection indicates that the cache filesystem or storage backend is not keeping
+up.
 
 ## Serving a copy of a store
 

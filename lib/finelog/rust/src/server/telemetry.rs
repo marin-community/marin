@@ -1088,9 +1088,6 @@ pub(crate) fn telemetry_schema() -> Schema {
 }
 
 fn store_error(error: StatsError) -> ApiError {
-    if let StatsError::IngestBufferFull(message) = error {
-        return ApiError::new(StatusCode::TOO_MANY_REQUESTS, "ingest_buffer_full", message);
-    }
     ApiError::new(
         StatusCode::SERVICE_UNAVAILABLE,
         "storage_unavailable",

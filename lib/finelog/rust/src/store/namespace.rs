@@ -45,9 +45,7 @@ use crate::store::compaction::executor::{
 use crate::store::compaction::planner::{build_job, plan};
 use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
-use crate::store::ram_buffer::{
-    stamp_seq_and_build, RamBuffers, SealedBuffer, SEGMENT_TARGET_BYTES,
-};
+use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{
@@ -130,19 +128,15 @@ fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
     }
 }
 
+/// Buffered-byte size at which an append forces an early flush, short-circuiting
+/// the flush-rate cooldown so a write burst can't buffer unboundedly (and bounds
+/// a single L0's size).
+pub const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
+const MAX_NAMESPACE_RAM_BYTES: i64 = 2 * SEGMENT_TARGET_BYTES;
+
 /// Maximum idle gap before the flush task wakes on its own. With steady writes
 /// the per-append nudge drives flushes; this is the ceiling for a quiet namespace.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Maximum raw Arrow bytes retained by one disk-backed namespace. One segment
-/// may be in a blocked flush while another accumulates behind it; further
-/// writes retry instead of growing RAM without bound.
-pub(crate) const MAX_NAMESPACE_RAM_BYTES: i64 = 2 * SEGMENT_TARGET_BYTES;
-const SEQ_COLUMN_BYTES_PER_ROW: i64 = std::mem::size_of::<i64>() as i64;
-
-pub(crate) fn buffered_batch_bytes(data_bytes: i64, num_rows: i64) -> i64 {
-    data_bytes + SEQ_COLUMN_BYTES_PER_ROW * num_rows
-}
 
 /// Minimum spacing between consecutive L0 flushes. Every append nudges the flush
 /// task, so without this floor a steadily-written namespace seals a fresh tiny L0
@@ -649,47 +643,19 @@ impl Namespace {
         }
     }
 
-    /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
-    /// (or `-1` if empty). In memory mode the rows are immediately "persisted".
-    #[cfg(test)]
-    pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> i64 {
-        if aligned.num_rows == 0 {
-            return -1;
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let (last_seq, buffered_bytes) = self.append_aligned_batch_locked(&mut inner, aligned);
-        drop(inner);
-        self.notify_flush_after_append(buffered_bytes);
-        last_seq
-    }
-
-    pub(crate) fn try_append_aligned_batch(
-        &self,
-        aligned: &AlignedBatch,
-    ) -> Result<i64, StatsError> {
+    /// Stamp `seq` onto `aligned` and append it, returning the last allocated seq.
+    /// Rejects a disk-backed write that would exceed the RAM limit.
+    pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> Result<i64, StatsError> {
         if aligned.num_rows == 0 {
             return Ok(-1);
         }
         let mut inner = self.inner.lock().unwrap();
         let n = aligned.num_rows as i64;
-        self.ensure_append_capacity_locked(&inner, buffered_batch_bytes(aligned.byte_size, n))?;
-        let (last_seq, buffered_bytes) = self.append_aligned_batch_locked(&mut inner, aligned);
-        drop(inner);
-        self.notify_flush_after_append(buffered_bytes);
-        Ok(last_seq)
-    }
-
-    fn append_aligned_batch_locked(
-        &self,
-        inner: &mut NsInner,
-        aligned: &AlignedBatch,
-    ) -> (i64, i64) {
-        let n = aligned.num_rows as i64;
+        let added_bytes = aligned.byte_size + 8 * n;
+        self.ensure_append_capacity(&inner, added_bytes)?;
         let first_seq = inner.buffers.allocate_seq(n);
         let stamped = stamp_seq_and_build(aligned, first_seq, &self.arrow_schema);
-        inner
-            .buffers
-            .append_batch(stamped, buffered_batch_bytes(aligned.byte_size, n));
+        inner.buffers.append_batch(stamped, added_bytes);
         let last_seq = first_seq + n - 1;
         if self.data_dir.is_none() {
             // Memory mode: no parquet; the rows are durable the instant they
@@ -697,10 +663,13 @@ impl Namespace {
             self.persisted_seq.send_replace(last_seq);
         }
         let buffered_bytes = inner.buffers.ram_bytes();
-        (last_seq, buffered_bytes)
+        drop(inner);
+        self.notify_flush_after_append(buffered_bytes);
+        Ok(last_seq)
     }
 
-    /// Append already-built log columns (`seq` excluded) and return the last seq.
+    /// Append already-built log columns (`seq` excluded), returning the last seq.
+    /// Rejects a disk-backed write that would exceed the RAM limit.
     ///
     /// `columns` are the six non-seq log columns in registered order
     /// (key/source/data/epoch_ms/level/cluster), prepared by the caller OUTSIDE
@@ -717,7 +686,8 @@ impl Namespace {
         }
         let mut inner = self.inner.lock().unwrap();
         let n = num_rows as i64;
-        self.ensure_append_capacity_locked(&inner, buffered_batch_bytes(added_bytes, n))?;
+        let added_bytes = added_bytes + 8 * n;
+        self.ensure_append_capacity(&inner, added_bytes)?;
         let first_seq = inner.buffers.allocate_seq(n);
         let seq_array: Int64Array = (first_seq..first_seq + n).collect();
         let mut all: Vec<arrow::array::ArrayRef> = Vec::with_capacity(columns.len() + 1);
@@ -725,9 +695,7 @@ impl Namespace {
         all.extend(columns);
         let batch = RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
             .expect("log columns match the stored log schema");
-        inner
-            .buffers
-            .append_batch(batch, buffered_batch_bytes(added_bytes, n));
+        inner.buffers.append_batch(batch, added_bytes);
         let last_seq = first_seq + n - 1;
         if self.data_dir.is_none() {
             self.persisted_seq.send_replace(last_seq);
@@ -738,26 +706,14 @@ impl Namespace {
         Ok(last_seq)
     }
 
-    /// Check whether `added_bytes` can be admitted without changing state.
-    pub(crate) fn ensure_append_capacity(&self, added_bytes: i64) -> Result<(), StatsError> {
-        let inner = self.inner.lock().unwrap();
-        self.ensure_append_capacity_locked(&inner, added_bytes)
-    }
-
-    fn ensure_append_capacity_locked(
-        &self,
-        inner: &NsInner,
-        added_bytes: i64,
-    ) -> Result<(), StatsError> {
-        if self.data_dir.is_none() {
+    fn ensure_append_capacity(&self, inner: &NsInner, added_bytes: i64) -> Result<(), StatsError> {
+        if self.data_dir.is_none()
+            || inner.buffers.ram_bytes().saturating_add(added_bytes) <= MAX_NAMESPACE_RAM_BYTES
+        {
             return Ok(());
         }
-        let buffered_bytes = inner.buffers.ram_bytes();
-        if buffered_bytes.saturating_add(added_bytes) <= MAX_NAMESPACE_RAM_BYTES {
-            return Ok(());
-        }
-        Err(StatsError::IngestBufferFull(format!(
-            "namespace {:?} has {buffered_bytes} buffered bytes; incoming {added_bytes} bytes would exceed the {MAX_NAMESPACE_RAM_BYTES}-byte ingest limit",
+        Err(StatsError::ResourceExhausted(format!(
+            "namespace {:?} has reached its {MAX_NAMESPACE_RAM_BYTES}-byte ingest limit",
             self.name
         )))
     }
@@ -861,7 +817,7 @@ impl Namespace {
         }
     }
 
-    /// Drain one bounded prefix of the in-RAM buffer to a new L0 segment.
+    /// Drain the in-RAM buffer to a new L0 segment, synchronously.
     ///
     /// Test/close sync-point and the body the flush task runs. Returns `Ok(())`
     /// when there was nothing to flush. On parquet-write failure the in-flight
@@ -888,13 +844,6 @@ impl Namespace {
                 // Durability-before-ack: the file is renamed and the catalog row
                 // is committed before we publish the new high-water seq.
                 self.persisted_seq.send_replace(sealed.max_seq);
-                let buffered_bytes = self.inner.lock().unwrap().buffers.ram_bytes();
-                if buffered_bytes >= SEGMENT_TARGET_BYTES {
-                    // A bounded flush can leave another complete segment in RAM.
-                    // Keep draining without waiting for the periodic tick.
-                    self.flush_notify.notify_one();
-                    self.force_flush.notify_one();
-                }
                 Ok(())
             }
             Err(e) => {
@@ -903,20 +852,6 @@ impl Namespace {
                 tracing::warn!(namespace = %self.name, error = %e, "flush failed; restored RAM buffer");
                 Err(e)
             }
-        }
-    }
-
-    /// Drain every bounded RAM prefix, stopping on the first write failure.
-    fn flush_all(&self) -> Result<(), StatsError> {
-        if self.data_dir.is_none() {
-            return Ok(());
-        }
-        loop {
-            let has_chunks = self.inner.lock().unwrap().buffers.has_chunks();
-            if !has_chunks {
-                return Ok(());
-            }
-            self.flush_once()?;
         }
     }
 
@@ -2324,15 +2259,15 @@ impl Namespace {
     /// Cooperatively shut the namespace down.
     ///
     /// Stops + JOINs the flush + maintenance tasks (bounded by `timeout`), then
-    /// drains every bounded RAM prefix (no RAM-only rows survive unless a write
-    /// fails) and, for a
+    /// does a final `flush_once` (no RAM-only rows survive; durability is already
+    /// preserved — an acked write was on a sealed segment) and, for a
     /// remote-configured namespace, a final bounded `sync_step` so the bucket
     /// matches the catalog at shutdown.
     pub async fn shutdown(&self, timeout: Duration) {
         self.stop_and_join(timeout).await;
         // Final drain so no acked-but-still-RAM rows are lost (best-effort;
         // failures are already logged inside flush_once).
-        let _ = self.flush_all();
+        let _ = self.flush_once();
         // Final reconcile so the bucket matches the catalog at shutdown.
         // Best-effort + bounded by the same per-namespace `timeout`; if it
         // doesn't finish, `boot_reconcile` re-syncs on the next start. No-op
@@ -2741,12 +2676,6 @@ mod tests {
         }
     }
 
-    fn over_half_segment_aligned() -> AlignedBatch {
-        let mut batch = aligned(1);
-        batch.byte_size = SEGMENT_TARGET_BYTES / 2 + 1;
-        batch
-    }
-
     fn metrics_aligned(run_ids: &[&str]) -> AlignedBatch {
         let schema = schema_to_arrow(&levanter_metrics_schema());
         let rows = run_ids.len();
@@ -2859,7 +2788,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_drains_every_bounded_flush() {
+    async fn disk_backed_append_rejects_a_full_buffer() {
         let dir = tempdir();
         let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
         let ns = open_ns(
@@ -2869,80 +2798,14 @@ mod tests {
             catalog,
         );
         ns.stop_and_join(Duration::from_secs(1)).await;
-        for _ in 0..3 {
-            ns.append_aligned_batch(&over_half_segment_aligned());
-        }
-
-        ns.shutdown(Duration::from_secs(1)).await;
-
-        assert_eq!(ns.memory_summary(), (0, 0));
-        assert_eq!(ns.inner.lock().unwrap().local_segments.len(), 3);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn partial_flush_rearms_full_backlog() {
-        let dir = tempdir();
-        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
-        let ns = open_ns(
-            "iris.worker",
-            worker_schema(),
-            Some(dir.join("iris.worker")),
-            catalog,
-        );
-        ns.stop_and_join(Duration::from_secs(1)).await;
-        for _ in 0..3 {
-            ns.append_aligned_batch(&over_half_segment_aligned());
-        }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), ns.flush_notify.notified())
-                .await
-                .is_ok()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), ns.force_flush.notified())
-                .await
-                .is_ok()
-        );
-
-        ns.flush_once().unwrap();
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), ns.flush_notify.notified())
-                .await
-                .is_ok()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), ns.force_flush.notified())
-                .await
-                .is_ok()
-        );
-        ns.shutdown(Duration::from_secs(1)).await;
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[tokio::test]
-    async fn disk_backed_append_rejects_rows_past_the_ram_limit() {
-        let dir = tempdir();
-        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
-        let ns = open_ns(
-            "iris.worker",
-            worker_schema(),
-            Some(dir.join("iris.worker")),
-            catalog,
-        );
-        ns.stop_and_join(Duration::from_secs(1)).await;
-        for _ in 0..3 {
-            ns.try_append_aligned_batch(&over_half_segment_aligned())
-                .unwrap();
-        }
+        let mut batch = aligned(1);
+        batch.byte_size = MAX_NAMESPACE_RAM_BYTES - 8;
+        ns.append_aligned_batch(&batch).unwrap();
         let before = ns.memory_summary();
 
-        let error = ns
-            .try_append_aligned_batch(&over_half_segment_aligned())
-            .unwrap_err();
+        let error = ns.append_aligned_batch(&aligned(1)).unwrap_err();
 
-        assert!(matches!(error, StatsError::IngestBufferFull(_)));
+        assert!(matches!(error, StatsError::ResourceExhausted(_)));
         assert_eq!(ns.memory_summary(), before);
         ns.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(&dir).ok();
@@ -2960,7 +2823,7 @@ mod tests {
             catalog,
         );
 
-        let last = ns.append_aligned_batch(&aligned(3));
+        let last = ns.append_aligned_batch(&aligned(3)).unwrap();
         assert_eq!(last, 3);
         ns.await_persisted(last, Duration::from_secs(10))
             .await
@@ -2989,7 +2852,8 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         ns.flush_once().unwrap();
 
         let l0 = discover_segments(&ns_dir);
@@ -3049,7 +2913,8 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         ns.flush_once().unwrap();
         ns.run_maintenance(true).await.unwrap();
 
@@ -3109,7 +2974,8 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        ns.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         ns.flush_once().unwrap();
         ns.run_maintenance(true).await.unwrap();
 
@@ -3265,7 +3131,8 @@ mod tests {
             remote_dir.to_str().unwrap(),
             StoragePolicy::default(),
         );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        ns.append_aligned_batch(&metrics_aligned(&["run-a"]))
+            .unwrap();
         ns.flush_once().unwrap();
         ns.run_maintenance(true).await.unwrap();
 
@@ -3339,7 +3206,8 @@ mod tests {
             remote_dir.to_str().unwrap(),
             StoragePolicy::default(),
         );
-        ns.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        ns.append_aligned_batch(&metrics_aligned(&["run-a"]))
+            .unwrap();
         ns.flush_once().unwrap();
         ns.run_maintenance(true).await.unwrap();
 
@@ -3379,7 +3247,7 @@ mod tests {
             Some(dir.join("iris.worker")),
             catalog,
         );
-        let last = ns.append_aligned_batch(&aligned(3));
+        let last = ns.append_aligned_batch(&aligned(3)).unwrap();
         ns.await_persisted(last, Duration::from_secs(10))
             .await
             .unwrap();
@@ -3413,8 +3281,8 @@ mod tests {
         // Memory mode: no flush; stats come from RAM via the seq window.
         let catalog = Arc::new(Catalog::open(None).unwrap());
         let ns = open_ns("iris.worker", worker_schema(), None, catalog);
-        ns.append_aligned_batch(&aligned(3));
-        ns.append_aligned_batch(&aligned(2));
+        ns.append_aligned_batch(&aligned(3)).unwrap();
+        ns.append_aligned_batch(&aligned(2)).unwrap();
         let stats = ns.stats();
         assert_eq!(stats.row_count, 5);
         assert_eq!(stats.min_seq, 1);
@@ -3435,7 +3303,7 @@ mod tests {
                 Some(ns_dir.clone()),
                 catalog,
             );
-            let last = ns.append_aligned_batch(&aligned(4));
+            let last = ns.append_aligned_batch(&aligned(4)).unwrap();
             ns.await_persisted(last, Duration::from_secs(10))
                 .await
                 .unwrap();
@@ -3448,7 +3316,7 @@ mod tests {
         assert_eq!(stats.row_count, 4);
         assert_eq!(stats.max_seq, 4);
         // A new append continues monotonically from seq 5.
-        let last = ns2.append_aligned_batch(&aligned(1));
+        let last = ns2.append_aligned_batch(&aligned(1)).unwrap();
         assert_eq!(last, 5);
         ns2.await_persisted(4, Duration::from_secs(1))
             .await
@@ -3572,7 +3440,7 @@ mod tests {
         // Many small appends; flush via the direct sync-point once.
         let mut last = -1;
         for _ in 0..5 {
-            last = ns.append_aligned_batch(&aligned(2));
+            last = ns.append_aligned_batch(&aligned(2)).unwrap();
         }
         ns.flush_once().unwrap();
         ns.await_persisted(last, Duration::from_secs(10))
@@ -3724,9 +3592,9 @@ mod tests {
         let ns = open_ns("log.test", data_schema(), Some(ns_dir.clone()), catalog);
 
         // Two L0 flushes merged to one L1 — the merge builds the bundle.
-        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         ns.flush_once().unwrap();
-        let last = ns.append_aligned_batch(&data_aligned(5, 5));
+        let last = ns.append_aligned_batch(&data_aligned(5, 5)).unwrap();
         ns.flush_once().unwrap();
         ns.await_persisted(last, Duration::from_secs(10))
             .await
@@ -3768,7 +3636,7 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         ns.flush_once().unwrap();
         ns.run_maintenance(true).await.unwrap();
 
@@ -3804,7 +3672,7 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         ns.flush_once().unwrap();
 
         let segments = discover_segments(&ns_dir);
@@ -3833,9 +3701,9 @@ mod tests {
             Some(ns_dir.clone()),
             catalog,
         );
-        ns.append_aligned_batch(&aligned(3));
+        ns.append_aligned_batch(&aligned(3)).unwrap();
         ns.flush_once().unwrap();
-        let last = ns.append_aligned_batch(&aligned(3));
+        let last = ns.append_aligned_batch(&aligned(3)).unwrap();
         ns.flush_once().unwrap();
         ns.await_persisted(last, Duration::from_secs(10))
             .await
@@ -3863,9 +3731,9 @@ mod tests {
             Some(ns_dir.clone()),
             catalog.clone(),
         );
-        before.append_aligned_batch(&aligned(3));
+        before.append_aligned_batch(&aligned(3)).unwrap();
         before.flush_once().unwrap();
-        let last = before.append_aligned_batch(&aligned(3));
+        let last = before.append_aligned_batch(&aligned(3)).unwrap();
         before.flush_once().unwrap();
         before
             .await_persisted(last, Duration::from_secs(10))
@@ -3992,7 +3860,7 @@ mod tests {
 
     /// Append one batch and force it durable on a sealed L0 segment.
     async fn write_one(ns: &Arc<Namespace>) {
-        let last = ns.append_aligned_batch(&aligned(1));
+        let last = ns.append_aligned_batch(&aligned(1)).unwrap();
         ns.flush_once().unwrap();
         ns.await_persisted(last, Duration::from_secs(10))
             .await

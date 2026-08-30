@@ -4,29 +4,19 @@
 //! insertion lock.
 //!
 //! The chunk list maintains the LSM invariant `chunks[i-1].rows > chunks[i].rows`
-//! while adjacent chunks fit within one segment. Tail merges and seals never
-//! concatenate more than `SEGMENT_TARGET_BYTES`, which stays well below Arrow's
-//! 32-bit variable-width offset limit. Byte/row accounting is O(1): the caller
-//! supplies `added_bytes` (the `AlignedBatch.byte_size` plus 8 bytes per row for
-//! the stamped `seq` column) so the hot path never walks the batch buffers.
+//! by cascade-merging the tail after each append (`concat_batches` is cheap and
+//! preserves total byte count for primitive/string buffers). Byte/row accounting
+//! is O(1): the caller supplies `added_bytes` (the `AlignedBatch.byte_size` plus
+//! 8 bytes per row for the stamped `seq` column) so the hot path never walks the
+//! batch buffers.
 
 use std::sync::Arc;
 
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 
 use crate::store::schema::{AlignedBatch, IMPLICIT_SEQ_COLUMN};
-
-/// Buffered-byte target for one L0 segment and one Arrow concatenation.
-pub(crate) const SEGMENT_TARGET_BYTES: i64 = 100 * 1024 * 1024;
-
-#[derive(Debug)]
-struct BufferedChunk {
-    batch: RecordBatch,
-    nbytes: i64,
-}
 
 /// An immutable, in-flight flush buffer.
 ///
@@ -44,7 +34,7 @@ pub struct SealedBuffer {
 /// Owns the in-RAM write state for a single namespace.
 pub struct RamBuffers {
     arrow_schema: SchemaRef,
-    chunks: Vec<BufferedChunk>,
+    chunks: Vec<RecordBatch>,
     flushing: Option<SealedBuffer>,
     next_seq: i64,
     ram_bytes: i64,
@@ -85,10 +75,7 @@ impl RamBuffers {
     /// supplies `added_bytes` (so the hot path never walks the batch buffers).
     pub fn append_batch(&mut self, batch: RecordBatch, added_bytes: i64) {
         let rows = batch.num_rows() as i64;
-        self.chunks.push(BufferedChunk {
-            batch,
-            nbytes: added_bytes,
-        });
+        self.chunks.push(batch);
         maintain_chunk_invariant(&mut self.chunks, &self.arrow_schema);
         self.ram_bytes += added_bytes;
         self.ram_rows += rows;
@@ -110,61 +97,25 @@ impl RamBuffers {
         !self.chunks.is_empty()
     }
 
-    /// Move up to one segment target of accumulated chunks into a sealed buffer.
-    ///
-    /// A single incoming chunk may exceed the target and is sealed alone. The
-    /// sealed buffer is also stored on `self.flushing` so `ram_bytes`/`ram_rows`
-    /// keep counting it until the flush commits.
+    /// Move accumulated chunks into a sealed flushing buffer. Returns `None` if
+    /// there is nothing to flush. The sealed buffer is also stored on
+    /// `self.flushing` so `ram_bytes`/`ram_rows` keep counting it until the
+    /// flush commits.
     pub fn seal(&mut self) -> Option<SealedBuffer> {
         if self.chunks.is_empty() {
             return None;
         }
-
-        let mut selected_count = 1;
-        let mut sealed_bytes = self.chunks[0].nbytes;
-        let mut sealed_rows = self.chunks[0].batch.num_rows() as i64;
-        while selected_count < self.chunks.len() {
-            let next = &self.chunks[selected_count];
-            let Some(combined_bytes) = sealed_bytes.checked_add(next.nbytes) else {
-                break;
-            };
-            if combined_bytes > SEGMENT_TARGET_BYTES {
-                break;
-            }
-            sealed_bytes = combined_bytes;
-            sealed_rows += next.batch.num_rows() as i64;
-            selected_count += 1;
-        }
-
-        let visible = if selected_count == 1 {
-            self.chunks[0].batch.clone()
+        let tables = std::mem::take(&mut self.chunks);
+        let sealed_bytes = self.ram_bytes;
+        let sealed_rows = self.ram_rows;
+        self.ram_bytes = 0;
+        self.ram_rows = 0;
+        let visible = if tables.len() == 1 {
+            tables.into_iter().next().unwrap()
         } else {
-            let tables: Vec<RecordBatch> = self.chunks[..selected_count]
-                .iter()
-                .map(|chunk| chunk.batch.clone())
-                .collect();
-            match concat_batches(&self.arrow_schema, &tables) {
-                Ok(batch) => batch,
-                Err(ArrowError::OffsetOverflowError(offset)) => {
-                    tracing::warn!(
-                        offset,
-                        chunks = selected_count,
-                        bytes = sealed_bytes,
-                        "sealed RAM chunks exceeded Arrow's offset limit; sealing oldest chunk"
-                    );
-                    selected_count = 1;
-                    sealed_bytes = self.chunks[0].nbytes;
-                    sealed_rows = self.chunks[0].batch.num_rows() as i64;
-                    self.chunks[0].batch.clone()
-                }
-                Err(error) => {
-                    panic!("bounded same-schema RAM chunks failed to concatenate: {error}")
-                }
-            }
+            concat_batches(&self.arrow_schema, &tables)
+                .expect("concat_batches over same-schema chunks never fails")
         };
-        self.chunks.drain(..selected_count);
-        self.ram_bytes -= sealed_bytes;
-        self.ram_rows -= sealed_rows;
         let seq_idx = self
             .arrow_schema
             .index_of(IMPLICIT_SEQ_COLUMN)
@@ -196,13 +147,7 @@ impl RamBuffers {
         if let Some(f) = self.flushing.take() {
             self.ram_bytes += f.nbytes;
             self.ram_rows += f.num_rows;
-            self.chunks.insert(
-                0,
-                BufferedChunk {
-                    batch: f.batch,
-                    nbytes: f.nbytes,
-                },
-            );
+            self.chunks.insert(0, f.batch);
         }
     }
 }
@@ -222,42 +167,20 @@ fn seq_minmax(seq: &Int64Array) -> (i64, i64) {
     (min, max)
 }
 
-/// Restore the LSM row-count invariant while merged chunks fit one segment.
+/// Restore the LSM invariant `chunks[i-1].rows > chunks[i].rows`.
 ///
 /// Called after each append. Only the tail can violate the invariant, so we
 /// cascade-merge from the tail until the previous chunk is strictly larger than
-/// the last or merging would cross the segment target. A failed optional merge
-/// leaves both original chunks intact for bounded sealing.
-fn maintain_chunk_invariant(chunks: &mut Vec<BufferedChunk>, arrow_schema: &SchemaRef) {
+/// the last. Bounds `chunks.len()` logarithmically in total row count.
+pub fn maintain_chunk_invariant(chunks: &mut Vec<RecordBatch>, arrow_schema: &SchemaRef) {
     while chunks.len() >= 2
-        && chunks[chunks.len() - 2].batch.num_rows() <= chunks[chunks.len() - 1].batch.num_rows()
+        && chunks[chunks.len() - 2].num_rows() <= chunks[chunks.len() - 1].num_rows()
     {
-        let len = chunks.len();
-        let Some(merged_bytes) = chunks[len - 2].nbytes.checked_add(chunks[len - 1].nbytes) else {
-            break;
-        };
-        if merged_bytes > SEGMENT_TARGET_BYTES {
-            break;
-        }
-        let tables = [chunks[len - 2].batch.clone(), chunks[len - 1].batch.clone()];
-        let merged = match concat_batches(arrow_schema, &tables) {
-            Ok(batch) => batch,
-            Err(ArrowError::OffsetOverflowError(offset)) => {
-                tracing::warn!(
-                    offset,
-                    bytes = merged_bytes,
-                    "RAM chunks exceeded Arrow's offset limit; preserving separate chunks"
-                );
-                break;
-            }
-            Err(error) => panic!("bounded same-schema RAM chunks failed to concatenate: {error}"),
-        };
-        chunks.pop();
-        chunks.pop();
-        chunks.push(BufferedChunk {
-            batch: merged,
-            nbytes: merged_bytes,
-        });
+        let last = chunks.pop().unwrap();
+        let prev = chunks.pop().unwrap();
+        let merged = concat_batches(arrow_schema, &[prev, last])
+            .expect("concat_batches over same-schema chunks never fails");
+        chunks.push(merged);
     }
 }
 
@@ -419,10 +342,10 @@ mod tests {
     fn assert_invariant(buffers: &RamBuffers) {
         for w in buffers.chunks.windows(2) {
             assert!(
-                w[0].batch.num_rows() > w[1].batch.num_rows(),
+                w[0].num_rows() > w[1].num_rows(),
                 "chunk invariant violated: {} <= {}",
-                w[0].batch.num_rows(),
-                w[1].batch.num_rows()
+                w[0].num_rows(),
+                w[1].num_rows()
             );
         }
     }
@@ -457,41 +380,6 @@ mod tests {
         assert_eq!(buffers.ram_rows(), 0);
         assert_eq!(buffers.ram_bytes(), 0);
         assert!(!buffers.has_chunks());
-    }
-
-    #[test]
-    fn seal_splits_combined_chunks_at_the_segment_target() {
-        let schema = worker_arrow();
-        let mut buffers = RamBuffers::new(Arc::clone(&schema), 1);
-        let chunk_bytes = SEGMENT_TARGET_BYTES / 2 + 1;
-
-        for _ in 0..2 {
-            let aligned = worker_aligned(1);
-            let first = buffers.allocate_seq(1);
-            let stamped = stamp_seq_and_build(&aligned, first, &schema);
-            buffers.append_batch(stamped, chunk_bytes);
-        }
-
-        let first = buffers.seal().unwrap();
-        assert_eq!(first.num_rows, 1);
-        assert_eq!((first.min_seq, first.max_seq), (1, 1));
-        assert_eq!(first.nbytes, chunk_bytes);
-        assert_eq!(buffers.ram_rows(), 2);
-        assert_eq!(buffers.ram_bytes(), 2 * chunk_bytes);
-
-        buffers.restore_flush();
-        let retried = buffers.seal().unwrap();
-        assert_eq!((retried.min_seq, retried.max_seq), (1, 1));
-        buffers.commit_flush();
-
-        let second = buffers.seal().unwrap();
-        assert_eq!(second.num_rows, 1);
-        assert_eq!((second.min_seq, second.max_seq), (2, 2));
-        assert_eq!(second.nbytes, chunk_bytes);
-        buffers.commit_flush();
-
-        assert_eq!(buffers.ram_rows(), 0);
-        assert_eq!(buffers.ram_bytes(), 0);
     }
 
     #[test]
