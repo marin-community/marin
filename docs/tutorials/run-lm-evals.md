@@ -167,6 +167,22 @@ uv run python -m experiments.evaluation.cli launch \
   --no-wait
 ```
 
+Run the Artificial Analysis-aligned Terminal-Bench 2.1 protocol (89 tasks, Terminus 2, three
+attempts per task) on Daytona:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb21-aa \
+  --federated_cluster cw-rno2a \
+  --priority interactive \
+  --no-wait
+```
+
+Artificial Analysis uses E2B; `tb21-aa` uses Daytona and is therefore not an exact sandbox-provider
+reproduction. Its dataset is pinned to the 89-task Terminal-Bench 2.1 package revision recorded in
+the Harbor policy.
+
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
 
@@ -245,7 +261,7 @@ when RunAI reports a transient read failure.
 
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
-`experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`,
+`experiments/evaluation/evals.py`. Useful Harbor keys outside `agentic` include `tb2-lite`, `tb21-aa`,
 `swebench-lite`, `swebench-full`, `aime-smoke`, `aime-harbor`, and `grug-opencode-id`.
 
 ### Choose a model

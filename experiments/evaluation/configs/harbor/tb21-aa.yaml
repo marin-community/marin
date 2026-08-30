@@ -1,0 +1,28 @@
+# Artificial Analysis Intelligence Index v4.1.1 protocol, with Daytona replacing E2B.
+# AA evaluates all 89 Terminal-Bench 2.1 tasks with Terminus 2 and averages
+# pass@1 over three attempts per task.
+n_attempts: 3
+n_concurrent_trials: 8
+retry:
+  max_retries: 30
+  exclude_exceptions:
+    - AgentTimeoutError
+    - AgentEnvironmentTimeoutError
+    - BadRequestError
+    - VerifierTimeoutError
+    - SummarizationTimeoutError
+    - ContextLengthExceededError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+  force_build: true
+  delete: true
+  kwargs:
+    auto_snapshot: true
+agents:
+  - name: terminus-2
+datasets:
+  - name: terminal-bench/terminal-bench-2-1
+    ref: sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a

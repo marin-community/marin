@@ -243,6 +243,7 @@ EVALS.update(
         # Agentic datasets contain Harbor task directories and run with Daytona.
         "tb2": harbor_definition("tb2"),
         "tb2-lite": harbor_definition("tb2-lite", 2),
+        "tb21-aa": harbor_definition("tb21-aa"),
         "swebench": harbor_definition("swebench"),
         "swebench-lite": harbor_definition("swebench-lite", 2),
         "swebench-full": harbor_definition("swebench-full"),

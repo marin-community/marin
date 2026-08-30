@@ -226,6 +226,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     curand_root = nvidia_root / "curand"
     (curand_root / "include").mkdir(parents=True)
     (curand_root / "include" / "__init__.py").touch()
+    (curand_root / "include" / "curand.h").touch()
     (curand_root / "include" / "curand_kernel.h").touch()
     (curand_root / "lib").mkdir()
     (curand_root / "lib" / "libcurand.so.10").touch()
@@ -249,6 +250,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     assert (compatibility_include / "curand_kernel.h").resolve() == (
         curand_root / "include" / "curand_kernel.h"
     ).resolve()
+    assert (compatibility_include / "curand.h").resolve() == (curand_root / "include" / "curand.h").resolve()
     assert (compatibility_include / "nvrtc.h").resolve() == (cuda_nvrtc_root / "include" / "nvrtc.h").resolve()
     assert (compatibility_include / "crt" / "host_defines.h").resolve() == (
         compiler_root / "include" / "crt" / "host_defines.h"

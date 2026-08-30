@@ -229,6 +229,24 @@ uv run python -m experiments.evaluation.cli launch \
 The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
 task directories to Harbor.
 
+`tb21-aa` reproduces the published Artificial Analysis Intelligence Index v4.1.1 Terminal-Bench
+protocol: the pinned 89-task `terminal-bench/terminal-bench-2-1` package, Terminus 2, and three
+pass@1 attempts per task. It uses the campaign standard of 128 concurrent trials. Artificial
+Analysis runs its sandboxes on E2B; this preset intentionally uses Daytona, so results are
+AA-aligned rather than an exact reproduction of its execution environment. Model-specific sampling
+still comes from the model catalog: Artificial Analysis uses `temperature=0.6` for reasoning models
+unless the model creator recommends another setting, and permits the creator-disclosed maximum
+output length.
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb21-aa \
+  --federated_cluster cw-rno2a \
+  --priority interactive \
+  --no-wait
+```
+
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.
 
