@@ -10,9 +10,13 @@ parquet schema with a per-row ``env_class`` so one training run mixes verifier
 environments freely; ``extra_info`` carries the bin name and grade for
 curriculum samplers and per-source metrics.
 
-Math bins are graded from source metadata (MATH level, contest provenance).
-Reasoning-gym bins are graded a priori from generator difficulty knobs, so
-grades encode a genuine prior rather than a measured solve rate.
+Round 3 arranges bins on one 0-13 ladder from single-digit sums to graduate
+mathematics, anchored to school grade and contest tier. Grades come from the
+strongest available signal per source: explicit per-problem school grades
+(ASDiv), dataset difficulty metadata (MATH levels), contest provenance
+(GSM8K, AIME), or generator knobs re-anchored to round-2 measured pass rates
+(reasoning-gym arithmetic). Grades g04, g09, and g11-g13 are reserved for the
+AMC, olympiad, Putnam, and graduate bins of the full ladder.
 """
 
 from __future__ import annotations
@@ -20,10 +24,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import requests
 from datasets import concatenate_datasets, load_dataset
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact
@@ -52,6 +58,12 @@ AIME_DATASET = "di-zhang-fdu/AIME_1983_2024"
 AIME_REVISION = "3e2cc86"
 MATH500_DATASET = "HuggingFaceH4/MATH-500"
 MATH500_REVISION = "6e4ed1a"
+# The HF ASDiv mirrors drop the per-problem school-grade attribute, so the pool
+# reads the original XML at a pinned commit.
+ASDIV_REVISION = "883f90a9a65bf00304ba8f37423910fe743abc47"
+ASDIV_XML_URL = f"https://raw.githubusercontent.com/chaochun/nlu-asdiv-dataset/{ASDIV_REVISION}/dataset/ASDiv.xml"
+SVAMP_DATASET = "ChilleD/SVAMP"
+SVAMP_REVISION = "5e0bf1e"
 
 GSM8K_ENV = "gsm8k"
 ANSWER_LINE_ENV = "aime"
@@ -88,15 +100,20 @@ class PoolBin:
     env_class: str
 
 
-# Grades order bins easiest to hardest on one shared 0-10 scale. MATH levels
+# Grades order bins easiest to hardest on one shared 0-13 ladder. MATH levels
 # 1-2 sit in one bin because level 1 alone has only 564 train rows. Two bins
 # may share a grade (they are distinct arms of the same difficulty band).
-GSM8K_BIN = PoolBin("g01-gsm8k", grade=1, env_class=GSM8K_ENV)
-MATH_L12_BIN = PoolBin("g02-math-l12", grade=2, env_class=ANSWER_LINE_ENV)
-MATH_L3_BIN = PoolBin("g04-math-l3", grade=4, env_class=ANSWER_LINE_ENV)
-MATH_L4_BIN = PoolBin("g06-math-l4", grade=6, env_class=ANSWER_LINE_ENV)
+ASDIV_ELEM_BIN = PoolBin("g01-asdiv-elem", grade=1, env_class=ANSWER_LINE_ENV)
+ASDIV_UPPER_BIN = PoolBin("g02-asdiv-upper", grade=2, env_class=ANSWER_LINE_ENV)
+SVAMP_BIN = PoolBin("g02-svamp", grade=2, env_class=ANSWER_LINE_ENV)
+GSM8K_BIN = PoolBin("g03-gsm8k", grade=3, env_class=GSM8K_ENV)
+MATH_L12_BIN = PoolBin("g05-math-l12", grade=5, env_class=ANSWER_LINE_ENV)
+MATH_L3_BIN = PoolBin("g06-math-l3", grade=6, env_class=ANSWER_LINE_ENV)
+MATH_L4_BIN = PoolBin("g07-math-l4", grade=7, env_class=ANSWER_LINE_ENV)
 MATH_L5_BIN = PoolBin("g08-math-l5", grade=8, env_class=ANSWER_LINE_ENV)
 AIME_BIN = PoolBin("g10-aime", grade=10, env_class=ANSWER_LINE_ENV)
+# ASDiv school grades 1-3 form the elementary bin; 4-6 the upper bin.
+ASDIV_ELEM_GRADES = frozenset({"1", "2", "3"})
 MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 1": MATH_L12_BIN,
     "Level 2": MATH_L12_BIN,
@@ -126,10 +143,11 @@ class ReasoningGymBin:
 RG_TRAIN_ROWS = 1200
 RG_VALIDATION_ROWS = 128
 
-# A-priori grading rationale: single small additions are trivial (grade 0);
-# longer mixed-sign chains with more digits track MATH mid-levels; spelling
-# and base conversion are hard for a subword-tokenized 0.6B model, scaling
-# with word length and base size.
+# Procedural arithmetic anchors the bottom of the ladder ("2+2"). Round 2
+# graded these families by knob guesses that overshot badly (3-4-term sums
+# passed at ~0.97 while graded 3), so round 3 re-anchors the chain_sum grades
+# to those measured rates and drops the non-math spelling/base-conversion
+# families from the realistic math ladder.
 REASONING_GYM_BINS = (
     ReasoningGymBin(
         PoolBin("g00-rg-sum-easy", grade=0, env_class=REASONING_GYM_ENV),
@@ -139,72 +157,30 @@ REASONING_GYM_BINS = (
         knobs={"min_terms": 2, "max_terms": 2, "min_digits": 1, "max_digits": 2},
     ),
     ReasoningGymBin(
-        PoolBin("g03-rg-sum-med", grade=3, env_class=REASONING_GYM_ENV),
+        PoolBin("g01-rg-sum-med", grade=1, env_class=REASONING_GYM_ENV),
         task="chain_sum",
         size=RG_TRAIN_ROWS,
         seed=102,
         knobs={"min_terms": 3, "max_terms": 4, "min_digits": 2, "max_digits": 3},
     ),
     ReasoningGymBin(
-        PoolBin("g05-rg-spell-short", grade=5, env_class=REASONING_GYM_ENV),
-        task="spell_backward",
-        size=RG_TRAIN_ROWS,
-        seed=103,
-        knobs={"min_word_len": 3, "max_word_len": 5},
-    ),
-    ReasoningGymBin(
-        PoolBin("g05-rg-base-small", grade=5, env_class=REASONING_GYM_ENV),
-        task="base_conversion",
-        size=RG_TRAIN_ROWS,
-        seed=104,
-        knobs={"min_base": 2, "max_base": 10, "min_value": 0, "max_value": 500},
-    ),
-    ReasoningGymBin(
-        PoolBin("g07-rg-sum-hard", grade=7, env_class=REASONING_GYM_ENV),
+        PoolBin("g02-rg-sum-hard", grade=2, env_class=REASONING_GYM_ENV),
         task="chain_sum",
         size=RG_TRAIN_ROWS,
         seed=105,
         knobs={"min_terms": 5, "max_terms": 6, "min_digits": 4, "max_digits": 4, "allow_negation": True},
     ),
-    ReasoningGymBin(
-        PoolBin("g09-rg-spell-long", grade=9, env_class=REASONING_GYM_ENV),
-        task="spell_backward",
-        size=RG_TRAIN_ROWS,
-        seed=106,
-        knobs={"min_word_len": 8, "max_word_len": 10},
-    ),
-    ReasoningGymBin(
-        PoolBin("g09-rg-base-large", grade=9, env_class=REASONING_GYM_ENV),
-        task="base_conversion",
-        size=RG_TRAIN_ROWS,
-        seed=107,
-        knobs={"min_base": 11, "max_base": 16, "min_value": 100, "max_value": 1000},
-    ),
 )
 
-# Held-out generator draws at the medium difficulty of each family, for
-# in-run validation curves on the procedural tasks.
+# Held-out generator draws at the medium difficulty of the arithmetic family,
+# for an in-run validation curve on the procedural task.
 VALIDATION_REASONING_GYM_BINS = (
     ReasoningGymBin(
-        PoolBin("val-rg-sum", grade=3, env_class=REASONING_GYM_ENV),
+        PoolBin("val-rg-sum", grade=1, env_class=REASONING_GYM_ENV),
         task="chain_sum",
         size=RG_VALIDATION_ROWS,
         seed=201,
         knobs={"min_terms": 3, "max_terms": 4, "min_digits": 2, "max_digits": 3},
-    ),
-    ReasoningGymBin(
-        PoolBin("val-rg-spell", grade=5, env_class=REASONING_GYM_ENV),
-        task="spell_backward",
-        size=RG_VALIDATION_ROWS,
-        seed=202,
-        knobs={"min_word_len": 3, "max_word_len": 5},
-    ),
-    ReasoningGymBin(
-        PoolBin("val-rg-base", grade=5, env_class=REASONING_GYM_ENV),
-        task="base_conversion",
-        size=RG_VALIDATION_ROWS,
-        seed=203,
-        knobs={"min_base": 2, "max_base": 10, "min_value": 0, "max_value": 500},
     ),
 )
 
@@ -314,9 +290,56 @@ def _aime_records() -> list[dict[str, object]]:
     return records
 
 
+# Word-problem answers arrive as "9 (apples)" (ASDiv) or "7.0" (SVAMP); keep
+# plain numbers and simple fractions, drop the few clock-time/date leftovers.
+_NUMERIC_ANSWER = re.compile(r"^-?\d+(?:\.\d+)?(?:/\d+)?$")
+
+
+def _plain_number(text: str) -> str | None:
+    value = text.split("(")[0].strip().replace(",", "")
+    if not _NUMERIC_ANSWER.match(value):
+        return None
+    if value.endswith(".0"):
+        value = value[: -len(".0")]
+    return value
+
+
+def _asdiv_records() -> list[dict[str, object]]:
+    response = requests.get(ASDIV_XML_URL, timeout=60)
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+    records = []
+    skipped = 0
+    for index, problem in enumerate(root.iter("Problem")):
+        answer = _plain_number(problem.findtext("Answer", ""))
+        if answer is None:
+            skipped += 1
+            continue
+        pool_bin = ASDIV_ELEM_BIN if problem.get("Grade") in ASDIV_ELEM_GRADES else ASDIV_UPPER_BIN
+        question = f"{problem.findtext('Body', '').strip()} {problem.findtext('Question', '').strip()}"
+        records.append(_pool_record(question=question, answer=answer, pool_bin=pool_bin, split="train", index=index))
+    logger.info("ASDiv: kept %d rows, skipped %d without a plain numeric answer", len(records), skipped)
+    return records
+
+
+def _svamp_records() -> list[dict[str, object]]:
+    dataset = load_dataset(SVAMP_DATASET, split="train", revision=SVAMP_REVISION)
+    records = []
+    skipped = 0
+    for index, example in enumerate(dataset):
+        answer = _plain_number(str(example["Answer"]))
+        if answer is None:
+            skipped += 1
+            continue
+        question = f"{example['Body'].strip()} {example['Question'].strip()}"
+        records.append(_pool_record(question=question, answer=answer, pool_bin=SVAMP_BIN, split="train", index=index))
+    logger.info("SVAMP: kept %d rows, skipped %d without a plain numeric answer", len(records), skipped)
+    return records
+
+
 def _math500_records() -> list[dict[str, object]]:
     dataset = load_dataset(MATH500_DATASET, split="test", revision=MATH500_REVISION)
-    math500_bin = PoolBin(VALIDATION_MATH500_SOURCE, grade=2, env_class=ANSWER_LINE_ENV)
+    math500_bin = PoolBin(VALIDATION_MATH500_SOURCE, grade=5, env_class=ANSWER_LINE_ENV)
     return [
         _pool_record(
             question=example["problem"], answer=example["answer"], pool_bin=math500_bin, split="test", index=index
@@ -370,6 +393,8 @@ def write_pool_parquet(config: PoolParquetConfig) -> None:
     """Write the graded train pool and the fixed validation set."""
     train = _drop_over_length_records(
         [
+            *_asdiv_records(),
+            *_svamp_records(),
             *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
             *_math_records(),
             *_aime_records(),
