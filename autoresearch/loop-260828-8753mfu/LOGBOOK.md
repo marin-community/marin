@@ -963,3 +963,41 @@ s/step (~17 min). Running deployment stack vs campaign-zero over
 steps +5..+58, same night, same protocol: firmer MFU estimate (54
 scored points instead of 15) and a 60-step pointwise loss comparison
 against the calibrated ~1e-4 band.
+
+## 2026-08-31 ~04:00Z: C13 fable review — deprioritization REVERSED, smoke-gated
+
+Fable's F4 is stronger than the scope objection I acted on: the capacity
+gate is a LEXICOGRAPHIC GREEDY (_prefix_cap_counts, then
+_clip_receiver_group_sizes, both index-order) and chunks x
+chunk_capacity == local_capacity EXACTLY at this shape, so every
+(sender,expert) pair's accepted count is weakly greater at chunks=1 --
+the accepted set is a strict SUPERSET. Nothing accepted today is dropped
+there; no existing traffic is re-routed. That is unambiguously better
+fidelity, not a different policy. (Caveat recorded: the superset property
+needs the exact-division condition, which holds here and not in general.)
+Consequences adopted: the C-C null band is NOT the gate (newly-routed
+tokens legitimately move the loss; ~2800 of 33.5M assignments change
+status, so expect the delta inside the band anyway); the arm is scored as
+NON-INFERIORITY (keep at >= -0.17) rather than needing +0.17, since F5
+confirms MFU is exactly 1/step_time and cannot see the fidelity gain.
+
+Other findings adopted: F1 memory estimate revised UP to +12..+16 GiB
+(the backward is the binding case -- the cuDNN wgrad custom_vjp pins gu
+[C,I2] and h [C,I] alongside x_dispatch), leaving ~9-13 GiB margin, not
+16-20. F2 reframes the lever honestly: the chunking rationale is
+re-mechanised (transient working set, both directions), not dead --
+"testing whether the arena can hold an unchunked layer". F6/F7 name two
+failure modes to classify by signature (remat absorbs it => engaged-
+negative like slop90; NCCL symmetric-buffer OOM at first execution =>
+the H10 signature, distinct from a BFC/arena OOM). F3 was a live harness
+bug, FIXED (a control could not carry the kept CTAS=1 without claiming
+TREATMENT; an empty knob atoi's to 0 -> default grid). F12 mints C14: a
+pooled gate permits LOWERING capacity_factor at equal drops (~9% off C),
+which would repay F1's memory cost -- the real prize behind C13.
+
+Smoke gates pre-declared (all must pass): no NCCL/symmetric-buffer
+failure at first execution; no dot/grouped-GEMM in the remat set and
+remat count within ~2x of 325; peak_gib <= ~125; drop_fraction down ~10x
+(this is the engagement check); cta_count=152 and the wheel install line
+present. Failing 1-3 closes C13 at desk+smoke cost with the mechanism
+named; failing 4 means the knob did not reach the backend.
