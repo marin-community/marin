@@ -1264,7 +1264,9 @@ fn array_buffer_size(arr: &ArrayRef) -> i64 {
 /// Rejects: a batch column
 /// literally named `seq`, a duplicate column, an unknown column, a missing
 /// non-nullable column, a type mismatch (after dictionary decode), and any
-/// nested/union arrow type.
+/// nested/union arrow type. Conflicts with the registered columns are reported as
+/// [`StatsError::BatchSchemaConflict`]; malformed Arrow content remains
+/// [`StatsError::SchemaValidation`].
 pub fn validate_and_align_batch(
     batch: &RecordBatch,
     registered: &Schema,
@@ -1339,12 +1341,12 @@ fn validate_and_align_batch_with_policy(
                     ignored_columns.push((*name).to_string());
                 }
                 UnknownColumnPolicy::IgnoreNullable => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown required column {name:?} not in registered schema"
                     )));
                 }
                 UnknownColumnPolicy::Reject => {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "unknown column {name:?} not in registered schema"
                     )));
                 }
@@ -1367,7 +1369,7 @@ fn validate_and_align_batch_with_policy(
             Some((actual_dt, _, array)) => {
                 let actual_type = arrow_to_column_type(actual_dt)?;
                 if actual_type != col.r#type {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: type mismatch registered={} batch={}",
                         col.name,
                         column_type_name(col.r#type),
@@ -1394,7 +1396,7 @@ fn validate_and_align_batch_with_policy(
             }
             None => {
                 if !col.nullable {
-                    return Err(StatsError::SchemaValidation(format!(
+                    return Err(StatsError::BatchSchemaConflict(format!(
                         "column {:?}: missing required (non-nullable) column",
                         col.name
                     )));
@@ -2299,7 +2301,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2321,7 +2323,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2342,7 +2344,7 @@ mod tests {
         );
         assert!(matches!(
             validate_and_align_batch(&b, &worker_stored()),
-            Err(StatsError::SchemaValidation(_))
+            Err(StatsError::BatchSchemaConflict(_))
         ));
     }
 
@@ -2375,10 +2377,9 @@ mod tests {
     #[test]
     fn align_nested_type_rejected() {
         // worker_id arrives as a List, which is unsupported.
-        let list =
-            ListArray::from_iter_primitive::<arrow::datatypes::Int64Type, _, _>(vec![Some(vec![
-                Some(1_i64),
-            ])]);
+        let list = ListArray::from_iter_primitive::<arrow::datatypes::UInt64Type, _, _>(vec![
+            Some(vec![Some(1_u64)]),
+        ]);
         let list_dt = list.data_type().clone();
         let b = batch(
             vec![Field::new("worker_id", list_dt, false)],

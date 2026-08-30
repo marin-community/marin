@@ -53,9 +53,10 @@ on every pod. How that band turns into actual preemption depends on the backend:
 - **K8s GPU clusters (CoreWeave).** Every pod is admitted through Kueue. Kueue reads
   the pod's PriorityClass as the Workload priority and, with the ClusterQueue's
   `preemption.withinClusterQueue: LowerPriority` policy, evicts lower-priority
-  Workloads to admit a higher-priority one — including when Topology-Aware
-  Scheduling can't otherwise place it on full nodes. This is what lets a
-  higher-priority multi-host gang reclaim capacity from running `batch` gangs.
+  Workloads when binding GPU or RDMA quota is exhausted. Topology-Aware
+  Scheduling checks that those victims make a compatible placement available.
+  This is what lets a higher-priority multi-host gang reclaim full nodes from
+  running `batch` gangs instead of waiting behind non-binding quota.
   Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
   not a stray pod out of it.
 - **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks

@@ -707,10 +707,11 @@ impl Store {
         let persisted_targets = prepared_partitions
             .into_iter()
             .map(|(destination, engine, aligned)| {
-                let last_seq = engine.append_aligned_batch(&aligned);
-                (destination, last_seq)
+                engine
+                    .append_aligned_batch(&aligned)
+                    .map(|last_seq| (destination, last_seq))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ForwardedWrite {
             rows_written,
             persisted_targets,
@@ -739,7 +740,7 @@ impl Store {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
-        let last_seq = engine.append_aligned_batch(&aligned);
+        let last_seq = engine.append_aligned_batch(&aligned)?;
         Ok(ForwardedWrite {
             rows_written: n,
             persisted_targets: vec![(name.to_string(), last_seq)],
@@ -758,7 +759,7 @@ impl Store {
         added_bytes: i64,
     ) -> Result<i64, StatsError> {
         let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok(engine.append_log_batch(columns, num_rows, added_bytes))
+        engine.append_log_batch(columns, num_rows, added_bytes)
     }
 
     /// Block until `target` is durable in `name`, bounded by `timeout`.

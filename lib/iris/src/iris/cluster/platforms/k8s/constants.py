@@ -4,11 +4,13 @@
 """Shared Kubernetes constants for Iris cluster components."""
 
 DEFAULT_TASK_CACHE_DIR = "/cache"
+NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
+RDMA_RESOURCE = "rdma/ib"
 
 # NVIDIA GPU nodes commonly carry this taint. Pods requesting GPUs must
 # tolerate it or they will remain Pending.
 NVIDIA_GPU_TOLERATION: dict = {
-    "key": "nvidia.com/gpu",
+    "key": NVIDIA_GPU_RESOURCE,
     "operator": "Exists",
     "effect": "NoSchedule",
 }
