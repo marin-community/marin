@@ -21,7 +21,7 @@ POOL_ROOT = "s3://marin-us-east-02a/marin/documents/curriculum-rl-pool"
 @click.option("--version", required=True)
 def main(version: str) -> None:
     for filename in ("train.parquet", "validation.parquet"):
-        path = prefix_join(POOL_ROOT, version, filename)
+        path = prefix_join(prefix_join(POOL_ROOT, version), filename)
         with StoragePath(path).open("rb") as handle:
             table = pq.read_table(handle, columns=["extra_info"])
         counts: Counter[tuple[int, str]] = Counter()
