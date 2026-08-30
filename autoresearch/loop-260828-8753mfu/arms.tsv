@@ -38,3 +38,4 @@ mfl-h11-c1-c	2741bc382f	2026.08.29.36	ragged_all_to_all	mixture	device	4470000	2
 mfl-k1x-smoke	3572ccb3c1	2026.08.29.37	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--opt-resident-leaves 1 --opt-resident-donation excluded	none	0.75	none
 mfl-k1x-a	3572ccb3c1	2026.08.29.38	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	--opt-resident-leaves 1 --opt-resident-donation excluded	none	0.75	none
 mfl-e2e-zero-a	5324007f19	2026.08.29.39	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none	0.75	none
+mfl-e2e-zero-b	5324007f19	2026.08.29.40	ragged_all_to_all	mixture	device	4470000	28800	s3://marin-us-east-02a/marin/grug/hero-12d8b6f0-dee637/2026.08.19.2/checkpoints/step-30000	none	none	0.75	none
