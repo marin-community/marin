@@ -12,6 +12,14 @@ series as guards.
 **23.34 → 24.04 MFU (+0.70, +3.0% throughput), measured same-night, same protocol,
 both sides fidelity-clean.** Peak HBM also falls 116.57 → 112.75 GiB.
 
+Re-anchored on the **wgrad-corrected** tree (the stack you would actually ship):
+campaign zero 23.183 → deployment control 23.961 = **+0.78**. The two agree, so
+the defensible claim is **+0.7 ± 0.1**. The zero draw carries sd 0.909 with two
+stalls against the pre-fix zeros' sd 0.02, so it confirms the headline rather
+than sharpening it, and it runs the branch-pinned PJRT (``--pjrt-wheel``
+postdates that commit) where the controls run the H11 wheel with the env var
+set — bit-comparable with it unset, which is why the patch is env-gated.
+
 That end-to-end number is a direct measurement (campaign-zero tree vs the full
 stack on the same night), not a sum of parts: two zero draws at 23.356 / 23.326
 (sd 0.02) against three deployment draws at 24.081 / 24.073 / 23.969 (sd 0.06),
@@ -95,6 +103,36 @@ twice the rows per transport op, so each op runs ~2x longer and is corresponding
 harder to hide — and the transport is link-bound at that size, so the CTA cap cannot
 recover it.
 
+## A silent correctness defect, found and fixed (not a live incident)
+
+The cuDNN grouped-Wgrad wrapper padded expert groups to 8 rows while the
+vendored kernel declares ``FIX_PAD_SIZE = 256`` and its own ``can_implement``
+rejects ``k % 256``. Marin imported the private kernel class and bypassed that
+check, so every ragged-backend step computed expert weight gradients from an
+over-read. Three independent lines converged: a fresh Opus auditor derived the
+mechanism from vendor source and reproduced issue #8339's GB200 numbers to three
+decimals *uniquely* at ``cta_tile_k=64``; a codex auditor found the declared
+contract; and a controlled single-variable GB200 experiment measured it. Same
+gate, same seeds, only the padding changed:
+
+| seed | ragged grad error before | after fix | ring reference |
+|---|---|---|---|
+| 0 | 0.0259 | 0.000807 | 0.000673 |
+| 1 | 0.0301 | 0.000443 | 0.000604 |
+| 2 | 0.0229 | 0.000539 | 0.000738 |
+| 3 | 0.0255 | 0.000515 | 0.000532 |
+
+A 30–70x reduction to the ring floor. **Scope: the live hero is NOT affected** —
+it was deployed on the pooled-wave backend, whose expert MLP is a plain
+``jnp.einsum`` with no grouped GEMM. This is a **ragged-migration blocker**, and
+it corrupted every ragged arm in this campaign (throughput is unaffected —
+identical FLOPs — but loss-quality claims on ragged arms predate the fix).
+
+Fix isolated as ``2ca4c1e046`` for cherry-picking, and measured **throughput-free**
+(24.016 fixed-tree control vs 24.07 pre-fix, inside noise). The 4-GPU gate that
+would have caught this **is not run by anything**: #8605 deleted the cluster-smoke
+workflow after 38 consecutive timeouts, and #8704 tracks a replacement.
+
 ## Hazard found, worth fixing regardless of this campaign
 
 Keeping an optimizer-state leaf device-resident **and donated** under the async
@@ -134,5 +172,36 @@ the rack — a dispatch-chain fusion whose premise was a misread trace family, a
 "dead code" deletions that HLO evidence showed were either never emitted or
 load-bearing.
 
+Closed in the second phase, each with a mechanism rather than a number:
+
+- **C15, pre-aligned receiver layout** (-0.173, ~3σ, two draws). The mechanism
+  *worked* — it deleted 180 ms/step of loop-fusion copies, reproduced in both
+  draws — but gave it back through a reproducible **+3% transport slowdown on a
+  payload that grew 0.20%** (bf16[301466,3072] → bf16[302080,3072], 614 rows),
+  17x more than size explains. So the ragged kernel's cost tracks per-peer
+  message granularity, not volume, matching the wave-quantization finding from
+  the dk-native work — and it retroactively explains why the padding-fusion
+  follow-up from the CuTe FFI campaign never materialized. The ``h`` mask it
+  needs is not removable: the pre-aligned kernel genuinely reads ~40k rows past
+  ``cu[-1]`` holding uninitialized memory.
+- **Expert chunking, now closed on BOTH sides.** chunks=1 → -0.45 (but exactly
+  dropless); chunks=2 (default) → baseline at 3.3e-5 drops; chunks=3 → -0.15 AND
+  6.5x the drops (2.15e-4), a fidelity failure independent of throughput. The
+  default is a genuine two-sided optimum.
+- **Desk-killed before spending rack time**, by pricing each candidate against
+  the measured budget of the leg it attacks: a combine-weight epilogue fusion
+  (+7-10% in Megatron-Core / ERNIE 4.5 / Ling 2.0 — but ``_unpermute_from_global_expert``
+  already fuses exactly that into one ``sonic_gather_sum``); a QB-histogram
+  allreduce deferral (premise real and beta genuinely deferred, but capped at
+  ~0.036 MFU against a 0.18 bar); a Newton-Schulz padding deletion (capped at
+  ~0.07 MFU); and the whole remat direction (1065 ms/step of recompute, but the
+  families are 9-160 GiB against ~26 GiB of headroom, and the one that fits
+  deletes only ~12-17 ms/step).
+
 The recurring lesson: on this stack, levers that **reschedule** work engaged and
-lost; the two that **deleted** work paid.
+lost; the two that **deleted** work paid. Nine independent perturbations — slop
+factor, async copy threshold, pipelined offload (twice), command-buffer subsets,
+save policy, receiver alignment, chunking in both directions, allocator fraction
+— all engaged and all lost or came back null. **The published configuration is a
+strongly defended local optimum**, and that is itself the campaign's most
+reusable result: it says where NOT to spend the next engineer-week.
