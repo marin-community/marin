@@ -43,6 +43,11 @@ use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::store::object_store::ObjectStore;
 use crate::store::table::query_view::SegmentObjectMap;
 
+/// Tail bytes fetched per remote Parquet file when reading its footer. Large
+/// enough to cover the metadata of a target-size object in one ranged GET; a
+/// larger footer falls back to a second fetch.
+const REMOTE_FOOTER_SIZE_HINT: usize = 512 * 1024;
+
 /// A live namespace as one DataFusion table.
 ///
 /// Backed by a `ListingTable` over the snapshotted sealed parquet files, or —
@@ -223,15 +228,26 @@ impl NamespaceProvider {
     }
 
     fn listing_table(schema: SchemaRef, segment_paths: &[String]) -> DFResult<Arc<ListingTable>> {
-        Self::listing_table_for_urls(
-            schema,
-            segment_paths.iter().map(|path| format!("file://{path}")),
-        )
+        let urls: Vec<ListingTableUrl> = segment_paths
+            .iter()
+            .map(|path| ListingTableUrl::parse(format!("file://{path}")))
+            .collect::<DFResult<Vec<_>>>()?;
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+        let config = ListingTableConfig::new_with_multi_paths(urls)
+            .with_listing_options(options)
+            .with_schema(schema);
+        Ok(Arc::new(ListingTable::try_new(config)?))
     }
 
     /// A listing table over pre-formed URLs — remote object URLs (`gs://…`)
     /// resolve against the object store registered at store open; bare paths
     /// fall through to the local filesystem store.
+    ///
+    /// A remote read is round-trip bound, so this shape minimizes requests per
+    /// file: no planning-time statistics pass (execution reads each footer
+    /// once anyway), and a footer size hint so a footer is one ranged GET
+    /// instead of a tail probe plus a second fetch.
     fn listing_table_for_urls(
         schema: SchemaRef,
         urls: impl IntoIterator<Item = String>,
@@ -240,8 +256,11 @@ impl NamespaceProvider {
             .into_iter()
             .map(ListingTableUrl::parse)
             .collect::<DFResult<Vec<_>>>()?;
-        let options =
-            ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
+        let format =
+            ParquetFormat::default().with_metadata_size_hint(Some(REMOTE_FOOTER_SIZE_HINT));
+        let options = ListingOptions::new(Arc::new(format))
+            .with_file_extension(".parquet")
+            .with_collect_stat(false);
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
             .with_schema(schema);
