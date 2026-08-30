@@ -101,9 +101,6 @@ branch = "main"
 base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
-nuances = [
-    "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
-]
 
 [MarinSkyRL]
 upstream = "https://github.com/NovaSky-AI/SkyRL.git"

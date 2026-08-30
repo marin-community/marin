@@ -298,7 +298,6 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
         import harbor.trial.queue as queue_module
         from harbor.models.job.config import JobConfig
         from harbor.trial.queue import TrialQueue
-        from harbor.trial.trial import Trial
 
         async def main():
             policies = json.loads(Path(sys.argv[1]).read_text())
@@ -311,27 +310,18 @@ def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_pol
                     exception_info=SimpleNamespace(exception_type="InternalServerError")
                 )
 
-                class FailedTrial:
-                    paths = SimpleNamespace(trial_dir=Path("/tmp/unused-harbor-trial"))
-
-                    async def run(self):
-                        nonlocal attempts
-                        attempts += 1
-                        return failed_result
-
-                    def add_hook(self, _event, _hook):
-                        pass
-
-                async def create_trial(_config):
-                    return FailedTrial()
+                async def run_failed_attempt(_config, _attempt):
+                    nonlocal attempts
+                    attempts += 1
+                    return failed_result
 
                 async def record_wait(delay):
                     waits.append(delay)
 
-                Trial.create = staticmethod(create_trial)
                 queue_module.asyncio.sleep = record_wait
-                queue_module.safe_rmtree = lambda *_args, **_kwargs: None
-                result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
+                queue = TrialQueue(n_concurrent=1, retry_config=retry)
+                queue._run_admitted_attempt = run_failed_attempt
+                result = await queue._run_trial(
                     SimpleNamespace(trial_name="endpoint-failure")
                 )
                 assert result is failed_result
