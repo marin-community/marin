@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import pulumi
 import pulumi_kubernetes as k8s
+from iris.cluster.config import IrisClusterConfig
+from iris.cluster.platforms.k8s.constants import NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.kueue_manifests import (
     CW_REPO_URL,
     OPERATOR_NS,
@@ -19,6 +21,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     build_topology_cr,
 )
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
+from iris.cluster.types import AcceleratorType
 
 from iac.config import KueueProvisioningSpec
 from iac.imports import NO_IMPORTS, ImportRegistrar
@@ -26,9 +29,9 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 # cks-kueue chart coordinates. The installer resolves `latest`; IaC pins the version so the
 # release is reproducible. Bump this in lockstep with a chart upgrade.
 CKS_KUEUE_CHART = "cks-kueue"
-CKS_KUEUE_VERSION = "1.4.0"
+CKS_KUEUE_VERSION = "1.5.0"
 # The Topology CRD's served apiVersion (install_kueue.py reads it from the live CRD; it is
-# v1beta1 for cks-kueue 1.4.0).
+# v1beta1 for cks-kueue 1.5.0).
 TOPOLOGY_API_VERSION = "kueue.x-k8s.io/v1beta1"
 MANAGER_DEPLOYMENT = "kueue-controller-manager"
 
@@ -38,6 +41,22 @@ class KueueAddonArgs:
     namespace: str  # webhook scope + LocalQueue namespace, from kubernetes_provider.namespace
     cluster_queue: str  # from kubernetes_provider.kueue.cluster_queue
     spec: KueueProvisioningSpec
+    nominal_quotas: dict[str, str]
+
+
+def accelerator_nominal_quotas(config: IrisClusterConfig) -> dict[str, str]:
+    """Return binding GPU and RDMA quotas from CoreWeave scale-group maxima."""
+    accelerator_count = 0
+    for scale_group in config.scale_groups.values():
+        resources = scale_group.resources
+        template = scale_group.slice_template
+        if resources is None or resources.device_type != AcceleratorType.GPU or template is None:
+            continue
+        accelerator_count += scale_group.max_slices * max(1, template.num_vms) * resources.device_count
+    if accelerator_count <= 0:
+        raise ValueError("CoreWeave Kueue requires positive accelerator capacity")
+    quota = str(accelerator_count)
+    return {NVIDIA_GPU_RESOURCE: quota, RDMA_RESOURCE: quota}
 
 
 class KueueAddon(pulumi.ComponentResource):
@@ -117,7 +136,7 @@ class KueueAddon(pulumi.ComponentResource):
         )
         imports.register(resource_flavor, parent=self, provider_id=RESOURCE_FLAVOR_NAME)
 
-        queue_manifest = build_cluster_queue(args.cluster_queue)
+        queue_manifest = build_cluster_queue(args.cluster_queue, nominal_quotas=args.nominal_quotas)
         cluster_queue = k8s.apiextensions.CustomResource(
             "cluster-queue",
             api_version=queue_manifest["apiVersion"],
