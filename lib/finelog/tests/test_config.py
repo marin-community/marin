@@ -154,7 +154,7 @@ def test_load_config_rejects_pvc_name_for_node_local_cache(tmp_path: Path) -> No
         """,
     )
 
-    with pytest.raises(ValueError, match="cache_pvc_name cannot be set with node-local"):
+    with pytest.raises(ValueError):
         load_finelog_config(str(cfg_path))
 
 

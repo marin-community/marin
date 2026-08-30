@@ -33,6 +33,7 @@ from rigging.provenance import Provenance
 
 CACHE_MOUNT_PATH = CACHE_DIR
 CACHE_VOLUME_NAME = "cache"
+EPHEMERAL_STORAGE_RESOURCE = "ephemeral-storage"
 FINELOG_USER_ID = 1000
 HEALTH_PATH = "/health"
 NODE_ARCH = "amd64"
@@ -101,7 +102,7 @@ def _container_env(config: FinelogConfig) -> list[k8s.core.v1.EnvVarArgs]:
 
 
 def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str]) -> FinelogResourceArgs:
-    """Build typed PVC, Deployment, and Service inputs for a Finelog server."""
+    """Build typed Deployment, Service, and optional PVC inputs for a Finelog server."""
     config = args.config
     assert config.deployment.k8s is not None
     deployment = config.deployment.k8s
@@ -110,8 +111,8 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     resource_requests = {"cpu": deployment.cpu_request, "memory": deployment.memory_request}
     resource_limits = {"cpu": deployment.cpu_limit, "memory": deployment.memory_limit}
     if deployment.cache_storage is K8sCacheStorage.NODE_LOCAL:
-        resource_requests["ephemeral-storage"] = cache_size
-        resource_limits["ephemeral-storage"] = cache_size
+        resource_requests[EPHEMERAL_STORAGE_RESOURCE] = cache_size
+        resource_limits[EPHEMERAL_STORAGE_RESOURCE] = cache_size
 
     pvc = None
     if deployment.cache_storage is K8sCacheStorage.NODE_LOCAL:
