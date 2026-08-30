@@ -897,3 +897,38 @@ backward machinery -> dual review + GPU smoke mandatory):
 Plan: implement both behind separate knobs, review together, smoke,
 run STACKED (+0.27 expected, above bar), back-ablate on keep per the
 interaction rule.
+
+## 2026-08-31 ~01:30Z: C10 + C11 BOTH DESK-KILLED (HLO proof); a bigger finding falls out
+
+C10 dead-select: FALSIFIED. The chunk-0 passthrough select is never
+emitted — JAX's custom_vjp transposition drops it at lowering (before
+XLA). Positive control: [TK,H] select count == chunks-1 exactly, swept
+over _EXPERT_CHUNKS 1/2/3/6 (0/1/2/5), and the single survivor
+source-attributes to the chunk-1 call site. The earlier "survives DCE at
+jaxpr level" was a pre-DCE traced jaxpr artifact. Corollary: the
+profiled loop_select_fusion_12_remat2 family (2/layer, 208 ms) is NOT
+two passthrough selects — it is either the live chunk-1 select plus an
+XLA HloRematerialization clone (what the _remat2 suffix means) or the
+ragged_dot group-mask selects; its fusion body must be read before any
+candidate is minted against it.
+C11 barrier-pinned recompute: FALSIFIED. The recomputed dispatch gather
+feeds the recomputed collectives, which feed the w13 wgrad dot — load-
+bearing, not dangling. The optimization_barrier is not the pin; the
+wgrad is.
+
+NEW FINDING (C12 candidate, unverified on GPU): collectives ARE
+recomputed in the backward on the current policy — per MoE call at
+chunks=2 the module holds 12 ragged-a2a ops in three groups of four:
+primal (jvp), RECOMPUTE (transpose/checkpoint/rematted_computation),
+and transpose. That is 1/3 of the transport instruction count spent
+re-running forward transport, and it contradicts the in-code comment at
+ep_ragged_all_to_all.py:410-413 ("XLA never recomputes collectives")
+and the campaign memory note that collective outputs are un-rematable.
+Caveat before anyone gets excited: the escape (saving the a2a output)
+needs [C,H] x chunks x 48 layers ~ 178 GB — impossible; this may simply
+be the forced side of the remat tradeoff, and much of the recomputed
+transport may be hidden on the collective stream. Next step is
+evidence, not an arm: confirm the three-group structure in a GPU HLO
+dump and measure how much of the recompute group is EXPOSED before
+treating it as a lever. Also worth re-reading the chunking rationale
+against it.
