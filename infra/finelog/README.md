@@ -55,6 +55,13 @@ With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
 an existing replacement claim. Enable the stack's `import` option when Pulumi
 first adopts that claim.
 
+Changing an existing Pulumi-managed `persistent-volume` stack directly to
+`node-local` is intentionally not automatic: Pulumi refuses to remove the
+protected claim. Decide whether to recover or retain that data, then explicitly
+remove the claim from Pulumi state before updating the Deployment. The bundled
+regional stacks were adopted in `node-local` mode, so their prior claims never
+entered the new stack state.
+
 Do not mount an object store as the cache filesystem. Finelog's SQLite catalog
 and active segments require local filesystem semantics; object storage belongs
 behind `remote_log_dir` until the server owns that storage path natively.
