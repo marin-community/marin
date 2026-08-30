@@ -15,11 +15,7 @@ from iac.kubernetes.finelog import FinelogServerArgs, finelog_resource_args
 from rigging.provenance import Provenance
 
 
-def _args(
-    cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME,
-    *,
-    cache_pvc_name: str | None = None,
-) -> FinelogServerArgs:
+def _args(cache_storage: K8sCacheStorage = K8sCacheStorage.PERSISTENT_VOLUME) -> FinelogServerArgs:
     config = FinelogConfig(
         name="finelog-cw",
         port=10001,
@@ -29,7 +25,6 @@ def _args(
             k8s=K8sDeployment(
                 namespace="iris",
                 cache_storage=cache_storage,
-                cache_pvc_name=cache_pvc_name,
                 storage_gb=250,
             )
         ),
