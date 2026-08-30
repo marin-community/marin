@@ -12,13 +12,20 @@ series as guards.
 **23.34 → 24.04 MFU (+0.70, +3.0% throughput), measured same-night, same protocol,
 both sides fidelity-clean.** Peak HBM also falls 116.57 → 112.75 GiB.
 
-Re-anchored on the **wgrad-corrected** tree (the stack you would actually ship):
-campaign zero 23.183 → deployment control 23.961 = **+0.78**. The two agree, so
-the defensible claim is **+0.7 ± 0.1**. The zero draw carries sd 0.909 with two
-stalls against the pre-fix zeros' sd 0.02, so it confirms the headline rather
-than sharpening it, and it runs the branch-pinned PJRT (``--pjrt-wheel``
-postdates that commit) where the controls run the H11 wheel with the env var
-set — bit-comparable with it unset, which is why the patch is env-gated.
+Re-anchored on the **wgrad-corrected** tree — the stack you would actually ship,
+and now the headline of record:
+
+**23.151 → 23.961 MFU (+0.81, +3.5% throughput), ~12.6σ.** Zero pair
+23.183 / 23.120 (sd 0.045) against control pair 24.016 / 23.906 (sd 0.078),
+se 0.064. Peak 116.57 on both zero draws, matching the pre-fix zero exactly.
+The pre-fix measurement (+0.70) and this one agree within their errors; this is
+the one to quote, because it includes the correctness fix.
+
+One caveat to carry with it: zero runs the branch-pinned PJRT because
+``--pjrt-wheel`` postdates that commit, where the controls run the H11 wheel with
+the env var set. The wheel is bit-comparable with the var unset — that is why the
+patch was written env-gated with the default preserving today's behavior — so this
+is a build difference, not a treatment difference.
 
 That end-to-end number is a direct measurement (campaign-zero tree vs the full
 stack on the same night), not a sum of parts: two zero draws at 23.356 / 23.326
