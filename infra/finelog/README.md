@@ -41,10 +41,10 @@ SHA, base commit, and dirty status into the image. Run the deploy from the
 intended checkout; there is no rollout counter in Pulumi configuration.
 
 Set `deployment.k8s.cache_pvc_name` only when incident recovery moves a server
-to an existing replacement claim. Pulumi keeps the canonical `<name>-cache` PVC
-protected but mounts the named claim in the Deployment; create and verify that
-claim before applying the stack. Removing the override remounts the canonical
-claim on the next `Recreate` rollout.
+to an existing replacement claim. Pulumi treats the named claim as externally
+managed and does not create the canonical `<name>-cache` PVC; create and verify
+the replacement before applying the stack. Removing the override creates and
+mounts the protected canonical claim on the next `Recreate` rollout.
 
 For a read-only preview, run `pulumi preview --stack <cluster>` from
 `infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic

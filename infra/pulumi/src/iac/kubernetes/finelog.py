@@ -69,7 +69,7 @@ class FinelogServerArgs:
 class FinelogResourceArgs:
     """Typed inputs for the Kubernetes objects owned by ``FinelogServer``."""
 
-    pvc: k8s.core.v1.PersistentVolumeClaimInitArgs
+    pvc: k8s.core.v1.PersistentVolumeClaimInitArgs | None
     deployment: k8s.apps.v1.DeploymentInitArgs
     service: k8s.core.v1.ServiceInitArgs
 
@@ -179,8 +179,9 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
         ],
     )
 
-    return FinelogResourceArgs(
-        pvc=k8s.core.v1.PersistentVolumeClaimInitArgs(
+    pvc = None
+    if deployment.cache_pvc_name is None:
+        pvc = k8s.core.v1.PersistentVolumeClaimInitArgs(
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=cache_pvc_name,
                 namespace=deployment.namespace,
@@ -191,7 +192,10 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
                 storage_class_name=deployment.storage_class,
                 resources=k8s.core.v1.VolumeResourceRequirementsArgs(requests={"storage": f"{deployment.storage_gb}Gi"}),
             ),
-        ),
+        )
+
+    return FinelogResourceArgs(
+        pvc=pvc,
         deployment=k8s.apps.v1.DeploymentInitArgs(
             metadata=metadata,
             spec=k8s.apps.v1.DeploymentSpecArgs(
@@ -297,15 +301,18 @@ class FinelogServer(pulumi.ComponentResource):
                 protect=protect,
             )
 
-        pvc = k8s.core.v1.PersistentVolumeClaim(
-            "pvc",
-            args=resources.pvc,
-            opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
-        )
+        dependencies: list[pulumi.Resource] = []
+        if resources.pvc is not None:
+            pvc = k8s.core.v1.PersistentVolumeClaim(
+                "pvc",
+                args=resources.pvc,
+                opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
+            )
+            dependencies.append(pvc)
         deployment = k8s.apps.v1.Deployment(
             "deployment",
             args=resources.deployment,
-            opts=child_options(f"{namespace}/{config.name}", depends_on=[pvc]),
+            opts=child_options(f"{namespace}/{config.name}", depends_on=dependencies),
         )
         command.local.Command(
             "verify",

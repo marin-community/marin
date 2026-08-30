@@ -74,10 +74,9 @@ def test_finelog_retains_deployment_history_for_rollback() -> None:
     assert resources.deployment.spec.revision_history_limit == 10
 
 
-def test_finelog_can_mount_a_recovery_pvc_without_replacing_the_managed_claim() -> None:
+def test_finelog_can_mount_an_externally_managed_recovery_pvc() -> None:
     resources = finelog_resource_args(_args(cache_pvc_name="finelog-cw-cache-recovery"), "image@sha256:digest")
-    assert resources.pvc.metadata is not None
-    assert resources.pvc.metadata.name == "finelog-cw-cache"
+    assert resources.pvc is None
     assert resources.deployment.spec is not None
     assert resources.deployment.spec.template.spec is not None
     volume = resources.deployment.spec.template.spec.volumes[0]
