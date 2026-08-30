@@ -46,6 +46,7 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import (
+    RAGGED_CUDNN_RECEIVER_ALIGNMENT as RAGGED_CUDNN_RECEIVER_ALIGNMENT,
     RAGGED_DEFAULT_EXPERT_CHUNKS as RAGGED_DEFAULT_EXPERT_CHUNKS,
     RAGGED_DISPATCH_REMAT_SAVE_NAMES as RAGGED_DISPATCH_REMAT_SAVE_NAMES,
     _moe_mlp_ep_ragged_a2a_local,
@@ -77,6 +78,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     ragged_expert_chunks: int | None = eqx.field(static=True, default=None)
+    ragged_receiver_alignment: int | None = eqx.field(static=True, default=None)
     num_expert_waves: int = eqx.field(static=True, default=1)
 
     @staticmethod
@@ -94,6 +96,7 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         ragged_expert_chunks: int | None = None,
+        ragged_receiver_alignment: int | None = None,
         num_expert_waves: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
@@ -118,6 +121,7 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             ragged_expert_chunks=ragged_expert_chunks,
+            ragged_receiver_alignment=ragged_receiver_alignment,
             num_expert_waves=num_expert_waves,
         )
 
@@ -146,6 +150,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             ragged_expert_chunks=self.ragged_expert_chunks,
+            ragged_receiver_alignment=self.ragged_receiver_alignment,
             num_expert_waves=self.num_expert_waves,
         )
 
@@ -166,6 +171,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     ragged_expert_chunks: int | None = None,
+    ragged_receiver_alignment: int | None = None,
     num_expert_waves: int = 1,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], CapacityOverflow]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -184,6 +190,12 @@ def moe_mlp(
     transport: how many sequential chunks the local expert bank is processed in,
     each with its own share of the receiver capacity. `None` takes
     `RAGGED_DEFAULT_EXPERT_CHUNKS`; an explicit count must divide the local bank.
+
+    `ragged_receiver_alignment` lays that transport's receiver buffer out with
+    every expert group starting on a multiple of that many rows, which lets the
+    cuDNN grouped weight-gradient kernel read the buffer without its operand
+    pre-pass. `None` packs the groups back to back, as before. It changes the
+    layout only: the same rows are accepted and dropped either way.
 
     `pooled_transport_capacity_factor` sets the sender capacity for each
     destination pool. `num_expert_waves` sets the static wave count for the
@@ -256,7 +268,11 @@ def moe_mlp(
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
-            shard_local_fn = partial(_moe_mlp_ep_ragged_a2a_local, expert_chunks=ragged_expert_chunks)
+            shard_local_fn = partial(
+                _moe_mlp_ep_ragged_a2a_local,
+                expert_chunks=ragged_expert_chunks,
+                receiver_alignment=ragged_receiver_alignment,
+            )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":

@@ -12,7 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
-from levanter.grug.grug_moe import RAGGED_DEFAULT_EXPERT_CHUNKS
+from levanter.grug.grug_moe import RAGGED_CUDNN_RECEIVER_ALIGNMENT, RAGGED_DEFAULT_EXPERT_CHUNKS
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -80,6 +80,7 @@ def build_diagnostic_run(
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
     ragged_expert_chunks: int | None = None,
+    ragged_receiver_alignment: int | None = None,
     remat_save: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     opt_resident_leaves: int = 0,
@@ -154,6 +155,7 @@ def build_diagnostic_run(
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
             ("ragged_expert_chunks", ragged_expert_chunks),
+            ("ragged_receiver_alignment", ragged_receiver_alignment),
             ("remat_save_names", REMAT_SAVE_BUNDLES[remat_save] if remat_save is not None else None),
         )
         if value is not None
@@ -194,6 +196,11 @@ def build_diagnostic_run(
     remat_save_tags = (f"remat-save-{remat_save.replace('_', '-')}",) if remat_save is not None else ()
     # Only tag a named chunk count; the default arm keeps the tag set it has always had.
     chunk_tags = (f"expert-chunks-{model.ragged_expert_chunks}",) if model.ragged_expert_chunks is not None else ()
+    # Same rule for the receiver alignment: only a named layout is tagged, so the default arm's
+    # tag set is untouched.
+    alignment_tags = (
+        (f"receiver-align-{model.ragged_receiver_alignment}",) if model.ragged_receiver_alignment is not None else ()
+    )
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
@@ -260,6 +267,7 @@ def build_diagnostic_run(
                     wave_tag,
                     size_tag,
                     *chunk_tags,
+                    *alignment_tags,
                     *remat_save_tags,
                     "gb200",
                     HARRIER_MIX_2026_08_18_TAG,
@@ -408,6 +416,18 @@ def build_diagnostic_run(
         "share of the receiver capacity, which also makes capacity clipping per-chunk. Must divide "
         f"the local expert count. Default keeps the backend's {RAGGED_DEFAULT_EXPERT_CHUNKS}. "
         "Other transports ignore it."
+    ),
+)
+@click.option(
+    "--receiver-alignment",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Start every expert group in the ragged all-to-all receiver buffer on a multiple of this "
+        "many rows, so the cuDNN grouped weight-gradient kernel reads the transport's buffer "
+        "instead of a copy of it. Must be a multiple of "
+        f"{RAGGED_CUDNN_RECEIVER_ALIGNMENT}. Default packs the groups back to back and keeps the "
+        "copy. Other transports ignore it."
     ),
 )
 @click.option(
@@ -568,6 +588,7 @@ def main(
     latent_dim: int | None,
     moe_implementation: str | None,
     expert_chunks: int | None,
+    receiver_alignment: int | None,
     remat_save: str | None,
     master_params: str,
     opt_resident_leaves: int,
@@ -600,6 +621,7 @@ def main(
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
         ragged_expert_chunks=expert_chunks,
+        ragged_receiver_alignment=receiver_alignment,
         remat_save=remat_save,
         master_param_mode=MasterParamMode(master_params),
         opt_resident_leaves=opt_resident_leaves,

@@ -122,6 +122,19 @@ def _clip_receiver_group_sizes(
     return jnp.concatenate(clipped_by_receiver, axis=1)
 
 
+def _align_up_rows(values: Int[Array, "..."], alignment: int) -> Int[Array, "..."]:
+    """Round each row count up to a multiple of ``alignment``.
+
+    ``alignment == 1`` returns the input array itself, so a caller that leaves alignment off
+    emits no arithmetic at all and traces exactly the graph it traced before this existed.
+    """
+    if alignment < 1:
+        raise ValueError(f"alignment must be positive, got {alignment}")
+    if alignment == 1:
+        return values
+    return ((values + alignment - 1) // alignment) * alignment
+
+
 class ExpertA2aParams(NamedTuple):
     """Offset/size vectors for one direction of an expert-granular ``ragged_all_to_all``."""
 
@@ -137,6 +150,7 @@ def _expert_granular_a2a_params(
     shard_id: Int[Array, ""],
     *,
     local_expert_size: int,
+    receiver_alignment: int = 1,
 ) -> tuple[ExpertA2aParams, ExpertA2aParams]:
     """Build dispatch and return ``ragged_all_to_all`` parameters at (peer, expert) granularity.
 
@@ -147,6 +161,14 @@ def _expert_granular_a2a_params(
     permute before the grouped MLP. The return direction is the exact mirror: it reads the
     expert-major receiver buffer and writes valid prefixes back to the sender's unclipped
     positions, leaving dropped rows at the output operand's values.
+
+    ``receiver_alignment`` rounds each receiver group's *extent* up to a multiple of that many
+    rows, which starts every group on an aligned row and leaves up to ``alignment - 1`` unwritten
+    rows between groups. It changes only where the receiver puts each group: senders read the
+    same rows and send the same sizes, the accepted set is untouched, and the return direction
+    reads the same valid prefixes back out. The receiver buffer must then hold
+    ``capacity + (alignment - 1) * groups`` rows, since the per-group slack is charged to the
+    buffer rather than to the capacity that decides drops.
     """
     num_shards = all_group_sizes.shape[0]
 
@@ -160,7 +182,8 @@ def _expert_granular_a2a_params(
 
     # Receiver side: expert-major segment starts on each destination, sender-major within.
     dest_totals = jnp.sum(clipped, axis=0)  # [dest, e]
-    expert_starts = jnp.cumsum(dest_totals, axis=1) - dest_totals
+    group_extents = _align_up_rows(dest_totals, receiver_alignment)  # [dest, e]
+    expert_starts = jnp.cumsum(group_extents, axis=1) - group_extents
     senders_before_me = (jnp.cumsum(clipped, axis=0) - clipped)[shard_id]  # [dest, e]
     dispatch_output_offsets = expert_starts + senders_before_me
 

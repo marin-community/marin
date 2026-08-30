@@ -94,6 +94,39 @@ def _build_launcher(
     return launcher
 
 
+def aligned_group_capacity(rows: int, groups: int, alignment: int = _GROUP_ALIGNMENT) -> int:
+    """Rows a buffer needs so `groups` groups holding `rows` payload rows partition it aligned.
+
+    Rounding each group's extent up to ``alignment`` can cost at most one extra alignment per
+    group beyond rounding the total up once, and that worst case is never reached by every group
+    at once, so ``groups - 1`` alignments of slack is both sufficient and tight. The result is
+    itself a multiple of ``alignment``, which is what lets the last group absorb the leftover and
+    still divide it.
+
+    ``alignment == 1`` is the unaligned layout, where extents are the payload counts and no slack
+    is needed at all.
+    """
+    if alignment < 1:
+        raise ValueError(f"alignment must be positive, got {alignment}")
+    if alignment == 1:
+        return rows
+    return -(-rows // alignment) * alignment + alignment * (groups - 1)
+
+
+def full_partition_offsets(rows: int, group_sizes: jax.Array) -> jax.Array:
+    """Per-group end rows that partition all ``rows``, giving the last group the leftover.
+
+    The kernel's contract is not only that every extent divides `_GROUP_ALIGNMENT`; the final
+    offset must also equal the operand's physical row count, since the kernel walks its groups
+    across one TMA descriptor over the whole buffer. Charging the residual rows to the last group
+    satisfies the second half. They contribute nothing to its product as long as they are zero in
+    one of the two operands, which is what every caller here guarantees.
+    """
+    group_sizes = jnp.asarray(group_sizes, dtype=jnp.int32)
+    residual = rows - jnp.sum(group_sizes, dtype=jnp.int32)
+    return jnp.cumsum(group_sizes.at[-1].add(residual), dtype=jnp.int32)
+
+
 def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Array, jax.Array]:
     """Insert zero rows so each contiguous expert group ends on a `_GROUP_ALIGNMENT` boundary."""
     if values.ndim != 2:
@@ -113,14 +146,11 @@ def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Arr
     #
     # The physical size is static (it must not depend on runtime routing): rounding the capacity up
     # and adding one alignment per preceding group is always enough for the rounded extents.
-    aligned_capacity = -(-values.shape[0] // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
-    padded_capacity = aligned_capacity + _GROUP_ALIGNMENT * (groups - 1)
+    padded_capacity = aligned_group_capacity(values.shape[0], groups)
 
-    head_sizes = ((group_sizes[:-1] + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
-    tail_size = padded_capacity - jnp.sum(head_sizes, dtype=jnp.int32)
-    padded_group_sizes = jnp.concatenate([head_sizes, tail_size[None]])
+    aligned_sizes = ((group_sizes + _GROUP_ALIGNMENT - 1) // _GROUP_ALIGNMENT) * _GROUP_ALIGNMENT
     active_offsets = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    padded_offsets = jnp.cumsum(padded_group_sizes, dtype=jnp.int32)
+    padded_offsets = full_partition_offsets(padded_capacity, aligned_sizes)
     active_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), active_offsets[:-1]])
     padded_starts = jnp.concatenate([jnp.zeros((1,), jnp.int32), padded_offsets[:-1]])
 
@@ -136,8 +166,42 @@ def pad_grouped_rows(values: jax.Array, group_sizes: jax.Array) -> tuple[jax.Arr
 
 
 def cudnn_grouped_wgrad(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Compute per-expert ``lhs.T @ rhs`` for contiguous ragged row groups."""
+    """Compute per-expert ``lhs.T @ rhs`` for contiguous ragged row groups.
+
+    Both operands are copied into the kernel's aligned layout first, which is what
+    `pad_grouped_rows` costs. A caller whose buffers already carry that layout should use
+    `cudnn_grouped_wgrad_prealigned`.
+    """
     _assert_group_alignment_matches_kernel()
+    lhs_padded, padded_offsets = pad_grouped_rows(lhs, group_sizes)
+    rhs_padded, _ = pad_grouped_rows(rhs, group_sizes)
+    return _grouped_wgrad(lhs_padded, rhs_padded, padded_offsets, expert_count=group_sizes.shape[0])
+
+
+def cudnn_grouped_wgrad_prealigned(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """`cudnn_grouped_wgrad` for operands already in the kernel's aligned layout.
+
+    The caller guarantees that group ``i`` occupies rows
+    ``[sum(group_sizes[:i]), sum(group_sizes[:i+1]))`` of both operands, that every entry of
+    ``group_sizes`` is a multiple of `_GROUP_ALIGNMENT` (so every group starts on an aligned
+    row), and that any row inside a group that carries no data is zero in at least one operand.
+
+    Any rows past the last group are folded into it by `full_partition_offsets`, because the
+    kernel requires the final offset to equal the operand's row count -- it addresses every group
+    through one descriptor over the whole buffer, so a group that ends short reads on into
+    whatever follows. The buffer's own slack is what gets folded in, and it is zero.
+
+    Under that contract this is `cudnn_grouped_wgrad` with the pad pass removed: `pad_grouped_rows`
+    applied to such a layout reproduces it row for row and returns the same offsets, so the kernel
+    sees byte-identical operands and offsets either way.
+    """
+    _assert_group_alignment_matches_kernel()
+    offsets = full_partition_offsets(lhs.shape[0], group_sizes)
+    return _grouped_wgrad(lhs, rhs, offsets, expert_count=group_sizes.shape[0])
+
+
+def _grouped_wgrad(lhs: jax.Array, rhs: jax.Array, offsets: jax.Array, *, expert_count: int) -> jax.Array:
+    """Call the kernel over row groups delimited by ``offsets``, the per-group end rows."""
     if lhs.ndim != 2 or rhs.ndim != 2:
         raise ValueError(f"lhs and rhs must be rank 2, got lhs={lhs.shape}, rhs={rhs.shape}")
     if lhs.shape[0] != rhs.shape[0]:
@@ -150,22 +214,20 @@ def cudnn_grouped_wgrad(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) 
             f"got lhs={lhs.shape}, rhs={rhs.shape}"
         )
 
-    lhs_padded, padded_offsets = pad_grouped_rows(lhs, group_sizes)
-    rhs_padded, _ = pad_grouped_rows(rhs, group_sizes)
     modules = _cudnn_modules()
     max_active_clusters = modules.cutlass.utils.HardwareInfo().get_max_active_clusters(
         _CLUSTER_SHAPE_MN[0] * _CLUSTER_SHAPE_MN[1]
     )
     launcher = _build_launcher(
         modules,
-        expert_count=group_sizes.shape[0],
+        expert_count=expert_count,
         max_active_clusters=max_active_clusters,
     )
     tensor_spec = modules.cutlass_jax.TensorSpec
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
-            jax.ShapeDtypeStruct((group_sizes.shape[0], lhs.shape[1], rhs.shape[1]), lhs.dtype),
+            jax.ShapeDtypeStruct((expert_count, lhs.shape[1], rhs.shape[1]), lhs.dtype),
             jax.ShapeDtypeStruct((1,), jnp.uint8),
         ),
         input_spec=(
@@ -179,5 +241,5 @@ def cudnn_grouped_wgrad(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) 
         ),
         use_static_tensors=False,
     )
-    output, _workspace = call(lhs_padded, rhs_padded, padded_offsets)
+    output, _workspace = call(lhs, rhs, offsets)
     return output

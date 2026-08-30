@@ -14,7 +14,8 @@ Axis names used in the shape annotations:
     E       experts in the model
     Elocal  experts held by this shard
     Echunk  experts in one sequential chunk, Elocal / chunks
-    C       rows in one chunk's receiver buffer, the per-chunk capacity
+    C       rows in one chunk's receiver buffer: the per-chunk capacity, plus the group-alignment
+            slack when the receiver layout is aligned
     S       shards on the expert axis
 """
 
@@ -31,8 +32,10 @@ from jaxtyping import Array, Float, Int
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import CapacityOverflow, _interleave_gate_up
+from levanter.grug._moe.cudnn_wgrad_cute import _GROUP_ALIGNMENT, aligned_group_capacity
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
+    _align_up_rows,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
@@ -47,6 +50,11 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # Sequential local-expert chunks per MoE layer when a caller does not name one; capacity splits
 # evenly across chunks. Falls back to a single chunk when the local expert count is not divisible.
 RAGGED_DEFAULT_EXPERT_CHUNKS = 2
+
+# Receiver-buffer row alignment that lets the cuDNN grouped weight-gradient kernel read the
+# transport's buffer directly. Its wrapper otherwise copies both operands into this layout on
+# every chunk of every layer, which is the whole cost the alignment removes.
+RAGGED_CUDNN_RECEIVER_ALIGNMENT = _GROUP_ALIGNMENT
 
 # Named dispatch products a remat policy can keep for the backward instead of recomputing.
 # Both are local (pre-collective) values: saving them deletes the recompute of the expert
@@ -72,9 +80,16 @@ class _ExpertMlp(Protocol):
     """Runs the expert MLP over a receiver buffer laid out expert-major.
 
     Implementations take both views of the buffer's group sizes: the physical sizes, which charge
-    trailing padding to the last expert, and the active sizes, which count only received rows.
-    Which one a kernel reads depends on whether it covers the whole buffer or works from segment
-    boundaries, so both are always passed and a kernel discards the one it does not use.
+    trailing padding to the last expert, and the active sizes, which count only the rows each
+    group occupies. Which one a kernel reads depends on whether it covers the whole buffer or
+    works from segment boundaries, so both are always passed and a kernel discards the one it
+    does not use.
+
+    Under an aligned receiver layout both views are aligned: the active sizes are the arrival
+    counts rounded up to the group alignment, and the physical sizes are those extents with the
+    buffer's leftover charged to the last expert. Either way a group covers its arrivals followed
+    by rows the collective never wrote, which are zero. Every kernel here is a grouped GEMM over
+    rows, so those rows contribute zero and produce zero.
     """
 
     def __call__(
@@ -122,12 +137,54 @@ def _cute_expert_mlp(
     # QuACK, cuDNN Frontend, and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
     from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn  # noqa: PLC0415
 
+    return _run_cute_expert_mlp(_expert_mlp_cudnn, x_dispatch, moe_w13_local, moe_w2_local, active_group_sizes)
+
+
+def _cute_expert_mlp_prealigned(
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "C H"]:
+    """`_cute_expert_mlp` for a receiver buffer already in the cuDNN kernel's aligned layout.
+
+    This one takes the *physical* sizes, which are the aligned group extents with the buffer's
+    leftover rows charged to the last expert. Two reasons, and they are the same reason:
+
+    * The weight-gradient kernel walks its groups through one descriptor over the whole operand,
+      so its final offset has to be the operand's row count. `full_partition_offsets` would fold
+      the leftover in anyway; handing it in already folded keeps one layout in play.
+    * Because every row is then inside some group, the forward's grouped GEMMs write every row of
+      their outputs. Rows past the last group would otherwise keep whatever the freshly allocated
+      buffer held, and the weight gradients read those rows once the leftover is folded in. Their
+      partner operand is zero there, so a finite value would cancel -- but a stale NaN would not.
+
+    The rows a group covers past its arrivals are the buffer's zeros either way, and every kernel
+    here is a grouped GEMM over rows, so they contribute zero and produce zero.
+    """
+    del activation_fn, active_group_sizes
+
+    from levanter.grug._moe.sonic_cute import _expert_mlp_cudnn_prealigned  # noqa: PLC0415
+
+    return _run_cute_expert_mlp(
+        _expert_mlp_cudnn_prealigned, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes
+    )
+
+
+def _run_cute_expert_mlp(
+    expert_mlp_cudnn,
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I2"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    group_sizes: Int[Array, "Echunk"],
+) -> Float[Array, "C H"]:
+    """Interleave the gate/up weights and call one of `sonic_cute`'s expert-MLP primitives."""
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
-    cumulative_group_sizes = jnp.concatenate(
-        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
-    )
-    return _expert_mlp_cudnn(x_dispatch, w13_interleaved, moe_w2_local, active_group_sizes, cumulative_group_sizes)
+    cumulative_group_sizes = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+    return expert_mlp_cudnn(x_dispatch, w13_interleaved, moe_w2_local, group_sizes, cumulative_group_sizes)
 
 
 @functools.cache
@@ -152,15 +209,19 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
+def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, receiver_alignment: int = 1) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
     QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
     activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
     portable `ragged_dot` path, which computes the same function.
+
+    ``receiver_alignment`` above one says the transport has already laid the receiver buffer out
+    on the cuDNN weight-gradient kernel's group alignment, which lets the cute path skip that
+    kernel's operand pre-pass. `ragged_dot` reads group sizes off the buffer either way.
     """
     if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
-        return _cute_expert_mlp
+        return _cute_expert_mlp_prealigned if receiver_alignment > 1 else _cute_expert_mlp
     return _ragged_dot_expert_mlp
 
 
@@ -398,6 +459,26 @@ def _resolve_expert_chunks(expert_chunks: int | None, local_experts: int) -> int
     return expert_chunks
 
 
+def _resolve_receiver_alignment(receiver_alignment: int | None) -> int:
+    """Row alignment the receiver buffer's expert groups start on.
+
+    ``None`` is the unaligned layout: groups are packed back to back and the cuDNN
+    weight-gradient wrapper copies both of its operands into an aligned buffer itself. Any other
+    value lays the groups out aligned at the source and deletes those copies, which is only
+    sound if the value is a multiple of what that kernel requires.
+    """
+    if receiver_alignment is None:
+        return 1
+    if receiver_alignment < 1:
+        raise ValueError(f"receiver_alignment must be positive, got {receiver_alignment}")
+    if receiver_alignment % RAGGED_CUDNN_RECEIVER_ALIGNMENT != 0:
+        raise ValueError(
+            f"receiver_alignment={receiver_alignment} must be a multiple of "
+            f"{RAGGED_CUDNN_RECEIVER_ALIGNMENT}, the cuDNN grouped weight-gradient group alignment"
+        )
+    return receiver_alignment
+
+
 def _moe_mlp_ep_ragged_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -409,6 +490,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     expert_chunks: int | None = None,
+    receiver_alignment: int | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityOverflow]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -439,6 +521,13 @@ def _moe_mlp_ep_ragged_a2a_local(
     chunk_capacity = max(chunk_experts, int(math.ceil(local_capacity / chunks)))
     hidden_dim = x_local.shape[1]
 
+    # Aligning the receiver's expert groups costs the chunk a bounded number of unwritten rows.
+    # Those rows are buffer, not capacity: the clip below still admits `chunk_capacity` rows, so
+    # no assignment is accepted or dropped differently. Sizing the buffer with the padding path's
+    # own rule is what makes the two layouts the same size, and therefore comparable row for row.
+    alignment = _resolve_receiver_alignment(receiver_alignment)
+    receiver_rows = aligned_group_capacity(chunk_capacity, chunk_experts, alignment)
+
     with jax.named_scope("dispatch"):
         flat_selected = selected_experts_local.reshape(-1)  # [TK]
         sorted_indices = tree_checkpoint_name(jnp.argsort(flat_selected), RAGGED_SORTED_INDICES_REMAT_NAME)  # [TK]
@@ -448,7 +537,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
         all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
 
-    expert_mlp = _select_expert_mlp(activation_fn)
+    expert_mlp = _select_expert_mlp(activation_fn, receiver_alignment=alignment)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
     # Built per-iteration (not jnp.zeros) so the layer scan does not re-copy a hoisted
     # constant into the in-place return a2a's output slot every step; see _loop_local_zeros.
@@ -470,6 +559,7 @@ def _moe_mlp_ep_ragged_a2a_local(
                 clipped_group_sizes,
                 shard_id,
                 local_expert_size=local_experts,
+                receiver_alignment=alignment,
             )
             # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
             # of every chunk at the same time. This causes the high memory use that the chunks
@@ -481,7 +571,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             # pack arrivals expert-major, so the received buffer feeds the grouped MLP
             # directly: no sender compaction and no receiver-side permute.
             x_dispatch = _dispatch_ragged_a2a(  # [C, H]
-                chunk_capacity,
+                receiver_rows,
                 assignments_per_shard,
                 chunk_source,
                 *dispatch_params,
@@ -489,11 +579,18 @@ def _moe_mlp_ep_ragged_a2a_local(
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
-            active_group_sizes = active_all[
-                chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts
-            ]  # [Echunk]
+            # The group extents the receiver buffer was actually laid out on -- the arrival counts
+            # under no alignment, and their rounded-up extents otherwise. The a2a rounds the same
+            # per-expert totals the same way, so the two layouts agree by construction.
+            active_group_sizes = _align_up_rows(
+                active_all[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts], alignment
+            )  # [Echunk]
             total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
+            # `receiver_rows - total_valid` is nonnegative, and under an aligned layout it is a
+            # multiple of the alignment, because `aligned_group_capacity` bounds the rounded
+            # extents and is itself a multiple. So the physical sizes stay a legal aligned
+            # partition of the whole buffer, which is what the pre-aligned wgrad path needs.
+            physical_group_sizes = active_group_sizes.at[-1].add(receiver_rows - total_valid)  # [Echunk]
             out_dispatch = expert_mlp(  # [C, H]
                 x_dispatch,
                 moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
@@ -507,7 +604,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
             returned = _return_ragged_a2a(
-                chunk_capacity,
+                receiver_rows,
                 out_dispatch,
                 returned,
                 *return_params,

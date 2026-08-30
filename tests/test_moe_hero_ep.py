@@ -116,6 +116,30 @@ def test_expert_chunks_override_reaches_the_model_config():
     assert config.model.remat_mode == "offload_carry"
 
 
+def test_receiver_alignment_override_reaches_the_model_config():
+    step = launch.build_diagnostic_run(
+        run_id="aligned-receiver",
+        dp_racks=1,
+        num_steps=1,
+        ragged_receiver_alignment=ragged_backend.RAGGED_CUDNN_RECEIVER_ALIGNMENT,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.ragged_receiver_alignment == ragged_backend.RAGGED_CUDNN_RECEIVER_ALIGNMENT
+
+
+@pytest.mark.parametrize("alignment", [8, 64, 128, 257])
+def test_a_receiver_alignment_the_wgrad_kernel_cannot_use_is_rejected_before_launch(alignment):
+    # The pre-aligned weight-gradient path skips the kernel's own padding, so an alignment the
+    # kernel does not accept computes wrong expert weight gradients without saying so (issue
+    # #8339). It has to die at config time, not after the 16-node gang is allocated.
+    with pytest.raises(ValueError, match="multiple of 256"):
+        launch.build_diagnostic_run(
+            run_id="bad-alignment", dp_racks=1, num_steps=1, ragged_receiver_alignment=alignment, version="dev"
+        )
+
+
 def test_an_expert_chunk_count_that_cannot_divide_the_local_bank_is_rejected_before_launch():
     # 384 experts over the 64-wide expert axis leave 6 local experts, which 4 does not divide.
     # Without this the run dies inside the traced step, after the 16-node gang is allocated.
@@ -651,6 +675,31 @@ def test_one_expert_chunk_halves_the_ragged_transport_collectives():
 def test_an_expert_chunk_count_that_does_not_divide_the_local_bank_is_rejected_in_the_backend():
     with pytest.raises(ValueError, match="must divide the local expert count=4"):
         _lower_hero_loss_grad(_remat_probe_config(ragged_expert_chunks=3), debug_info=False)
+
+
+def test_the_receiver_alignment_is_inert_unless_it_is_set():
+    """Leaving the alignment off must not perturb the lowered step by a single byte.
+
+    The aligned layout is an arm, not a migration: it is meant to be compared against the runs
+    that came before it, so the default has to lower to the module it lowered to before the
+    option existed. The treatment then shows up only as the transport buffer's row count --
+    two chunk experts over a 148-row chunk capacity become `align_up(148, 256) + 256 = 512`
+    rows, the same size `pad_grouped_rows` would have allocated for its copy.
+    """
+    default_hlo = _lower_hero_loss_grad(_remat_probe_config(), debug_info=False)
+    unset_hlo = _lower_hero_loss_grad(_remat_probe_config(ragged_receiver_alignment=None), debug_info=False)
+    aligned_hlo = _lower_hero_loss_grad(
+        _remat_probe_config(ragged_receiver_alignment=ragged_backend.RAGGED_CUDNN_RECEIVER_ALIGNMENT),
+        debug_info=False,
+    )
+
+    assert unset_hlo == default_hlo
+    assert default_hlo.count("bf16[148,64]{1,0} ragged-all-to-all") == 6
+    assert aligned_hlo.count("bf16[512,64]{1,0} ragged-all-to-all") == 6
+    # Only the layout moves: the same collectives, in the same number, over the same axis.
+    assert aligned_hlo.count(" ragged-all-to-all(") == default_hlo.count(" ragged-all-to-all(")
+    for op in ("all-gather", "all-to-all", "all-reduce", "reduce-scatter"):
+        assert aligned_hlo.count(f" {op}(") == default_hlo.count(f" {op}(")
 
 
 def test_remat_save_names_reject_unknown_and_carry_names():

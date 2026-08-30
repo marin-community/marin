@@ -36,6 +36,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     RAGGED_REQUIRED_XLA_FLAGS,
     _quack_grouped_gemm_available,
     _resolve_expert_chunks,
+    _resolve_receiver_alignment,
     _select_expert_mlp,
 )
 from levanter.grug.grug_moe import moe_mlp
@@ -161,16 +162,19 @@ class RuntimeRow(BaseModel):
     expert_mlp_silu: str
     expert_mlp_gelu: str
     xla_flags: str
+    receiver_alignment: int | None
 
 
-def _runtime_row() -> RuntimeRow:
+def _runtime_row(receiver_alignment: int | None) -> RuntimeRow:
+    alignment = _resolve_receiver_alignment(receiver_alignment)
     return RuntimeRow(
         jax_version=jax.__version__,
         device_kind=jax.devices()[0].device_kind,
         quack_grouped_gemm_available=_quack_grouped_gemm_available(),
-        expert_mlp_silu=_select_expert_mlp(jax.nn.silu).__name__,
-        expert_mlp_gelu=_select_expert_mlp(jax.nn.gelu).__name__,
+        expert_mlp_silu=_select_expert_mlp(jax.nn.silu, receiver_alignment=alignment).__name__,
+        expert_mlp_gelu=_select_expert_mlp(jax.nn.gelu, receiver_alignment=alignment).__name__,
         xla_flags=os.environ.get("XLA_FLAGS", ""),
+        receiver_alignment=receiver_alignment,
     )
 
 
@@ -181,6 +185,10 @@ class RaggedEpResult(Artifact):
 @dataclasses.dataclass(frozen=True)
 class RaggedEpConfig:
     output_path: str
+    receiver_alignment: int | None = None
+    """Row alignment the transport's receiver expert groups start on; None packs them back to
+    back. The aligned layout changes which rows the collective writes where, so the check has to
+    be able to run against it before a hero arm does."""
 
 
 def _make_ep_mesh() -> Mesh:
@@ -304,7 +312,7 @@ def _graddiff(a, b) -> GradDiff:
     return GradDiff(worst_entry=max(maxes), tensor_median=max(medians), worst_slice_median=max(slice_medians))
 
 
-def _run() -> list[SeedRow]:
+def _run(receiver_alignment: int | None) -> list[SeedRow]:
     mesh = _make_ep_mesh()
     tokens = len(jax.devices()) * TOKENS_PER_DEVICE
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
@@ -322,6 +330,7 @@ def _run() -> list[SeedRow]:
                 mesh=None,
                 report_capacity_overflow=True,
                 capacity_factor=capacity_factor,
+                ragged_receiver_alignment=receiver_alignment,
             )
             return (out * out).sum(), (out, dropped)
 
@@ -395,7 +404,7 @@ def _run() -> list[SeedRow]:
 
 
 def run_benchmark(config: RaggedEpConfig) -> None:
-    rows = _run()
+    rows = _run(config.receiver_alignment)
     payload = [r.model_dump(mode="json") for r in rows]
     ground_truth_ok = all(
         r.ragged_vs_dense <= TOLERANCE
@@ -424,7 +433,7 @@ def run_benchmark(config: RaggedEpConfig) -> None:
         "matches_dense_under_drops": drops_ok,
         "ring_matches_dense_no_drop": ring_ok,
     }
-    runtime = _runtime_row()
+    runtime = _runtime_row(config.receiver_alignment)
     logger.info(
         "ragged_ep_result %s verdict %s runtime %s",
         json.dumps(payload),
@@ -445,12 +454,13 @@ def build_benchmark(
     target_cluster: str,
     version: str | None = None,
     transport_kernel: TransportKernel = TransportKernel.DEVICE,
+    receiver_alignment: int | None = None,
 ) -> ArtifactStep[RaggedEpResult]:
     name = "grug/ragged-ep-check"
     version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> RaggedEpConfig:
-        return RaggedEpConfig(output_path=ctx.output_path)
+        return RaggedEpConfig(output_path=ctx.output_path, receiver_alignment=receiver_alignment)
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),

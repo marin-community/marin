@@ -18,7 +18,12 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
-from levanter.grug._moe.cudnn_wgrad_cute import _GROUP_ALIGNMENT, pad_grouped_rows
+from levanter.grug._moe.cudnn_wgrad_cute import (
+    _GROUP_ALIGNMENT,
+    aligned_group_capacity,
+    full_partition_offsets,
+    pad_grouped_rows,
+)
 from levanter.grug._moe.common import (
     _interleave_gate_up,
     _interleave_halves,
@@ -27,7 +32,14 @@ from levanter.grug._moe.common import (
     _swiglu_gate_up_backward,
     CapacityOverflow,
 )
+from levanter.grug._moe.ep_common import _align_up_rows
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+import levanter.grug._moe.ep_ragged_all_to_all as ep_ragged_all_to_all
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    RAGGED_CUDNN_RECEIVER_ALIGNMENT,
+    _ragged_dot_expert_mlp,
+    _resolve_receiver_alignment,
+)
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
@@ -1070,14 +1082,20 @@ def _simulate_ragged_a2a(operands, outputs, params):
             outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
 
 
-def test_expert_granular_a2a_params_roundtrip_with_drops():
+@pytest.mark.parametrize("receiver_alignment", [1, 8])
+def test_expert_granular_a2a_params_roundtrip_with_drops(receiver_alignment: int):
     """Dispatch packs receivers expert-major with sender order inside each expert, and the
     return direction restores each accepted row to its unclipped sorted position, leaving
-    dropped rows at the output operand's values -- all under forced capacity clipping."""
+    dropped rows at the output operand's values -- all under forced capacity clipping.
+
+    Aligning the receiver's group starts must not change any of that: it decides where a group
+    sits in the receiver buffer, not which rows are accepted or where they come home to.
+    """
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
     capacity = int(0.7 * assignments)  # force drops
+    receiver_rows = aligned_group_capacity(capacity, local_experts, receiver_alignment)
 
     rng = np.random.default_rng(0)
     selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
@@ -1101,22 +1119,27 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
             jnp.asarray(clipped),
             jnp.asarray(s),
             local_expert_size=local_experts,
+            receiver_alignment=receiver_alignment,
         )
         for s in range(shards)
     ]
 
-    received = [np.zeros((capacity, hidden), np.float32) for _ in range(shards)]
+    received = [np.zeros((receiver_rows, hidden), np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
     for receiver in range(shards):
-        rows = [
-            sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]]
-            for e in range(local_experts)
-            for g in [receiver * local_experts + e]
-            for s in range(shards)
-        ]
-        expected = np.concatenate(rows, axis=0)
-        np.testing.assert_array_equal(received[receiver][: len(expected)], expected)
-        np.testing.assert_array_equal(received[receiver][len(expected) :], 0)
+        cursor = 0
+        for e in range(local_experts):
+            g = receiver * local_experts + e
+            expected = np.concatenate(
+                [sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]] for s in range(shards)], axis=0
+            )
+            assert cursor % receiver_alignment == 0
+            np.testing.assert_array_equal(received[receiver][cursor : cursor + len(expected)], expected)
+            extent = -(-len(expected) // receiver_alignment) * receiver_alignment
+            # Slack inside the group, which the grouped kernels contract as zeros.
+            np.testing.assert_array_equal(received[receiver][cursor + len(expected) : cursor + extent], 0)
+            cursor += extent
+        np.testing.assert_array_equal(received[receiver][cursor:], 0)
 
     returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(received, returned, [p[1] for p in params])
@@ -1129,17 +1152,23 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         np.testing.assert_array_equal(returned[s], expected)
 
 
-def test_expert_granular_a2a_params_chunked_masking_composes():
+@pytest.mark.parametrize("receiver_alignment", [1, 8])
+def test_expert_granular_a2a_params_chunked_masking_composes(receiver_alignment: int):
     """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
     reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
-    and the chained returns cover exactly the per-chunk accepted prefixes."""
+    and the chained returns cover exactly the per-chunk accepted prefixes.
+
+    The aligned layout composes the same way: a chunk's slack lives in that chunk's receiver
+    buffer, and the accepted set it returns is unchanged."""
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
     capacity = int(0.7 * assignments)
     chunks = 3
+    chunk_experts = local_experts // chunks
     chunk_capacity = -(-capacity // chunks)
-    chunk_of_expert = (np.arange(num_experts) % local_experts) // (local_experts // chunks)
+    receiver_rows = aligned_group_capacity(chunk_capacity, chunk_experts, receiver_alignment)
+    chunk_of_expert = (np.arange(num_experts) % local_experts) // chunk_experts
 
     rng = np.random.default_rng(0)
     selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
@@ -1166,10 +1195,11 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
                 jnp.asarray(clipped),
                 jnp.asarray(s),
                 local_expert_size=local_experts,
+                receiver_alignment=receiver_alignment,
             )
             for s in range(shards)
         ]
-        received = [np.zeros((chunk_capacity, hidden), np.float32) for _ in range(shards)]
+        received = [np.zeros((receiver_rows, hidden), np.float32) for _ in range(shards)]
         _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
         _simulate_ragged_a2a(received, returned, [p[1] for p in params])
 
@@ -1180,6 +1210,186 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
                 starts[s, g] : starts[s, g] + accepted[s, g]
             ]
         np.testing.assert_array_equal(returned[s], expected)
+
+
+def test_aligned_receiver_layout_is_what_the_wgrad_pad_would_have_built():
+    """The claim the pre-aligned cuDNN entry point rests on.
+
+    `pad_grouped_rows` turns an unaligned receiver buffer into the kernel's aligned layout by
+    copying it. An aligned receiver layout is that same layout, built by the collective instead.
+    Both the operand and the offsets the kernel sees must therefore agree row for row -- if they
+    did not, skipping the pad would change what the kernel computes.
+    """
+    shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
+    num_experts = shards * local_experts
+    assignments = tokens * topk
+    capacity = int(0.7 * assignments)
+    alignment = _GROUP_ALIGNMENT
+
+    rng = np.random.default_rng(0)
+    selected = rng.integers(0, num_experts, size=(shards, tokens, topk))
+    payload = rng.normal(size=(shards, assignments, hidden)).astype(np.float32)
+    sorted_payload = np.stack([payload[s][np.argsort(selected[s].reshape(-1), kind="stable")] for s in range(shards)])
+    group_sizes = np.stack(
+        [np.bincount(selected[s].reshape(-1), minlength=num_experts) for s in range(shards)]
+    ).astype(np.int32)
+    clipped = np.asarray(
+        _clip_receiver_group_sizes(
+            jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=capacity
+        )
+    )
+    assert clipped.sum() < group_sizes.sum()  # drops actually happen
+
+    buffers = {}
+    for receiver_alignment in (1, alignment):
+        params = [
+            _expert_granular_a2a_params(
+                jnp.asarray(group_sizes),
+                jnp.asarray(clipped),
+                jnp.asarray(s),
+                local_expert_size=local_experts,
+                receiver_alignment=receiver_alignment,
+            )
+            for s in range(shards)
+        ]
+        rows = aligned_group_capacity(capacity, local_experts, receiver_alignment)
+        received = [np.zeros((rows, hidden), np.float32) for _ in range(shards)]
+        _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+        buffers[receiver_alignment] = received
+
+    receiver_rows = aligned_group_capacity(capacity, local_experts, alignment)
+    arrivals = clipped.reshape(shards, shards, local_experts).sum(axis=0)  # [receiver, local expert]
+    for receiver in range(shards):
+        active = arrivals[receiver].astype(np.int32)
+        padded, padded_offsets = pad_grouped_rows(jnp.asarray(buffers[1][receiver]), jnp.asarray(active))
+        aligned = buffers[alignment][receiver]
+
+        # What the backend hands the pre-aligned entry point: the rounded extents with the
+        # buffer's leftover rows charged to the last group, which is the full partition the
+        # kernel requires. `pad_grouped_rows` builds the same partition of the same-sized buffer.
+        extents = np.asarray(_align_up_rows(jnp.asarray(active), alignment))
+        physical = extents.copy()
+        physical[-1] += receiver_rows - extents.sum()
+
+        assert padded.shape[0] == receiver_rows
+        np.testing.assert_array_equal(np.asarray(padded), aligned)
+        np.testing.assert_array_equal(np.asarray(padded_offsets), np.cumsum(physical))
+        np.testing.assert_array_equal(
+            np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents))), np.cumsum(physical)
+        )
+        assert int(padded_offsets[-1]) == padded.shape[0]
+
+
+def test_expert_mlp_over_an_aligned_receiver_buffer_matches_the_packed_layout():
+    """The other half of the claim: the expert MLP reads the aligned layout as if it were packed.
+
+    Each grouped GEMM here is row-wise, so a group's alignment slack -- zero rows the collective
+    never writes -- contributes nothing and produces zeros, and every arriving row gets the same
+    value it would have got packed. This is the portable `ragged_dot` path, which is what runs
+    wherever the cuDNN kernels do not.
+    """
+    alignment = _GROUP_ALIGNMENT
+    experts, hidden, intermediate = 3, 8, 16
+    active = np.array([5, 12, 3], np.int32)
+    extents = -(-active // alignment) * alignment
+    capacity = int(active.sum()) + 4  # trailing rows past the last group, as the backend has
+
+    rng = np.random.default_rng(0)
+    w13 = jnp.asarray(rng.normal(size=(experts, hidden, 2 * intermediate)), jnp.float32)
+    w2 = jnp.asarray(rng.normal(size=(experts, intermediate, hidden)), jnp.float32)
+    rows = rng.normal(size=(int(active.sum()), hidden)).astype(np.float32)
+
+    packed = np.zeros((capacity, hidden), np.float32)
+    packed[: active.sum()] = rows
+    aligned = np.zeros((aligned_group_capacity(capacity, experts, alignment), hidden), np.float32)
+    starts = np.cumsum(extents) - extents
+    read = 0
+    for e in range(experts):
+        aligned[starts[e] : starts[e] + active[e]] = rows[read : read + active[e]]
+        read += active[e]
+
+    def run(buffer, sizes):
+        physical = jnp.asarray(sizes).at[-1].add(buffer.shape[0] - int(sizes.sum()))
+        return _ragged_dot_expert_mlp(jnp.asarray(buffer), w13, w2, physical, jnp.asarray(sizes), jax.nn.silu)
+
+    packed_out = np.asarray(run(packed, active))
+    aligned_out = np.asarray(run(aligned, extents))
+
+    read = 0
+    for e in range(experts):
+        np.testing.assert_array_equal(
+            aligned_out[starts[e] : starts[e] + active[e]], packed_out[read : read + active[e]]
+        )
+        np.testing.assert_array_equal(aligned_out[starts[e] + active[e] : starts[e] + extents[e]], 0)
+        read += active[e]
+
+
+@pytest.mark.parametrize(
+    "capacity,groups,arrivals",
+    [
+        # The hero geometry: one chunk of three experts over the production receiver capacity.
+        (301466, 3, [301466, 0, 0]),
+        (301466, 3, [100000, 100000, 101466]),
+        (301466, 3, [99999, 100001, 65536]),
+        (301466, 3, [0, 0, 0]),
+        # Edges: a single group, an empty group, an exactly aligned capacity.
+        (301466, 1, [301466]),
+        (301466, 1, [0]),
+        (1024, 4, [0, 512, 0, 512]),
+        (1024, 4, [1, 1, 1, 1]),
+        (768, 3, [256, 256, 256]),
+    ],
+)
+def test_prealigned_offsets_are_a_full_aligned_partition_of_the_receiver_buffer(capacity, groups, arrivals):
+    """Both halves of the kernel's contract, on the layout the transport hands it.
+
+    The pre-aligned path skips `pad_grouped_rows`, so nothing downstream repairs the offsets: the
+    transport's buffer sizing and `full_partition_offsets` have to produce every extent a multiple
+    of `_GROUP_ALIGNMENT` *and* a final offset equal to the operand's row count. Rounding the
+    extents up alone gives the first and not the second.
+    """
+    alignment = _GROUP_ALIGNMENT
+    receiver_rows = aligned_group_capacity(capacity, groups, alignment)
+    assert receiver_rows % alignment == 0
+    assert receiver_rows >= capacity
+
+    extents = np.asarray(_align_up_rows(jnp.asarray(arrivals, jnp.int32), alignment))
+    assert extents.sum() <= receiver_rows, "the static buffer must cover every rounding of the routing"
+
+    offsets = np.asarray(full_partition_offsets(receiver_rows, jnp.asarray(extents)))
+    sizes = np.diff(np.concatenate([[0], offsets]))
+
+    assert int(offsets[-1]) == receiver_rows
+    assert all(int(size) % alignment == 0 for size in sizes)
+    assert all(int(size) >= arrival for size, arrival in zip(sizes, arrivals, strict=True))
+
+
+def test_receiver_alignment_must_satisfy_the_wgrad_kernels_group_alignment():
+    """The pre-aligned path skips the kernel's own pad, so the layout has to already satisfy it."""
+    assert RAGGED_CUDNN_RECEIVER_ALIGNMENT == _GROUP_ALIGNMENT == 256
+    assert _resolve_receiver_alignment(None) == 1
+    assert _resolve_receiver_alignment(_GROUP_ALIGNMENT) == _GROUP_ALIGNMENT
+    assert _resolve_receiver_alignment(2 * _GROUP_ALIGNMENT) == 2 * _GROUP_ALIGNMENT
+    # The alignments this option was written against before the kernel's real requirement was
+    # known. An arm configured at one of them must not quietly run a misaligned layout.
+    for stale in (1, 8, 64, 128, _GROUP_ALIGNMENT + 1, _GROUP_ALIGNMENT + 128):
+        with pytest.raises(ValueError, match="multiple"):
+            _resolve_receiver_alignment(stale)
+    with pytest.raises(ValueError, match="positive"):
+        _resolve_receiver_alignment(0)
+    with pytest.raises(ValueError, match="positive"):
+        _resolve_receiver_alignment(-256)
+
+
+def test_receiver_alignment_routes_the_expert_mlp_to_the_prealigned_wgrad(monkeypatch):
+    """An aligned receiver layout is the only thing that lets the cute path skip the pad."""
+    monkeypatch.setattr(ep_ragged_all_to_all, "_quack_grouped_gemm_available", lambda: True)
+    select = ep_ragged_all_to_all._select_expert_mlp
+    assert select(jax.nn.silu) is ep_ragged_all_to_all._cute_expert_mlp
+    assert select(jax.nn.silu, receiver_alignment=1) is ep_ragged_all_to_all._cute_expert_mlp
+    assert select(jax.nn.silu, receiver_alignment=_GROUP_ALIGNMENT) is ep_ragged_all_to_all._cute_expert_mlp_prealigned
+    # The portable path reads group sizes off whatever buffer it is handed, aligned or not.
+    assert select(jax.nn.gelu, receiver_alignment=_GROUP_ALIGNMENT) is _ragged_dot_expert_mlp
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])

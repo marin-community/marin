@@ -42,6 +42,7 @@ from levanter.grug.attention import (
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
+    RAGGED_CUDNN_RECEIVER_ALIGNMENT,
     RAGGED_DISPATCH_REMAT_SAVE_NAMES,
     MoeActivation,
     MoEExpertMlp,
@@ -256,6 +257,13 @@ class GrugModelConfig:
     share of the receiver capacity. None takes the backend default
     (`RAGGED_DEFAULT_EXPERT_CHUNKS`, falling back to one chunk on a local bank it does not
     divide); an explicit count must divide the local bank. Other transports ignore it."""
+    ragged_receiver_alignment: int | None = None
+    """Row alignment each expert group starts on in the ragged all-to-all receiver buffer. None
+    packs the groups back to back and leaves the cuDNN grouped weight-gradient wrapper to copy
+    both operands into an aligned buffer itself; a value (a multiple of
+    `RAGGED_CUDNN_RECEIVER_ALIGNMENT`) builds that layout in the transport and deletes the copies.
+    It moves rows within the buffer, not capacity, so the accepted set is unchanged. Other
+    transports ignore it."""
     pooled_transport_capacity_factor: float | None = None
     num_expert_waves: int = 1
     report_capacity_overflow: bool = False
@@ -314,6 +322,13 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.ragged_expert_chunks is not None and self.ragged_expert_chunks <= 0:
             raise ValueError("ragged_expert_chunks must be positive")
+        if self.ragged_receiver_alignment is not None and (
+            self.ragged_receiver_alignment <= 0 or self.ragged_receiver_alignment % RAGGED_CUDNN_RECEIVER_ALIGNMENT != 0
+        ):
+            raise ValueError(
+                f"ragged_receiver_alignment must be a positive multiple of {RAGGED_CUDNN_RECEIVER_ALIGNMENT}, "
+                f"got {self.ragged_receiver_alignment}"
+            )
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
         if self.moe_implementation == "fixed_pooled_wave_all_to_all":
@@ -1045,6 +1060,7 @@ class MoEMLP(eqx.Module):
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
                 ragged_expert_chunks=cfg.ragged_expert_chunks,
+                ragged_receiver_alignment=cfg.ragged_receiver_alignment,
                 num_expert_waves=cfg.num_expert_waves,
             ),
             cfg=cfg,

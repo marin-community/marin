@@ -1318,3 +1318,47 @@ speedup buys ~1-2.5% at best, so treat it as a profiling check).
 
 Ceiling: best published fine-grained-MoE MFU without quantization is
 28.8% (Megatron, 64 experts top-8, H100, full stack). We are at 24.0.
+
+## 2026-08-31 ~19:00Z: C15-on-fix reviews CONVERGE on a blocker I would have mismeasured
+
+Both reviewers independently found the same F1 and it is decisive: the
+physical-group-sizes NaN closure drives the four activation-path QuACK
+GEMMs' varlen M from sum(arrivals) to receiver_rows. The implementer
+priced it against CAPACITY (+0.20%); the correct denominator is
+ARRIVALS, because the GEMMs run over cu[-1]. At the hero:
+  arrivals/chunk ~262,144 vs receiver_rows 302,080
+  M-tiles 3*ceil(87381/256)=1026 -> 302080/256=1180 = +15.0%
+Against the campaign's own measured QuACK family (3,036 ms/step incl.
+886 ms of remat recompute) that is +455 ms, versus -365 ms from deleting
+the pad. NET +90 ms/step ~ -0.14 MFU: the arm as staged would have LOST,
+and I would have recorded "the copy elimination does not pay" when the
+truth is "we silently added 15% GEMM work". Note the inflation is
+receiver_rows/arrivals in general -- it approaches the capacity factor
+under balanced routing and is unbounded at low utilization, so this was
+never a hero-specific +0.2%.
+
+The NaN hazard itself is CONFIRMED real by both: dw2=wgrad(h,dy) and
+dw13=wgrad(x_dispatch,d_gu); the transport-side operands are guaranteed
+zero in the leftover by _loop_local_zeros, but h and d_gu are fresh
+QuACK/elementwise outputs whose rows past cu[-1] are recycled BFC
+memory, and 0*NaN poisons an M-reduction accumulator. The old path was
+safe only because pad_grouped_rows masked with `valid`.
+
+Both proposed the same cheap closure, which is what I had already sent
+to the implementer: keep cu = active/aligned extents for the GEMMs (no
+inflation -- the aligned extents are free, since 256 IS the QuACK tile),
+pass physical sizes to the WGRAD ONLY, and zero h and d_gu past cu[-1]
+via the existing _zero_inactive_grouped_rows rather than a second
+mechanism. Estimated net -275 to -315 ms/step (~+0.4 MFU) for ~20 lines.
+
+Two more findings adopted: (F3) the 4-GPU dense-reference gate ALREADY
+plumbs receiver_alignment and nothing passes 256 -- so "the first real
+invocation is on the arm" was self-inflicted; run the gate at None and
+256 before any rack time, which also re-confirms the hotfix
+independently. (F2) the "byte-identical default" claim is overstated --
+the CPU lowering selects the portable MLP and never emits the cuDNN
+path at all, so the sha256 match covers the transport, not the two
+files that changed; restate as value-identical, and brute-force
+evidence (50k draws, 0 mismatches) supports that weaker claim.
+Refuted: alignment>256 is sound, not unsound (F4) -- it just makes F1
+worse and breaks the byte-identity docstring.
