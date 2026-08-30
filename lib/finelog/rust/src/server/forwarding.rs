@@ -895,12 +895,10 @@ enum PushError {
     Permanent(String),
 }
 
-/// Whether the hub identified invalid content that cannot succeed when resent unchanged.
 fn is_permanent_rejection(error: &connectrpc::ConnectError) -> bool {
     error.code == connectrpc::error::ErrorCode::InvalidArgument
 }
 
-/// Whether the hub rejected a well-formed batch against its current registered schema.
 fn is_schema_conflict(error: &connectrpc::ConnectError) -> bool {
     error.code == connectrpc::error::ErrorCode::FailedPrecondition
 }
