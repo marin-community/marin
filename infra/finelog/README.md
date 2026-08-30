@@ -45,13 +45,20 @@ intended checkout; there is no rollout counter in Pulumi configuration.
 - `persistent-volume` is the default. Pulumi creates a protected PVC, or adopts
   the existing claim named by `cache_pvc_name`.
 - `node-local` mounts an `emptyDir` backed by the node's ephemeral disk. Pulumi
-  requests and limits ephemeral storage to `storage_gb`, and creates no PVC.
+  requests and limits ephemeral storage to `storage_gb`, and normally creates
+  no PVC.
   Pod replacement discards the cache, so use this only for a regional sender
   whose forwarded hub copy may become the read source after a restart.
 
-Set `deployment.k8s.cache_pvc_name` only with `persistent-volume` to adopt and
-mount an existing replacement claim. Enable the stack's `import` option when
-Pulumi first adopts that claim.
+With `persistent-volume`, set `deployment.k8s.cache_pvc_name` to adopt and mount
+an existing replacement claim. Enable the stack's `import` option when Pulumi
+first adopts that claim.
+
+To move an existing Pulumi stack to `node-local`, first change `cache_storage`
+but retain `cache_pvc_name` for the rollout. Pulumi keeps the named claim
+unmounted, clears its deletion protection, and marks it for retention. After
+verifying the node-local pod, remove `cache_pvc_name` in a second update; Pulumi
+then removes the claim from its state without deleting the Kubernetes PVC.
 
 For a read-only preview, run `pulumi preview --stack <cluster>` from
 `infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic

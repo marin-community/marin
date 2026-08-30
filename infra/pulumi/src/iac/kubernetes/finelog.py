@@ -126,6 +126,8 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
             name=CACHE_VOLUME_NAME,
             persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(claim_name=cache_pvc_name),
         )
+    if deployment.cache_storage is K8sCacheStorage.PERSISTENT_VOLUME or deployment.cache_pvc_name is not None:
+        cache_pvc_name = k8s_cache_pvc_name(config)
         pvc = k8s.core.v1.PersistentVolumeClaimInitArgs(
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 name=cache_pvc_name,
@@ -301,6 +303,7 @@ class FinelogServer(pulumi.ComponentResource):
             depends_on: list[pulumi.Resource] | None = None,
             ignore_changes: list[str] | None = None,
             protect: bool = False,
+            retain_on_delete: bool = False,
         ) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
                 parent=self,
@@ -309,6 +312,7 @@ class FinelogServer(pulumi.ComponentResource):
                 ignore_changes=ignore_changes,
                 import_=import_id if args.adopt else None,
                 protect=protect,
+                retain_on_delete=retain_on_delete,
             )
 
         dependencies: list[pulumi.Resource] = []
@@ -316,7 +320,11 @@ class FinelogServer(pulumi.ComponentResource):
             pvc = k8s.core.v1.PersistentVolumeClaim(
                 "pvc",
                 args=resources.pvc,
-                opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
+                opts=child_options(
+                    f"{namespace}/{k8s_cache_pvc_name(config)}",
+                    protect=config.deployment.k8s.cache_storage is K8sCacheStorage.PERSISTENT_VOLUME,
+                    retain_on_delete=True,
+                ),
             )
             dependencies.append(pvc)
         deployment = k8s.apps.v1.Deployment(

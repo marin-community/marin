@@ -86,6 +86,8 @@ class K8sDeployment:
     storage_class: str | None = None
     storage_gb: int = 200
     # Existing replacement claim to adopt and mount instead of `<name>-cache`.
+    # With node-local storage, keeps that claim managed but unmounted for one
+    # transition update so Pulumi can retain it safely.
     cache_pvc_name: str | None = None
     cpu_request: str = "2"
     cpu_limit: str = "8"
@@ -107,8 +109,6 @@ class K8sDeployment:
             raise ValueError("deployment.k8s.storage_gb must be > 0")
         if self.cache_storage is K8sCacheStorage.NODE_LOCAL and self.storage_class is not None:
             raise ValueError("deployment.k8s.storage_class cannot be set with node-local cache storage")
-        if self.cache_storage is K8sCacheStorage.NODE_LOCAL and self.cache_pvc_name is not None:
-            raise ValueError("deployment.k8s.cache_pvc_name cannot be set with node-local cache storage")
 
 
 @dataclass(frozen=True)
