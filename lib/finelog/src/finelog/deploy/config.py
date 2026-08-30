@@ -39,6 +39,8 @@ class TelemetryMigrationMode(StrEnum):
 
 
 class K8sCacheStorage(StrEnum):
+    """Kubernetes cache storage backends."""
+
     PERSISTENT_VOLUME = "persistent-volume"
     NODE_LOCAL = "node-local"
 
