@@ -14,6 +14,7 @@
 //! blanket trait, which must be in scope.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -64,6 +65,37 @@ pub fn build_remote_object_store(
 impl RemoteObjectStore {
     pub(super) fn provider(&self) -> Provider {
         self.provider.clone()
+    }
+
+    /// The backend store and base URL a query engine registers to scan this
+    /// provider's objects directly. `None` for a local-directory provider,
+    /// whose objects scan through the engine's default file store.
+    pub fn scan_registration(&self) -> Option<(String, Arc<dyn object_store::ObjectStore>)> {
+        self.provider
+            .base_url()
+            .map(|base| (base.to_string(), Arc::clone(self.provider.backend())))
+    }
+
+    /// The URL a registered scan reads `id` from.
+    pub(super) fn scan_url(&self, id: &ObjectId) -> String {
+        let key: Vec<&str> = self
+            .prefix_parts()
+            .chain(id.as_str().split('/').filter(|part| !part.is_empty()))
+            .collect();
+        match self.provider.base_url() {
+            Some(base) => format!("{base}/{}", key.join("/")),
+            None => {
+                let mut path = self
+                    .provider
+                    .local_root()
+                    .expect("a provider without a base URL has a local root")
+                    .to_path_buf();
+                for part in key {
+                    path.push(part);
+                }
+                path.to_string_lossy().into_owned()
+            }
+        }
     }
 
     /// Split the configured prefix on `/` into individual path components.
@@ -221,6 +253,10 @@ impl RemoteObjectStore {
 impl ObjectStore for RemoteObjectStore {
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         self.write_immutable(id, bytes).await
+    }
+
+    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
+        Some(self.scan_url(id))
     }
 
     async fn read(&self, id: &ObjectId) -> Result<Option<StoredObject>, StatsError> {

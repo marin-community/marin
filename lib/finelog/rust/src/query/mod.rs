@@ -162,6 +162,20 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
         .clone()
 }
 
+/// Register a remote object store so scans can read `base_url` objects
+/// directly. Called once at store construction for a bucket-backed provider;
+/// local-directory providers scan through the default file store.
+pub fn register_scan_object_store(
+    base_url: &str,
+    store: Arc<dyn object_store::ObjectStore>,
+) -> Result<(), crate::errors::StatsError> {
+    let url = url::Url::parse(base_url).map_err(|error| {
+        crate::errors::StatsError::Internal(format!("parse scan store URL {base_url:?}: {error}"))
+    })?;
+    shared_runtime_env().register_object_store(&url, store);
+    Ok(())
+}
+
 /// Occupancy of the process-wide parquet metadata cache.
 ///
 /// The cache holds decoded footers, so it is what stands between a query and a

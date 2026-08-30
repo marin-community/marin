@@ -213,6 +213,25 @@ pub trait ObjectStore: Send + Sync {
         )))
     }
 
+    /// The URL a registered query-engine scan reads this object from directly,
+    /// when the backing provider supports remote scans.
+    fn remote_scan_url(&self, _id: &ObjectId) -> Option<String> {
+        None
+    }
+
+    /// The verified local cache file for `reference` when one is already
+    /// present, without fetching anything.
+    async fn cached_path(
+        &self,
+        _reference: &ObjectReference,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        Ok(None)
+    }
+
+    /// Begin materializing `reference` into the local cache without waiting
+    /// for it. A store without a cache does nothing.
+    fn warm(&self, _reference: &ObjectReference) {}
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

@@ -42,7 +42,7 @@ use crate::store::catalog::{
 use crate::store::ipc::decode_one_record_batch;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::object_store::{
-    build_remote_object_store, CachedObjectStore, LegacyObjectStore, ObjectStore,
+    build_remote_object_store, CachedObjectStore, LegacyObjectStore, ObjectStore, RemoteObjectStore,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
@@ -344,6 +344,14 @@ impl Store {
                 Some(interpose) => interpose(store),
                 None => store,
             });
+        if let Some((base_url, backend)) = provider
+            .as_ref()
+            .and_then(RemoteObjectStore::scan_registration)
+        {
+            // Scans read uncached objects straight from the provider while the
+            // cache fills behind them.
+            crate::query::register_scan_object_store(&base_url, backend)?;
+        }
         let query_visibility = Arc::new(tokio::sync::RwLock::new(()));
         let object_store = match (&provider, &data_dir) {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(

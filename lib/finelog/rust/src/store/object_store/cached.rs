@@ -314,6 +314,28 @@ impl ObjectStore for CachedObjectStore {
         self.cache.path(id)
     }
 
+    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
+        self.source.remote_scan_url(id)
+    }
+
+    async fn cached_path(
+        &self,
+        reference: &ObjectReference,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.lookup(reference).await
+    }
+
+    fn warm(&self, reference: &ObjectReference) {
+        let store = self.clone();
+        let reference = reference.clone();
+        tokio::spawn(async move {
+            if let Err(error) = store.materialize(&reference).await {
+                tracing::debug!(%error, object = ?reference.id.as_str(),
+                    "background cache fill failed; the next scan reads remote again");
+            }
+        });
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

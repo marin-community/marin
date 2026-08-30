@@ -35,6 +35,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::indices::{IndexRegistry, SegmentArtifacts};
@@ -92,23 +93,46 @@ impl ObjectSources {
     /// Fetch exactly the objects `paths` names, plus the artifacts those
     /// segments advertise.
     ///
-    /// A source object that cannot be localized fails the scan: its rows are
-    /// part of the answer. An artifact that cannot be localized is skipped —
-    /// derived indexes are an optimization and the source Parquet remains
-    /// authoritative — matching the fail-open behavior of a corrupt bundle.
-    async fn localize(&self, paths: &[String]) -> DFResult<()> {
-        let selected: Vec<_> = paths
-            .iter()
-            .filter_map(|path| self.segments.get(path))
-            .collect();
-        futures::future::try_join_all(selected.iter().map(|objects| async move {
-            self.store
-                .local_path(&objects.source)
+    /// Resolve the segments `paths` names into what this scan reads: the
+    /// verified cache file when one exists, otherwise the object's remote URL —
+    /// the query proceeds against the remote while a background fill (bounded
+    /// by the store's fetch semaphore) materializes the cache for the next
+    /// scan. A store whose provider cannot serve remote scans localizes
+    /// synchronously, and a source that exists nowhere fails the scan: its
+    /// rows are part of the answer.
+    ///
+    /// Artifacts never block a query. A cached bundle or projection is used; an
+    /// uncached one is warmed in the background and this scan reads the source
+    /// Parquet — matching the fail-open behavior of a corrupt bundle.
+    async fn resolve(&self, paths: &[String]) -> DFResult<ResolvedScan> {
+        let external = |error| datafusion::error::DataFusionError::External(Box::new(error));
+        let mut resolved = ResolvedScan::default();
+        for path in paths {
+            let Some(objects) = self.segments.get(path) else {
+                continue;
+            };
+            match self
+                .store
+                .cached_path(&objects.source)
                 .await
-                .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))
-        }))
-        .await?;
-        for objects in selected {
+                .map_err(external)?
+            {
+                Some(local) => resolved.local.push(local.to_string_lossy().into_owned()),
+                None => match self.store.remote_scan_url(&objects.source.id) {
+                    Some(url) => {
+                        self.store.warm(&objects.source);
+                        resolved.remote.push(url);
+                    }
+                    None => {
+                        let local = self
+                            .store
+                            .local_path(&objects.source)
+                            .await
+                            .map_err(external)?;
+                        resolved.local.push(local.to_string_lossy().into_owned());
+                    }
+                },
+            }
             for reference in objects
                 .artifacts
                 .bundle
@@ -119,13 +143,27 @@ impl ObjectSources {
                 else {
                     continue;
                 };
-                if let Err(error) = self.store.local_path(&artifact).await {
-                    tracing::debug!(%error, "artifact object unavailable; scanning source parquet");
+                if self
+                    .store
+                    .cached_path(&artifact)
+                    .await
+                    .map_err(external)?
+                    .is_none()
+                {
+                    self.store.warm(&artifact);
                 }
             }
         }
-        Ok(())
+        Ok(resolved)
     }
+}
+
+/// The file sets one scan reads: verified local cache files, and remote URLs
+/// for the objects the cache does not hold yet.
+#[derive(Default)]
+struct ResolvedScan {
+    local: Vec<String>,
+    remote: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -185,9 +223,22 @@ impl NamespaceProvider {
     }
 
     fn listing_table(schema: SchemaRef, segment_paths: &[String]) -> DFResult<Arc<ListingTable>> {
-        let urls: Vec<ListingTableUrl> = segment_paths
-            .iter()
-            .map(|path| ListingTableUrl::parse(format!("file://{path}")))
+        Self::listing_table_for_urls(
+            schema,
+            segment_paths.iter().map(|path| format!("file://{path}")),
+        )
+    }
+
+    /// A listing table over pre-formed URLs — remote object URLs (`gs://…`)
+    /// resolve against the object store registered at store open; bare paths
+    /// fall through to the local filesystem store.
+    fn listing_table_for_urls(
+        schema: SchemaRef,
+        urls: impl IntoIterator<Item = String>,
+    ) -> DFResult<Arc<ListingTable>> {
+        let urls: Vec<ListingTableUrl> = urls
+            .into_iter()
+            .map(ListingTableUrl::parse)
             .collect::<DFResult<Vec<_>>>()?;
         let options =
             ListingOptions::new(Arc::new(ParquetFormat::default())).with_file_extension(".parquet");
@@ -426,22 +477,49 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Prune from the pinned table metadata BEFORE any object is
-                // fetched, then localize exactly the selected objects. Planning
-                // a cold-cache query costs no downloads for segments the
-                // predicate excluded.
+                // touched. Planning costs nothing for segments the predicate
+                // excluded. Object-backed segments then split by cache state:
+                // cached files scan locally, the rest scan the remote directly
+                // while a background fill warms the cache for the next query.
                 let segment_paths = self.segment_paths_for_filters(filters);
-                if let Some(sources) = &self.object_sources {
-                    sources.localize(&segment_paths).await?;
-                }
                 // Delegate to DataFusion's parquet scan (which keeps the existing
                 // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
-                let plan = if segment_paths.len() == self.segment_paths.len() {
-                    t.scan(state, projection, filters, limit).await?
-                } else if segment_paths.is_empty() {
+                let plan = if segment_paths.is_empty() {
                     MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
                         .scan(state, projection, filters, limit)
                         .await?
+                } else if let Some(sources) = &self.object_sources {
+                    let resolved = sources.resolve(&segment_paths).await?;
+                    let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+                    if !resolved.local.is_empty() {
+                        plans.push(
+                            Self::listing_table(Arc::clone(&self.schema), &resolved.local)?
+                                .scan(state, projection, filters, limit)
+                                .await?,
+                        );
+                    }
+                    if !resolved.remote.is_empty() {
+                        plans.push(
+                            Self::listing_table_for_urls(
+                                Arc::clone(&self.schema),
+                                resolved.remote.iter().cloned(),
+                            )?
+                            .scan(state, projection, filters, limit)
+                            .await?,
+                        );
+                    }
+                    match plans.len() {
+                        0 => {
+                            MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
+                                .scan(state, projection, filters, limit)
+                                .await?
+                        }
+                        1 => plans.pop().expect("one plan"),
+                        _ => UnionExec::try_new(plans)?,
+                    }
+                } else if segment_paths.len() == self.segment_paths.len() {
+                    t.scan(state, projection, filters, limit).await?
                 } else {
                     Self::listing_table(Arc::clone(&self.schema), &segment_paths)?
                         .scan(state, projection, filters, limit)

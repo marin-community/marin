@@ -316,6 +316,21 @@ impl ObjectStore for FaultInjectingObjectStore {
         self.inner.planned_local_path(id)
     }
 
+    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
+        self.inner.remote_scan_url(id)
+    }
+
+    async fn cached_path(
+        &self,
+        reference: &ObjectReference,
+    ) -> Result<Option<PathBuf>, StatsError> {
+        self.inner.cached_path(reference).await
+    }
+
+    fn warm(&self, reference: &ObjectReference) {
+        self.inner.warm(reference)
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

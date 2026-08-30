@@ -24,6 +24,9 @@ pub(super) struct Provider {
     backend: Arc<dyn BackendObjectStore>,
     prefix: String,
     local_root: Option<PathBuf>,
+    /// `gs://bucket` / `s3://bucket` for a bucket-backed provider; `None` for
+    /// a local directory, whose objects scan through the default file store.
+    base_url: Option<String>,
 }
 
 impl Provider {
@@ -43,6 +46,7 @@ impl Provider {
                 backend: Arc::new(backend),
                 prefix: prefix.to_string(),
                 local_root: None,
+                base_url: Some(format!("{GCS_SCHEME}{bucket}")),
             }));
         }
         if let Some(rest) = value.strip_prefix(S3_SCHEME) {
@@ -57,6 +61,7 @@ impl Provider {
                 backend: Arc::new(backend),
                 prefix: prefix.to_string(),
                 local_root: None,
+                base_url: Some(format!("{S3_SCHEME}{bucket}")),
             }));
         }
 
@@ -69,11 +74,16 @@ impl Provider {
             backend: Arc::new(backend),
             prefix: String::new(),
             local_root: Some(PathBuf::from(value)),
+            base_url: None,
         }))
     }
 
     pub(super) fn backend(&self) -> &Arc<dyn BackendObjectStore> {
         &self.backend
+    }
+
+    pub(super) fn base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
     }
 
     pub(super) fn prefix_parts(&self) -> impl Iterator<Item = &str> {

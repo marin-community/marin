@@ -377,6 +377,43 @@ fn localized_data_objects(faults: &FaultInjectingObjectStore) -> BTreeSet<String
         .collect()
 }
 
+/// The data-object keys (`_finelog/.../objects/*.parquet`) the local cache
+/// holds right now.
+fn cached_data_objects(data_dir: &Path) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let mut stack = vec![data_dir.join("_finelog")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(relative) = path.strip_prefix(data_dir) {
+                let key = relative.to_string_lossy().into_owned();
+                if key.contains("/objects/") {
+                    keys.insert(key);
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// Wait for the background cache fill to settle on `expected`, returning
+/// whatever the cache holds at the deadline.
+async fn wait_for_cache_fill(data_dir: &Path, expected: &BTreeSet<String>) -> BTreeSet<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let cached = cached_data_objects(data_dir);
+        if &cached == expected || std::time::Instant::now() > deadline {
+            return cached;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 /// Assert that a bootstrap resolved the table's state and nothing else: it read
 /// HEAD, and it fetched no data object, index bundle, or projection.
 fn assert_metadata_only_bootstrap(faults: &FaultInjectingObjectStore) {
@@ -649,10 +686,10 @@ async fn a_fence_steal_during_an_ambiguous_flush_commit_leaves_one_writer() {
 
 /// A store that restarts with no local cache and no local catalog bootstraps
 /// from the object directory alone. Recovery downloads no data, the first reads
-/// localize only the objects they selected, and the table compacts cleanly
-/// afterwards.
+/// scan the object directory directly while the cache fills in the background
+/// with only the live objects, and the table compacts cleanly afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_cold_restart_serves_reads_before_localizing_anything_it_did_not_select() {
+async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
     let cluster = Cluster::new("scenario_cold_restart");
     let mut invariants = Invariants::new(&cluster.remote_dir);
 
@@ -685,31 +722,33 @@ async fn a_cold_restart_serves_reads_before_localizing_anything_it_did_not_selec
     restarted.recover_tables().await.unwrap();
     assert_metadata_only_bootstrap(&faults);
 
-    // A full scan, before any maintenance cycle.
+    // A full scan, before any maintenance cycle. The cold cache never blocks
+    // the read: the scan runs against the object directory itself and the
+    // cache fills behind it.
     faults.clear_calls();
+    assert!(cached_data_objects(&cluster.data_dir).is_empty());
     let scanned = seq_column(&run_sql(&restarted, &format!("SELECT seq FROM \"{TABLE}\"")).await);
     assert_eq!(scanned, vec![1, 2, 3, 4]);
+    assert!(
+        localized_data_objects(&faults).is_empty(),
+        "a cold scan must not block on object downloads"
+    );
+    let warmed = wait_for_cache_fill(&cluster.data_dir, &live).await;
     assert_eq!(
-        localized_data_objects(&faults),
-        live,
-        "a scan localizes the live objects and nothing the state retired"
+        warmed, live,
+        "the background fill warms the live objects and nothing the state retired"
     );
 
-    // A forwarding-style read of one sequence window.
-    faults.clear_calls();
+    // A forwarding-style read of one sequence window, now served from the
+    // warmed cache.
     let forwarded = run_sql(
         &restarted,
         &format!("SELECT * FROM \"{TABLE}\" WHERE seq > 3 AND seq <= {last_seq} ORDER BY seq"),
     )
     .await;
     assert_eq!(seq_column(&forwarded), vec![4]);
-    assert!(
-        localized_data_objects(&faults).is_subset(&live),
-        "a windowed read must not reach a retired object"
-    );
 
     // A FetchLogs-style read: a key prefix, a cursor, and a limit.
-    faults.clear_calls();
     let fetched = run_sql(
         &restarted,
         &format!(
@@ -718,9 +757,10 @@ async fn a_cold_restart_serves_reads_before_localizing_anything_it_did_not_selec
     )
     .await;
     assert_eq!(seq_column(&fetched), vec![2, 3]);
-    assert!(
-        localized_data_objects(&faults).is_subset(&live),
-        "a FetchLogs-style read must not reach a retired object"
+    assert_eq!(
+        cached_data_objects(&cluster.data_dir),
+        live,
+        "warm reads never materialize a retired object"
     );
 
     // Compaction after a cold restart commits like any other.
