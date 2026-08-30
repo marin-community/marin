@@ -483,9 +483,9 @@ import flag: the live PVC must be adopted, not recreated.
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
 
-Confirm the hub is receiving. The sender stamps the `cluster` column, and a row
-only lands once its token verified, so a row carrying the sender's name is proof
-forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
+Confirm the hub is receiving. The hub overwrites the `cluster` column with the
+cluster bound to the verified JWT, so a row carrying the sender's name proves that
+sender's forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
 the whole `log` namespace will time out. An empty `cluster` is the hub's own rows;
 a sender missing from this list is a sender whose rows are not arriving.
 
@@ -517,9 +517,10 @@ uv run finelog query "$CLUSTER" --format table \
 
 Interpret the pair as follows:
 
-- Regional rows present and hub rows absent or only a prefix: forwarding is
-  delayed. Repeat the exact hub query; do not treat an immediate empty result as
-  loss.
+- Regional rows present and hub rows absent, only a prefix, or a non-prefix subset:
+  forwarding is delayed or a batch was permanently rejected. Repeat the exact hub
+  query, then inspect the forwarder warnings and `telemetry_v1.finelog` counters below.
+  Do not classify an immediate empty result by itself as loss.
 - Rows absent regionally but present in `kubectl logs <pod> -c task`: inspect
   `kubectl logs <pod> -c log-shipper` and the regional Finelog ingest path.
 - Rows absent from both Finelog stores and the container runtime: the task did
@@ -531,6 +532,24 @@ therefore does not monopolize forwarding ahead of new log rows. Hub or network
 failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
+
+The hub returns `failed_precondition` when a well-formed batch conflicts with its
+registered schema. The sender preserves the cursor, clears its registration cache,
+and retries after registration refresh. A persistent conflict pins that namespace's
+cursor, holding later rows behind it until the schemas become compatible or local
+retention evicts the blocked positions. If refresh does not clear the next sweep,
+compare the source and hub registrations and deploy a compatible schema; do not reset
+the cursor. Other namespaces continue forwarding.
+
+The hub returns `invalid_argument` for malformed row content. The sender drops the
+entire outbound chunk, including otherwise valid rows in that chunk, and advances its
+cursor because resending the same bytes cannot succeed. The regional store remains the
+source of record until retention evicts those rows. `forwarding_seq_positions` with
+`outcome='permanent_rejection'` records the skipped sequence span.
+
+Roll this status-code contract to the hub before regional senders. An older hub reports
+registered-schema conflicts as `invalid_argument`, which a newer sender would treat as
+permanent. Verify the hub build first, then roll the regional forwarders.
 
 Inspect the sender's forwarder messages without changing the deployment. Read
 the deployment name and Kubernetes connection details from
@@ -544,16 +563,49 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
 
 Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
-draining every locally retained row. `rows evicted before they were forwarded`
+processing retained rows without moving the cursor merely because of backlog pressure.
+`rows evicted before they were forwarded`
 means that local retention has already made source sequence positions unreadable.
-`hub rejected the batch; preserving the cursor` means the sender will re-register
-the namespace's current schema on the next sweep and retry the same rows. A current
+`batch conflicts with the hub schema; preserving the cursor` means the sender will
+re-register the namespace's current schema on the next sweep and retry the same rows.
+`hub permanently rejected the batch; dropping it` means the hub classified the content
+as invalid and the sender advanced the cursor. A current
 hub also registers an unseen server-owned destination before appending telemetry
 routed from the legacy `telemetry_v1` root. A `namespace ... is not registered`
 rejection for such a destination means the hub predates that behavior or its managed
-registration failed. The cumulative `skipped_seqs` progress counter reports only
-sequence positions lost to local retention; filtered foreign-origin rows may make it an
-upper bound on lost rows.
+registration failed. The cumulative, process-lifetime `skipped_seqs` log field includes
+permanent rejections and local-retention gaps and resets after restart.
+
+Sequence positions measure cursor distance, not decoded row count. Gaps and rows
+filtered because they already carry a foreign origin can make both `skipped_seqs` and
+`forwarding_seq_positions` an upper bound on affected rows. Telemetry values are
+five-minute deltas; an unreported partial interval is lost if the sender restarts.
+
+Each regional sender writes five-minute delta counters to `telemetry_v1.finelog`; the
+same forwarder copies them to the hub on a later successful sweep. Query dropped
+positions across the fleet for the last hour with:
+
+```bash
+uv run finelog query marin --format table \
+  'SELECT date_bin(INTERVAL '\''5 minutes'\'', to_timestamp_millis(timestamp_ms)) AS bucket,
+          cluster,
+          json_get(attributes_json, '\''namespace'\'') AS namespace,
+          json_get(attributes_json, '\''outcome'\'') AS outcome,
+          sum(value) AS seq_positions
+   FROM "telemetry_v1.finelog"
+   WHERE name = '\''forwarding_seq_positions'\''
+     AND json_get(attributes_json, '\''outcome'\'') IN
+         ('\''permanent_rejection'\'', '\''retention_eviction'\'')
+     AND timestamp_ms > (extract(epoch from now()) * 1000 - 3600000)
+   GROUP BY bucket, cluster, namespace, outcome
+   ORDER BY bucket, cluster, namespace, outcome'
+```
+
+The Fleet health Grafana dashboard plots failed batches and dropped sequence positions.
+`forwarding_batches` also exposes `schema_conflict` and `retryable_failure` outcomes.
+Check `max(timestamp_ms)` for the sender before interpreting an empty hub result. During
+a hub or network failure the diagnostic telemetry is also delayed; run the same query
+against the regional target without a `cluster` predicate to inspect its local copy.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
