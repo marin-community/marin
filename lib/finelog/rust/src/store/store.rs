@@ -33,7 +33,7 @@ use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, RegisteredNamespace};
 use crate::store::ipc::decode_one_record_batch;
-use crate::store::namespace::Namespace;
+use crate::store::namespace::{buffered_batch_bytes, Namespace};
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
@@ -153,6 +153,9 @@ pub struct Store {
     mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
+    /// Serializes the short admission-and-append section so a routed write is
+    /// either admitted for every destination or appended nowhere.
+    ingest_lock: Mutex<()>,
     /// Serializes the complete catalog-and-engine registration lifecycle per namespace.
     /// Concurrent first registrations must not build and displace separate engines.
     namespace_registration_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -280,6 +283,7 @@ impl Store {
             mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
+            ingest_lock: Mutex::new(()),
             namespace_registration_locks: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
             index_cache: Arc::new(IndexCache::new(index_cache_mb)),
@@ -704,13 +708,26 @@ impl Store {
             ignored_columns.extend(ignored);
             prepared_partitions.push((destination, engine, aligned));
         }
+        let _ingest_guard = self.ingest_lock.lock().unwrap();
+        let mut admission_bytes: BTreeMap<String, (Arc<Namespace>, i64)> = BTreeMap::new();
+        for (destination, engine, aligned) in &prepared_partitions {
+            let added_bytes = buffered_batch_bytes(aligned.byte_size, aligned.num_rows as i64);
+            let entry = admission_bytes
+                .entry(destination.clone())
+                .or_insert_with(|| (Arc::clone(engine), 0));
+            entry.1 = entry.1.saturating_add(added_bytes);
+        }
+        for (_, (engine, added_bytes)) in admission_bytes {
+            engine.ensure_append_capacity(added_bytes)?;
+        }
         let persisted_targets = prepared_partitions
             .into_iter()
             .map(|(destination, engine, aligned)| {
-                let last_seq = engine.append_aligned_batch(&aligned);
-                (destination, last_seq)
+                engine
+                    .try_append_aligned_batch(&aligned)
+                    .map(|last_seq| (destination, last_seq))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ForwardedWrite {
             rows_written,
             persisted_targets,
@@ -739,7 +756,8 @@ impl Store {
             stamp_cluster_column(&mut aligned, origin);
         }
         let n = aligned.num_rows as i64;
-        let last_seq = engine.append_aligned_batch(&aligned);
+        let _ingest_guard = self.ingest_lock.lock().unwrap();
+        let last_seq = engine.try_append_aligned_batch(&aligned)?;
         Ok(ForwardedWrite {
             rows_written: n,
             persisted_targets: vec![(name.to_string(), last_seq)],
@@ -758,7 +776,8 @@ impl Store {
         added_bytes: i64,
     ) -> Result<i64, StatsError> {
         let engine = self.require_engine(LOG_NAMESPACE_NAME)?;
-        Ok(engine.append_log_batch(columns, num_rows, added_bytes))
+        let _ingest_guard = self.ingest_lock.lock().unwrap();
+        engine.append_log_batch(columns, num_rows, added_bytes)
     }
 
     /// Block until `target` is durable in `name`, bounded by `timeout`.

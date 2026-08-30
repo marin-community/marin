@@ -79,6 +79,9 @@ class K8sDeployment:
     kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
+    # Override the PVC mounted by the Deployment without replacing the protected
+    # Pulumi-managed `<name>-cache` claim. The named claim must already exist.
+    cache_pvc_name: str | None = None
     cpu_request: str = "2"
     cpu_limit: str = "8"
     memory_request: str = "16Gi"
@@ -255,8 +258,14 @@ def k8s_env_secret_name(config: FinelogConfig) -> str | None:
 
 
 def k8s_cache_pvc_name(config: FinelogConfig) -> str:
-    """Return the PersistentVolumeClaim name for a Kubernetes deployment."""
+    """Return the canonical Pulumi-managed PersistentVolumeClaim name."""
     return f"{config.name}-cache"
+
+
+def k8s_mounted_cache_pvc_name(config: FinelogConfig) -> str:
+    """Return the existing PersistentVolumeClaim mounted by the Deployment."""
+    assert config.deployment.k8s is not None
+    return config.deployment.k8s.cache_pvc_name or k8s_cache_pvc_name(config)
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -326,6 +335,7 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", defaults.storage_gb)),
+        cache_pvc_name=raw.get("cache_pvc_name"),
         cpu_request=str(raw.get("cpu_request", defaults.cpu_request)),
         cpu_limit=str(raw.get("cpu_limit", defaults.cpu_limit)),
         memory_request=str(raw.get("memory_request", defaults.memory_request)),

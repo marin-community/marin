@@ -134,6 +134,16 @@ fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
 /// the per-append nudge drives flushes; this is the ceiling for a quiet namespace.
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Maximum raw Arrow bytes retained by one disk-backed namespace. One segment
+/// may be in a blocked flush while another accumulates behind it; further
+/// writes retry instead of growing RAM without bound.
+pub(crate) const MAX_NAMESPACE_RAM_BYTES: i64 = 2 * SEGMENT_TARGET_BYTES;
+const SEQ_COLUMN_BYTES_PER_ROW: i64 = std::mem::size_of::<i64>() as i64;
+
+pub(crate) fn buffered_batch_bytes(data_bytes: i64, num_rows: i64) -> i64 {
+    data_bytes + SEQ_COLUMN_BYTES_PER_ROW * num_rows
+}
+
 /// Minimum spacing between consecutive L0 flushes. Every append nudges the flush
 /// task, so without this floor a steadily-written namespace seals a fresh tiny L0
 /// on each wake (many per second). Holding off coalesces all appends in the
@@ -641,17 +651,45 @@ impl Namespace {
 
     /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
     /// (or `-1` if empty). In memory mode the rows are immediately "persisted".
+    #[cfg(test)]
     pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> i64 {
         if aligned.num_rows == 0 {
             return -1;
         }
         let mut inner = self.inner.lock().unwrap();
+        let (last_seq, buffered_bytes) = self.append_aligned_batch_locked(&mut inner, aligned);
+        drop(inner);
+        self.notify_flush_after_append(buffered_bytes);
+        last_seq
+    }
+
+    pub(crate) fn try_append_aligned_batch(
+        &self,
+        aligned: &AlignedBatch,
+    ) -> Result<i64, StatsError> {
+        if aligned.num_rows == 0 {
+            return Ok(-1);
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let n = aligned.num_rows as i64;
+        self.ensure_append_capacity_locked(&inner, buffered_batch_bytes(aligned.byte_size, n))?;
+        let (last_seq, buffered_bytes) = self.append_aligned_batch_locked(&mut inner, aligned);
+        drop(inner);
+        self.notify_flush_after_append(buffered_bytes);
+        Ok(last_seq)
+    }
+
+    fn append_aligned_batch_locked(
+        &self,
+        inner: &mut NsInner,
+        aligned: &AlignedBatch,
+    ) -> (i64, i64) {
         let n = aligned.num_rows as i64;
         let first_seq = inner.buffers.allocate_seq(n);
         let stamped = stamp_seq_and_build(aligned, first_seq, &self.arrow_schema);
         inner
             .buffers
-            .append_batch(stamped, aligned.byte_size + 8 * n);
+            .append_batch(stamped, buffered_batch_bytes(aligned.byte_size, n));
         let last_seq = first_seq + n - 1;
         if self.data_dir.is_none() {
             // Memory mode: no parquet; the rows are durable the instant they
@@ -659,9 +697,7 @@ impl Namespace {
             self.persisted_seq.send_replace(last_seq);
         }
         let buffered_bytes = inner.buffers.ram_bytes();
-        drop(inner);
-        self.notify_flush_after_append(buffered_bytes);
-        last_seq
+        (last_seq, buffered_bytes)
     }
 
     /// Append already-built log columns (`seq` excluded) and return the last seq.
@@ -675,12 +711,13 @@ impl Namespace {
         columns: Vec<arrow::array::ArrayRef>,
         num_rows: usize,
         added_bytes: i64,
-    ) -> i64 {
+    ) -> Result<i64, StatsError> {
         if num_rows == 0 {
-            return -1;
+            return Ok(-1);
         }
         let mut inner = self.inner.lock().unwrap();
         let n = num_rows as i64;
+        self.ensure_append_capacity_locked(&inner, buffered_batch_bytes(added_bytes, n))?;
         let first_seq = inner.buffers.allocate_seq(n);
         let seq_array: Int64Array = (first_seq..first_seq + n).collect();
         let mut all: Vec<arrow::array::ArrayRef> = Vec::with_capacity(columns.len() + 1);
@@ -688,7 +725,9 @@ impl Namespace {
         all.extend(columns);
         let batch = RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
             .expect("log columns match the stored log schema");
-        inner.buffers.append_batch(batch, added_bytes + 8 * n);
+        inner
+            .buffers
+            .append_batch(batch, buffered_batch_bytes(added_bytes, n));
         let last_seq = first_seq + n - 1;
         if self.data_dir.is_none() {
             self.persisted_seq.send_replace(last_seq);
@@ -696,7 +735,31 @@ impl Namespace {
         let buffered_bytes = inner.buffers.ram_bytes();
         drop(inner);
         self.notify_flush_after_append(buffered_bytes);
-        last_seq
+        Ok(last_seq)
+    }
+
+    /// Check whether `added_bytes` can be admitted without changing state.
+    pub(crate) fn ensure_append_capacity(&self, added_bytes: i64) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        self.ensure_append_capacity_locked(&inner, added_bytes)
+    }
+
+    fn ensure_append_capacity_locked(
+        &self,
+        inner: &NsInner,
+        added_bytes: i64,
+    ) -> Result<(), StatsError> {
+        if self.data_dir.is_none() {
+            return Ok(());
+        }
+        let buffered_bytes = inner.buffers.ram_bytes();
+        if buffered_bytes.saturating_add(added_bytes) <= MAX_NAMESPACE_RAM_BYTES {
+            return Ok(());
+        }
+        Err(StatsError::IngestBufferFull(format!(
+            "namespace {:?} has {buffered_bytes} buffered bytes; incoming {added_bytes} bytes would exceed the {MAX_NAMESPACE_RAM_BYTES}-byte ingest limit",
+            self.name
+        )))
     }
 
     /// Block until `target` is durable, bounded by `timeout`.
@@ -2678,7 +2741,7 @@ mod tests {
         }
     }
 
-    fn half_segment_aligned() -> AlignedBatch {
+    fn over_half_segment_aligned() -> AlignedBatch {
         let mut batch = aligned(1);
         batch.byte_size = SEGMENT_TARGET_BYTES / 2 + 1;
         batch
@@ -2807,7 +2870,7 @@ mod tests {
         );
         ns.stop_and_join(Duration::from_secs(1)).await;
         for _ in 0..3 {
-            ns.append_aligned_batch(&half_segment_aligned());
+            ns.append_aligned_batch(&over_half_segment_aligned());
         }
 
         ns.shutdown(Duration::from_secs(1)).await;
@@ -2829,7 +2892,7 @@ mod tests {
         );
         ns.stop_and_join(Duration::from_secs(1)).await;
         for _ in 0..3 {
-            ns.append_aligned_batch(&half_segment_aligned());
+            ns.append_aligned_batch(&over_half_segment_aligned());
         }
         assert!(
             tokio::time::timeout(Duration::from_millis(10), ns.flush_notify.notified())
@@ -2854,6 +2917,33 @@ mod tests {
                 .await
                 .is_ok()
         );
+        ns.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn disk_backed_append_rejects_rows_past_the_ram_limit() {
+        let dir = tempdir();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        ns.stop_and_join(Duration::from_secs(1)).await;
+        for _ in 0..3 {
+            ns.try_append_aligned_batch(&over_half_segment_aligned())
+                .unwrap();
+        }
+        let before = ns.memory_summary();
+
+        let error = ns
+            .try_append_aligned_batch(&over_half_segment_aligned())
+            .unwrap_err();
+
+        assert!(matches!(error, StatsError::IngestBufferFull(_)));
+        assert_eq!(ns.memory_summary(), before);
         ns.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -27,6 +27,7 @@ from finelog.deploy.config import (
     auth_policy_json,
     k8s_cache_pvc_name,
     k8s_env_secret_name,
+    k8s_mounted_cache_pvc_name,
 )
 from rigging.provenance import Provenance
 
@@ -106,6 +107,7 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     deployment = config.deployment.k8s
     labels = {K8S_APP_LABEL: config.name}
     cache_pvc_name = k8s_cache_pvc_name(config)
+    mounted_cache_pvc_name = k8s_mounted_cache_pvc_name(config)
     metadata = k8s.meta.v1.ObjectMetaArgs(
         name=config.name,
         namespace=deployment.namespace,
@@ -170,7 +172,9 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
         volumes=[
             k8s.core.v1.VolumeArgs(
                 name=CACHE_VOLUME_NAME,
-                persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(claim_name=cache_pvc_name),
+                persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(
+                    claim_name=mounted_cache_pvc_name
+                ),
             )
         ],
     )

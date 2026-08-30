@@ -6,6 +6,7 @@
 //! - `SchemaValidation` / `InvalidNamespace` -> `invalid_argument`
 //! - `NamespaceNotFound` -> `not_found`
 //! - `QueryResultTooLarge` -> `resource_exhausted`
+//! - `IngestBufferFull` -> `resource_exhausted`
 //! - `Internal` -> `internal`
 
 use connectrpc::ConnectError;
@@ -26,6 +27,8 @@ pub enum StatsError {
     NamespaceNotFound(String),
     /// Query result exceeds the size cap.
     QueryResultTooLarge(String),
+    /// A disk-backed namespace has reached its in-memory ingest limit.
+    IngestBufferFull(String),
     /// A durability await exceeded its budget (write not durable in time).
     DeadlineExceeded(String),
     /// Unexpected internal failure.
@@ -40,6 +43,7 @@ impl std::fmt::Display for StatsError {
             StatsError::InvalidNamespace(m) => write!(f, "{m}"),
             StatsError::NamespaceNotFound(m) => write!(f, "{m}"),
             StatsError::QueryResultTooLarge(m) => write!(f, "{m}"),
+            StatsError::IngestBufferFull(m) => write!(f, "{m}"),
             StatsError::DeadlineExceeded(m) => write!(f, "{m}"),
             StatsError::Internal(m) => write!(f, "{m}"),
         }
@@ -56,6 +60,7 @@ impl From<StatsError> for ConnectError {
             StatsError::InvalidNamespace(m) => ConnectError::invalid_argument(m),
             StatsError::NamespaceNotFound(m) => ConnectError::not_found(m),
             StatsError::QueryResultTooLarge(m) => ConnectError::resource_exhausted(m),
+            StatsError::IngestBufferFull(m) => ConnectError::resource_exhausted(m),
             StatsError::DeadlineExceeded(m) => ConnectError::deadline_exceeded(m),
             StatsError::Internal(m) => ConnectError::internal(m),
         }
@@ -100,11 +105,13 @@ mod tests {
     }
 
     #[test]
-    fn too_large_maps_to_resource_exhausted() {
-        assert_eq!(
-            code_of(StatsError::QueryResultTooLarge("x".into())),
-            ErrorCode::ResourceExhausted
-        );
+    fn capacity_errors_map_to_resource_exhausted() {
+        for error in [
+            StatsError::QueryResultTooLarge("x".into()),
+            StatsError::IngestBufferFull("x".into()),
+        ] {
+            assert_eq!(code_of(error), ErrorCode::ResourceExhausted);
+        }
     }
 
     #[test]
