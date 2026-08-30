@@ -1,0 +1,23 @@
+name: snowball-step105149-sft-s1-chat
+location: s3://marin-us-east-02a/marin/exports/grug/snowball_step105149_sft_s1_chat/2026.08.13.1/step-257/hf-bf16-vllm/
+tokenizer: marin-community/marin-tokenizer
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 32768
+  max_num_batched_tokens: 32768
+  max_num_seqs: 32
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+generation:
+  max_gen_toks: 8192
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
+    repetition_penalty: "1.1"

@@ -20,7 +20,7 @@ MARIN_EVAL_HARDWARE = HardwarePolicy(
     gpu_preference=("H100", "GB200"),
     gpu_profiles=MappingProxyType(
         {
-            "H100": GpuProfile(hbm_gb=80, max_count=8, cluster="cw-us-east-02a"),
+            "H100": GpuProfile(hbm_gb=80, max_count=8, cluster="cw-rno2a"),
             "GB200": GpuProfile(hbm_gb=186, max_count=4, cluster="cw-us-east-08a"),
         }
     ),

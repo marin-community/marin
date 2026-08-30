@@ -137,6 +137,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=config.save_interval_minutes),
             keep=config.checkpoint_keep,
+            timeout=timedelta(hours=2),
         ),
         # First launch: output dir empty -> weights-only init from initialize_from. Once this
         # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
@@ -197,6 +198,7 @@ class GrugModel:
     checkpoint_keep: list[dict] | None = None
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
+    wandb_mode: str | None = None
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path
@@ -229,6 +231,7 @@ class GrugModel:
             project=spec.wandb_project,
             tags=list(self.wandb_tags),
             group=self.wandb_group,
+            mode=self.wandb_mode,
             name=run_id,
         )
         return GrugMoeSFTConfig(
