@@ -294,7 +294,35 @@ SNOWBALL_SMOKE = ScalePreset(
     evals="gsm8k-smoke",
 )
 
-SCALES = {preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE)}
+# The 67B-A2B measurement point: 4 FSDP2 policy nodes + 4 expert-parallel
+# engine nodes. The smoke averaged 884 generated tokens against a 1024 cap,
+# so the full runs widen the window to 3072 with a 2048 response budget
+# (the 1024-token prompt budget still admits every pool row). 60 steps at
+# 128x8 responses bounds an arm near the round-2 per-arm token budget.
+SNOWBALL_FULL = ScalePreset(
+    label="snowball-full",
+    num_nodes=8,
+    role_plan=SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=4,
+        inference_engine_tensor_parallel_size=1,
+        train_batch_size=128,
+        policy_mini_batch_size=64,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=8,
+    ),
+    max_steps=60,
+    eval_interval=10,
+    ckpt_interval=10,
+    request_window_tokens=3072,
+    max_new_tokens=2048,
+    micro_forward_batch_size_per_gpu=2,
+    evals="math500,gsm8k-0shot",
+)
+
+SCALES = {preset.label: preset for preset in (SMOKE, FULL, SNOWBALL_SMOKE, SNOWBALL_FULL)}
 
 # The pool filter must keep every retained prompt under each preset's
 # max_input_length (request window minus generation budget), or retained rows
