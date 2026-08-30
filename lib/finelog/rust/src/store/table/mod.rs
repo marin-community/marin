@@ -333,7 +333,7 @@ impl TableManager {
     /// This is the ingest fast path: it takes the buffer's short lock only. A
     /// busy or blocked controller cannot delay it.
     pub fn append(&self, name: &str, aligned: &AlignedBatch) -> Result<i64, StatsError> {
-        Ok(self.require_writable(name)?.append_aligned_batch(aligned))
+        self.require_writable(name)?.append_aligned_batch(aligned)
     }
 
     /// The latest published state for `name`, or `None` before its first durable

@@ -638,6 +638,12 @@ restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
 failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
 ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
+A disk-backed namespace rejects writes that would take its raw Arrow buffer
+above 200 MiB. Connect clients receive `resource_exhausted`; HTTP telemetry
+clients receive the existing 503 `storage_unavailable` response. Sustained
+rejection indicates that the cache filesystem or storage backend is not keeping
+up.
+
 ## Serving a copy of a store
 
 Anything that boots finelog over a copy of a real store directory — the Grafana

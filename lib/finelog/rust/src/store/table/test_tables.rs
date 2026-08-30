@@ -179,7 +179,7 @@ pub fn open_table_remote(
 
 /// Append one batch and force it durable on a sealed L0 segment.
 pub async fn write_one(table: &Arc<TableRuntime>) {
-    let last = table.append_aligned_batch(&aligned(1));
+    let last = table.append_aligned_batch(&aligned(1)).unwrap();
     table.flush().await.unwrap();
     table
         .await_persisted(last, Duration::from_secs(10))

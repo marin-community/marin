@@ -469,7 +469,9 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        table
+            .append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         table.flush().await.unwrap();
         maintain_cycle(&table, true).await;
 
@@ -615,9 +617,9 @@ mod tests {
         let table = open_table("log.test", data_schema(), Some(table_dir.clone()), catalog);
 
         // Two L0 flushes merged to one L1 — the merge builds the bundle.
-        table.append_aligned_batch(&data_aligned(5, 0));
+        table.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         table.flush().await.unwrap();
-        let last = table.append_aligned_batch(&data_aligned(5, 5));
+        let last = table.append_aligned_batch(&data_aligned(5, 5)).unwrap();
         table.flush().await.unwrap();
         table
             .await_persisted(last, Duration::from_secs(10))
@@ -680,9 +682,9 @@ mod tests {
             "a table with no object-store specification keeps its data locally"
         );
 
-        table.append_aligned_batch(&data_aligned(5, 0));
+        table.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         table.flush().await.unwrap();
-        let last = table.append_aligned_batch(&data_aligned(5, 5));
+        let last = table.append_aligned_batch(&data_aligned(5, 5)).unwrap();
         table.flush().await.unwrap();
         table
             .await_persisted(last, Duration::from_secs(10))
@@ -718,7 +720,7 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&data_aligned(5, 0));
+        table.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         table.flush().await.unwrap();
         maintain_cycle(&table, true).await;
 
@@ -755,7 +757,7 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&data_aligned(5, 0));
+        table.append_aligned_batch(&data_aligned(5, 0)).unwrap();
         table.flush().await.unwrap();
 
         let segments = discover_segments(&table_dir);
@@ -784,9 +786,9 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&aligned(3));
+        table.append_aligned_batch(&aligned(3)).unwrap();
         table.flush().await.unwrap();
-        let last = table.append_aligned_batch(&aligned(3));
+        let last = table.append_aligned_batch(&aligned(3)).unwrap();
         table.flush().await.unwrap();
         table
             .await_persisted(last, Duration::from_secs(10))
@@ -815,9 +817,9 @@ mod tests {
             Some(table_dir.clone()),
             catalog.clone(),
         );
-        before.append_aligned_batch(&aligned(3));
+        before.append_aligned_batch(&aligned(3)).unwrap();
         before.flush().await.unwrap();
-        let last = before.append_aligned_batch(&aligned(3));
+        let last = before.append_aligned_batch(&aligned(3)).unwrap();
         before.flush().await.unwrap();
         before
             .await_persisted(last, Duration::from_secs(10))

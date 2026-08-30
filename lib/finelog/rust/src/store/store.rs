@@ -1101,10 +1101,11 @@ impl Store {
         let persisted_targets = prepared_partitions
             .into_iter()
             .map(|(destination, table, aligned)| {
-                let last_seq = table.append_aligned_batch(&aligned);
-                (destination, last_seq)
+                table
+                    .append_aligned_batch(&aligned)
+                    .map(|last_seq| (destination, last_seq))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ForwardedWrite {
             rows_written,
             persisted_targets,
@@ -1153,7 +1154,7 @@ impl Store {
         added_bytes: i64,
     ) -> Result<i64, StatsError> {
         let table = self.tables.require(LOG_NAMESPACE_NAME)?;
-        Ok(table.append_log_batch(columns, num_rows, added_bytes))
+        table.append_log_batch(columns, num_rows, added_bytes)
     }
 
     /// Block until `target` is durable in `name`, bounded by `timeout`.

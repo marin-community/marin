@@ -656,7 +656,9 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        table
+            .append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         table.flush().await.unwrap();
         maintain(&table, true).await;
 
@@ -819,7 +821,9 @@ mod tests {
             remote_dir.to_str().unwrap(),
             StoragePolicy::default(),
         );
-        table.append_aligned_batch(&metrics_aligned(&["run-a"]));
+        table
+            .append_aligned_batch(&metrics_aligned(&["run-a"]))
+            .unwrap();
         table.flush().await.unwrap();
         maintain(&table, true).await;
 

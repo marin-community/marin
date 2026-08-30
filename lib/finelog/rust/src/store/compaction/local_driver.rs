@@ -334,7 +334,9 @@ mod tests {
             Some(table_dir.clone()),
             catalog,
         );
-        table.append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]));
+        table
+            .append_aligned_batch(&metrics_aligned(&["run-a", "run-b"]))
+            .unwrap();
         table.flush().await.unwrap();
 
         let l0 = discover_segments(&table_dir);

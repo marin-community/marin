@@ -24,6 +24,11 @@ use crate::store::schema::AlignedBatch;
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Hard cap on one table's raw Arrow buffer bytes. When persistence stalls the
+/// force-flush threshold stops draining the buffer, so writes beyond this cap
+/// are rejected instead of accumulating until an Arrow offset overflows.
+pub const MAX_TABLE_RAM_BYTES: i64 = 2 * crate::store::table::runtime_policy::SEGMENT_TARGET_BYTES;
+
 /// What the maintenance scheduler needs to know about a buffer to time its next
 /// flush.
 pub struct FlushDemand {
@@ -88,18 +93,25 @@ impl IngestBuffer {
         }
     }
 
-    /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
-    /// (or `-1` if empty).
-    pub fn append_aligned(&self, aligned: &AlignedBatch, max_buffer_bytes: i64) -> i64 {
+    /// Stamp `seq` onto `aligned` and append it, returning the last allocated
+    /// seq (or `-1` if empty). Rejects a flushed table's write that would exceed
+    /// the RAM limit.
+    pub fn append_aligned(
+        &self,
+        aligned: &AlignedBatch,
+        max_buffer_bytes: i64,
+    ) -> Result<i64, StatsError> {
         if aligned.num_rows == 0 {
-            return -1;
+            return Ok(-1);
         }
         let rows = aligned.num_rows as i64;
+        let added_bytes = aligned.byte_size + 8 * rows;
         let (last_seq, buffered_bytes) = {
             let mut buffers = self.buffers.lock().unwrap();
+            self.ensure_append_capacity(&buffers, added_bytes)?;
             let first_seq = buffers.allocate_seq(rows);
             let stamped = stamp_seq_and_build(aligned, first_seq, &self.arrow_schema);
-            buffers.append_batch(stamped, aligned.byte_size + 8 * rows);
+            buffers.append_batch(stamped, added_bytes);
             let last_seq = first_seq + rows - 1;
             if self.durable_on_append {
                 // No parquet: the rows are durable the instant they land in RAM,
@@ -109,10 +121,11 @@ impl IngestBuffer {
             (last_seq, buffers.ram_bytes())
         };
         self.request_flush(buffered_bytes >= max_buffer_bytes);
-        last_seq
+        Ok(last_seq)
     }
 
-    /// Append already-built log columns (`seq` excluded) and return the last seq.
+    /// Append already-built log columns (`seq` excluded), returning the last
+    /// seq. Rejects a flushed table's write that would exceed the RAM limit.
     ///
     /// `columns` are the non-seq log columns in registered order, prepared by the
     /// caller OUTSIDE the lock. `num_rows` is their common length and
@@ -123,13 +136,15 @@ impl IngestBuffer {
         num_rows: usize,
         added_bytes: i64,
         max_buffer_bytes: i64,
-    ) -> i64 {
+    ) -> Result<i64, StatsError> {
         if num_rows == 0 {
-            return -1;
+            return Ok(-1);
         }
         let rows = num_rows as i64;
+        let added_bytes = added_bytes + 8 * rows;
         let (last_seq, buffered_bytes) = {
             let mut buffers = self.buffers.lock().unwrap();
+            self.ensure_append_capacity(&buffers, added_bytes)?;
             let first_seq = buffers.allocate_seq(rows);
             let seq_array: Int64Array = (first_seq..first_seq + rows).collect();
             let mut all: Vec<ArrayRef> = Vec::with_capacity(columns.len() + 1);
@@ -137,7 +152,7 @@ impl IngestBuffer {
             all.extend(columns);
             let batch = RecordBatch::try_new(Arc::clone(&self.arrow_schema), all)
                 .expect("log columns match the stored log schema");
-            buffers.append_batch(batch, added_bytes + 8 * rows);
+            buffers.append_batch(batch, added_bytes);
             let last_seq = first_seq + rows - 1;
             if self.durable_on_append {
                 self.persisted_seq.send_replace(last_seq);
@@ -145,7 +160,25 @@ impl IngestBuffer {
             (last_seq, buffers.ram_bytes())
         };
         self.request_flush(buffered_bytes >= max_buffer_bytes);
-        last_seq
+        Ok(last_seq)
+    }
+
+    /// A memory-mode table's rows never wait on a flush, so its buffer is the
+    /// table itself and stays exempt from the cap.
+    fn ensure_append_capacity(
+        &self,
+        buffers: &RamBuffers,
+        added_bytes: i64,
+    ) -> Result<(), StatsError> {
+        if self.durable_on_append
+            || buffers.ram_bytes().saturating_add(added_bytes) <= MAX_TABLE_RAM_BYTES
+        {
+            return Ok(());
+        }
+        Err(StatsError::ResourceExhausted(format!(
+            "table {:?} has reached its {MAX_TABLE_RAM_BYTES}-byte ingest limit",
+            self.table
+        )))
     }
 
     /// Move the buffered chunks into the in-flight slot for one flush, or `None`

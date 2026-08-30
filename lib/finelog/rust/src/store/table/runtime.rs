@@ -315,20 +315,21 @@ impl TableRuntime {
         Ok(())
     }
 
-    /// Stamp `seq` onto `aligned` and append it; returns the last seq allocated
-    /// (or `-1` if empty).
-    pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> i64 {
+    /// Stamp `seq` onto `aligned` and append it, returning the last allocated
+    /// seq (or `-1` if empty). Rejects a write that would exceed the RAM limit.
+    pub fn append_aligned_batch(&self, aligned: &AlignedBatch) -> Result<i64, StatsError> {
         self.buffer
             .append_aligned(aligned, self.policy().max_buffer_bytes)
     }
 
-    /// Append already-built log columns (`seq` excluded) and return the last seq.
+    /// Append already-built log columns (`seq` excluded), returning the last
+    /// seq. Rejects a write that would exceed the RAM limit.
     pub fn append_log_batch(
         &self,
         columns: Vec<ArrayRef>,
         num_rows: usize,
         added_bytes: i64,
-    ) -> i64 {
+    ) -> Result<i64, StatsError> {
         self.buffer.append_columns(
             columns,
             num_rows,
@@ -708,6 +709,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_disk_backed_append_rejects_a_full_buffer() {
+        let dir = tempdir();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let table = open_table(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+        );
+        let mut batch = aligned(1);
+        batch.byte_size = crate::store::table::ingest::MAX_TABLE_RAM_BYTES - 8;
+        table.append_aligned_batch(&batch).unwrap();
+        let before = table.memory_summary();
+
+        let error = table.append_aligned_batch(&aligned(1)).unwrap_err();
+
+        assert!(matches!(error, StatsError::ResourceExhausted(_)));
+        assert_eq!(table.memory_summary(), before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn append_then_await_persisted_writes_a_segment() {
         let dir = tempdir();
         let table_dir = dir.join("iris.worker");
@@ -719,7 +742,7 @@ mod tests {
             catalog,
         );
 
-        let last = table.append_aligned_batch(&aligned(3));
+        let last = table.append_aligned_batch(&aligned(3)).unwrap();
         assert_eq!(last, 3);
         flush_and_await(&table, last).await;
 
@@ -747,7 +770,7 @@ mod tests {
             Some(dir.join("iris.worker")),
             catalog,
         );
-        let last = table.append_aligned_batch(&aligned(3));
+        let last = table.append_aligned_batch(&aligned(3)).unwrap();
         flush_and_await(&table, last).await;
 
         let snapshot = table.query_snapshot().unwrap();
@@ -780,8 +803,8 @@ mod tests {
         // Memory mode: no flush; stats come from RAM via the seq window.
         let catalog = Arc::new(Catalog::open(None).unwrap());
         let table = open_table("iris.worker", worker_schema(), None, catalog);
-        table.append_aligned_batch(&aligned(3));
-        table.append_aligned_batch(&aligned(2));
+        table.append_aligned_batch(&aligned(3)).unwrap();
+        table.append_aligned_batch(&aligned(2)).unwrap();
         let stats = table.stats();
         assert_eq!(stats.row_count, 5);
         assert_eq!(stats.min_seq, 1);
@@ -802,7 +825,7 @@ mod tests {
                 Some(table_dir.clone()),
                 catalog,
             );
-            let last = table.append_aligned_batch(&aligned(4));
+            let last = table.append_aligned_batch(&aligned(4)).unwrap();
             flush_and_await(&table, last).await;
         }
         // Second runtime over the same dir: next seq is past the persisted max,
@@ -813,7 +836,7 @@ mod tests {
         assert_eq!(stats.row_count, 4);
         assert_eq!(stats.max_seq, 4);
         // A new append continues monotonically from seq 5.
-        let last = restarted.append_aligned_batch(&aligned(1));
+        let last = restarted.append_aligned_batch(&aligned(1)).unwrap();
         assert_eq!(last, 5);
         restarted
             .await_persisted(4, Duration::from_secs(1))
@@ -836,7 +859,7 @@ mod tests {
         // Many small appends; flush via the direct sync-point once.
         let mut last = -1;
         for _ in 0..5 {
-            last = table.append_aligned_batch(&aligned(2));
+            last = table.append_aligned_batch(&aligned(2)).unwrap();
         }
         table.flush().await.unwrap();
         table
