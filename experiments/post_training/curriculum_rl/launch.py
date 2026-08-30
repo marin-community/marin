@@ -499,7 +499,10 @@ def build_arm(
             cluster=policy.cluster,
             cluster_config=cluster_config,
             cpu=16,
-            memory="128GB",
+            # The Snowball export streams ~134GB of bf16 shards through host
+            # buffers on load (per node, policy and engine alike); 128GB of
+            # host RAM OOM-killed the first smoke.
+            memory="512GB" if policy is SNOWBALL_POLICY else "128GB",
             disk="2TB",
             priority="interactive",
             # Fail fast: a broken config surfaces on the first attempt, and a
