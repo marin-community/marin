@@ -15,11 +15,22 @@ both sides fidelity-clean.** Peak HBM also falls 116.57 → 112.75 GiB.
 Re-anchored on the **wgrad-corrected** tree — the stack you would actually ship,
 and now the headline of record:
 
-**23.151 → 23.961 MFU (+0.81, +3.5% throughput), ~12.6σ.** Zero pair
-23.183 / 23.120 (sd 0.045) against control pair 24.016 / 23.906 (sd 0.078),
-se 0.064. Peak 116.57 on both zero draws, matching the pre-fix zero exactly.
-The pre-fix measurement (+0.70) and this one agree within their errors; this is
-the one to quote, because it includes the correctness fix.
+**Delta: +0.81 MFU (+3.5% throughput), ~12.6σ.** Zero pair 23.183 / 23.120
+(sd 0.045) against same-tree control pair 24.016 / 23.906 (sd 0.078), se 0.064.
+Peak 116.57 on both zero draws, matching the pre-fix zero exactly. The pre-fix
+measurement (+0.70) agrees within error.
+
+**Absolute level of the deployed configuration: 24.03 ± 0.09 MFU**, pooling all
+six draws of it — 24.161 / 24.081 / 24.073 / 24.016 / 23.969 / 23.906, four of
+six above 24.0. Quote the pooled figure for the level and the same-tree pair for
+the delta; do NOT read the control pair's 23.961 as the level. Those two draws
+are two of the three lowest in the set, and pairing them against pre-fix draws
+would be the cross-night comparison this protocol rules out (placement varies
+±2.8% night to night; same-night pairs only).
+
+The post-fix draws sit 0.07 below the pre-fix ones, which is inside the 0.090
+spread and bounded far below it by arithmetic: the correctness fix adds ~768
+padded rows out of ~300k on a 496 ms/step weight-gradient call, ≈0.002 MFU.
 
 One caveat to carry with it: zero runs the branch-pinned PJRT because
 ``--pjrt-wheel`` postdates that commit, where the controls run the H11 wheel with
