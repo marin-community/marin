@@ -3,9 +3,9 @@
 
 """A Finelog server built and deployed to Kubernetes.
 
-The component owns the image, PersistentVolumeClaim, Deployment, and Service. Secret
-values remain outside Pulumi: callers name a pre-existing Kubernetes Secret, and the
-Deployment references it through ``envFrom``.
+The component owns the image, Deployment, Service, and optional PersistentVolumeClaim.
+Secret values remain outside Pulumi: callers name a pre-existing Kubernetes Secret,
+and the Deployment references it through ``envFrom``.
 """
 
 import os
@@ -24,6 +24,7 @@ from finelog.deploy.config import (
     K8S_CONTAINER_NAME,
     SOURCE_REVISION_ANNOTATION,
     FinelogConfig,
+    K8sCacheStorage,
     auth_policy_json,
     k8s_cache_pvc_name,
     k8s_env_secret_name,
@@ -68,7 +69,7 @@ class FinelogServerArgs:
 class FinelogResourceArgs:
     """Typed inputs for the Kubernetes objects owned by ``FinelogServer``."""
 
-    pvc: k8s.core.v1.PersistentVolumeClaimInitArgs
+    pvc: k8s.core.v1.PersistentVolumeClaimInitArgs | None
     deployment: k8s.apps.v1.DeploymentInitArgs
     service: k8s.core.v1.ServiceInitArgs
 
@@ -105,7 +106,37 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     assert config.deployment.k8s is not None
     deployment = config.deployment.k8s
     labels = {K8S_APP_LABEL: config.name}
-    cache_pvc_name = k8s_cache_pvc_name(config)
+    cache_size = f"{deployment.storage_gb}Gi"
+    resource_requests = {"cpu": deployment.cpu_request, "memory": deployment.memory_request}
+    resource_limits = {"cpu": deployment.cpu_limit, "memory": deployment.memory_limit}
+    if deployment.cache_storage is K8sCacheStorage.NODE_LOCAL:
+        resource_requests["ephemeral-storage"] = cache_size
+        resource_limits["ephemeral-storage"] = cache_size
+
+    pvc = None
+    if deployment.cache_storage is K8sCacheStorage.NODE_LOCAL:
+        cache_volume = k8s.core.v1.VolumeArgs(
+            name=CACHE_VOLUME_NAME,
+            empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(size_limit=cache_size),
+        )
+    else:
+        cache_pvc_name = k8s_cache_pvc_name(config)
+        cache_volume = k8s.core.v1.VolumeArgs(
+            name=CACHE_VOLUME_NAME,
+            persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(claim_name=cache_pvc_name),
+        )
+        pvc = k8s.core.v1.PersistentVolumeClaimInitArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                name=cache_pvc_name,
+                namespace=deployment.namespace,
+                labels=labels,
+            ),
+            spec=k8s.core.v1.PersistentVolumeClaimSpecArgs(
+                access_modes=["ReadWriteOnce"],
+                storage_class_name=deployment.storage_class,
+                resources=k8s.core.v1.VolumeResourceRequirementsArgs(requests={"storage": cache_size}),
+            ),
+        )
     metadata = k8s.meta.v1.ObjectMetaArgs(
         name=config.name,
         namespace=deployment.namespace,
@@ -135,8 +166,8 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
             )
         ],
         resources=k8s.core.v1.ResourceRequirementsArgs(
-            requests={"cpu": deployment.cpu_request, "memory": deployment.memory_request},
-            limits={"cpu": deployment.cpu_limit, "memory": deployment.memory_limit},
+            requests=resource_requests,
+            limits=resource_limits,
         ),
         # Opening an existing store on a network-backed PVC can exceed one minute.
         startup_probe=k8s.core.v1.ProbeArgs(
@@ -163,31 +194,15 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
     pod_spec = k8s.core.v1.PodSpecArgs(
         # Native dependencies and rollback images are not uniformly multi-architecture.
         node_selector={"kubernetes.io/arch": NODE_ARCH},
-        # The image runs as UID/GID 1000; fsGroup makes the mounted PVC writable.
+        # The image runs as UID/GID 1000; fsGroup makes the mounted cache writable.
         security_context=k8s.core.v1.PodSecurityContextArgs(fs_group=FINELOG_USER_ID),
         priority_class_name=deployment.priority_class_name,
         containers=[container],
-        volumes=[
-            k8s.core.v1.VolumeArgs(
-                name=CACHE_VOLUME_NAME,
-                persistent_volume_claim=k8s.core.v1.PersistentVolumeClaimVolumeSourceArgs(claim_name=cache_pvc_name),
-            )
-        ],
+        volumes=[cache_volume],
     )
 
     return FinelogResourceArgs(
-        pvc=k8s.core.v1.PersistentVolumeClaimInitArgs(
-            metadata=k8s.meta.v1.ObjectMetaArgs(
-                name=cache_pvc_name,
-                namespace=deployment.namespace,
-                labels=labels,
-            ),
-            spec=k8s.core.v1.PersistentVolumeClaimSpecArgs(
-                access_modes=["ReadWriteOnce"],
-                storage_class_name=deployment.storage_class,
-                resources=k8s.core.v1.VolumeResourceRequirementsArgs(requests={"storage": f"{deployment.storage_gb}Gi"}),
-            ),
-        ),
+        pvc=pvc,
         deployment=k8s.apps.v1.DeploymentInitArgs(
             metadata=metadata,
             spec=k8s.apps.v1.DeploymentSpecArgs(
@@ -283,25 +298,30 @@ class FinelogServer(pulumi.ComponentResource):
             import_id: str,
             *,
             depends_on: list[pulumi.Resource] | None = None,
+            ignore_changes: list[str] | None = None,
             protect: bool = False,
         ) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
                 parent=self,
                 provider=k8s_provider,
                 depends_on=depends_on,
+                ignore_changes=ignore_changes,
                 import_=import_id if args.adopt else None,
                 protect=protect,
             )
 
-        pvc = k8s.core.v1.PersistentVolumeClaim(
-            "pvc",
-            args=resources.pvc,
-            opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
-        )
+        dependencies: list[pulumi.Resource] = []
+        if resources.pvc is not None:
+            pvc = k8s.core.v1.PersistentVolumeClaim(
+                "pvc",
+                args=resources.pvc,
+                opts=child_options(f"{namespace}/{k8s_cache_pvc_name(config)}", protect=True),
+            )
+            dependencies.append(pvc)
         deployment = k8s.apps.v1.Deployment(
             "deployment",
             args=resources.deployment,
-            opts=child_options(f"{namespace}/{config.name}", depends_on=[pvc]),
+            opts=child_options(f"{namespace}/{config.name}", depends_on=dependencies),
         )
         command.local.Command(
             "verify",
@@ -313,7 +333,13 @@ class FinelogServer(pulumi.ComponentResource):
         k8s.core.v1.Service(
             "service",
             args=resources.service,
-            opts=child_options(f"{namespace}/{config.name}", depends_on=[deployment]),
+            opts=child_options(
+                f"{namespace}/{config.name}",
+                depends_on=[deployment],
+                # Kubernetes assigns these immutable fields when the Service is
+                # created. Preserve them when adopting an existing Service.
+                ignore_changes=["spec.clusterIP", "spec.clusterIPs"],
+            ),
         )
 
         self.image_ref = image.ref

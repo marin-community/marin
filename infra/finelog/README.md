@@ -5,10 +5,10 @@ cluster. Each `Pulumi.<cluster>.yaml` stack loads the matching configuration fro
 `lib/finelog/config/<cluster>.yaml`. The reusable resource component lives in
 `iac.kubernetes.finelog`.
 
-Pulumi owns the image, PersistentVolumeClaim, Deployment, and Service. The
-`<config.name>-env` Kubernetes Secret (for example, `finelog-cw-use02a-env`)
-stays outside Pulumi state. Create or rotate it with `finelog deploy sync-secret`
-before updating a stack.
+Pulumi owns the image, Deployment, Service, and, for persistent caches, the
+PersistentVolumeClaim. The `<config.name>-env` Kubernetes Secret (for example,
+`finelog-cw-use02a-env`) stays outside Pulumi state. Create or rotate it with
+`finelog deploy sync-secret` before updating a stack.
 
 ## Update a server
 
@@ -40,8 +40,18 @@ identity from the checkout's content-addressed Git tree SHA and stamps the tree
 SHA, base commit, and dirty status into the image. Run the deploy from the
 intended checkout; there is no rollout counter in Pulumi configuration.
 
-Set `deployment.k8s.cache_pvc_name` to adopt and mount an existing replacement
-claim. Enable the stack's `import` option when Pulumi first adopts that claim.
+`deployment.k8s.cache_storage` selects the cache lifetime:
+
+- `persistent-volume` is the default. Pulumi creates a protected PVC, or adopts
+  the existing claim named by `cache_pvc_name`.
+- `node-local` mounts an `emptyDir` backed by the node's ephemeral disk. Pulumi
+  requests and limits ephemeral storage to `storage_gb`, and creates no PVC.
+  Pod replacement discards the cache, so use this only for a regional sender
+  whose forwarded hub copy may become the read source after a restart.
+
+Set `deployment.k8s.cache_pvc_name` only with `persistent-volume` to adopt and
+mount an existing replacement claim. Enable the stack's `import` option when
+Pulumi first adopts that claim.
 
 For a read-only preview, run `pulumi preview --stack <cluster>` from
 `infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic
@@ -68,9 +78,10 @@ Pass `--to-revision N` to select an exact revision shown by `kubectl rollout
 history deployment/<name>`. The command waits for the exact revision created by
 the rollback, verifies ingest health, and refreshes Pulumi state. If the target
 fails verification, it restores and verifies the revision that was serving when
-the command started. This rolls back the Pod template and image only; it does
-not restore PVC contents or an older value of the out-of-band environment
-Secret. A later deploy from a newer checkout rolls forward again.
+the command started. This rolls back the Pod template and image only. It does
+not restore PVC contents, a discarded node-local cache, or an older value of
+the out-of-band environment Secret. A later deploy from a newer checkout rolls
+forward again.
 
 ## Adopt an existing server
 

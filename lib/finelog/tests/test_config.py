@@ -136,6 +136,28 @@ def test_derive_endpoint_uri_k8s() -> None:
     assert metadata == {"port": "10001"}
 
 
+def test_load_config_rejects_pvc_name_for_node_local_cache(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "node-local.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-node-local
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: s3://bucket/test
+        deployment:
+          k8s:
+            namespace: iris
+            cache_storage: node-local
+            storage_gb: 250
+            cache_pvc_name: finelog-cache
+        """,
+    )
+
+    with pytest.raises(ValueError, match="cache_pvc_name cannot be set with node-local"):
+        load_finelog_config(str(cfg_path))
+
+
 def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
     """An ordered cidr+jwt `auth:` list serializes to the exact `FINELOG_AUTH_POLICY`
     JSON the finelog Rust server parses — order preserved, snake_case tags, and the
