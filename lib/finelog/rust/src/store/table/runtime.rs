@@ -393,6 +393,7 @@ impl TableRuntime {
         let mut view = SegmentSnapshot {
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
+            seq_bounds: Default::default(),
             partitions: Default::default(),
             min_seq: planned.iter().map(|segment| segment.min_seq).min(),
             artifacts: Default::default(),
@@ -402,6 +403,8 @@ impl TableRuntime {
             if let Some(bounds) = segment.key_bounds {
                 view.key_bounds.insert(segment.path.clone(), bounds);
             }
+            view.seq_bounds
+                .insert(segment.path.clone(), (segment.min_seq, segment.max_seq));
             if let Some(partition) = segment.partition {
                 view.partitions.insert(segment.path.clone(), partition);
             }

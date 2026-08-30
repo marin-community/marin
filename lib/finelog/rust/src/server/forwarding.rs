@@ -689,7 +689,8 @@ where
             .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
             .with_segment_artifacts(snapshot.artifacts)
             .with_exact_postings_policy(snapshot.exact_postings_policy)
-            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
+            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_seq_bounds(snapshot.seq_bounds);
         let provider = match snapshot.sources {
             Some((store, segments)) => provider.with_object_sources(store, segments),
             None => provider,

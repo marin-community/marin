@@ -30,6 +30,9 @@ use crate::store::types::{segment_to_row, LocalSegment, SegmentRow};
 pub struct SegmentSnapshot {
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (i64, i64)>,
+    /// Exact per-segment `seq` bounds, so a `seq`-bounded scan selects only the
+    /// segments whose disjoint ranges it overlaps.
+    pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub partitions: BTreeMap<String, SegmentPartition>,
     pub min_seq: Option<i64>,
     /// What each snapshotted segment advertises, so a scan opens artifacts by
@@ -197,6 +200,10 @@ impl SegmentView {
                         (segment.min_key_value?, segment.max_key_value?),
                     ))
                 })
+                .collect(),
+            seq_bounds: segments
+                .iter()
+                .map(|segment| (segment.path.clone(), (segment.min_seq, segment.max_seq)))
                 .collect(),
             partitions: segments
                 .iter()

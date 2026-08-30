@@ -264,7 +264,8 @@ impl LogService for LogServiceImpl {
             .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?
             .with_segment_artifacts(snapshot.artifacts)
             .with_exact_postings_policy(snapshot.exact_postings_policy)
-            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds);
+            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_seq_bounds(snapshot.seq_bounds);
 
         // Run the read (DataFusion schedules its own CPU tasks; await directly),
         // under the same effective deadline the Query RPC uses. An object-backed

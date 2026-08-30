@@ -36,6 +36,7 @@ pub struct PlannedSegment {
     /// object's identity rather than from the local directory.
     pub path: String,
     pub min_seq: i64,
+    pub max_seq: i64,
     /// Exact Int64 key bounds, when the segment's key column carries them.
     pub key_bounds: Option<(i64, i64)>,
     pub partition: Option<SegmentPartition>,
@@ -95,6 +96,8 @@ fn plan_segment(
     Ok(PlannedSegment {
         path: path.to_string_lossy().into_owned(),
         min_seq: segment.min_seq.unwrap_or(0),
+        // A missing bound must never prune: i64::MAX makes every range overlap.
+        max_seq: segment.max_seq.unwrap_or(i64::MAX),
         key_bounds: key_bounds(segment),
         partition,
         artifacts: crate::store::table::local_artifacts(store, &artifacts)?,

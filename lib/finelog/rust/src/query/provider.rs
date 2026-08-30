@@ -59,6 +59,8 @@ pub struct NamespaceProvider {
     segment_key_bounds: BTreeMap<String, (i64, i64)>,
     partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
     segment_partitions: BTreeMap<String, SegmentPartition>,
+    /// Exact per-segment `seq` bounds, captured with the path snapshot.
+    segment_seq_bounds: BTreeMap<String, (i64, i64)>,
     indices: Arc<IndexRegistry>,
     /// The artifacts each snapshotted segment advertises, captured with the
     /// path snapshot. A scan opens exactly these references and never derives a
@@ -205,12 +207,20 @@ impl NamespaceProvider {
         let partition_candidates = self
             .partition_policy
             .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
+        let seq_range = ranges.get("seq");
         let paths = self
             .segment_paths
             .iter()
             .filter(|path| {
                 let key_matches = key_range.is_none_or(|(_, range)| {
                     self.segment_key_bounds
+                        .get(path.as_str())
+                        .is_none_or(|&(minimum, maximum)| {
+                            minimum > maximum || range.overlaps(minimum, maximum)
+                        })
+                });
+                let seq_matches = seq_range.is_none_or(|range| {
+                    self.segment_seq_bounds
                         .get(path.as_str())
                         .is_none_or(|&(minimum, maximum)| {
                             minimum > maximum || range.overlaps(minimum, maximum)
@@ -227,7 +237,7 @@ impl NamespaceProvider {
                                 || candidates.contains(partition)
                         })
                 });
-                key_matches && partition_matches
+                key_matches && seq_matches && partition_matches
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -235,7 +245,7 @@ impl NamespaceProvider {
             tracing::debug!(
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range and physical partitions"
+                "scoped segment planning to key range, seq range, and physical partitions"
             );
         }
         paths
@@ -264,6 +274,7 @@ impl NamespaceProvider {
                 segment_key_bounds: BTreeMap::new(),
                 partition_policy: None,
                 segment_partitions: BTreeMap::new(),
+                segment_seq_bounds: BTreeMap::new(),
                 indices,
                 segment_artifacts: Arc::new(SegmentArtifacts::new()),
                 exact_postings_policy: None,
@@ -281,6 +292,7 @@ impl NamespaceProvider {
             segment_key_bounds: BTreeMap::new(),
             partition_policy: None,
             segment_partitions: BTreeMap::new(),
+            segment_seq_bounds: BTreeMap::new(),
             indices,
             segment_artifacts: Arc::new(SegmentArtifacts::new()),
             exact_postings_policy: None,
@@ -314,6 +326,18 @@ impl NamespaceProvider {
     ) -> Self {
         self.segment_key_column = Some(key_column.into());
         self.segment_key_bounds = bounds;
+        self
+    }
+
+    /// Attach exact per-segment `seq` bounds captured with the path snapshot.
+    ///
+    /// Segments partition the sequence space disjointly, so a `seq`-bounded
+    /// predicate (a forwarder cursor read, a tail query) selects only the
+    /// segments whose range it overlaps — on an object-backed table that is
+    /// the difference between localizing a few tail objects and the whole
+    /// table.
+    pub fn with_segment_seq_bounds(mut self, bounds: BTreeMap<String, (i64, i64)>) -> Self {
+        self.segment_seq_bounds = bounds;
         self
     }
 
@@ -594,6 +618,37 @@ mod tests {
         assert_eq!(
             provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
             vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
+        );
+        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+    }
+
+    /// A `seq`-bounded predicate selects only the segments whose disjoint seq
+    /// ranges it overlaps — on an object-backed table everything else is never
+    /// localized. A segment without recorded bounds is always selected.
+    #[tokio::test]
+    async fn a_seq_range_prunes_segments_before_localization() {
+        let schema = worker_arrow();
+        let paths: Vec<String> = (0..3)
+            .map(|i| format!("/planned/seg_{i}.parquet"))
+            .collect();
+        let provider = NamespaceProvider::build_with_local_artifacts(schema, &paths)
+            .unwrap()
+            .with_segment_seq_bounds(BTreeMap::from([
+                (paths[0].clone(), (1, 100)),
+                (paths[1].clone(), (101, 200)),
+                // paths[2] has no recorded bounds and must never be pruned.
+            ]));
+
+        let range = col("seq")
+            .gt_eq(lit(150i64))
+            .and(col("seq").lt_eq(lit(160i64)));
+        assert_eq!(
+            provider.segment_paths_for_filters(&[range]),
+            vec![paths[1].clone(), paths[2].clone()]
+        );
+        assert_eq!(
+            provider.segment_paths_for_filters(&[col("seq").gt(lit(500i64))]),
+            vec![paths[2].clone()]
         );
         assert_eq!(provider.segment_paths_for_filters(&[]), paths);
     }

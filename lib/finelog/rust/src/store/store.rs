@@ -157,6 +157,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (i64, i64)>,
+    pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
     pub min_seq: Option<i64>,
     pub indices: Arc<IndexRegistry>,
@@ -1222,6 +1223,7 @@ impl Store {
             .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
             .with_exact_postings_policy(exact_postings_policy)
             .with_segment_key_bounds(key_column, segments.key_bounds)
+            .with_segment_seq_bounds(segments.seq_bounds)
             .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
             let provider = match self.object_store.clone() {
                 Some(store) => provider.with_object_sources(store, segments.sources),
@@ -1261,6 +1263,7 @@ impl Store {
             key_column: engine.key_column().to_string(),
             paths: segments.paths,
             key_bounds: segments.key_bounds,
+            seq_bounds: segments.seq_bounds,
             partitions: segments.partitions,
             min_seq: segments.min_seq,
             indices: Arc::clone(self.tables.indices()),
