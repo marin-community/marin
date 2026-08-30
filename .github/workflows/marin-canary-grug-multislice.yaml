@@ -183,6 +183,17 @@ jobs:
           wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+      - name: Cancel unfinished Iris job
+        if: >-
+          always() &&
+          steps.submit.outcome == 'success' &&
+          steps.wait.outcome != 'success' &&
+          steps.submit.outputs.job_id != ''
+        shell: bash -l {0}
+        run: |
+          .venv/bin/iris --config="$IRIS_CONFIG" job cancel --exact \
+            "${{ steps.submit.outputs.job_id }}"
+
       - name: Upload Slack message
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
