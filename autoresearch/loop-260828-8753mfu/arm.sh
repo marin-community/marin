@@ -64,6 +64,19 @@ if [ -n "${DK_CTAS_PER_SM:-}" ] && [ -z "${TREATMENT:-}" ] && [ -z "${KEPT_FLAGS
   echo "DK_CTAS_PER_SM is set but neither TREATMENT=1 nor KEPT_FLAGS=1 is; refusing (contaminated control?)" >&2
   exit 1
 fi
+# The absolute-count knob (H21) overrides the per-SM one in the plugin, so it is always a
+# treatment. It only exists in the H21 wheel: setting it without that wheel reaches a plugin that
+# never reads it and scores as a vacuous null, which is indistinguishable from the lever failing.
+if [ -n "${DK_CTAS_TOTAL:-}" ]; then
+  if [ -z "${TREATMENT:-}" ]; then
+    echo "DK_CTAS_TOTAL is set but TREATMENT=1 is not; refusing" >&2
+    exit 1
+  fi
+  case "${EXTRA_LAUNCH_ARGS:-}" in
+    *pjrt-h21-cta-absolute*) ;;
+    *) echo "DK_CTAS_TOTAL is set but EXTRA_LAUNCH_ARGS does not carry the H21 wheel; that plugin does not read the variable and the arm would score as a vacuous null" >&2; exit 1 ;;
+  esac
+fi
 
 # One RID/VERSION per submission, ever: a reused RID merges W&B histories, resurrects the
 # leader-populated compile cache (clique-deadlock recipe), and can vacuously reuse artifacts.
@@ -109,6 +122,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   -e XLA_FLAGS "${ARM_XLA_FLAGS:-}" \
   -e XLA_PYTHON_CLIENT_MEM_FRACTION "${MEM_FRACTION:-0.75}" \
   -e XLA_RAGGED_A2A_DK_CTAS_PER_SM "${DK_CTAS_PER_SM:-}" \
+  -e XLA_RAGGED_A2A_DK_CTAS_TOTAL "${DK_CTAS_TOTAL:-}" \
   -e TF_CPP_MIN_LOG_LEVEL 0 \
   -e TF_CPP_VMODULE "hlo_rematerialization=1,execution_stream_assignment=1,collective_pipeliner=1,ragged_all_to_all_thunk=3" \
   -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
@@ -127,9 +141,10 @@ uv run iris --config lib/iris/config/marin.yaml job run \
      --version "${VERSION}" --run >"${LOOP_DIR}/${RID}-submit.log" 2>&1 \
   || { echo "submit FAILED, tail of ${RID}-submit.log:" >&2; tail -20 "${LOOP_DIR}/${RID}-submit.log" >&2; exit 1; }
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${RID}" "$(git -C "$REPO" rev-parse --short HEAD)" "${VERSION}" "${MOE_IMPL}" "${TRAINING_DATA}" \
   "${MASTER_PARAMS}" "${SCHEDULE_STEPS}" "${ARM_TIMEOUT}" "${RESTORE_FROM:-none}" \
-  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" "${MEM_FRACTION:-0.75}" "${DK_CTAS_PER_SM:-none}" >> "${LOOP_DIR}/arms.tsv"
+  "${EXTRA_LAUNCH_ARGS:-none}" "${ARM_XLA_FLAGS:-none}" "${MEM_FRACTION:-0.75}" "${DK_CTAS_PER_SM:-none}" \
+  "${DK_CTAS_TOTAL:-none}" >> "${LOOP_DIR}/arms.tsv"
 
-echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none}, memfrac: ${MEM_FRACTION:-0.75}, dk_ctas: ${DK_CTAS_PER_SM:-none})"
+echo "submitted ${RID} at ${PRIORITY} priority (timeout ${ARM_TIMEOUT}s, commit $(git -C "$REPO" rev-parse --short HEAD), data ${TRAINING_DATA}, extra: ${EXTRA_LAUNCH_ARGS:-none}, xla_flags: ${ARM_XLA_FLAGS:-none}, memfrac: ${MEM_FRACTION:-0.75}, dk_ctas: ${DK_CTAS_PER_SM:-none}, dk_total: ${DK_CTAS_TOTAL:-none})"
