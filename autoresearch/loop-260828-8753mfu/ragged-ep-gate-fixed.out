@@ -1,0 +1,45 @@
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+   Building marin-root @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate
+   Building marin-deploy @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/infra/deploy
+   Building marin-dupekit @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/dupekit
+   Building marin-finelog @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/finelog
+   Building marin-ducky @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/ducky
+   Building marin-core @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/marin
+   Building marin-fray @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/fray
+   Building marin-haliax @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/haliax
+   Building marin-iris @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/iris
+   Building marin-rigging @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/rigging
+   Building marin-finestore @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/finestore
+   Building marin-levanter @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/levanter
+   Building marin-zephyr @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/zephyr
+warning: `build_system.requires = ["uv-build>=0.7.19,<0.10.0"]` does not contain the current uv version 0.11.21
+warning: Found license classifier `License :: OSI Approved :: Apache Software License`. License classifiers are ambiguous and deprecated per PEP 639; projects should use `project.license` and `project.license-files` instead.
+      Built marin-levanter @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/levanter
+Downloading resiliparse
+      Built marin-finestore @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/finestore
+      Built marin-deploy @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/infra/deploy
+      Built marin-ducky @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/ducky
+      Built marin-zephyr @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/zephyr
+      Built marin-finelog @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/finelog
+      Built marin-dupekit @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/dupekit
+      Built marin-haliax @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/haliax
+      Built marin-fray @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/fray
+      Built marin-core @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/marin
+      Built marin-root @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate
+      Built marin-iris @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/iris
+      Built marin-rigging @ file:///tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate/lib/rigging
+ Downloaded resiliparse
+Installed 209 packages in 27ms
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/marin/.cache/uv/builds-v0/.tmpyCynd9/bin/python
+cachedir: .pytest_cache
+rootdir: /tmp/claude-1003/-home-marin-projects-marin/8565584c-bea8-410e-aa5b-c60ba76fecbb/scratchpad/wt-fixgate
+configfile: pyproject.toml
+plugins: timeout-2.4.0, anyio-4.12.1, jaxtyping-0.3.5
+collecting ... collected 1 item
+
+tests/cluster/grug/test_ragged_ep_check.py::test_the_ragged_ep_transport_matches_a_dense_reference Not all requested scopes were granted by the authorization server, missing scopes email.
+PASSED
+
+======================== 1 passed in 665.82s (0:11:05) =========================

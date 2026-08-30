@@ -21008,3 +21008,505 @@ exec
  M autoresearch/loop-260828-8753mfu/audit-codex-wgrad.txt
 ?? autoresearch/loop-260828-8753mfu/ragged-ep-gate.out
 
+The independent lanes and local verification converge: runtime dispatch and the pinned cuDNN source establish an unsupported Wgrad call, while CPU-only checks cover portable algebra and confirm GPU checks are unavailable here.
+  ✓ Read Levanter guidance and establish checkout, hero configuration, and runtime dispatch
+  ✓ Validate JAX, QuACK, cuDNN, activation, layout, dtype, and gradient contracts
+  ✓ Search Marin corpus, git history, GitHub issues/PRs, and test evidence
+  ✓ Run read-only CPU probes and identify unavailable GPU checks
+  ✓ Reconcile evidence and deliver verdict, blast radius, and confidence
+exec
+/etc/profiles/per-user/marin/bin/bash -lc "nl -ba lib/levanter/src/levanter/grug/_moe/sonic.py | sed -n '90,175p;280,360p'; nl -ba lib/levanter/src/levanter/grug/_moe/sonic_cute.py | sed -n '30,48p;132,146p'" in /home/marin/projects/marin-mfu-loop
+ succeeded in 0ms:
+    90	                x_vals = tl.load(x_ptrs, mask=x_mask, other=0.0).to(tl.float32)
+    91	
+    92	                if w_is_none:
+    93	                    acc += tl.sum(x_vals, axis=0)
+    94	                else:
+    95	                    w_vals = tl.load(w_ptr + m_abs, mask=k_mask, other=0.0).to(tl.float32)
+    96	                    acc += tl.sum(x_vals * w_vals[:, None], axis=0)
+    97	
+    98	            out_ptrs = out_ptr + t_idx * stride_outt + h_idx * stride_outh
+    99	            tl.store(out_ptrs, acc, mask=h_mask)
+   100	
+   101	    @triton.jit
+   102	    def _sonic_token_gather_sum_bwd_kernel(
+   103	        dout_ptr,  # (T, H)
+   104	        x_ptr,  # (Mtotal, H)
+   105	        w_ptr,  # (Mtotal,)
+   106	        m_perm_ptr,  # (Mtotal,) int32
+   107	        m_offset_ptr,  # unused for fixed-K, kept to match Sonic metadata
+   108	        dx_ptr,  # (Mtotal, H)
+   109	        dw_ptr,  # (Mtotal,)
+   110	        t: tl.constexpr,
+   111	        h: tl.constexpr,
+   112	        max_k: tl.constexpr,
+   113	        stride_doutt: tl.constexpr,
+   114	        stride_douth: tl.constexpr,
+   115	        stride_xm: tl.constexpr,
+   116	        stride_xh: tl.constexpr,
+   117	        block_h: tl.constexpr,
+   118	    ):
+   119	        assignment = tl.program_id(axis=0)
+   120	        token = assignment // max_k
+   121	        h_idx = tl.arange(0, block_h).to(tl.int64)
+   122	        h_mask = h_idx < h
+   123	
+   124	        perm_idx = tl.load(m_perm_ptr + assignment).to(tl.int64)
+   125	        weight = tl.load(w_ptr + assignment).to(tl.float32)
+   126	
+   127	        dout = tl.load(
+   128	            dout_ptr + token * stride_doutt + h_idx * stride_douth,
+   129	            mask=h_mask,
+   130	            other=0.0,
+   131	        ).to(tl.float32)
+   132	        x = tl.load(
+   133	            x_ptr + perm_idx * stride_xm + h_idx * stride_xh,
+   134	            mask=h_mask,
+   135	            other=0.0,
+   136	        ).to(tl.float32)
+   137	
+   138	        tl.store(dx_ptr + perm_idx * stride_xm + h_idx * stride_xh, dout * weight, mask=h_mask)
+   139	        dw = tl.sum(dout * x, axis=0)
+   140	        tl.store(dw_ptr + assignment, dw)
+   141	
+   142	else:
+   143	    _sonic_token_gather_sum_kernel = None
+   144	    _sonic_token_gather_sum_bwd_kernel = None
+   145	
+   146	
+   147	def _require_sonic_deps() -> None:
+   148	    if jt is None or _sonic_token_gather_sum_kernel is None or _sonic_token_gather_sum_bwd_kernel is None:
+   149	        raise ImportError(
+   150	            "implementation='sonic' requires jax-triton and triton; install the gpu extra for marin-levanter "
+   151	            "or marin."
+   152	        )
+   153	    if not os.environ.get("TRITON_CACHE_DIR"):
+   154	        os.environ["TRITON_CACHE_DIR"] = _DEFAULT_TRITON_CACHE_DIR
+   155	
+   156	
+   157	def sonic_gather_sum_available() -> bool:
+   158	    """Whether the fused gather-and-weighted-sum kernel can run in this process.
+   159	
+   160	    The kernel is Triton, so a non-GPU backend rules it out however the imports went.
+   161	    """
+   162	    return (
+   163	        jt is not None
+   164	        and _sonic_token_gather_sum_kernel is not None
+   165	        and _sonic_token_gather_sum_bwd_kernel is not None
+   166	        and jax.default_backend() == "gpu"
+   167	    )
+   168	
+   169	
+   170	def _next_power_of_2(value: int) -> int:
+   171	    if value < 1:
+   172	        raise ValueError(f"value must be positive, got {value}")
+   173	    return 1 << (value - 1).bit_length()
+   174	
+   175	
+   280	        max_k=topk,
+   281	        stride_doutt=hidden_dim,
+   282	        stride_douth=1,
+   283	        stride_xm=hidden_dim,
+   284	        stride_xh=1,
+   285	        block_h=block_h,
+   286	    )
+   287	
+   288	
+   289	@jax.custom_vjp
+   290	def sonic_gather_sum(
+   291	    dispatch_output: Float[Array, "M H"],
+   292	    dispatch_positions: Int[Array, "T K"],
+   293	    combine_weights: Float[Array, "T K"],
+   294	) -> Float[Array, "T H"]:
+   295	    tokens, topk = combine_weights.shape
+   296	    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+   297	    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+   298	    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+   299	    return _sonic_gather_sum_impl(
+   300	        dispatch_output,
+   301	        weights_flat,
+   302	        positions_flat,
+   303	        offsets,
+   304	        tokens=tokens,
+   305	        topk=topk,
+   306	    )
+   307	
+   308	
+   309	def _sonic_gather_sum_fwd(
+   310	    dispatch_output: Float[Array, "M H"],
+   311	    dispatch_positions: Int[Array, "T K"],
+   312	    combine_weights: Float[Array, "T K"],
+   313	) -> tuple[Float[Array, "T H"], tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]]]:
+   314	    tokens, topk = combine_weights.shape
+   315	    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+   316	    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+   317	    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+   318	    out = _sonic_gather_sum_impl(
+   319	        dispatch_output,
+   320	        weights_flat,
+   321	        positions_flat,
+   322	        offsets,
+   323	        tokens=tokens,
+   324	        topk=topk,
+   325	    )
+   326	    return out, (dispatch_output, dispatch_positions, combine_weights)
+   327	
+   328	
+   329	def _sonic_gather_sum_bwd(
+   330	    residuals: tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]],
+   331	    dout: Float[Array, "T H"],
+   332	) -> tuple[Float[Array, "M H"], None, Float[Array, "T K"]]:
+   333	    dispatch_output, dispatch_positions, combine_weights = residuals
+   334	    tokens, topk = combine_weights.shape
+   335	    weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
+   336	    positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
+   337	    offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
+   338	    d_dispatch_output, d_weights_flat = _sonic_gather_sum_bwd_impl(
+   339	        dout,
+   340	        dispatch_output,
+   341	        weights_flat,
+   342	        positions_flat,
+   343	        offsets,
+   344	        tokens=tokens,
+   345	        topk=topk,
+   346	    )
+   347	    d_combine_weights = d_weights_flat.reshape(combine_weights.shape).astype(combine_weights.dtype)
+   348	    return d_dispatch_output, None, d_combine_weights
+   349	
+   350	
+   351	sonic_gather_sum.defvjp(_sonic_gather_sum_fwd, _sonic_gather_sum_bwd)
+   352	
+   353	
+   354	def _moe_mlp_local_sonic(
+   355	    x: Float[Array, "T H"],
+   356	    selected_experts: Int[Array, "T K"],
+   357	    combine_weights: Float[Array, "T K"],
+   358	    moe_w13: Float[Array, "E H I2"],
+   359	    moe_w2: Float[Array, "E I H"],
+   360	    *,
+    30	    _swiglu_gate_up_backward,
+    31	    _zero_dropped_assignments,
+    32	    _zero_inactive_grouped_rows,
+    33	)
+    34	from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad, cudnn_grouped_wgrad_prealigned
+    35	from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
+    36	
+    37	# QuACK activation-path GEMM configuration, tuned at the i3072 hero shapes on one GB200.
+    38	# Tile (256, 256) beats the (256, 128) default by 1.235x on the gated GEMM and 1.094x on the
+    39	# down GEMM. CLC persistence adds a further 1.049x / 1.120x at that tile. Under CLC the two
+    40	# GEMMs prefer different clusters: the gated gate/up GEMM stays at (2, 1, 1), while the plain
+    41	# grouped GEMMs -- down forward plus the backward dh/dx matmuls -- gain 1.055x at (2, 2, 1).
+    42	# All of this is scheduling, so none of it changes the computed function.
+    43	#
+    44	# These reach `_expert_mlp_cudnn` only. `_expert_mlp` -- the local FSDP path, used by the
+    45	# `fsdp-nodrop` and `fsdp-chunk4` ablation arms -- still calls the GEMMs at their defaults, as it
+    46	# did before this tuning existed, so nothing regressed. It is untuned rather than deliberately
+    47	# tuned differently: the measurements above were taken at the i3072 hero shapes and the FSDP arms
+    48	# run d768, so the numbers do not transfer without re-measuring.
+   132	    _expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
+   133	    return _expert_mlp_cudnn
+   134	
+   135	
+   136	_expert_mlp_cudnn = _build_expert_mlp_cudnn(cudnn_grouped_wgrad)
+   137	# For a receiver buffer whose expert groups already start on the kernel's aligned rows, with the
+   138	# slack between them zero. The transport builds that layout, so the pad pass is pure copy traffic.
+   139	_expert_mlp_cudnn_prealigned = _build_expert_mlp_cudnn(cudnn_grouped_wgrad_prealigned)
+   140	
+   141	
+   142	def _moe_mlp_local_sonic_cute(
+   143	    x: Float[Array, "T H"],
+   144	    selected_experts: Int[Array, "T K"],
+   145	    combine_weights: Float[Array, "T K"],
+   146	    moe_w13: Float[Array, "E H I2"],
+
+codex
+## Verdict: incorrect
+
+The current ragged hero path computes silently wrong expert-weight gradients. Both `dw13`—therefore `w_gate` and `w_up`—and `dw2`/`w_down` are passed to an unsupported cuDNN Frontend 1.27.0 grouped-Wgrad kernel configuration.
+
+Confidence is high for the dispatch and contract violation. Confidence in the exact error distribution is moderate because no SM100 GPU was available here; historical GB200 measurements were not rerun.
+
+### Actual production dispatch
+
+I audited HEAD `85caf4210b32404839aab07c85bd875e7bd0dad1` plus the dirty working tree. The current branch’s hero model specifies d6144, expert width/intermediate width 3072, 384 experts, top-8, 48 layers, capacity factor 1.15, and `ragged_all_to_all` in [heuristic.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/heuristic.py:85). The recipe supplies EP64 and BF16 compute in [hero_recipe.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/hero_recipe.py:33) and [hero_recipe.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/hero_recipe.py:41); parameters are cast to compute dtype before `jax.value_and_grad` in [train.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:873).
+
+The resulting path is:
+
+1. `ActivationFunctionEnum.silu` resolves to the exact `jax.nn.silu` function object in [activation.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/utils/activation.py:63).
+2. EP64 plus `ragged_all_to_all` selects `_moe_mlp_ep_ragged_a2a_local` in [grug_moe.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/grug_moe.py:256).
+3. On SM100, with the pinned GPU packages importable, `_select_expert_mlp` chooses `_cute_expert_mlp` in [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:181).
+4. `ragged_expert_chunks` is unset, so six local experts are split into two chunks of three in [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:500).
+5. `_expert_mlp_cudnn` dispatches:
+
+| Operation | Selected implementation |
+|---|---|
+| Gate/up forward + SiLU | QuACK `GemmGatedSm100` |
+| Down forward | QuACK `GemmDefaultSm100` |
+| Backward `dh` and expert-input `dx` | QuACK `GemmDefaultSm100`, transposed layouts |
+| SwiGLU derivative | JAX arithmetic in `_swiglu_gate_up_backward` |
+| `dw2` | cuDNN `MoEGroupedGemmWgradBF16Kernel` |
+| `dw13` | cuDNN `MoEGroupedGemmWgradBF16Kernel` |
+
+The two Wgrad calls are explicit at [sonic_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/sonic_cute.py:117). A recorded hero-shape xprof also identifies `pad_grouped_rows` as the immediate predecessor of the cuDNN dW13 call, with the exact 301,487-row padded operand, in [LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:1023). That confirms runtime selection rather than merely inferring from available kernels.
+
+The geometry probe produced:
+
+```text
+hero_geometry= {
+  'tokens_per_shard': 65536,
+  'assignments_per_shard': 524288,
+  'local_experts': 6,
+  'chunks': 2,
+  'experts_per_chunk': 3,
+  'local_capacity': 602932,
+  'chunk_capacity': 301466
+}
+```
+
+### Contract audit
+
+JAX ragged all-to-all: no violation found. JAX 0.11.1 requires equal-length, nonempty integer metadata vectors, length divisible by the mapped-axis size, and matching transposed send/receive sizes in [parallel.py](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:631). Marin constructs 384 entries—EP64 × six local experts—and dispatch/return as exact mirrors in [ep_common.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_common.py:147). Its custom VJP performs the same swapped sizes, exchanged offsets, reverse collective, and overwritten-output masking as JAX’s own transpose rule; compare [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:344) with [parallel.py](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1692).
+
+QuACK forward and activation gradients: no visible contract violation found. The pinned 0.6.1 wrapper declares BF16 support and 8-element vector alignment in [quack_moe_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/quack_moe_cute.py:77). Hero dimensions 3072 and 6144 meet the layout constraints; cumulative group offsets are int32 and have length four for each three-expert call. The forward/down/dgrad logical weight layouts match the wrapper’s `b_major="n"` and `"k"` mappings. This integration directly uses QuACK kernel classes rather than a separately documented stable JAX facade, which remains an API-stability risk, but I found no hero-shape contract mismatch.
+
+Sonic combine: no violation found. On GPU the fused gather/sum uses FP32 accumulation and its backward writes one result per unique dispatch position in [sonic.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/sonic.py:289). Its hidden-width limit covers the hero’s latent width 3072.
+
+cuDNN Wgrad: definite violation. Marin pins cuDNN Frontend 1.27.0 in [pyproject.toml](/home/marin/projects/marin-mfu-loop/lib/levanter/pyproject.toml:93) and [uv.lock](/home/marin/projects/marin-mfu-loop/uv.lock:5764). That exact package’s shipped API requires:
+
+- Every expert token count to be divisible by 256.
+- The final cumulative offset to equal the input token dimension.
+- BF16 inputs, int32 offsets, FP32 accumulation, compatible contiguous layouts and pointer alignment.
+- SM100 or newer.
+- A successful internal `can_implement` call.
+
+See the installed package’s [_bf16_api.py](/home/marin/.cache/uv/archive-v0/XG3ddyF2LTqrNQ-M/cudnn/gemm/cutedsl/grouped/wgrad/_bf16_api.py:135) and [NVIDIA’s 1.27 documentation](https://docs.nvidia.com/deeplearning/cudnn/v1.27.0/fe-oss-apis/gemm_fusions/grouped_gemm_wgrad.html). The internal kernel itself declares `FIX_PAD_SIZE = 256` and rejects other group lengths in [moe_grouped_gemm_wgrad.py](/home/marin/.cache/uv/archive-v0/XG3ddyF2LTqrNQ-M/cudnn/gemm/cutedsl/grouped/wgrad/moe_grouped_gemm_wgrad.py:75).
+
+Marin instead:
+
+- Imports the private internal kernel class directly in [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:36).
+- Pads groups only to eight rows at [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:74).
+- Calls the raw kernel without the public `check_support` or internal `can_implement` check at [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:50).
+
+A CPU probe of the actual padding helper showed:
+
+```text
+backend= cpu
+input_rows= 301466 padded_rows= 301487
+active_sizes= [100489, 100488, 100489]
+padded_sizes= [100496, 100488, 100496]
+padded_sizes_mod_256= [144, 136, 144]
+last_offset= 301480
+```
+
+This probe does not test the GPU kernel. It proves that the wrapper’s metadata fails the documented 256-row requirement. At the fixed hero shape, the padded physical row count is `301466 + 7×3 = 301487`, while the final offset is always divisible by eight, so the public final-offset equality can never hold either.
+
+The dirty working-tree changes add an optional prealigned receiver layout, but the hero leaves `ragged_receiver_alignment=None`; `_GROUP_ALIGNMENT` remains eight. They do not fix the contract failure.
+
+### History and numerical evidence
+
+Repository and GitHub history corroborate the defect:
+
+```text
+$ git log --all --follow -- .../cudnn_wgrad_cute.py
+dc584e765d 2026-08-27 [grug] Rework ... (#8549)
+583fa2830d 2026-08-20 [grug] Compute ... on cuDNN grouped kernels
+f2c9f702f3 2026-08-16 ... needs 64-aligned group offsets
+
+$ git merge-base --is-ancestor f2c9f702f3 HEAD
+exit 1
+```
+
+[Issue #8339](https://github.com/marin-community/marin/issues/8339) reports direct GB200 errors of 0.17–0.55 relative to the gradient peak at production-like dimensions, versus a BF16 floor near 0.003. Its [later contract correction](https://github.com/marin-community/marin/issues/8339#issuecomment-5318708904) reports relative error 0.269 with eight-row alignment, 0.217 with 32, and zero with 64—but correctly notes that even 64 remains outside the supported 256-row contract.
+
+The issue was closed without a fix reaching this branch. Commit `f2c9f702f3` changed eight to 64 only on a separate lineage and is not an ancestor of HEAD. [PR #8549](https://github.com/marin-community/marin/pull/8549) later merged the eight-row wrapper as `dc584e765d...`. Its reported green four-GPU test is not dispositive: the harness gates gradients on a 5% worst-slice median while ignoring the recorded maximum in [ragged_ep.py](/home/marin/projects/marin-mfu-loop/lib/marin/src/marin/testing/moe/ragged_ep.py:84) and [ragged_ep.py](/home/marin/projects/marin-mfu-loop/lib/marin/src/marin/testing/moe/ragged_ep.py:406). The accelerator test is explicitly unscheduled in [test_ragged_ep_check.py](/home/marin/projects/marin-mfu-loop/tests/cluster/grug/test_ragged_ep_check.py:4).
+
+Local CPU tests:
+
+```text
+ss.. [100%]
+SKIPPED [2] ... requires an even number of >=2 devices
+2 passed, 2 skipped
+```
+
+The two passes covered the portable SwiGLU backward formula. The end-to-end ragged value/gradient tests skipped. No JAX ragged collective, QuACK kernel, cuDNN Wgrad kernel, or SM100 execution occurred locally.
+
+### Blast radius
+
+For every affected backward step:
+
+- All 48 routed-MoE layers are affected.
+- Every EP rank processes two chunks with three local experts each.
+- `dw13` has per-call shape `[3, 3072, 6144]`, contaminating both `w_gate` and `w_up`.
+- `dw2` has per-call shape `[3, 3072, 3072]`, contaminating `w_down`.
+- That is two unsupported Wgrad calls × two chunks × 48 layers = 192 unsupported calls per rank per training step.
+- Forward outputs and same-step expert-input/router/combine gradients are not directly produced by the faulty Wgrad call. Subsequent steps are nevertheless contaminated after the optimizer applies the corrupted expert-weight updates.
+
+The historical 17–55% peak-relative errors demonstrate potentially large entrywise corruption, but they are not an exact measurement of the current latent-hero tensor shapes. The current error distribution, affected-entry fraction, and loss impact are therefore undetermined.
+
+One important boundary: the original long-running 18T hero launched at commit `12d8b6f...` used `fixed_pooled_wave_all_to_all`, not this ragged/cuDNN path, as documented in [issue #8435](https://github.com/marin-community/marin/issues/8435#issuecomment-5335872267). Current ragged hero launches, checkpoint-restored diagnostics, and future training from the branch default are in the blast radius; the immutable original pooled-wave launch is not.
+
+### Confidence and limitations
+
+- High confidence that current SM100+SiLU ragged hero dispatches to this Wgrad wrapper.
+- High confidence that the supplied inputs violate both the documented facade and the raw kernel’s own 256-row `can_implement` requirement.
+- High confidence that both expert weight-gradient tensors are affected.
+- Moderate confidence in the historical magnitude’s transfer to the exact current shapes.
+- No local GPU evidence. CPU results were used only for portable algebra and metadata construction.
+
+Echo returned the same #8339 and #8081 records; feedback was recorded as `#944`. The broader Marin corpus was stale and its server unavailable:
+
+```text
+corpus: 179531 chunks, built 62h ago (STALE)
+summaries: 21 weeks, latest 2026-08-17_2026-08-23
+server: cannot reach https://marinmirror.exe.xyz
+```
+
+Research facets were: current revision/topology; runtime dispatch; JAX transport contract; QuACK forward/dgrad layouts; SwiGLU/interleave VJPs; cuDNN Wgrad contract; tests/numerics; git/GitHub history; run blast radius; and working-tree-versus-HEAD behavior.
+
+I made no commits or intentional source edits. The checkout was already dirty and was left intact.
+tokens used
+394,735
+## Verdict: incorrect
+
+The current ragged hero path computes silently wrong expert-weight gradients. Both `dw13`—therefore `w_gate` and `w_up`—and `dw2`/`w_down` are passed to an unsupported cuDNN Frontend 1.27.0 grouped-Wgrad kernel configuration.
+
+Confidence is high for the dispatch and contract violation. Confidence in the exact error distribution is moderate because no SM100 GPU was available here; historical GB200 measurements were not rerun.
+
+### Actual production dispatch
+
+I audited HEAD `85caf4210b32404839aab07c85bd875e7bd0dad1` plus the dirty working tree. The current branch’s hero model specifies d6144, expert width/intermediate width 3072, 384 experts, top-8, 48 layers, capacity factor 1.15, and `ragged_all_to_all` in [heuristic.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/heuristic.py:85). The recipe supplies EP64 and BF16 compute in [hero_recipe.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/hero_recipe.py:33) and [hero_recipe.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/hero_recipe.py:41); parameters are cast to compute dtype before `jax.value_and_grad` in [train.py](/home/marin/projects/marin-mfu-loop/experiments/grug/moe_hero_ep/train.py:873).
+
+The resulting path is:
+
+1. `ActivationFunctionEnum.silu` resolves to the exact `jax.nn.silu` function object in [activation.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/utils/activation.py:63).
+2. EP64 plus `ragged_all_to_all` selects `_moe_mlp_ep_ragged_a2a_local` in [grug_moe.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/grug_moe.py:256).
+3. On SM100, with the pinned GPU packages importable, `_select_expert_mlp` chooses `_cute_expert_mlp` in [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:181).
+4. `ragged_expert_chunks` is unset, so six local experts are split into two chunks of three in [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:500).
+5. `_expert_mlp_cudnn` dispatches:
+
+| Operation | Selected implementation |
+|---|---|
+| Gate/up forward + SiLU | QuACK `GemmGatedSm100` |
+| Down forward | QuACK `GemmDefaultSm100` |
+| Backward `dh` and expert-input `dx` | QuACK `GemmDefaultSm100`, transposed layouts |
+| SwiGLU derivative | JAX arithmetic in `_swiglu_gate_up_backward` |
+| `dw2` | cuDNN `MoEGroupedGemmWgradBF16Kernel` |
+| `dw13` | cuDNN `MoEGroupedGemmWgradBF16Kernel` |
+
+The two Wgrad calls are explicit at [sonic_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/sonic_cute.py:117). A recorded hero-shape xprof also identifies `pad_grouped_rows` as the immediate predecessor of the cuDNN dW13 call, with the exact 301,487-row padded operand, in [LOGBOOK.md](/home/marin/projects/marin-mfu-loop/autoresearch/loop-260828-8753mfu/LOGBOOK.md:1023). That confirms runtime selection rather than merely inferring from available kernels.
+
+The geometry probe produced:
+
+```text
+hero_geometry= {
+  'tokens_per_shard': 65536,
+  'assignments_per_shard': 524288,
+  'local_experts': 6,
+  'chunks': 2,
+  'experts_per_chunk': 3,
+  'local_capacity': 602932,
+  'chunk_capacity': 301466
+}
+```
+
+### Contract audit
+
+JAX ragged all-to-all: no violation found. JAX 0.11.1 requires equal-length, nonempty integer metadata vectors, length divisible by the mapped-axis size, and matching transposed send/receive sizes in [parallel.py](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:631). Marin constructs 384 entries—EP64 × six local experts—and dispatch/return as exact mirrors in [ep_common.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_common.py:147). Its custom VJP performs the same swapped sizes, exchanged offsets, reverse collective, and overwritten-output masking as JAX’s own transpose rule; compare [ep_ragged_all_to_all.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py:344) with [parallel.py](/home/marin/projects/marin-mfu-loop/.venv/lib/python3.12/site-packages/jax/_src/lax/parallel.py:1692).
+
+QuACK forward and activation gradients: no visible contract violation found. The pinned 0.6.1 wrapper declares BF16 support and 8-element vector alignment in [quack_moe_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/quack_moe_cute.py:77). Hero dimensions 3072 and 6144 meet the layout constraints; cumulative group offsets are int32 and have length four for each three-expert call. The forward/down/dgrad logical weight layouts match the wrapper’s `b_major="n"` and `"k"` mappings. This integration directly uses QuACK kernel classes rather than a separately documented stable JAX facade, which remains an API-stability risk, but I found no hero-shape contract mismatch.
+
+Sonic combine: no violation found. On GPU the fused gather/sum uses FP32 accumulation and its backward writes one result per unique dispatch position in [sonic.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/sonic.py:289). Its hidden-width limit covers the hero’s latent width 3072.
+
+cuDNN Wgrad: definite violation. Marin pins cuDNN Frontend 1.27.0 in [pyproject.toml](/home/marin/projects/marin-mfu-loop/lib/levanter/pyproject.toml:93) and [uv.lock](/home/marin/projects/marin-mfu-loop/uv.lock:5764). That exact package’s shipped API requires:
+
+- Every expert token count to be divisible by 256.
+- The final cumulative offset to equal the input token dimension.
+- BF16 inputs, int32 offsets, FP32 accumulation, compatible contiguous layouts and pointer alignment.
+- SM100 or newer.
+- A successful internal `can_implement` call.
+
+See the installed package’s [_bf16_api.py](/home/marin/.cache/uv/archive-v0/XG3ddyF2LTqrNQ-M/cudnn/gemm/cutedsl/grouped/wgrad/_bf16_api.py:135) and [NVIDIA’s 1.27 documentation](https://docs.nvidia.com/deeplearning/cudnn/v1.27.0/fe-oss-apis/gemm_fusions/grouped_gemm_wgrad.html). The internal kernel itself declares `FIX_PAD_SIZE = 256` and rejects other group lengths in [moe_grouped_gemm_wgrad.py](/home/marin/.cache/uv/archive-v0/XG3ddyF2LTqrNQ-M/cudnn/gemm/cutedsl/grouped/wgrad/moe_grouped_gemm_wgrad.py:75).
+
+Marin instead:
+
+- Imports the private internal kernel class directly in [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:36).
+- Pads groups only to eight rows at [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:74).
+- Calls the raw kernel without the public `check_support` or internal `can_implement` check at [cudnn_wgrad_cute.py](/home/marin/projects/marin-mfu-loop/lib/levanter/src/levanter/grug/_moe/cudnn_wgrad_cute.py:50).
+
+A CPU probe of the actual padding helper showed:
+
+```text
+backend= cpu
+input_rows= 301466 padded_rows= 301487
+active_sizes= [100489, 100488, 100489]
+padded_sizes= [100496, 100488, 100496]
+padded_sizes_mod_256= [144, 136, 144]
+last_offset= 301480
+```
+
+This probe does not test the GPU kernel. It proves that the wrapper’s metadata fails the documented 256-row requirement. At the fixed hero shape, the padded physical row count is `301466 + 7×3 = 301487`, while the final offset is always divisible by eight, so the public final-offset equality can never hold either.
+
+The dirty working-tree changes add an optional prealigned receiver layout, but the hero leaves `ragged_receiver_alignment=None`; `_GROUP_ALIGNMENT` remains eight. They do not fix the contract failure.
+
+### History and numerical evidence
+
+Repository and GitHub history corroborate the defect:
+
+```text
+$ git log --all --follow -- .../cudnn_wgrad_cute.py
+dc584e765d 2026-08-27 [grug] Rework ... (#8549)
+583fa2830d 2026-08-20 [grug] Compute ... on cuDNN grouped kernels
+f2c9f702f3 2026-08-16 ... needs 64-aligned group offsets
+
+$ git merge-base --is-ancestor f2c9f702f3 HEAD
+exit 1
+```
+
+[Issue #8339](https://github.com/marin-community/marin/issues/8339) reports direct GB200 errors of 0.17–0.55 relative to the gradient peak at production-like dimensions, versus a BF16 floor near 0.003. Its [later contract correction](https://github.com/marin-community/marin/issues/8339#issuecomment-5318708904) reports relative error 0.269 with eight-row alignment, 0.217 with 32, and zero with 64—but correctly notes that even 64 remains outside the supported 256-row contract.
+
+The issue was closed without a fix reaching this branch. Commit `f2c9f702f3` changed eight to 64 only on a separate lineage and is not an ancestor of HEAD. [PR #8549](https://github.com/marin-community/marin/pull/8549) later merged the eight-row wrapper as `dc584e765d...`. Its reported green four-GPU test is not dispositive: the harness gates gradients on a 5% worst-slice median while ignoring the recorded maximum in [ragged_ep.py](/home/marin/projects/marin-mfu-loop/lib/marin/src/marin/testing/moe/ragged_ep.py:84) and [ragged_ep.py](/home/marin/projects/marin-mfu-loop/lib/marin/src/marin/testing/moe/ragged_ep.py:406). The accelerator test is explicitly unscheduled in [test_ragged_ep_check.py](/home/marin/projects/marin-mfu-loop/tests/cluster/grug/test_ragged_ep_check.py:4).
+
+Local CPU tests:
+
+```text
+ss.. [100%]
+SKIPPED [2] ... requires an even number of >=2 devices
+2 passed, 2 skipped
+```
+
+The two passes covered the portable SwiGLU backward formula. The end-to-end ragged value/gradient tests skipped. No JAX ragged collective, QuACK kernel, cuDNN Wgrad kernel, or SM100 execution occurred locally.
+
+### Blast radius
+
+For every affected backward step:
+
+- All 48 routed-MoE layers are affected.
+- Every EP rank processes two chunks with three local experts each.
+- `dw13` has per-call shape `[3, 3072, 6144]`, contaminating both `w_gate` and `w_up`.
+- `dw2` has per-call shape `[3, 3072, 3072]`, contaminating `w_down`.
+- That is two unsupported Wgrad calls × two chunks × 48 layers = 192 unsupported calls per rank per training step.
+- Forward outputs and same-step expert-input/router/combine gradients are not directly produced by the faulty Wgrad call. Subsequent steps are nevertheless contaminated after the optimizer applies the corrupted expert-weight updates.
+
+The historical 17–55% peak-relative errors demonstrate potentially large entrywise corruption, but they are not an exact measurement of the current latent-hero tensor shapes. The current error distribution, affected-entry fraction, and loss impact are therefore undetermined.
+
+One important boundary: the original long-running 18T hero launched at commit `12d8b6f...` used `fixed_pooled_wave_all_to_all`, not this ragged/cuDNN path, as documented in [issue #8435](https://github.com/marin-community/marin/issues/8435#issuecomment-5335872267). Current ragged hero launches, checkpoint-restored diagnostics, and future training from the branch default are in the blast radius; the immutable original pooled-wave launch is not.
+
+### Confidence and limitations
+
+- High confidence that current SM100+SiLU ragged hero dispatches to this Wgrad wrapper.
+- High confidence that the supplied inputs violate both the documented facade and the raw kernel’s own 256-row `can_implement` requirement.
+- High confidence that both expert weight-gradient tensors are affected.
+- Moderate confidence in the historical magnitude’s transfer to the exact current shapes.
+- No local GPU evidence. CPU results were used only for portable algebra and metadata construction.
+
+Echo returned the same #8339 and #8081 records; feedback was recorded as `#944`. The broader Marin corpus was stale and its server unavailable:
+
+```text
+corpus: 179531 chunks, built 62h ago (STALE)
+summaries: 21 weeks, latest 2026-08-17_2026-08-23
+server: cannot reach https://marinmirror.exe.xyz
+```
+
+Research facets were: current revision/topology; runtime dispatch; JAX transport contract; QuACK forward/dgrad layouts; SwiGLU/interleave VJPs; cuDNN Wgrad contract; tests/numerics; git/GitHub history; run blast radius; and working-tree-versus-HEAD behavior.
+
+I made no commits or intentional source edits. The checkout was already dirty and was left intact.

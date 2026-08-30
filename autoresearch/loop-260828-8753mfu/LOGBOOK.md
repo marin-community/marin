@@ -1150,3 +1150,58 @@ the hero configuration as ragged_all_to_all. That premise is wrong for
 the DEPLOYED hero (right for the campaign branch). Their audit of the
 ragged path is still valid and on-point; I must correct the framing when
 we compare notes rather than let it stand.
+
+## 2026-08-31 ~14:00Z: CONFIRMED on hardware, and FIXED (commit 2ca4c1e046)
+
+Controlled single-variable experiment on GB200, the repo's own 4-GPU
+dense-reference gate, same seeds and same exact fp32 oracle, with QuACK
+forward, the sonic combine, the transport and the reference all held
+constant. Only the wgrad group padding changed (8 -> 256).
+
+  seed   ragged grad worst_slice_median      ring (reference path)
+         before        after                 (unchanged)
+  0      0.0259    ->  0.000807              0.000673
+  1      0.0301    ->  0.000443              0.000604
+  2      0.0229    ->  0.000539              0.000738
+  3      0.0255    ->  0.000515              0.000532
+
+30-70x reduction, landing AT the ring floor (ratio 0.7-1.2). The ragged
+path is now numerically indistinguishable from an independent
+implementation of the same math. That attributes the entire pre-fix 40x
+ragged-vs-ring gap to the padding and nothing else -- QuACK reduction
+order, the combine, and the transport are all exonerated.
+
+Both audits (fresh opus agent + codex, neither told the diagnosis, no
+contact with each other) independently returned "incorrect" beforehand:
+codex from the vendored package's own validators (FIX_PAD_SIZE=256,
+can_implement rejecting k%256, _validate_offset_sequence requiring
+256-alignment and offsets[-1]==tokens_sum, Marin importing the private
+class and padding to 8); the opus agent from a mechanism derivation off
+vendor source (one TMA descriptor over the whole buffer while
+k_tile_cnt rounds UP, so a group over-reads its successor) whose CPU
+simulation reproduces #8339's GB200 numbers to three decimals and
+UNIQUELY at cta_tile_k=64, the tile the installed CUTLASS pins for bf16.
+
+Scope, final: NOT a live incident (the deployed hero is pooled-wave,
+which computes the expert MLP with plain einsum). It is a ragged-
+migration blocker, and it corrupted every ragged arm in this campaign.
+Conditions required: SM100 + SiLU + the GPU extra; TPU/H100/other
+activations fall back to ragged_dot and are unaffected.
+
+Fix (2ca4c1e046, isolated and cherry-pickable, 2 files): pad to 256
+sourced from and asserted against the installed kernel's FIX_PAD_SIZE
+at call time and in a test; satisfy BOTH halves of the contract by
+giving the last group every remaining row so the final offset equals
+the buffer's row count (codex caught that my first attempt satisfied
+only divisibility); test the padder against the contract rather than
+against the transport's matching idea of the layout, which is what let
+the old value pass. NOTE: the gate above ran the divisibility-only
+version (a1e770c540) -- that alone restored the ring floor, so the
+final-offset completion is contract hygiene, not additional numerical
+correction.
+
+CAMPAIGN CAVEAT: this campaign's ragged arms ran the corrupted wgrad on
+BOTH sides of every A/B. Throughput results stand unchanged (identical
+FLOPs either way). Any claim resting on loss quality needs re-checking
+post-fix, and the fidelity evidence should be re-stated on the fixed
+stack before the keeps are promoted.

@@ -7,3 +7,6 @@ plugins: timeout-2.4.0, anyio-4.12.1, jaxtyping-0.3.5
 collecting ... collected 1 item
 
 tests/cluster/grug/test_ragged_ep_check.py::test_the_ragged_ep_transport_matches_a_dense_reference Not all requested scopes were granted by the authorization server, missing scopes email.
+PASSED
+
+======================== 1 passed in 670.71s (0:11:10) =========================
