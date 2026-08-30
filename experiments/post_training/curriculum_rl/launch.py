@@ -171,8 +171,17 @@ ARMS = {
         ArmSpec("grade-prior", SamplerKind.GRADE_PRIOR),
         ArmSpec("naive-dapo", SamplerKind.NAIVE, dapo=True),
         ArmSpec("thompson-dapo", SamplerKind.THOMPSON, dapo=True),
+        ArmSpec("learnability-dapo", SamplerKind.LEARNABILITY, dapo=True),
+        ArmSpec("grade-prior-dapo", SamplerKind.GRADE_PRIOR, dapo=True),
     )
 }
+
+# Round-3 directional arms weight bins by the probability a GRPO group
+# survives dynamic-sampling filtering (1 - p^n - (1-p)^n) rather than by
+# per-sample reward variance p(1-p): the filter's actual rollout-cost model,
+# near-flat across mid difficulties.
+GROUP_INFORMATIVE_SAMPLERS = frozenset({SamplerKind.LEARNABILITY, SamplerKind.GRADE_PRIOR})
+GROUP_INFORMATIVE_OVERRIDE = "data.sampling.weighting=group-informative"
 
 
 def arm_overrides(spec: ArmSpec, policy: PolicySpec) -> tuple[str, ...]:
@@ -186,6 +195,8 @@ def arm_overrides(spec: ArmSpec, policy: PolicySpec) -> tuple[str, ...]:
     overrides = (*BASE_OVERRIDES, *policy.overrides)
     if spec.sampler is not SamplerKind.NAIVE:
         overrides = (*overrides, f"data.sampling.kind={spec.sampler.value}")
+    if spec.sampler in GROUP_INFORMATIVE_SAMPLERS:
+        overrides = (*overrides, GROUP_INFORMATIVE_OVERRIDE)
     if spec.dapo:
         overrides = (*overrides, DAPO_OVERRIDE)
     return overrides
