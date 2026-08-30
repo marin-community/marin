@@ -34,6 +34,10 @@ from marin.inference.vllm_server import (
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from prometheus_client.parser import text_string_to_metric_families
+from rigging import telemetry
+from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
+from rigging.testing import RecordingTelemetryTransport
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -48,6 +52,91 @@ def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
     assert not _starts_nccl_ras_probe(preinstalled)
     assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(preinstalled, {"VLLM_HOST_IP": "10.0.0.2"}))
+
+
+def test_vllm_family_selection_keeps_late_counter_and_histogram_complete() -> None:
+    noise = "\n".join(f'vllm:noise{{index="{index}"}} {index}' for index in range(1050))
+    scrape = f"""
+# TYPE vllm:noise gauge
+{noise}
+# TYPE vllm:late_requests_total counter
+vllm:late_requests_total{{engine="0"}} 7
+# TYPE vllm:late_requests_created gauge
+vllm:late_requests_created{{engine="0"}} 1
+# TYPE vllm:late_histogram histogram
+vllm:late_histogram_bucket{{engine="0",le="0.1"}} 2
+vllm:late_histogram_bucket{{engine="0",le="+Inf"}} 3
+vllm:late_histogram_count{{engine="0"}} 3
+vllm:late_histogram_sum{{engine="0"}} 0.4
+# TYPE vllm:late_histogram_created gauge
+vllm:late_histogram_created{{engine="0"}} 1
+"""
+
+    snapshots = vllm_server._vllm_metric_snapshots(
+        tuple(text_string_to_metric_families(scrape)),
+        family_names=frozenset({"vllm:late_requests", "vllm:late_histogram"}),
+    )
+
+    assert {snapshot.name for snapshot in snapshots} == {
+        "late_requests_total",
+        "late_histogram_bucket",
+        "late_histogram_count",
+        "late_histogram_sum",
+    }
+    assert len(snapshots) == 5
+
+
+def test_vllm_metric_overflow_rejects_whole_batch_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
+    telemetry.shutdown(0.01)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    scrapes = iter(
+        (
+            tuple(
+                text_string_to_metric_families(
+                    '# TYPE vllm:selected gauge\nvllm:selected{index="0"} 0\n'
+                    'vllm:selected{index="1"} 1\nvllm:selected{index="2"} 2\n'
+                )
+            ),
+            tuple(text_string_to_metric_families('# TYPE vllm:selected gauge\nvllm:selected{index="recovered"} 4\n')),
+        )
+    )
+    scraper = PrometheusScraper("http://vllm/metrics")
+    monkeypatch.setattr(scraper, "scrape", lambda: next(scrapes))
+    collector = PrometheusCollector(
+        metric_source="vllm",
+        scraper=scraper,
+        processor=lambda families: vllm_server._vllm_metric_snapshots(
+            families,
+            family_names=frozenset({"vllm:selected"}),
+        ),
+        publisher=vllm_server._VllmMetricSnapshotPublisher(
+            max_records=2,
+            attributes={"metric_source": "vllm"},
+        ),
+    )
+
+    try:
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 0)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            3,
+        )
+        assert not [record for record in transport.records if record["name"] == "selected"]
+
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 1)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            0,
+        )
+        assert transport.record("selected", {"index": "recovered"})["value"] == 4
+    finally:
+        telemetry.shutdown(0.1)
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

@@ -311,7 +311,11 @@ def main(
         replica_axis_size=replica_groups,
     )
 
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=False, processes_per_task=HERO_GPUS_PER_NODE)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=False,
+        moe_implementation=model.moe_implementation,
+        processes_per_task=HERO_GPUS_PER_NODE,
+    )
     dispatch_grug_training_run(
         run_id=run_id,
         config=config,

@@ -83,7 +83,7 @@ def test_client_set_federation_field_is_rejected_from_a_non_admin(state, log_cli
     With auth on, a non-admin caller that sets it is forging a handoff to run a job
     as another user, so ``LaunchJob`` denies it before any owner re-pinning.
     """
-    mock_controller.provider.health = state._health
+    mock_controller.backend.health = state._health
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

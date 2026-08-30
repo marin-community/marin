@@ -82,6 +82,8 @@ class ModelServeConfig(BaseModel):
     limit_mm_per_prompt: str | None
     tool_call_parser: str | None
     reasoning_parser: str | None
+    vllm_batch_invariant: bool | None = None
+    vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...]
     chat_template: str | None
     auto_overrides: bool

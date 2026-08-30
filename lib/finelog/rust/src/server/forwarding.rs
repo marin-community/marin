@@ -34,16 +34,18 @@
 //!   rather than backfilling a retention window.
 //! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
 //!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
-//! - It advances a namespace's cursor only after the hub acks the batch. A crash or
-//!   rejection re-forwards it (at-least-once; tolerable for logs and append-only stats).
+//! - It advances a namespace's cursor after the hub acks the batch or permanently
+//!   rejects malformed content. A crash or retryable rejection re-forwards it
+//!   (at-least-once; tolerable for logs and append-only stats).
 //! - A backlog is only a cursor into the source's already-bounded local retention, not a
 //!   separate in-memory queue. The forwarder drains it without an age or row-count cap.
-//!   It skips only when eviction has already removed the cursor's segments.
+//!   It also skips a batch the hub identifies as permanently invalid, so one poison row
+//!   cannot wedge every later row in that namespace.
 //!
-//! A push failure leaves the cursor in place and yields to the next namespace; nothing
-//! here can take the store down.
+//! A retryable push failure leaves the cursor in place and yields to the next namespace;
+//! nothing here can take the store down.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -61,6 +63,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::errors::StatsError;
+use crate::policies::storage_policy_for;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::provider::NamespaceProvider;
 use crate::query::{
@@ -68,6 +71,7 @@ use crate::query::{
     RegisteredProvider,
 };
 use crate::server::auth::FINELOG_AUDIENCE;
+use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::schema::{
@@ -76,6 +80,7 @@ use crate::store::schema::{
 };
 use crate::store::store::LOG_NAMESPACE_NAME;
 use crate::store::Store;
+use crate::telemetry_policy::{FINELOG_NAMESPACE, TELEMETRY_NAMESPACE};
 
 /// How long the forwarder waits after every namespace is caught up or unable to make
 /// progress. Backlogged namespaces trigger another round immediately, so throughput
@@ -127,6 +132,14 @@ const PUSH_RETRY_BACKOFF: Duration = Duration::from_secs(1);
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the logs it forwards.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
+
+const OUTCOME_ACCEPTED: &str = "accepted";
+const OUTCOME_PERMANENT_REJECTION: &str = "permanent_rejection";
+const OUTCOME_RETENTION_EVICTION: &str = "retention_eviction";
+const OUTCOME_RETRYABLE_FAILURE: &str = "retryable_failure";
+const OUTCOME_SCHEMA_CONFLICT: &str = "schema_conflict";
+const ATTRIBUTE_NAMESPACE: &str = "namespace";
+const ATTRIBUTE_OUTCOME: &str = "outcome";
 
 /// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING` JSON;
 /// the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it never rides
@@ -331,6 +344,9 @@ where
             cluster = %self.config.cluster,
             "finelog forwarder: started"
         );
+        if let Err(error) = self.ensure_progress_namespace() {
+            tracing::warn!(error = %error, "finelog forwarder: registering progress telemetry failed");
+        }
         let mut progress = Progress::new();
         loop {
             if *stop.borrow() {
@@ -380,7 +396,12 @@ where
                 turn = ForwardTurn::MoreRows;
             }
         }
-        progress.report();
+        if let Some(deltas) = progress.take_report() {
+            if let Err(error) = self.emit_progress(&deltas).await {
+                progress.restore(deltas);
+                tracing::warn!(error = %error, "finelog forwarder: writing progress telemetry failed");
+            }
+        }
         turn
     }
 
@@ -433,6 +454,7 @@ where
         if let Some(resume_at) = batch.resume_at {
             let skipped = resume_at - cursor;
             progress.skipped_seqs += skipped;
+            progress.record_seq_positions(name, OUTCOME_RETENTION_EVICTION, skipped);
             tracing::warn!(
                 namespace = name,
                 cursor,
@@ -484,29 +506,48 @@ where
         // is still retrying, even when a later chunk reaches the hub first.
         let mut pushes = futures::stream::iter(pushes).buffered(concurrency);
         while let Some((last_seq, result)) = pushes.next().await {
+            let advanced = last_seq - cursor;
             match result {
-                Ok(()) => progress.batches += 1,
+                Ok(()) => {
+                    progress.batches += 1;
+                    progress.record_batch(name, OUTCOME_ACCEPTED);
+                    progress.record_seq_positions(name, OUTCOME_ACCEPTED, advanced);
+                }
                 Err(PushError::Stopping(e)) => {
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push interrupted");
                     return ForwardTurn::Wait;
                 }
                 Err(PushError::Retryable(e)) => {
+                    progress.record_batch(name, OUTCOME_RETRYABLE_FAILURE);
                     tracing::warn!(namespace = name, cursor, error = %e, "finelog forwarder: push failed; retrying next sweep");
                     return ForwardTurn::Wait;
                 }
-                Err(PushError::Rejected(e)) => {
-                    // InvalidArgument also covers a stale hub schema. Forget the last
-                    // registration so the next sweep evolves the hub before retrying
-                    // these same rows. Namespace fairness prevents a genuine poison
-                    // batch from blocking unrelated tables.
+                Err(PushError::SchemaConflict(e)) => {
+                    // The same bytes may become valid after the hub's registration is
+                    // refreshed or its binary is upgraded. Keep the rows owed.
+                    progress.record_batch(name, OUTCOME_SCHEMA_CONFLICT);
                     self.registered.lock().unwrap().remove(name);
                     tracing::warn!(
                         namespace = name,
                         cursor,
                         error = %e,
-                        "finelog forwarder: hub rejected the batch; preserving the cursor and refreshing the schema next sweep"
+                        "finelog forwarder: batch conflicts with the hub schema; preserving the cursor and refreshing registration next sweep"
                     );
                     return ForwardTurn::Wait;
+                }
+                Err(PushError::Permanent(e)) => {
+                    let skipped = advanced;
+                    progress.skipped_seqs += skipped;
+                    progress.record_batch(name, OUTCOME_PERMANENT_REJECTION);
+                    progress.record_seq_positions(name, OUTCOME_PERMANENT_REJECTION, skipped);
+                    tracing::warn!(
+                        namespace = name,
+                        cursor,
+                        skipped,
+                        resume_at = last_seq,
+                        error = %e,
+                        "finelog forwarder: hub permanently rejected the batch; dropping it"
+                    );
                 }
             }
             cursor = last_seq;
@@ -547,6 +588,40 @@ where
                 Ok(persisted)
             }
         }
+    }
+
+    /// Persist one interval of delta counters locally. The ordinary forwarder carries
+    /// `telemetry_v1.finelog` to the hub on a later sweep.
+    async fn emit_progress(&self, deltas: &ForwardingDeltas) -> Result<(), StatsError> {
+        self.ensure_progress_namespace()?;
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                StatsError::Internal(format!("system clock is before the unix epoch: {error}"))
+            })?
+            .as_millis() as i64;
+        let batch = counter_batch("finelog", timestamp_ms, deltas.samples())?;
+        let ipc = encode_ipc(&batch.schema(), &[batch]).map_err(|error| {
+            StatsError::Internal(format!("encoding forwarding telemetry: {error}"))
+        })?;
+        let outcome = self
+            .store
+            .write_ingestion_rows(TELEMETRY_NAMESPACE, &ipc, None)?;
+        for (namespace, last_seq) in outcome.persisted_targets {
+            self.store
+                .await_persisted(&namespace, last_seq, PUSH_TIMEOUT)
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn ensure_progress_namespace(&self) -> Result<(), StatsError> {
+        self.store.register_managed_table(
+            FINELOG_NAMESPACE,
+            telemetry_schema(),
+            storage_policy_for(FINELOG_NAMESPACE)?,
+        )?;
+        Ok(())
     }
 
     async fn persist(&self, name: &str, cursor: i64) -> Result<(), StatsError> {
@@ -752,8 +827,9 @@ where
     /// Retry transient failures at most [`PUSH_ATTEMPTS_PER_TURN`] times, then return the
     /// chunk still owed so the caller can give the next namespace its turn.
     ///
-    /// Returns [`PushError::Rejected`] only when the hub refuses the chunk's content,
-    /// [`PushError::Retryable`] for a condition that may clear, and
+    /// Returns [`PushError::Permanent`] when the hub identifies invalid content,
+    /// [`PushError::SchemaConflict`] when registration state may make the same bytes
+    /// valid later, [`PushError::Retryable`] for other conditions that may clear, and
     /// [`PushError::Stopping`] when `stop` latches.
     async fn push(
         &self,
@@ -784,8 +860,11 @@ where
                             tracing::debug!(namespace = name, "finelog forwarder: batch delivered");
                             return Ok(());
                         }
-                        Err(e) if is_content_rejection(&e) => {
-                            Err(PushError::Rejected(e.to_string()))
+                        Err(e) if is_permanent_rejection(&e) => {
+                            Err(PushError::Permanent(e.to_string()))
+                        }
+                        Err(e) if is_schema_conflict(&e) => {
+                            Err(PushError::SchemaConflict(e.to_string()))
                         }
                         Err(e) if *stop.borrow() => Err(PushError::Stopping(e.to_string())),
                         Err(e) => Err(PushError::Retryable(e.to_string())),
@@ -832,19 +911,19 @@ enum PushError {
     /// The request may succeed later. The chunk is still owed, and the next namespace
     /// must receive its turn before this one retries.
     Retryable(String),
-    /// The hub refused the chunk's content. This may be a stale registered schema, so
-    /// the caller preserves the cursor and refreshes registration before retrying.
-    Rejected(String),
+    /// The batch conflicts with the hub's current schema. The caller refreshes
+    /// registration and preserves the cursor because the same bytes may become valid.
+    SchemaConflict(String),
+    /// The hub identified invalid content that cannot succeed when resent unchanged.
+    Permanent(String),
 }
 
-/// Whether the hub rejected the request's content rather than reporting a transient
-/// service condition.
-///
-/// `invalid_argument` includes both structurally bad batches and a batch whose columns
-/// have not reached the hub's registered schema. The caller distinguishes neither:
-/// both remain owed while other namespaces continue making progress.
-fn is_content_rejection(error: &connectrpc::ConnectError) -> bool {
+fn is_permanent_rejection(error: &connectrpc::ConnectError) -> bool {
     error.code == connectrpc::error::ErrorCode::InvalidArgument
+}
+
+fn is_schema_conflict(error: &connectrpc::ConnectError) -> bool {
+    error.code == connectrpc::error::ErrorCode::FailedPrecondition
 }
 
 /// Sleep between transient attempts. Returns `true` when shutdown latches or its sender
@@ -954,10 +1033,11 @@ fn chunk_by_bytes(
 struct Progress {
     /// Requests the hub accepted, across every namespace. Counted in batches, not rows.
     batches: u64,
-    /// `seq` positions the forwarder passed over because local retention evicted them.
-    /// An upper bound on rows lost: some positions held rows the scan would have filtered
-    /// out anyway.
+    /// `seq` positions the forwarder passed over because local retention evicted them or
+    /// the hub permanently rejected their batch. This is an upper bound on rows lost:
+    /// some positions held rows the scan would have filtered out anyway.
     skipped_seqs: i64,
+    pending: ForwardingDeltas,
     last_report: Instant,
 }
 
@@ -966,13 +1046,31 @@ impl Progress {
         Self {
             batches: 0,
             skipped_seqs: 0,
+            pending: ForwardingDeltas::default(),
             last_report: Instant::now(),
         }
     }
 
-    fn report(&mut self) {
+    fn record_batch(&mut self, namespace: &str, outcome: &'static str) {
+        *self
+            .pending
+            .batches
+            .entry((namespace.to_string(), outcome))
+            .or_default() += 1;
+    }
+
+    fn record_seq_positions(&mut self, namespace: &str, outcome: &'static str, count: i64) {
+        let count = u64::try_from(count).expect("forwarding sequence deltas are nonnegative");
+        *self
+            .pending
+            .seq_positions
+            .entry((namespace.to_string(), outcome))
+            .or_default() += count;
+    }
+
+    fn take_report(&mut self) -> Option<ForwardingDeltas> {
         if self.last_report.elapsed() < PROGRESS_INTERVAL {
-            return;
+            return None;
         }
         self.last_report = Instant::now();
         tracing::info!(
@@ -980,7 +1078,65 @@ impl Progress {
             skipped_seqs = self.skipped_seqs,
             "finelog forwarder: progress"
         );
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending))
     }
+
+    fn restore(&mut self, deltas: ForwardingDeltas) {
+        self.pending.merge(deltas);
+    }
+}
+
+#[derive(Default)]
+struct ForwardingDeltas {
+    batches: BTreeMap<(String, &'static str), u64>,
+    seq_positions: BTreeMap<(String, &'static str), u64>,
+}
+
+impl ForwardingDeltas {
+    fn is_empty(&self) -> bool {
+        self.batches.is_empty() && self.seq_positions.is_empty()
+    }
+
+    fn samples(&self) -> Vec<CounterSample> {
+        self.batches
+            .iter()
+            .map(|((namespace, outcome), value)| CounterSample {
+                name: "forwarding_batches".to_string(),
+                value: *value as f64,
+                unit: "batches".to_string(),
+                attributes: forwarding_attributes(namespace, outcome),
+            })
+            .chain(
+                self.seq_positions
+                    .iter()
+                    .map(|((namespace, outcome), value)| CounterSample {
+                        name: "forwarding_seq_positions".to_string(),
+                        value: *value as f64,
+                        unit: "positions".to_string(),
+                        attributes: forwarding_attributes(namespace, outcome),
+                    }),
+            )
+            .collect()
+    }
+
+    fn merge(&mut self, other: Self) {
+        for (key, value) in other.batches {
+            *self.batches.entry(key).or_default() += value;
+        }
+        for (key, value) in other.seq_positions {
+            *self.seq_positions.entry(key).or_default() += value;
+        }
+    }
+}
+
+fn forwarding_attributes(namespace: &str, outcome: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ATTRIBUTE_NAMESPACE.to_string(), namespace.to_string()),
+        (ATTRIBUTE_OUTCOME.to_string(), outcome.to_string()),
+    ])
 }
 
 /// Start the forward loop on the runtime, returning its handle. The caller latches

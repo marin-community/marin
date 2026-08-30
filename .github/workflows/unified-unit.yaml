@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Nightly slow tests failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -284,13 +284,6 @@ jobs:
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
-              # Install Node.js in userspace if not present (needed for protobuf generation during uv sync)
-              if ! command -v npx >/dev/null 2>&1; then \
-                echo '::group::Installing Node.js in userspace'; \
-                curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp && \
-                export PATH=/tmp/node-v22.16.0-linux-x64/bin:\$PATH; \
-                echo '::endgroup::'; \
-              fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
                 timeout --kill-after=5 --signal=TERM 1490 \

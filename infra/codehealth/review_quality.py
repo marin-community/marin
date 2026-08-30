@@ -1,21 +1,11 @@
-#!/usr/bin/env -S uv run --script
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "click>=8.0",
-#     "pydantic>=2.0",
-#     "wandb>=0.18",
-# ]
-# ///
 
 """Aggregator and reporter for the code-health stats dashboard.
 
 Two subcommands:
   - `aggregate` (designed to run as a daily GHA cron) classifies reviewer
-    comments and appends them to the shared `review-stats` W&B run.
+    comments and appends them to the `codehealth.autolint` Finelog namespaces.
   - `report` reads those accumulated tables back and renders a markdown digest
     (summary table, by-class breakdown, weekly trend, top PRs, examples). It
     also folds in the linter-fed `invocations`/`findings` tables (written by
@@ -25,10 +15,9 @@ Two subcommands:
 
 `aggregate`, for each PR merged in the last N days:
   1. Pull review/inline/issue comments via the `gh` CLI.
-  2. Drop bot comments (only humans should be in the denominator).
-  3. Classify each human comment with a pluggable classifier — a headless
-     Claude Code session (`claude -p`) by default, the same agent that runs the
-     lint review. Comments from all PRs are pooled, batched, and the batches
+  2. Drop bot comments and agent-authored `🤖` replies.
+  3. Classify each human comment with a pluggable classifier — a sandboxed
+     Codex session (`codex exec`) by default. Comments from all PRs are pooled, batched, and the batches
      classified in parallel so a many-PR run is not a long serial trickle of
      one request per comment. Two independent "could automation have caught
      this?" signals:
@@ -37,91 +26,72 @@ Two subcommands:
        - catchable_generous — a modern LLM running on the diff alone would
                               plausibly flag it with high confidence.
      Strict ⊆ generous by construction (the prompt enforces it).
-  4. Pull the bot's own findings for the PR's head_sha from the existing
-     `findings` artifact written by `infra/codehealth/log_stats.py`.
-  5. Append two flat tables to the shared `review-stats` W&B run (same run
-     that `infra/codehealth/log_stats.py` writes invocations + findings to):
+  4. Pull the bot's own findings for the PR's head_sha from the `findings`
+     namespace written by `infra/codehealth/log_stats.py`.
+  5. Append two tables alongside the invocations and findings that
+     `infra/codehealth/log_stats.py` writes:
        - human_comments      — one row per classified comment.
        - pr_review_outcomes  — one row per PR (rollup).
 
-Same append-to-artifact pattern as `infra/codehealth/log_stats.py`. Concurrent
-writers race; loser's row is dropped (acceptable at our scale).
+The tables are append-only, and a rolling window re-emits rows for PRs seen on
+an earlier run, so both reads take the most recent row per natural key by the
+server-assigned `seq`.
 
-Requires a logged-in `claude` CLI (subscription auth) and W&B auth, plus
-`gh auth login` for the GitHub side. Designed to run as a daily GHA cron.
+Requires a logged-in `codex` CLI and Finelog access
+(`uv run iris --cluster marin login`), plus `gh auth login` for the GitHub
+side. Designed to run as a daily GHA cron.
 """
 
 import datetime as dt
 import json
 import logging
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
 import click
-import wandb
-
-# Sibling standalone script: the canonical schema for the linter-fed tables this
-# report reads back. Importing keeps the column layouts in one place rather than
-# re-declaring them here and risking drift.
-from log_stats import FINDING_COLUMNS, INVOCATION_COLUMNS
+from finelog.client import LogClient
 from pydantic import BaseModel, Field, TypeAdapter
 
-logger = logging.getLogger("codehealth.review")
+# Sibling module: the row types for every table this tool reads and writes.
+from .review_tables import (
+    DEFAULT_DEPLOYMENT,
+    FINDINGS_NAMESPACE,
+    HUMAN_COMMENTS_NAMESPACE,
+    INVOCATIONS_NAMESPACE,
+    NAMESPACE_PREFIX,
+    PR_REVIEW_OUTCOMES_NAMESPACE,
+    HumanComment,
+    PrReviewOutcome,
+    append_rows,
+    open_tables_client,
+    parse_utc,
+    row_count,
+)
 
-WANDB_PROJECT = "marin-review-stats"
-WANDB_RUN_ID = "review-stats"
+logger = logging.getLogger("codehealth.review_quality")
+
 DEFAULT_REPO = "marin-community/marin"
-# Classifier backend: a headless Claude Code session (`claude -p`). The model is
-# a CLI alias (`sonnet`, `opus`, `haiku`) or a full model id. `sonnet` balances
-# classification quality against cost for the per-comment judgment calls.
-DEFAULT_MODEL = "sonnet"
+# Balance classification quality and cost for bounded, schema-constrained
+# comment batches.
+DEFAULT_MODEL = "gpt-5.6-terra"
+DEFAULT_REASONING_EFFORT = "medium"
+DEFAULT_AGENT_COMMAND = "codex exec"
 DEFAULT_BATCH_SIZE = 20
-# One headless `claude` subprocess per batch, so concurrency caps simultaneous
-# processes (and subscription rate pressure) — lower than an HTTP-API backend.
+# One headless Codex subprocess per batch, so concurrency caps simultaneous
+# processes and subscription rate pressure.
 DEFAULT_CONCURRENCY = 4
-
-HUMAN_COMMENT_COLUMNS = [
-    "ts",
-    "pr_number",
-    "pr_title",
-    "merged_at",
-    "author",
-    "comment_id",
-    "comment_type",  # inline | review_body | issue
-    "file",
-    "line",
-    "body",
-    "class",
-    "catchable_strict",
-    "catchable_generous",
-    "confidence",
-    "reason",
-]
-
-PR_OUTCOME_COLUMNS = [
-    "ts",
-    "pr_number",
-    "pr_title",
-    "merged_at",
-    "author",
-    "head_sha",
-    "base_sha",
-    "total_human_comments",
-    "by_class_json",
-    "catchable_strict_count",
-    "catchable_generous_count",
-    "bot_findings_count",
-    "overlap_count",
-]
-
+MAX_COMMENT_CONTEXT = 6_000
+MAX_FILE_PATCH = 1_500
 
 # ---------------------------------------------------------------------------
 # Comment classifier: schema + prompt
@@ -150,6 +120,7 @@ class CommentToClassify:
     file: str | None
     line: int | None
     body: str
+    context: str | None
 
 
 class BatchedClassification(CommentClassification):
@@ -158,10 +129,8 @@ class BatchedClassification(CommentClassification):
     id: int
 
 
-# A classifier turns a batch of comments into classifications keyed by their
-# `id` marker. Comments it cannot classify are simply absent from the result.
-# Pluggable so the backend (currently a headless `claude -p` session) can be
-# swapped without touching the batching/parallelism orchestration.
+# A classifier turns a complete batch into classifications keyed by `id`.
+# Pluggable so the backend can change without touching batching orchestration.
 Classifier = Callable[[list[CommentToClassify]], dict[int, CommentClassification]]
 
 
@@ -238,38 +207,30 @@ def _format_batch(items: list[CommentToClassify]) -> str:
     blocks = []
     for it in items:
         where = f"File: {it.file}\nLine: {it.line}" if it.file else "Comment scope: top-level PR comment"
-        blocks.append(f"=== COMMENT id={it.id} ===\n{where}\nBody:\n{it.body.strip()}")
+        context = f"\nDiff context:\n{it.context.strip()}" if it.context else ""
+        blocks.append(f"=== COMMENT id={it.id} ===\n{where}\nBody:\n{it.body.strip()}{context}")
     return "\n\n".join(blocks)
 
 
-# Env markers that would bind a spawned `claude` to its parent Claude Code
-# session or to metered API billing. Stripped before exec (mirrors the lint
-# review in infra/linter.py) so each batch runs as a fresh, isolated session on
-# Claude subscription auth rather than nesting under the caller's transcript.
-CLAUDE_STRIPPED_ENV = (
-    "ANTHROPIC_API_KEY",
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_SSE_PORT",
+# Env markers that would bind a spawned classifier to its parent agent session.
+# Each batch runs as a fresh, isolated Codex session.
+AGENT_STRIPPED_ENV = (
+    "CODEX_THREAD_ID",
+    "LOOM_SESSION_ID",
+    "LOOM_TOKEN",
+    "WEAVER_BRANCH",
 )
 
 # Per-batch wall-clock ceiling for one headless classification call.
-CLAUDE_TIMEOUT = 300
+CLASSIFIER_TIMEOUT = 300
 
 
 def _headless_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in CLAUDE_STRIPPED_ENV}
+    return {k: v for k, v in os.environ.items() if k not in AGENT_STRIPPED_ENV}
 
 
 def _classification_schema() -> dict:
-    """Anthropic structured-output JSON schema for one batch result.
-
-    The API uses this schema as a tool `input_schema`, whose root must be an
-    object (a top-level array is rejected), so the per-comment classifications
-    are wrapped in a `results` array. Field set mirrors `BatchedClassification`.
-    """
+    """Codex structured-output schema for one batch result."""
     item = {
         "type": "object",
         "properties": {
@@ -281,71 +242,83 @@ def _classification_schema() -> dict:
             "reason": {"type": "string"},
         },
         "required": ["id", "class", "catchable_strict", "catchable_generous", "confidence", "reason"],
+        "additionalProperties": False,
     }
     return {
         "type": "object",
         "properties": {"results": {"type": "array", "items": item}},
         "required": ["results"],
+        "additionalProperties": False,
     }
 
 
-def _parse_claude_batch(stdout: str) -> list[BatchedClassification] | None:
-    """Extract the classifications from a `claude -p --output-format json`
-    envelope. Schema-validated structured output lands in the top-level
-    `structured_output` field (`result` carries only the model's prose).
-    Returns None on any error so the caller drops the batch.
-    """
+def _parse_codex_batch(output: str) -> list[BatchedClassification] | None:
+    """Parse one schema-constrained Codex final response."""
     try:
-        envelope = json.loads(stdout)
+        envelope = json.loads(output)
     except (json.JSONDecodeError, ValueError):
         return None
-    if not isinstance(envelope, dict) or envelope.get("is_error"):
-        return None
-    structured = envelope.get("structured_output")
-    if not isinstance(structured, dict) or "results" not in structured:
+    if not isinstance(envelope, dict) or "results" not in envelope:
         return None
     try:
-        return _BATCH_ADAPTER.validate_python(structured["results"])
+        return _BATCH_ADAPTER.validate_python(envelope["results"])
     except ValueError:
         return None
 
 
-def make_claude_classifier(model: str, agent_command: str = "claude -p") -> Classifier:
-    """Build a `Classifier` that shells out to a headless Claude Code session
-    per batch — the same agent the lint review uses, run as a fresh isolated
-    session on Claude subscription auth. A failed or malformed call yields no
-    classifications for that batch; those comments are dropped from the metric,
-    the same degradation as any classifier backend.
-    """
+def make_codex_classifier(
+    model: str,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    agent_command: str = DEFAULT_AGENT_COMMAND,
+) -> Classifier:
+    """Build a sandboxed, schema-constrained Codex classifier."""
     env = _headless_env()
-    cmd = [
-        *agent_command.split(),
-        "--output-format",
-        "json",
-        "--tools",
-        "",
-        "--model",
-        model,
-        "--json-schema",
-        json.dumps(_classification_schema()),
-    ]
+    base_command = shlex.split(agent_command)
 
     def classify(items: list[CommentToClassify]) -> dict[int, CommentClassification]:
         if not items:
             return {}
         prompt = f"{CLASSIFIER_SYSTEM}\n\n{_format_batch(items)}"
-        try:
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env, timeout=CLAUDE_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            logger.warning("claude classify timed out for batch of %d", len(items))
-            return {}
-        parsed = _parse_claude_batch(proc.stdout)
+        with tempfile.TemporaryDirectory() as directory:
+            schema_path = Path(directory) / "schema.json"
+            output_path = Path(directory) / "result.json"
+            schema_path.write_text(json.dumps(_classification_schema()))
+            cmd = [
+                *base_command,
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--ignore-rules",
+                "--model",
+                model,
+                "--config",
+                f'model_reasoning_effort="{reasoning_effort}"',
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(output_path),
+                "-",
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    input=prompt,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=CLASSIFIER_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("Codex classification timed out for batch of %d", len(items))
+                return {}
+            output = output_path.read_text() if output_path.exists() else ""
+        parsed = _parse_codex_batch(output) if proc.returncode == 0 else None
         if parsed is None:
             logger.warning(
-                "claude classify failed for batch of %d (exit=%s): %s",
+                "Codex classification failed for batch of %d (exit=%s): %s",
                 len(items),
                 proc.returncode,
-                (proc.stderr or proc.stdout or "").strip()[:200],
+                (proc.stderr or proc.stdout or output).strip()[:200],
             )
             return {}
         wanted = {it.id for it in items}
@@ -359,7 +332,7 @@ def make_claude_classifier(model: str, agent_command: str = "claude -p") -> Clas
             out[c.id] = c
         missing = len(wanted) - len(out)
         if missing:
-            logger.warning("claude omitted %d of %d comments in a batch", missing, len(items))
+            logger.warning("Codex omitted %d of %d comments in a batch", missing, len(items))
         return out
 
     return classify
@@ -370,7 +343,11 @@ def classify_comments(
 ) -> dict[int, CommentClassification]:
     """Classify every comment, batched into groups of `batch_size` and run
     `concurrency` batches at a time. Returns a map from comment `id` to its
-    classification; ids absent from the map could not be classified."""
+    classification.
+
+    Raises:
+        RuntimeError: One or more comments were omitted by a classifier batch.
+    """
     if not items:
         return {}
     batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
@@ -379,6 +356,9 @@ def classify_comments(
         futures = [pool.submit(classifier, batch) for batch in batches]
         for fut in as_completed(futures):
             results.update(fut.result())
+    missing = sorted({item.id for item in items} - set(results))
+    if missing:
+        raise RuntimeError(f"classifier omitted {len(missing)} comment(s): {missing[:10]}")
     return results
 
 
@@ -402,6 +382,7 @@ class Comment:
     file: str | None
     line: int | None
     body: str
+    context: str | None
 
 
 def _gh_json(args: list[str]) -> object:
@@ -418,14 +399,17 @@ def _gh_paginated(args: list[str]) -> list:
     so callers don't have to care how many pages came back.
     """
     pages = _gh_json([*args, "--paginate", "--slurp"])
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise TypeError("gh paginated response must be a list of pages")
     out: list = []
     for page in pages:
         out.extend(page)
     return out
 
 
-def _parse_github_timestamp(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _optional_github_timestamp(value: str | None) -> dt.datetime | None:
+    """Parse a GitHub timestamp that an unmerged PR leaves unset."""
+    return parse_utc(value) if value else None
 
 
 def _pr_from_rest_pull(pull: dict) -> dict:
@@ -460,14 +444,14 @@ def list_merged_prs(repo: str, days: int, limit: int | None) -> list[dict]:
             merged_at = pull.get("merged_at")
             if merged_at is None:
                 continue
-            if _parse_github_timestamp(merged_at) < since:
+            if parse_utc(merged_at) < since:
                 continue
             prs.append(_pr_from_rest_pull(pull))
             if limit is not None and len(prs) >= limit:
                 break
 
         last_updated_at = pulls[-1].get("updated_at")
-        if last_updated_at is not None and _parse_github_timestamp(last_updated_at) < since:
+        if last_updated_at is not None and parse_utc(last_updated_at) < since:
             break
         page += 1
 
@@ -487,6 +471,33 @@ def _is_bot(author: dict | None, bot_logins: set[str]) -> bool:
     return False
 
 
+def _is_reviewer_comment(comment: Comment) -> bool:
+    return not comment.is_bot and not comment.body.lstrip().startswith("🤖")
+
+
+def _pull_request_context(files: list[dict]) -> str | None:
+    """Render bounded changed-file patches for a top-level review comment."""
+    sections: list[str] = []
+    size = 0
+    for file in files:
+        path = file.get("filename")
+        if not path:
+            continue
+        header = (
+            f"File: {path} ({file.get('status', 'modified')}, "
+            f"+{file.get('additions', 0)}/-{file.get('deletions', 0)})"
+        )
+        patch = (file.get("patch") or "")[:MAX_FILE_PATCH]
+        section = f"{header}\n{patch}" if patch else header
+        separator_size = 2 if sections else 0
+        remaining = MAX_COMMENT_CONTEXT - size - separator_size
+        if remaining <= 0:
+            break
+        sections.append(section[:remaining])
+        size += separator_size + len(sections[-1])
+    return "\n\n".join(sections) or None
+
+
 def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment]:
     n = pr["number"]
     title = pr["title"]
@@ -496,6 +507,8 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
     base_sha = pr["baseRefOid"]
 
     out: list[Comment] = []
+    files = _gh_paginated(["api", f"repos/{repo}/pulls/{n}/files"])
+    pull_request_context = _pull_request_context(files)
 
     # Inline review comments (anchored to file:line)
     inline = _gh_paginated(["api", f"repos/{repo}/pulls/{n}/comments"])
@@ -516,6 +529,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 file=c.get("path"),
                 line=c.get("line") or c.get("original_line"),
                 body=c.get("body") or "",
+                context=(c.get("diff_hunk") or "")[:MAX_COMMENT_CONTEXT] or None,
             )
         )
 
@@ -541,6 +555,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 file=None,
                 line=None,
                 body=body,
+                context=pull_request_context,
             )
         )
 
@@ -563,6 +578,7 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
                 file=None,
                 line=None,
                 body=c.get("body") or "",
+                context=pull_request_context,
             )
         )
 
@@ -570,25 +586,82 @@ def fetch_pr_comments(repo: str, pr: dict, bot_logins: set[str]) -> list[Comment
 
 
 # ---------------------------------------------------------------------------
-# W&B: load bot findings + append new rows
+# Finelog: load prior rows + append new ones
 # ---------------------------------------------------------------------------
 
 
-def _load_existing_rows(wandb, log_key: str) -> list[list]:
-    try:
-        art = wandb.use_artifact(f"run-{WANDB_RUN_ID}-{log_key}:latest")
-        table = art.get(log_key)
-        return [list(row) for row in table.data]
-    except Exception:
+# The comment tables are append-only and a rolling window re-emits a PR's rows,
+# so every read collapses to the most recent row per natural key. `seq` is the
+# server-assigned per-row counter; ordering on it breaks ties within a run.
+LATEST_HUMAN_COMMENTS_SQL = f"""
+    SELECT * FROM (
+        SELECT *, row_number() OVER (
+            PARTITION BY pr_number, comment_type, comment_id ORDER BY seq DESC
+        ) AS recency
+        FROM "{HUMAN_COMMENTS_NAMESPACE}"
+    ) WHERE recency = 1
+"""
+
+LATEST_PR_OUTCOMES_SQL = f"""
+    SELECT * FROM (
+        SELECT *, row_number() OVER (
+            PARTITION BY pr_number ORDER BY seq DESC
+        ) AS recency
+        FROM "{PR_REVIEW_OUTCOMES_NAMESPACE}"
+    ) WHERE recency = 1
+"""
+
+_SHA_PATTERN = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
+
+
+def _as_utc(value):
+    """Stamp UTC on Finelog's naive timestamps; pass everything else through."""
+    if isinstance(value, dt.datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value
+
+
+def query_rows(client: LogClient, sql: str, namespace: str) -> list[dict]:
+    """Run `sql` over `namespace` and return rows with tz-aware timestamps.
+
+    An unregistered namespace is the normal state before the first write and
+    reads as empty. A query error against a registered namespace propagates, so
+    a schema mismatch is never rendered as an empty report.
+    """
+    if row_count(client, namespace) is None:
+        logger.info("namespace %s does not exist yet; treating as empty", namespace)
         return []
+    return [{k: _as_utc(v) for k, v in row.items()} for row in client.query(sql).to_pylist()]
 
 
-def _rows_to_dicts(columns: list[str], rows: list[list]) -> list[dict]:
-    """Zip the flat W&B table rows back into dicts keyed by column name."""
-    return [dict(zip(columns, r, strict=False)) for r in rows]
+def load_findings_for_shas(client: LogClient, shas: set[str]) -> dict[str, list[dict]]:
+    """Fetch the bot's own findings for `shas`, grouped by head_sha."""
+    by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
+    safe = sorted(sha for sha in shas if _SHA_PATTERN.match(sha))
+    if not safe:
+        return by_sha
+    in_list = ", ".join(f"'{sha}'" for sha in safe)
+    rows = query_rows(
+        client,
+        f"SELECT head_sha, file, line, code, confidence, message "
+        f'FROM "{FINDINGS_NAMESPACE}" WHERE head_sha IN ({in_list})',
+        FINDINGS_NAMESPACE,
+    )
+    for r in rows:
+        if r["head_sha"] in by_sha:
+            by_sha[r["head_sha"]].append(
+                {
+                    "file": r["file"],
+                    "line": r["line"],
+                    "code": r["code"],
+                    "confidence": r["confidence"],
+                    "message": r["message"],
+                }
+            )
+    return by_sha
 
 
-def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
+def build_classification_cache(human_rows: list[dict]) -> dict[tuple[str, int], tuple[str, CommentClassification]]:
     """Index already-classified comments so unchanged comments can skip
     re-classification. Keyed on (comment_type, comment_id) — GitHub's inline /
     review / issue comment ids live in separate spaces, so the type disambiguates
@@ -597,9 +670,9 @@ def build_classification_cache(human_rows: list[list]) -> dict[tuple[str, int], 
     cache is model-agnostic — re-run with `--refresh` after changing `--model`,
     since the table does not record it."""
     cache: dict[tuple[str, int], tuple[str, CommentClassification]] = {}
-    for row in _rows_to_dicts(HUMAN_COMMENT_COLUMNS, human_rows):
+    for row in human_rows:
         cls = CommentClassification(
-            **{"class": row["class"]},
+            **{"class": row["comment_class"]},
             catchable_strict=bool(row["catchable_strict"]),
             catchable_generous=bool(row["catchable_generous"]),
             confidence=float(row["confidence"]),
@@ -615,17 +688,17 @@ def resolve_classifications(
     classifier: Classifier,
     batch_size: int,
     concurrency: int,
-) -> list[CommentClassification | None]:
+) -> list[CommentClassification]:
     """Classify `comments`, returning one verdict per comment aligned with the
     input. A comment is reused from `cache` when the same (comment_type,
     comment_id) was seen before with identical (truncated) text; the rest are
     sent to `classifier` in parallel batches."""
-    final: list[CommentClassification | None] = [None] * len(comments)
+    resolved: dict[int, CommentClassification] = {}
     pending: list[tuple[int, Comment]] = []
     for i, c in enumerate(comments):
         cached = cache.get((c.comment_type, c.comment_id))
         if cached and cached[0] == c.body[:500]:
-            final[i] = cached[1]
+            resolved[i] = cached[1]
         else:
             pending.append((i, c))
     logger.info(
@@ -636,32 +709,14 @@ def resolve_classifications(
         batch_size,
         concurrency,
     )
-    items = [CommentToClassify(id=j, file=c.file, line=c.line, body=c.body) for j, (_, c) in enumerate(pending)]
+    items = [
+        CommentToClassify(id=j, file=c.file, line=c.line, body=c.body, context=c.context)
+        for j, (_, c) in enumerate(pending)
+    ]
     fresh = classify_comments(classifier, items, batch_size, concurrency)
     for j, (i, _) in enumerate(pending):
-        final[i] = fresh.get(j)
-    return final
-
-
-def load_findings_for_shas(wandb, shas: set[str]) -> dict[str, list[dict]]:
-    """Fetch bot findings rows for the given head_shas from the shared run.
-
-    Returns sha -> list of finding dicts (file, line, code, confidence, message).
-    """
-    by_sha: dict[str, list[dict]] = {sha: [] for sha in shas}
-    for r in _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings")):
-        sha = r["head_sha"]
-        if sha in by_sha:
-            by_sha[sha].append(
-                {
-                    "file": r["file"],
-                    "line": r["line"],
-                    "code": r["code"],
-                    "confidence": r["confidence"],
-                    "message": r["message"],
-                }
-            )
-    return by_sha
+        resolved[i] = fresh[j]
+    return [resolved[i] for i in range(len(comments))]
 
 
 def overlap_count(bot_findings: list[dict], human_comments: list[Comment], window: int = 5) -> int:
@@ -684,39 +739,27 @@ def overlap_count(bot_findings: list[dict], human_comments: list[Comment], windo
 
 
 # ---------------------------------------------------------------------------
-# Report: render the accumulated W&B tables into a shareable markdown digest
+# Report: render the accumulated tables into a shareable markdown digest
 # ---------------------------------------------------------------------------
 
 
-def _parse_ts(s: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-
-
 def _in_window(row: dict, key: str, start: dt.datetime) -> bool:
-    """True when the timestamp at `row[key]` is on/after `start`. Rows with a
-    missing or unparseable timestamp fall outside the window. Shared by the
-    merged-PR tables (keyed on `merged_at`) and the automation tables (`ts`)."""
+    """True when the timestamp at `row[key]` is on/after `start`. Rows with no
+    timestamp fall outside the window. Shared by the merged-PR tables (keyed on
+    `merged_at`) and the automation tables (`ts`)."""
     ts = row.get(key)
-    if not ts:
-        return False
-    try:
-        return _parse_ts(ts) >= start
-    except ValueError:
-        return False
+    return ts is not None and ts >= start
 
 
 def _group_by_isoweek(rows: list[dict], ts_key: str) -> dict[tuple[int, int], list[dict]]:
     """Bucket rows by the ISO (year, week) of `row[ts_key]`. Rows with a missing
-    or unparseable timestamp are dropped; callers sort the keys for display."""
+    timestamp are dropped; callers sort the keys for display."""
     weeks: dict[tuple[int, int], list[dict]] = {}
     for row in rows:
         ts = row.get(ts_key)
         if not ts:
             continue
-        try:
-            y, w, _ = _parse_ts(ts).isocalendar()
-        except ValueError:
-            continue
+        y, w, _ = ts.isocalendar()
         weeks.setdefault((y, w), []).append(row)
     return weeks
 
@@ -726,7 +769,7 @@ def _pct(n: int, d: int) -> str:
 
 
 def _to_int(value: object) -> int:
-    """Coerce a possibly-null W&B cell to int; missing/garbage counts as 0."""
+    """Coerce a possibly-null cell to int; missing/garbage counts as 0."""
     try:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -734,7 +777,7 @@ def _to_int(value: object) -> int:
 
 
 def _to_float(value: object) -> float | None:
-    """Coerce a possibly-null W&B cell to float, or None when absent/garbage."""
+    """Coerce a possibly-null cell to float, or None when absent/garbage."""
     try:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -784,7 +827,7 @@ def build_automation_section(invocations: list[dict], findings: list[dict], star
     blurb = (
         "What the review bot itself did over the window — every "
         "`pre-commit.py --review`, `/code-review`, and `/review-pr` run logs to "
-        "W&B. Distinct from the catchability analysis above: that measures human "
+        "Finelog. Distinct from the catchability analysis above: that measures human "
         "comments the bot could have caught; this is the bot's own output."
     )
     if not runs:
@@ -931,7 +974,7 @@ def build_report(
     # per-comment class + catchable flags the per-PR rollup does not.
     by_class: dict[str, list[int]] = {}
     for c in comments:
-        e = by_class.setdefault(str(c["class"]), [0, 0, 0])
+        e = by_class.setdefault(str(c["comment_class"]), [0, 0, 0])
         e[0] += 1
         e[1] += 1 if c["catchable_strict"] else 0
         e[2] += 1 if c["catchable_generous"] else 0
@@ -1002,7 +1045,7 @@ def build_report(
             _pr_link(repo, c["pr_number"]),
             _cell(_where(c.get("file"), c.get("line"))),
             "strict" if c["catchable_strict"] else "generous",
-            _cell(c["class"]),
+            _cell(c["comment_class"]),
             f"{float(c['confidence']):.2f}",
             _cell(c["body"], 120),
             _cell(c["reason"], 80),
@@ -1067,10 +1110,17 @@ def cli() -> None:
 @click.option("--repo", default=DEFAULT_REPO, show_default=True)
 @click.option("--days", type=int, default=1, show_default=True, help="Look back N days of merged PRs")
 @click.option("--limit", type=click.IntRange(min=1), default=None, help="Max PRs to process; omit for all PRs")
-@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Claude model alias or id for the classifier")
+@click.option("--model", default=DEFAULT_MODEL, show_default=True, help="Codex model id for the classifier")
+@click.option(
+    "--reasoning-effort",
+    default=DEFAULT_REASONING_EFFORT,
+    show_default=True,
+    type=click.Choice(["none", "low", "medium", "high", "xhigh", "max"]),
+    help="Codex reasoning effort for the classifier",
+)
 @click.option(
     "--agent-command",
-    default="claude -p",
+    default=DEFAULT_AGENT_COMMAND,
     show_default=True,
     help="Headless agent invocation for classification (reads its prompt on stdin)",
 )
@@ -1090,7 +1140,7 @@ def cli() -> None:
 )
 @click.option(
     "--bot-logins",
-    default="github-actions,dependabot,claude,claude-review,renovate",
+    default="github-actions,dependabot,claude,claude-review,loom-oa-dev,renovate,weaverbot",
     show_default=True,
     help="Comma-separated bot logins to skip (lowercase)",
 )
@@ -1099,22 +1149,25 @@ def cli() -> None:
     is_flag=True,
     help="Re-classify every comment, ignoring the cache (use after changing --model)",
 )
-@click.option("--dry-run", is_flag=True, help="Skip W&B upload; print rollup")
+@click.option("--dry-run", is_flag=True, help="Skip the Finelog write; print the rollup")
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to use")
 def aggregate(
     repo: str,
     days: int,
     limit: int,
     model: str,
+    reasoning_effort: str,
     agent_command: str,
     batch_size: int,
     concurrency: int,
     bot_logins: str,
     refresh: bool,
     dry_run: bool,
+    deployment: str,
 ) -> None:
-    """Classify reviewer comments on recently-merged PRs and append to W&B.
+    """Classify reviewer comments on recently-merged PRs and append to Finelog.
 
-    Comments already classified in the W&B `human_comments` table are reused by
+    Comments already classified in the `human_comments` table are reused by
     `comment_id` (unless their text changed), so a daily run over a rolling
     window only sends genuinely-new comments to the model. Pass `--refresh` to
     re-classify everything."""
@@ -1123,61 +1176,54 @@ def aggregate(
 
     agent_binary = agent_command.split()[0]
     if not shutil.which(agent_binary):
-        logger.error("classifier agent %r not found on PATH (need a logged-in `claude` CLI)", agent_binary)
+        logger.error("classifier agent %r not found on PATH (need a logged-in `codex` CLI)", agent_binary)
         sys.exit(2)
 
-    classifier = make_claude_classifier(model, agent_command)
+    classifier = make_codex_classifier(model, reasoning_effort, agent_command)
 
     logger.info("Listing PRs merged in last %d day(s) in %s", days, repo)
     prs = list_merged_prs(repo, days, limit)
     logger.info("Found %d merged PRs", len(prs))
 
-    aggregator_ts = dt.datetime.now(dt.UTC).isoformat()
+    aggregator_ts = dt.datetime.now(dt.UTC)
 
-    human_rows: list[list] = []
-    pr_rows: list[list] = []
+    human_rows: list[HumanComment] = []
+    pr_rows: list[PrReviewOutcome] = []
     all_shas: set[str] = set()
     per_pr_comments: dict[int, list[Comment]] = {}
 
     for pr in prs:
-        try:
-            comments = fetch_pr_comments(repo, pr, bot_login_set)
-        except subprocess.CalledProcessError as e:
-            logger.warning("Failed to fetch comments for PR #%s: %s", pr["number"], e)
-            continue
+        comments = fetch_pr_comments(repo, pr, bot_login_set)
         per_pr_comments[pr["number"]] = comments
         all_shas.add(pr["headRefOid"])
 
-    # Pull bot findings + the existing human_comments table from the shared run
-    # (skip in dry-run). The human_comments rows serve double duty: the
-    # classification cache below, and the replace-by-PR merge at the end.
+    # Pull the bot's findings for these PRs plus the already-classified
+    # comments, which seed the classification cache below. A dry run needs
+    # neither, so it never opens a client.
     if dry_run:
         findings_by_sha = {sha: [] for sha in all_shas}
-        existing_human_rows: list[list] = []
+        existing_human_rows: list[dict] = []
     else:
-        wandb.init(
-            project=WANDB_PROJECT,
-            id=WANDB_RUN_ID,
-            resume="allow",
-            settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
-        )
-        findings_by_sha = load_findings_for_shas(wandb, all_shas)
-        existing_human_rows = _load_existing_rows(wandb, "human_comments")
+        with open_tables_client(deployment) as client:
+            findings_by_sha = load_findings_for_shas(client, all_shas)
+            existing_human_rows = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
     cache = {} if refresh else build_classification_cache(existing_human_rows)
 
     # Flatten every human comment across all PRs. Reuse a cached classification
     # when the same comment_id was classified before with identical text;
     # otherwise queue it for the model. Only the queued ones are batched and
     # classified in parallel, so an overlapping daily window stays cheap.
-    human_by_pr = {pr["number"]: [c for c in per_pr_comments.get(pr["number"], []) if not c.is_bot] for pr in prs}
+    human_by_pr = {
+        pr["number"]: [c for c in per_pr_comments.get(pr["number"], []) if _is_reviewer_comment(c)] for pr in prs
+    }
     flat_comments = [c for pr in prs for c in human_by_pr[pr["number"]]]
     final_cls = resolve_classifications(flat_comments, cache, classifier, batch_size, concurrency)
 
     # Regroup by PR, preserving flat-list ordering.
     idx = 0
-    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification | None]]] = {}
+    classified_by_pr: dict[int, list[tuple[Comment, CommentClassification]]] = {}
     for pr in prs:
-        pairs: list[tuple[Comment, CommentClassification | None]] = []
+        pairs: list[tuple[Comment, CommentClassification]] = []
         for c in human_by_pr[pr["number"]]:
             pairs.append((c, final_cls[idx]))
             idx += 1
@@ -1191,50 +1237,48 @@ def aggregate(
         strict_cnt = generous_cnt = 0
 
         for c, cls in classified_by_pr[n]:
-            if cls is None:
-                continue
             by_class[cls.klass] = by_class.get(cls.klass, 0) + 1
             if cls.catchable_strict:
                 strict_cnt += 1
             if cls.catchable_generous:
                 generous_cnt += 1
             human_rows.append(
-                [
-                    aggregator_ts,
-                    n,
-                    pr["title"],
-                    pr["mergedAt"],
-                    c.author,
-                    c.comment_id,
-                    c.comment_type,
-                    c.file,
-                    c.line,
-                    c.body[:500],
-                    cls.klass,
-                    cls.catchable_strict,
-                    cls.catchable_generous,
-                    cls.confidence,
-                    cls.reason,
-                ]
+                HumanComment(
+                    ts=aggregator_ts,
+                    pr_number=n,
+                    pr_title=pr["title"],
+                    merged_at=_optional_github_timestamp(pr["mergedAt"]),
+                    author=c.author,
+                    comment_id=c.comment_id,
+                    comment_type=c.comment_type,
+                    file=c.file,
+                    line=c.line,
+                    body=c.body[:500],
+                    comment_class=cls.klass,
+                    catchable_strict=cls.catchable_strict,
+                    catchable_generous=cls.catchable_generous,
+                    confidence=cls.confidence,
+                    reason=cls.reason,
+                )
             )
 
         bot_findings = findings_by_sha.get(pr["headRefOid"], [])
         pr_rows.append(
-            [
-                aggregator_ts,
-                n,
-                pr["title"],
-                pr["mergedAt"],
-                (pr.get("author") or {}).get("login") or "unknown",
-                pr["headRefOid"],
-                pr["baseRefOid"],
-                len(human),
-                json.dumps(by_class),
-                strict_cnt,
-                generous_cnt,
-                len(bot_findings),
-                overlap_count(bot_findings, human),
-            ]
+            PrReviewOutcome(
+                ts=aggregator_ts,
+                pr_number=n,
+                pr_title=pr["title"],
+                merged_at=_optional_github_timestamp(pr["mergedAt"]),
+                author=(pr.get("author") or {}).get("login") or "unknown",
+                head_sha=pr["headRefOid"],
+                base_sha=pr["baseRefOid"],
+                total_human_comments=len(human),
+                by_class_json=json.dumps(by_class),
+                catchable_strict_count=strict_cnt,
+                catchable_generous_count=generous_cnt,
+                bot_findings_count=len(bot_findings),
+                overlap_count=overlap_count(bot_findings, human),
+            )
         )
         logger.info(
             "PR #%s: %d human comments, strict=%d generous=%d bot_findings=%d",
@@ -1246,35 +1290,23 @@ def aggregate(
         )
 
     if dry_run:
-        click.echo(json.dumps({"pr_rollups": pr_rows, "human_comments": human_rows[:20]}, default=str, indent=2))
+        payload = {
+            "pr_rollups": [asdict(r) for r in pr_rows],
+            "human_comments": [asdict(r) for r in human_rows[:20]],
+        }
+        click.echo(json.dumps(payload, default=str, indent=2))
         return
 
-    # Replace-by-PR: a daily cron over a rolling window re-emits rows for PRs
-    # we've seen before. Drop existing rows whose pr_number is in this batch,
-    # then append the fresh ones — the new rows are the source of truth for
-    # those PRs. (Cached comments are re-emitted with their stored verdict, so
-    # the dropped rows are reconstructed identically unless the text changed.)
-    refreshed_prs = {pr["number"] for pr in prs}
-    pr_col_idx = HUMAN_COMMENT_COLUMNS.index("pr_number")
-    out_pr_col_idx = PR_OUTCOME_COLUMNS.index("pr_number")
-
-    existing_humans = [r for r in existing_human_rows if r[pr_col_idx] not in refreshed_prs]
-    existing_humans.extend(human_rows)
-    wandb.log({"human_comments": wandb.Table(columns=HUMAN_COMMENT_COLUMNS, data=existing_humans)})
-
-    existing_outcomes = [
-        r for r in _load_existing_rows(wandb, "pr_review_outcomes") if r[out_pr_col_idx] not in refreshed_prs
-    ]
-    existing_outcomes.extend(pr_rows)
-    wandb.log({"pr_review_outcomes": wandb.Table(columns=PR_OUTCOME_COLUMNS, data=existing_outcomes)})
-
-    wandb.finish(quiet=True)
+    # Rows for a PR seen on an earlier run are appended again with their cached
+    # verdicts; LATEST_*_SQL is what collapses them on read.
+    with open_tables_client(deployment) as client:
+        append_rows(client, HUMAN_COMMENTS_NAMESPACE, HumanComment, human_rows)
+        append_rows(client, PR_REVIEW_OUTCOMES_NAMESPACE, PrReviewOutcome, pr_rows)
     logger.info(
-        "Logged %d PR rollups and %d classified human comments to %s/%s",
+        "Appended %d PR rollups and %d classified human comments to %s",
         len(pr_rows),
         len(human_rows),
-        WANDB_PROJECT,
-        WANDB_RUN_ID,
+        NAMESPACE_PREFIX,
     )
 
 
@@ -1284,27 +1316,22 @@ def aggregate(
 @click.option("--out", type=click.Path(dir_okay=False), default=None, help="Also write the markdown report here")
 @click.option("--public", is_flag=True, help="Create a public gist (default: secret)")
 @click.option("--no-gist", is_flag=True, help="Print the report to stdout instead of creating a gist")
-def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool) -> None:
+@click.option("--deployment", default=DEFAULT_DEPLOYMENT, show_default=True, help="Finelog deployment to use")
+def report(repo: str, days: int, out: str | None, public: bool, no_gist: bool, deployment: str) -> None:
     """Render the accumulated review stats into a markdown digest and gist it.
 
-    Reads four tables from the shared `review-stats` run: `pr_review_outcomes`
-    and `human_comments` (the catchability analysis) plus the linter-fed
+    Reads the four `codehealth.autolint` namespaces: `pr_review_outcomes` and
+    `human_comments` (the catchability analysis) plus the linter-fed
     `invocations` and `findings` (the review bot's own activity)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     now = dt.datetime.now(dt.UTC)
     start = now - dt.timedelta(days=days)
 
-    wandb.init(
-        project=WANDB_PROJECT,
-        id=WANDB_RUN_ID,
-        resume="allow",
-        settings=wandb.Settings(silent=True, _disable_stats=True, _disable_meta=True),
-    )
-    outcomes = _rows_to_dicts(PR_OUTCOME_COLUMNS, _load_existing_rows(wandb, "pr_review_outcomes"))
-    comments = _rows_to_dicts(HUMAN_COMMENT_COLUMNS, _load_existing_rows(wandb, "human_comments"))
-    invocations = _rows_to_dicts(INVOCATION_COLUMNS, _load_existing_rows(wandb, "invocations"))
-    findings = _rows_to_dicts(FINDING_COLUMNS, _load_existing_rows(wandb, "findings"))
-    wandb.finish(quiet=True)
+    with open_tables_client(deployment) as client:
+        outcomes = query_rows(client, LATEST_PR_OUTCOMES_SQL, PR_REVIEW_OUTCOMES_NAMESPACE)
+        comments = query_rows(client, LATEST_HUMAN_COMMENTS_SQL, HUMAN_COMMENTS_NAMESPACE)
+        invocations = query_rows(client, f'SELECT * FROM "{INVOCATIONS_NAMESPACE}"', INVOCATIONS_NAMESPACE)
+        findings = query_rows(client, f'SELECT * FROM "{FINDINGS_NAMESPACE}"', FINDINGS_NAMESPACE)
 
     markdown = build_report(outcomes, comments, invocations, findings, repo=repo, start=start, now=now, days=days)
 

@@ -27,16 +27,18 @@ from iris.cluster.backends.k8s.tasks import (
 )
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
-    BackendConfig,
     IrisClusterConfig,
     WorkerConfig,
     backend_attribute_sets,
-    resolve_backends,
 )
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import TaskBackend
+from iris.cluster.controller.backend import (
+    BackendDescriptor,
+    BackendKind,
+    TaskBackend,
+)
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.reconcile.loader import TransitionReader
@@ -47,6 +49,7 @@ from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,7 @@ _PRIORITY_BANDS = {priority_band_name(band): band for band in PRIORITY_BAND_VALU
 def make_task_backend(
     config: IrisClusterConfig,
     *,
+    descriptor: BackendDescriptor,
     unreachable_grace: Duration,
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
@@ -112,6 +116,7 @@ def make_task_backend(
         local_queue = local_queue_name(label_prefix)
         env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
+            descriptor=descriptor,
             kubectl=CloudK8sService(
                 namespace=namespace,
                 kubeconfig_path=kp.kubeconfig or None,
@@ -140,6 +145,7 @@ def make_task_backend(
         )
     if which == "worker_provider":
         return RpcTaskBackend(
+            descriptor=descriptor,
             stub_factory=RpcWorkerStubFactory(),
             unreachable_grace=unreachable_grace,
             autoscaler=autoscaler,
@@ -207,10 +213,18 @@ def make_backend(
     the autoscaler and the provider bundle are skipped (bundle creation needs
     platform credentials unavailable on a dev machine).
     """
+    descriptor = BackendDescriptor(
+        backend_id=DEFAULT_BACKEND_ID,
+        display_name=config.name or DEFAULT_BACKEND_ID,
+        kind=BackendKind.KUBERNETES if config.provider_kind() == "kubernetes_provider" else BackendKind.WORKER,
+        advertised_attributes={key: frozenset(values) for key, values in backend_attribute_sets(config).items()},
+        scale_groups=frozenset(config.scale_groups),
+    )
     which = config.provider_kind()
     if which == "kubernetes_provider":
         provider = make_task_backend(
             config,
+            descriptor=descriptor,
             unreachable_grace=unreachable_grace,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
@@ -223,6 +237,7 @@ def make_backend(
         # Neither provider configured: defer to make_task_backend's guidance error.
         return make_task_backend(
             config,
+            descriptor=descriptor,
             unreachable_grace=unreachable_grace,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
@@ -263,6 +278,7 @@ def make_backend(
 
     provider = make_task_backend(
         config,
+        descriptor=descriptor,
         unreachable_grace=unreachable_grace,
         task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
@@ -270,54 +286,3 @@ def make_backend(
     )
     logger.info("Backend created: %s", type(provider).__name__)
     return provider
-
-
-def _backend_subconfig(config: IrisClusterConfig, backend: BackendConfig) -> IrisClusterConfig:
-    """Project one ``BackendConfig`` back onto the top-level single-backend shape.
-
-    ``make_backend`` reads the provider/scale-group/platform fields off the
-    top-level config. A multi-backend cluster carries those per backend, so this
-    rebuilds the implicit single-backend view for one entry while sharing the
-    cluster-wide ``defaults``/``controller``/auth.
-    """
-    sub = config.model_copy(deep=True)
-    sub.backends = None
-    sub.worker_provider = backend.worker_provider
-    sub.kubernetes_provider = backend.kubernetes_provider
-    sub.scale_groups = dict(backend.scale_groups)
-    sub.platform = backend.platform if backend.platform is not None else config.platform
-    return sub
-
-
-def make_backends(
-    config: IrisClusterConfig,
-    *,
-    db: ControllerDB,
-    auth: ControllerAuth,
-    remote_state_dir: str,
-    dry_run: bool,
-    log_stack: LogStack,
-    unreachable_grace: Duration,
-) -> dict[str, TaskBackend]:
-    """Build the controller's ``{backend_id: TaskBackend}`` collection.
-
-    Iterates the resolved ``backends:`` map (or the implicit single entry keyed
-    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each through the
-    single-backend path, tagging it with its backend id.
-    """
-    backends: dict[str, TaskBackend] = {}
-    for backend_id, backend_cfg in resolve_backends(config).items():
-        provider = make_backend(
-            _backend_subconfig(config, backend_cfg),
-            db=db,
-            auth=auth,
-            remote_state_dir=remote_state_dir,
-            dry_run=dry_run,
-            log_stack=log_stack,
-            unreachable_grace=unreachable_grace,
-        )
-        provider.name = backend_id
-        provider.configure_routing(backend_attribute_sets(backend_cfg))
-        backends[backend_id] = provider
-        logger.info("Backend %r ready: %s", backend_id, type(provider).__name__)
-    return backends

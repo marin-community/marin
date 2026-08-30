@@ -169,14 +169,25 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<Re
     (addr, requests)
 }
 
-/// A hub that answers every RPC with `invalid_argument`, as the real one does for a
-/// structurally malformed entry or a batch whose columns are missing from the hub's
-/// registered schema. Returns the address and a count of the requests it served.
+/// A hub that answers every RPC with `invalid_argument`, as the real one does for
+/// structurally malformed content. Returns the address and a count of the requests it
+/// served.
 pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
     serve_error(
         connectrpc::ErrorCode::InvalidArgument,
         axum::http::StatusCode::BAD_REQUEST,
         "empty key",
+    )
+    .await
+}
+
+/// A hub that answers every RPC with `failed_precondition`, as a real hub does when a
+/// well-formed batch conflicts with its registered schema.
+pub async fn serve_schema_conflict() -> (SocketAddr, Arc<RequestStats>) {
+    serve_error(
+        connectrpc::ErrorCode::FailedPrecondition,
+        axum::http::StatusCode::BAD_REQUEST,
+        "batch conflicts with registered schema",
     )
     .await
 }

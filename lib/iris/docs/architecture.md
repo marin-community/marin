@@ -109,13 +109,21 @@ are the canonical data layer; **one-off queries may stay in `service.py`** —
 
 ### The TaskBackend contract
 
-`controller/backend.py` defines `TaskBackend`: the single uniform Protocol that
-drives task execution and capacity for one cluster. The controller owns the
-database and the loop cadences; a backend takes a plain-data snapshot in and
-returns a plain-data, method-specific result out. A backend **authors a
-projection** — task-state `effects` plus a `status` snapshot — that the
-controller commits/stores; the controller never learns which worker ran a task.
-Every backend implements the same phase methods (plus on-demand
+`controller/backend.py` defines `TaskBackend`: the Protocol that drives task
+execution and capacity for one cluster. Composition registers exactly one
+self-described backend with `Controller.register_backend` before `start()`.
+`BackendDescriptor` declares its ID, kind, advertised attributes, and scale
+groups. Federation connects controllers when work can execute on another
+cluster.
+
+The controller owns the database and loop cadences. It builds a complete,
+single-use `ScheduleRequest` from one read snapshot, including pending tasks,
+running attempts, worker state, and the user budget. `schedule` is a DB-less
+decision. Reconcile and autoscale
+use `BackendRuntime`/`DbBackendWorkerStore` and are not DB-less. The controller
+stores worker records and task assignments; the backend owns the provider-specific
+observation and actuation that produces task-state effects.
+Both backend implementations expose the same phase methods (plus on-demand
 `get_process_status`/`profile_task`/`exec_in_container`):
 
 - `schedule(ScheduleRequest) -> ScheduleResult` — a placement decision.
@@ -124,43 +132,31 @@ Every backend implements the same phase methods (plus on-demand
   backend also folds the liveness it observed into its **own**
   `WorkerHealthTracker` and stashes the workers its fold reaped.
 - `run_teardown()` — fail the reaped workers, tear down their slices and healthy
-  siblings, and forget them from the backend's own tracker. Called once per
-  backend after the tick's effects are committed; no worker identity is passed in.
+  siblings, and forget them from the backend's own tracker. Called after the
+  tick's effects are committed; no worker identity is passed in.
 - `autoscale(AutoscaleRequest) -> AutoscaleResult` — provision capacity.
 - `status() -> BackendStatus` — author this backend's dashboard status.
 
 Each method returns its own frozen result type (`ScheduleResult` /
 `ReconcileResult` / `AutoscaleResult`). `reconcile` returns `effects` only —
 uniform across backend kinds — so the controller commits the projection without
-branching on the concrete backend type; there are no `isinstance` branches. How
-authority is split between the controller and its backends (and how a remote
-backend becomes a controller of its own) is described in
-[`multi_backend.md`](multi_backend.md).
+branching on the concrete backend class.
 
-A backend declares `capabilities: frozenset[BackendCapability]`, metadata the
-dashboard and on-demand RPC routing key on. The controller calls every phase
-uniformly regardless, with one per-tick exception: `CLUSTER_VIEW` makes the
-controller drain the dispatch queue (a DB write it owns) into that backend's
-reconcile snapshot.
+`BackendDescriptor.kind` is `WORKER` for Iris worker-daemon clusters or
+`KUBERNETES` for Kueue-backed clusters. Kubernetes reconcile receives the
+controller-owned dispatch drain; worker reconcile sources its worker snapshot
+through `DbBackendWorkerStore`. Dashboard capability strings are derived from
+the kind and the presence of an Iris autoscaler.
 
-| Capability | Meaning |
-|---|---|
-| `WORKER_DAEMON` (`"workers"`) | Iris tracks worker daemons; the backend fans the per-worker Reconcile RPC out (`RpcTaskBackend`, `backends/rpc/backend.py` — GCP/TPU, CoreWeave bare-metal, manual, local). |
-| `IRIS_AUTOSCALER` (`"autoscaler"`) | the Iris `Autoscaler` provisions capacity for this backend. |
-| `CLUSTER_VIEW` (`"cluster"`) | the backend places tasks on its own cluster (`K8sTaskProvider`, `backends/k8s/tasks.py` — Kueue schedules and provisions; `schedule`/`autoscale` are effectively no-ops). |
-
-Worker health is **authored by each worker-daemon backend**, not the controller.
-A `WORKER_DAEMON` backend constructs and owns its own `WorkerHealthTracker`,
+Worker health is authored by a worker backend. It constructs and owns its
+`WorkerHealthTracker`,
 folds the liveness it observed during `reconcile` (REACHED / UNREACHABLE, plus
 BUILD_FAILED synthesized from its effects), and reaps over-threshold workers in
 its own `run_teardown`. There is no ping loop and no separate liveness channel —
 the reconcile RPC outcome is the only liveness signal. The controller reaches
-per-worker liveness only through the backends (`liveness_for_worker`,
-`all_liveness`), and worker registration routes to the owning backend's tracker
-by scale group. Cluster-view (e.g. Kubernetes) backends have **no Iris workers**:
-they hold no tracker, and pod status flows back as task `effects`. A new backend
-(e.g. Slurm) slots in by implementing the phase methods and declaring its
-capabilities.
+per-worker liveness through the backend (`liveness_for_worker`, `all_liveness`).
+Kubernetes backends have no Iris workers: they hold no tracker, and pod status
+flows back as task `effects`.
 
 **Entry points.** `cluster/client/` is the low-level RPC client
 (`RemoteClusterClient`); `client/` is the high-level user SDK (`IrisClient`,

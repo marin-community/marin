@@ -120,8 +120,21 @@ struct Args {
     telemetry_migration_mode: TelemetryMigrationMode,
 }
 
+/// Abort the standalone server after reporting any Rust panic.
+fn install_abort_on_panic_hook() {
+    // Tokio contains task panics as JoinErrors, which can leave poisoned store
+    // mutexes in a live process. Keep this hook in the binary so the PyO3 host
+    // does not inherit an abort-on-panic policy.
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        report(panic);
+        std::process::abort();
+    }));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_abort_on_panic_hook();
     let args = Args::parse();
 
     tracing_subscriber::fmt()
@@ -335,7 +348,42 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
+    use std::process::Command;
+
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn panic_boundary_aborts_process() {
+        const CHILD_PROCESS: &str = "FINELOG_ABORT_ON_PANIC_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            install_abort_on_panic_hook();
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime starts");
+            runtime.block_on(async {
+                let _ = tokio::spawn(async {
+                    panic!("exercise the finelog-server panic boundary");
+                })
+                .await;
+            });
+            return;
+        }
+
+        let status = Command::new(std::env::current_exe().expect("test executable exists"))
+            .args([
+                "--exact",
+                "tests::panic_boundary_aborts_process",
+                "--nocapture",
+            ])
+            .env(CHILD_PROCESS, "1")
+            .status()
+            .expect("panic-boundary child process starts");
+
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
+    }
 
     fn args(argv: &[&str]) -> Args {
         let mut full = vec!["finelog-server"];

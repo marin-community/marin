@@ -11,7 +11,8 @@ from finelog.rpc import logging_pb2
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
+    BackendKind,
     BackendRuntime,
     ProviderUnsupportedError,
     ReconcileRequest,
@@ -23,8 +24,8 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import set_user_budget, stamp_backend
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.controller.writes import set_user_budget
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_direct_job_request,
@@ -43,22 +44,18 @@ from sqlalchemy import update as sa_update
 class FakeDirectProvider:
     """Minimal cluster-view TaskBackend (K8s-like) for testing."""
 
-    name = "kubernetes"
-    capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     autoscaler = None
     health = None
 
     def __init__(self):
+        self.descriptor = BackendDescriptor(
+            backend_id=DEFAULT_BACKEND_ID,
+            display_name="kubernetes",
+            kind=BackendKind.KUBERNETES,
+        )
         self.sync_calls: list[ReconcileRequest] = []
         self.sync_result = ReconcileResult()
         self.closed = False
-        self.advertised: dict[str, set[str]] = {}
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         self.sync_calls.append(request)
@@ -343,14 +340,43 @@ def test_drain_deferred_gang_still_fills_same_band(state):
     assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
 
 
-def _submit_job_for_user(state, user: str, name: str, *, priority_band: int = 0) -> JobName:
+def _submit_job_for_user(
+    state, user: str, name: str, *, priority_band: int = 0, submitting_user: str | None = None
+) -> JobName:
     """Submit a single-task direct job owned by ``user`` and return its task id."""
     jid = JobName.root(user, name)
     req = make_direct_job_request(name, priority_band=priority_band)
     req.name = jid.to_wire()  # make_direct_job_request roots names at test-user
     with state._db.transaction() as cur:
-        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now(), submitting_user=submitting_user)
     return jid.task(0)
+
+
+def test_drain_uses_authenticated_email_for_nickname_job_budget(state):
+    email = "russell.power@openathena.ai"
+    _submit_job_for_user(
+        state,
+        "power",
+        "spend",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        submitting_user=email,
+    )
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)
+        set_user_budget(cur, email, 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+
+    pending = _submit_job_for_user(
+        state,
+        "power",
+        "pending",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        submitting_user=email,
+    )
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    [request] = [request for request in batch.tasks_to_run if request.task_id == pending.to_wire()]
+    assert request.priority == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_drain_interleaves_users_within_band(state):
@@ -435,28 +461,6 @@ def test_drain_redrives_assigned_null_worker(state):
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
     assert batch2.running_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
-
-
-def test_drain_scopes_running_tasks_to_backend(state):
-    """A CLUSTER_VIEW backend's drain scopes ``running_tasks`` (the poll set) to
-    its own backend_id. Without it two K8s backends each poll the other's
-    running pods and, after the pod-not-found grace, mark them FAILED."""
-    [task_a] = submit_direct_job(state, "backend-a")
-    submit_direct_job(state, "backend-b")  # the other backend's task must not leak into a's poll set
-    with state._db.transaction() as cur:
-        stamp_backend(
-            cur,
-            [
-                (JobName.root("test-user", "backend-a"), "a"),
-                (JobName.root("test-user", "backend-b"), "b"),
-            ],
-        )
-
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur, backend_id="a")
-
-    assert [r.task_id for r in batch.tasks_to_run] == [task_a.to_wire()]
-    assert [e.task_id for e in batch.running_tasks] == [task_a]
 
 
 def test_drain_executing_goes_to_running_tasks(state):

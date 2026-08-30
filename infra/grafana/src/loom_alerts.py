@@ -376,7 +376,7 @@ class LoomAlertClient:
             loom_token = _required_string(federation.json(), "token", "Loom federation response")
 
             run = await client.post(
-                f"{self._config.url}/api/runs",
+                f"{self._config.url}/api/runs/create",
                 json=request,
                 headers={"Authorization": f"Bearer {loom_token}"},
             )

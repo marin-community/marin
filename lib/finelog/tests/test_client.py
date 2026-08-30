@@ -681,11 +681,11 @@ def test_drop_table_unknown_is_no_op(tracked_clients, monkeypatch):
 
 
 def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatch):
-    """A non-retryable registration failure is handled as a flush failure.
+    """A non-retryable registration failure resolves the flush as DROPPED.
 
     Registration happens on the flush thread, so a schema conflict cannot
-    propagate to the caller of get_table. The offending batch is dropped (the
-    error is non-retryable) and the Table stays usable without crashing.
+    propagate to the caller of get_table. The offending batch is dropped and
+    the Table stays usable, but the flush must not claim the rows landed.
     """
 
     def conflict(self, request):
@@ -696,9 +696,12 @@ def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatc
     try:
         table = client.get_table("iris.worker", WorkerStat)
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
-        # Non-retryable: the batch is dropped, the flush resolves, nothing raises.
-        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        assert table.flush(timeout=5.0) == FlushResult.DROPPED
         assert tracked_clients[0].writes == []
+        # The verdict is per-flush: a later write that lands reports SUCCEEDED.
+        monkeypatch.undo()
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=2)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
     finally:
         client.close()
 

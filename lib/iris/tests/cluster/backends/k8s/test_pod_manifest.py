@@ -30,7 +30,15 @@ from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-from iris.testing.k8s import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
+from iris.testing.k8s import (
+    add_eq_constraint,
+    common_env_from_req,
+    k8s_backend_descriptor,
+    make_batch,
+    make_pod,
+    make_run_req,
+    pod_config,
+)
 
 INFRASTRUCTURE_FAILURE_REASONS = ("DeadlineExceeded", "Evicted", "Preempting")
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -68,7 +76,7 @@ def _dispatch(
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
-    provider = K8sTaskProvider(kubectl=k8s, pods=config, cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
@@ -121,7 +129,9 @@ def _task_update_from_pod(
 ) -> TaskUpdate:
     """Observe a K8s pod through the provider's public reconciliation boundary."""
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
+    )
     try:
         request = make_run_req(
             entry.task_id.to_wire(),

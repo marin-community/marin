@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
@@ -39,7 +39,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
-    BackendCapability,
+    BackendDescriptor,
     BackendRuntime,
     DeviceCapacity,
     ProviderError,
@@ -57,7 +57,9 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
+    RDMA_RESOURCE,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
@@ -158,15 +160,14 @@ _LABEL_JOB_ID = "iris.job_id"
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
 
-# Extended resource name for NVIDIA GPUs in pod requests/limits.
-_GPU_RESOURCE = "nvidia.com/gpu"
-
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
 # controller never pulls pod logs through the apiserver.
 _LOGSHIP_CONTAINER_NAME = "log-shipper"
 _LOGSHIP_VOLUME_NAME = "varlogpods"
 _NODE_POD_LOG_DIR = "/var/log/pods"
+LOGSHIP_CPU_REQUEST = "50m"
+OUTPUT_UPLOADER_CPU_REQUEST = "100m"
 
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
@@ -657,7 +658,7 @@ def _build_logship_sidecar(
         "command": [".venv/bin/python", "-m", "iris.cluster.backends.k8s.logship"],
         "env": env,
         "volumeMounts": [{"name": _LOGSHIP_VOLUME_NAME, "mountPath": _NODE_POD_LOG_DIR, "readOnly": True}],
-        "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
+        "resources": {"requests": {"cpu": LOGSHIP_CPU_REQUEST, "memory": "64Mi"}},
     }
 
 
@@ -679,7 +680,7 @@ def _build_output_uploader(
             {"name": OUTPUT_MOUNT.name, "mountPath": OUTPUT_MOUNT.container_path},
             {"name": OUTPUT_CONTROL_VOLUME_NAME, "mountPath": OUTPUT_CONTROL_PATH},
         ],
-        "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}},
+        "resources": {"requests": {"cpu": OUTPUT_UPLOADER_CPU_REQUEST, "memory": "128Mi"}},
         "terminationMessagePolicy": "File",
     }
     if env_secret_name:
@@ -883,10 +884,10 @@ def _build_pod_manifest(
             has_tpu = res.device.HasField("tpu")
             if gpu_count > 0:
                 # K8s treats accelerator limits as implicit requests.
-                limits[_GPU_RESOURCE] = str(gpu_count)
+                limits[NVIDIA_GPU_RESOURCE] = str(gpu_count)
                 if host_network:
                     # Request RDMA/IB devices for multi-host NCCL over InfiniBand.
-                    limits["rdma/ib"] = str(gpu_count)
+                    limits[RDMA_RESOURCE] = str(gpu_count)
         if limits:
             resources["limits"] = limits
         if requests:
@@ -1435,7 +1436,9 @@ def _pod_gpu_request(pod: dict) -> int:
     total = 0
     for container in pod.get("spec", {}).get("containers", []):
         resources = container.get("resources", {})
-        value = resources.get("requests", {}).get(_GPU_RESOURCE) or resources.get("limits", {}).get(_GPU_RESOURCE)
+        value = resources.get("requests", {}).get(NVIDIA_GPU_RESOURCE) or resources.get("limits", {}).get(
+            NVIDIA_GPU_RESOURCE
+        )
         if value:
             total += parse_k8s_quantity(str(value))
     return total
@@ -1869,7 +1872,7 @@ def _node_disk_bytes(node: dict) -> int:
 
 
 def _node_gpu_count(node: dict) -> int:
-    gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+    gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
     return int(parse_k8s_quantity(str(gpu))) if gpu else 0
 
 
@@ -1965,15 +1968,15 @@ class ClusterState:
         is dropped from the split (still counted as held) — it cannot be preempted on
         a band the parent can reason about.
 
-        Deliberately imperfect — it lags the sync and ignores per-node packing, which
-        the meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        Deliberately imperfect — it lags the sync and ignores per-node packing,
+        which federation routing tolerates (the peer's own Kueue is the backstop)."""
         band_by_class = {name: band for band, name in priority_class_names.items()}
         with self._lock:
             nodes = self._nodes[:]
             pods = self._pods[:]
         allocatable = 0
         for node in nodes:
-            gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+            gpu = node.get("status", {}).get("allocatable", {}).get(NVIDIA_GPU_RESOURCE)
             if gpu:
                 allocatable += int(parse_k8s_quantity(str(gpu)))
         held = 0
@@ -2369,8 +2372,7 @@ class K8sTaskProvider:
     Pod naming: iris-{task_id_sanitized}-{attempt_id}
     """
 
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
-
+    descriptor: BackendDescriptor
     kubectl: K8sService
     # Cluster-level pod settings; also the source of the namespace and managed
     # label this backend uses for its own ConfigMap/PDB writes and kubectl scans.
@@ -2396,13 +2398,9 @@ class K8sTaskProvider:
     # load. New-pod application (dispatch) is NOT gated — it runs every tick.
     # Tests set this to 0.0 so every reconcile scans.
     cluster_scan_interval: float = 5.0
-    name: str = "kubernetes"
-    # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
-    advertised: dict[str, set[str]] = field(default_factory=dict)
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
-    # A cluster backend tracks no Iris worker liveness; the controller's union read
-    # skips a None tracker, and no worker registers into a k8s scale group.
+    # A Kubernetes backend tracks no Iris worker liveness.
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, passed by the composer at construction (a cluster backend has no
@@ -2448,12 +2446,6 @@ class K8sTaskProvider:
             self._task_event_log = TaskEventLog(self.task_event_table)
         return self._task_event_log
 
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self.advertised
-
-    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
-        self.advertised = advertised
-
     def runtime_image(self, requested_image: str) -> str:
         return requested_image or self.pods.default_image
 
@@ -2467,7 +2459,7 @@ class K8sTaskProvider:
         lines up. Only when the backend advertises exactly one GPU variant can the
         GPUs be attributed unambiguously; otherwise it returns ``None`` (unset —
         shape-only federation)."""
-        variants = self.advertised.get(WellKnownAttribute.DEVICE_VARIANT)
+        variants = self.descriptor.advertised_attributes.get(WellKnownAttribute.DEVICE_VARIANT)
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()

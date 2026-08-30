@@ -490,6 +490,19 @@ def test_clusters_dashboard_shows_finelog_fleet_health():
     assert {"cluster", "server", "responsive", "ready", "desired", "latency_ms"} <= selectors
 
 
+def test_clusters_dashboard_shows_finelog_forwarding_failures_and_drops():
+    panels = {panel.get("title"): panel for panel in _all_panels(_stitched_dashboards()["clusters.json"])}
+    panel = panels["Finelog forwarding failures and drops"]
+    sql = _panel_sql({"panels": [panel]})[0]
+
+    assert 'FROM "telemetry_v1.finelog"' in sql
+    assert "name = 'forwarding_batches'" in sql
+    assert "json_get(attributes_json, 'outcome') <> 'accepted'" in sql
+    assert "name = 'forwarding_seq_positions'" in sql
+    assert "'permanent_rejection', 'retention_eviction'" in sql
+    assert panel["datasource"]["uid"] == "finelog-marin"
+
+
 def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
     (target,) = [
         target
