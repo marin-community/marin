@@ -112,9 +112,9 @@ jobs:
       # Bound the wait below the job timeout so a hung ferry fails this step
       # while the runner remains alive for diagnostics, live triage, and
       # cancellation. Keep 135m because a healthy child has taken about 60m and
-      # scheduling shares this bound. The 195m job timeout leaves 60m after the
-      # wait: 5m for diagnostics, 30m for triage, and 25m for setup and cleanup.
-      # Upload diagnostics only after cancellation so it cannot consume this window.
+      # scheduling shares this bound. The 195m job budget assigns 135m to the
+      # wait, 5m to diagnostics, 30m to triage, and 25m to setup and cleanup.
+      # Upload diagnostics only after cancellation so upload cannot delay cleanup.
       - name: Wait for Grug multislice smoke
         id: wait
         timeout-minutes: 135
