@@ -1205,3 +1205,47 @@ BOTH sides of every A/B. Throughput results stand unchanged (identical
 FLOPs either way). Any claim resting on loss quality needs re-checking
 post-fix, and the fidelity evidence should be re-stated on the fixed
 stack before the keeps are promoted.
+
+## 2026-08-31 ~14:30Z: structural map of the block mints three new candidates
+
+A structural mapping pass (read against ~/projects/marin, i.e. main --
+numbers involving the transport are pooled-wave there and must be
+re-derived on this branch) produced three fidelity-neutral,
+deletion-class candidates. All three attack work nobody has looked at,
+and none touch numerics.
+
+C16 -- QB histogram allreduce deferral. _qb_beta_hist psums an int32
+[384, 10000] histogram (15.36 MB) once per layer: 48 allreduces and
+737 MB of payload per step, plus a pmin and a pmax each (144 scalar
+collectives/step). The quantity is a CONTROL value not read until the
+NEXT step -- and the codebase already does exactly this deferral for
+qb_beta_local in the TOPK branch (model.py:1010-1013, "the pmean that
+used to live here is deferred to _reduce_router_stats ... beta is not
+read until the next step"). Deferring the histogram reduction the same
+way deletes 48 sizeable allreduces from the critical path per step.
+Bonus: the same path costs ~390 MiB/layer of HBM traffic (~18 GiB/step)
+via an atomic bincount plus a 10,000-deep sequential scan per expert.
+
+C17 -- Newton-Schulz 3D padding waste. _newtonschulz_padded_stack_sharded
+pads 48 layers up to the 64-way expert shard count, so 16 of 64 shards
+run NS on ZERO padding: 25% of all 3D NS work is computed and thrown
+away, every step. The fix logic already exists in the sibling 4D path
+(_newtonschulz_4d_distributed's subset-search over batch mesh axes);
+the 3D path just pads to the full shard count instead. Also flagged:
+the 3D path is a genuine all-to-all (~64 GB payload/step) and NS on the
+expert leaves alone is ~5.5% of model FLOPs, sequenced after the entire
+backward with nothing to overlap against.
+
+C18 -- norm/gate fusion. Of ~64 full-width [T,6144] passes per block
+forward (~48 GiB of HBM traffic), ~26 are pure elementwise/norm tax --
+RMSNorm x2, GatedNorm x2 (five full-width passes each for a rank-128
+gate), four residual adds -- and NONE of it is a fused kernel except
+SConv. RMSNorm and GatedNorm are plain JAX (model.py:594, :612). A
+fused norm+gate kernel is the same deletion class as the two keeps.
+
+Also corroborated independently: _clip_receiver_group_sizes compiles to
+~14,100 HLO ops with a 64-deep dependency chain per receiver -- the same
+"pathologically serial metadata" the fusion-pool decomposition found at
+293 ms/step on one SM of 148. Two agents reaching that from different
+directions raises my confidence that the metadata path is real work
+worth attacking, though 72% of it is currently hidden.
