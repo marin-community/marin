@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 WANDB_PROJECT = "marin-community/marin-curriculum-rl"
 VERSION_TAG = "2026.08.31"
+# Snowball arms were relaunched at micro_train_batch_size_per_gpu=4 under a
+# bumped version; the cancelled micro=1 probe lives at plain 2026.08.31 and
+# must not merge into the snowball-naive series.
+SNOWBALL_VERSION_TAG = "2026.08.31.1"
 ARM_ORDER = (
     "naive",
     "naive-dapo",
@@ -65,12 +69,16 @@ def responses_per_generate(arm: str) -> int:
 
 
 def arm_of(run_name: str) -> str | None:
-    if VERSION_TAG not in run_name or "smoke" in run_name:
+    if "curriculum-rl-" not in run_name or "smoke" in run_name:
         return None
     arm = run_name.split("curriculum-rl-")[1].split("-2026")[0]
     # Snowball checkpoint names carry the scale label (launch.py only drops the
     # suffix for the Qwen FULL preset): snowball-naive-snowball-full -> snowball-naive.
-    return arm.removesuffix("-snowball-full")
+    arm = arm.removesuffix("-snowball-full")
+    tag = SNOWBALL_VERSION_TAG if arm.startswith("snowball-") else VERSION_TAG
+    if f"-{tag}-" not in run_name:
+        return None
+    return arm
 
 
 def pick_runs(api: wandb.Api) -> dict[str, list]:
@@ -108,7 +116,7 @@ def arm_series(arm: str, runs: list) -> dict[str, object]:
     (redone steps after a resume are genuine spend). Within one entry, an eval
     row maps to the cumulative total at the latest preceding token row.
     """
-    eval_keys = [STEP_KEY] + [f"eval/{v}/avg_score" for v in VAL_GRADES] + ["eval/all/avg_score"]
+    eval_keys = [STEP_KEY] + [f"eval/{v}/pass_at_1" for v in VAL_GRADES] + ["eval/all/pass_at_1"]
     aligned: dict[tuple[int, int], dict[str, float]] = {}
     total = 0.0
     for entry_index, run in enumerate(sorted(runs, key=lambda r: r.created_at)):
@@ -133,7 +141,7 @@ def grade_weighted_score(row: dict[str, float]) -> float | None:
 
     Requires every validation bin so partial eval rows do not skew the metric.
     """
-    scores = {v: row.get(f"eval/{v}/avg_score") for v in VAL_GRADES}
+    scores = {v: row.get(f"eval/{v}/pass_at_1") for v in VAL_GRADES}
     if any(s is None for s in scores.values()):
         return None
     weight_total = sum(1 + g for g in VAL_GRADES.values())
@@ -142,7 +150,7 @@ def grade_weighted_score(row: dict[str, float]) -> float | None:
 
 def frontier_grade(row: dict[str, float]) -> int | None:
     """Highest validation grade scoring at least FRONTIER_THRESHOLD (0 if none)."""
-    scores = {v: row.get(f"eval/{v}/avg_score") for v in VAL_GRADES}
+    scores = {v: row.get(f"eval/{v}/pass_at_1") for v in VAL_GRADES}
     if any(s is None for s in scores.values()):
         return None
     passing = [VAL_GRADES[v] for v, s in scores.items() if s >= FRONTIER_THRESHOLD]
@@ -256,13 +264,13 @@ def main(out: Path) -> None:
     (out / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     for val in (*VAL_GRADES, "all"):
-        key = f"eval/{val}/avg_score"
+        key = f"eval/{val}/pass_at_1"
         by_steps, by_tokens = {}, {}
         for arm, d in data.items():
             by_steps[arm] = {int(r[STEP_KEY]): r[key] for r in d["evals"].values() if key in r and STEP_KEY in r}
             by_tokens[arm] = {r["cumulative_tokens"] / 1e6: r[key] for r in d["evals"].values() if key in r}
-        plot_lines(by_steps, "training step", "avg score", f"{val}: score vs steps", out / f"{val}-steps.png")
-        plot_lines(by_tokens, "generated tokens (M)", "avg score", f"{val}: score vs tokens", out / f"{val}-tokens.png")
+        plot_lines(by_steps, "training step", "pass@1", f"{val}: pass@1 vs steps", out / f"{val}-steps.png")
+        plot_lines(by_tokens, "generated tokens (M)", "pass@1", f"{val}: pass@1 vs tokens", out / f"{val}-tokens.png")
 
     weighted_by_tokens, frontier_by_tokens = {}, {}
     for arm, d in data.items():
@@ -279,7 +287,7 @@ def main(out: Path) -> None:
         weighted_by_tokens,
         "generated tokens (M)",
         "grade-weighted avg score",
-        "End metric: grade-weighted validation score vs tokens",
+        "End metric: grade-weighted validation pass@1 vs tokens",
         out / "grade-weighted-tokens.png",
     )
     plot_lines(
