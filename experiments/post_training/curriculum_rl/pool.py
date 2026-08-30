@@ -152,6 +152,12 @@ MAX_ANSWER_CHARS = 60
 VALIDATION_OMNI_SOURCE = "val-omni"
 OMNI_VALIDATION_ROWS = 128
 THEOREMQA_ANSWER_TYPES = frozenset({"integer", "float"})
+# Held-out slices at the AMC and graduate rungs so the grade-weighted end
+# metric can see the top of the ladder.
+VALIDATION_AMC_SOURCE = "val-amc"
+NUMINA_AMC_VALIDATION_ROWS = 128
+VALIDATION_THEOREMQA_SOURCE = "val-theoremqa"
+THEOREMQA_VALIDATION_STRIDE = 5
 MATH_BINS_BY_LEVEL: Mapping[str, PoolBin] = {
     "Level 1": MATH_L12_BIN,
     "Level 2": MATH_L12_BIN,
@@ -375,17 +381,24 @@ def _svamp_records() -> list[dict[str, object]]:
     return records
 
 
-def _numina_records() -> list[dict[str, object]]:
-    """Tiered NuminaMath slices: cn_k12, synthetic AMC, and olympiad sources."""
+def _numina_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Tiered NuminaMath slices, plus a held-out AMC validation slice.
+
+    The AMC quota is over-collected by the validation size; the tail past the
+    train quota becomes ``val-amc``, so the two splits are disjoint by
+    construction.
+    """
     dataset = load_dataset(NUMINA_DATASET, split="train", revision=NUMINA_REVISION)
+    validation_bin = PoolBin(VALIDATION_AMC_SOURCE, grade=NUMINA_AMC_BIN.grade, env_class=ANSWER_LINE_ENV)
     quotas = {pool_bin.name: quota for pool_bin, quota in NUMINA_BINS_BY_SOURCE.values()}
+    quotas[NUMINA_AMC_BIN.name] += NUMINA_AMC_VALIDATION_ROWS
     taken: Counter[str] = Counter()
-    records = []
+    train, validation = [], []
     for index, example in enumerate(dataset):
         selected = NUMINA_BINS_BY_SOURCE.get(example["source"])
         if selected is None:
             continue
-        pool_bin, _ = selected
+        pool_bin, train_quota = selected
         if taken[pool_bin.name] >= quotas[pool_bin.name]:
             if sum(taken.values()) >= sum(quotas.values()):
                 break
@@ -394,11 +407,18 @@ def _numina_records() -> list[dict[str, object]]:
         if answer is None or len(answer) > MAX_ANSWER_CHARS:
             continue
         taken[pool_bin.name] += 1
-        records.append(
-            _pool_record(question=example["problem"], answer=answer, pool_bin=pool_bin, split="train", index=index)
-        )
-    logger.info("NuminaMath: kept rows per bin %s", dict(taken))
-    return records
+        if pool_bin is NUMINA_AMC_BIN and taken[pool_bin.name] > train_quota:
+            validation.append(
+                _pool_record(
+                    question=example["problem"], answer=answer, pool_bin=validation_bin, split="test", index=index
+                )
+            )
+        else:
+            train.append(
+                _pool_record(question=example["problem"], answer=answer, pool_bin=pool_bin, split="train", index=index)
+            )
+    logger.info("NuminaMath: kept rows per bin %s (val-amc %d)", dict(taken), len(validation))
+    return train, validation
 
 
 def _omni_math_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -424,23 +444,30 @@ def _omni_math_records() -> tuple[list[dict[str, object]], list[dict[str, object
     return train, validation
 
 
-def _theoremqa_records() -> list[dict[str, object]]:
+def _theoremqa_records() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Numeric no-picture TheoremQA rows, with every Nth kept out as validation."""
     dataset = load_dataset(THEOREMQA_DATASET, split="test", revision=THEOREMQA_REVISION)
-    records = []
+    validation_bin = PoolBin(VALIDATION_THEOREMQA_SOURCE, grade=THEOREMQA_BIN.grade, env_class=ANSWER_LINE_ENV)
+    train, validation = [], []
+    kept = 0
     for index, example in enumerate(dataset):
         if example["Answer_type"] not in THEOREMQA_ANSWER_TYPES or str(example["Picture"]) not in ("None", ""):
             continue
-        records.append(
+        held_out = kept % THEOREMQA_VALIDATION_STRIDE == 0
+        kept += 1
+        pool_bin = validation_bin if held_out else THEOREMQA_BIN
+        out = validation if held_out else train
+        out.append(
             _pool_record(
                 question=example["Question"],
                 answer=str(example["Answer"]),
-                pool_bin=THEOREMQA_BIN,
-                split="train",
+                pool_bin=pool_bin,
+                split="test" if held_out else "train",
                 index=index,
             )
         )
-    logger.info("TheoremQA: kept %d numeric no-picture rows", len(records))
-    return records
+    logger.info("TheoremQA: %d train rows, %d validation rows", len(train), len(validation))
+    return train, validation
 
 
 def _hardmath_records() -> list[dict[str, object]]:
@@ -525,16 +552,18 @@ def _drop_over_length_records(records: list[dict[str, object]]) -> list[dict[str
 def write_pool_parquet(config: PoolParquetConfig) -> None:
     """Write the graded train pool and the fixed validation set."""
     omni_train, omni_validation = _omni_math_records()
+    numina_train, numina_validation = _numina_records()
+    theoremqa_train, theoremqa_validation = _theoremqa_records()
     train = _drop_over_length_records(
         [
             *_asdiv_records(),
             *_svamp_records(),
             *_gsm8k_records("train", GSM8K_TRAIN_ROWS),
-            *_numina_records(),
+            *numina_train,
             *_math_records(),
             *_aime_records(),
             *omni_train,
-            *_theoremqa_records(),
+            *theoremqa_train,
             *_hardmath_records(),
             *(record for rg_bin in REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "train")),
         ]
@@ -542,7 +571,9 @@ def write_pool_parquet(config: PoolParquetConfig) -> None:
     validation = [
         *_gsm8k_records("test", GSM8K_VALIDATION_ROWS, data_source=VALIDATION_GSM8K_SOURCE),
         *_math500_records(),
+        *numina_validation,
         *omni_validation,
+        *theoremqa_validation,
         *(record for rg_bin in VALIDATION_REASONING_GYM_BINS for record in _reasoning_gym_records(rg_bin, "test")),
     ]
     for records, filename in ((train, TRAIN_FILENAME), (validation, VALIDATION_FILENAME)):
