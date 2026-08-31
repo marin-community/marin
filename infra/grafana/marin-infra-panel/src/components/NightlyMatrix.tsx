@@ -10,6 +10,7 @@ interface Props { frames: DataFrame[]; width: number; height: number }
 
 const GROUP_NAMES: Record<string, string> = { marin: 'Marin', forks: 'Forks' };
 const SUBGROUP_NAMES: Record<string, string> = { training: 'Training', data: 'Data', cluster: 'Cluster', evaluation: 'Evaluation', rl: 'RL', inference: 'Inference' };
+const SUMMARY_ORDER = ['passed', 'running', 'slow', 'failed', 'no run', 'data unavailable', 'not due'];
 
 function formatDuration(seconds?: number): string {
   if (seconds === undefined) {return '—';}
@@ -18,16 +19,26 @@ function formatDuration(seconds?: number): string {
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`;
 }
 
-function status(cell: NightlyCell): { icon: string; tone: string; label: string } {
+function status(cell: NightlyCell): { icon: string; tone: string; label: string; summary?: string } {
   if (cell.state === 'run') {
-    if (!cell.healthy) {return { icon: '×', tone: '#f43f5e', label: cell.conclusion ?? 'failed' };}
-    if (cell.durationState === 'very-slow') {return { icon: '✓', tone: '#b45309', label: 'very slow success' };}
-    if (cell.durationState === 'slow') {return { icon: '✓', tone: '#92400e', label: 'slow success' };}
-    return { icon: '✓', tone: '#064e3b', label: 'success' };
+    if (cell.runStatus === 'queued' || cell.runStatus === 'in_progress') {
+      return { icon: '↻', tone: '#1d4ed8', label: 'Running', summary: 'running' };
+    }
+    if (!cell.healthy) {
+      const detail = cell.durationState === 'too-short' ? 'too short' : cell.conclusion;
+      return { icon: '×', tone: '#f43f5e', label: detail ? `Failed (${detail})` : 'Failed', summary: 'failed' };
+    }
+    if (cell.durationState === 'very-slow') {
+      return { icon: '⚠', tone: '#b45309', label: 'Very slow', summary: 'slow' };
+    }
+    if (cell.durationState === 'slow') {
+      return { icon: '⚠', tone: '#92400e', label: 'Slow', summary: 'slow' };
+    }
+    return { icon: '✓', tone: '#064e3b', label: 'Passed', summary: 'passed' };
   }
-  if (cell.state === 'missing') {return { icon: '!', tone: '#9f1239', label: 'missing' };}
-  if (cell.state === 'unavailable') {return { icon: '!', tone: '#9a3412', label: 'source unavailable' };}
-  if (cell.state === 'not-yet-due') {return { icon: '◷', tone: '#1e3a8a', label: 'not yet due' };}
+  if (cell.state === 'missing') {return { icon: '!', tone: '#9f1239', label: 'No run', summary: 'no run' };}
+  if (cell.state === 'unavailable') {return { icon: '?', tone: '#9a3412', label: 'Data unavailable', summary: 'data unavailable' };}
+  if (cell.state === 'not-yet-due') {return { icon: '◷', tone: '#475569', label: 'Not due', summary: 'not due' };}
   return { icon: '–', tone: 'transparent', label: cell.state.replaceAll('-', ' ') };
 }
 
@@ -53,15 +64,23 @@ export function NightlyMatrix({ frames, width, height }: Props) {
   const dates = [...new Set(cells.map((cell) => cell.date))].sort().reverse();
   const byKey = new Map(cells.map((cell) => [`${cell.laneId}\u0000${cell.date}`, cell]));
   const today = dates[0];
-  const todayCells = cells.filter((cell) => cell.date === today && cell.due);
+  const todayCounts = new Map<string, number>();
+  for (const cell of cells.filter((cell) => cell.date === today)) {
+    const summary = status(cell).summary;
+    if (summary) {todayCounts.set(summary, (todayCounts.get(summary) ?? 0) + 1);}
+  }
+  const todaySummary = SUMMARY_ORDER
+    .filter((summary) => todayCounts.has(summary))
+    .map((summary) => `${todayCounts.get(summary)} ${summary}`)
+    .join(' · ');
   const groups = spans(lanes, (lane) => lane.group);
   const subgroups = spans(lanes, (lane) => `${lane.group}/${lane.subgroup}`);
   const border = theme.colors.border.weak;
   return (
     <section className={css`width:${width}px;min-height:${height}px;color:${theme.colors.text.primary};padding:2px 4px;`} aria-label="Nightly regression status">
-      <div className={css`display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:13px;color:${theme.colors.text.secondary};`}>
-        <span><strong className={css`color:${theme.colors.text.primary};font-size:16px;`}>Nightly regressions</strong>{todayCells.length > 0 && ` · Today: ${todayCells.filter((cell) => cell.healthy).length}/${todayCells.length} healthy`}</span>
-        <span>✓ healthy · amber slow · × failed · ! missing</span>
+      <div className={css`display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;justify-content:space-between;margin:0 2px 5px;font-size:13px;color:${theme.colors.text.secondary};`}>
+        <span><strong className={css`color:${theme.colors.text.primary};font-size:16px;`}>Nightly regressions</strong>{todaySummary && ` · Today: ${todaySummary}`}</span>
+        <span role="note" aria-label="Nightly state legend">✓ Passed · ↻ Running · ⚠ Slow · × Failed · ! No run · ? Data unavailable · ◷ Not due</span>
       </div>
       <table className={css`width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-size:12px;`}>
         <caption className={css`position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);`}>Seven UTC days of scheduled regression status and duration by lane</caption>
