@@ -150,13 +150,16 @@ while matching the reference pipeline's worker shape. A 256-worker full run
 completed in 23m41s, ramped to 512 concurrent reduce tasks, and triggered GCS
 `429 SlowDown` responses.
 
-The earlier 12-worker packed presets completed without shard retries, GCS 429s,
-Iris failures, or preemptions. The light run processed 26.8 GB in 27m25s and
-used 16.91 CPU-hours. The full run processed 256.4 GB in 2h54m28s and used
-182.83 CPU-hours; Finelog recorded 18,970 completed shards and a 6.61 GiB
-maximum stage memory peak. These measurements include all benchmark stages and
-three connected-components rounds but do not validate the current 48-worker
-reference-shaped preset.
+The current 48-worker light preset completed in 27m55s and used 15.32 CPU-hours,
+with no shard retries, GCS 429s, Iris failures, or preemptions. The earlier
+12-worker packed light preset completed in 27m25s and used 16.91 CPU-hours.
+
+The clean full-preset measurement still comes from the earlier packed shape. It
+processed 256.4 GB in 2h54m28s and used 182.83 CPU-hours; Finelog recorded
+18,970 completed shards and a 6.61 GiB maximum stage memory peak. A 48-worker
+full attempt encountered 27 Iris worker-pool preemptions and is not valid
+performance evidence, even if the pipeline eventually completes. Run a clean
+48-worker full preset before citing a current full-preset duration.
 
 The 2 CPU / 16 GiB worker is the reference pipeline default. Forty-eight of
 them fit within the same aggregate CPU and RAM budget as the earlier packed
