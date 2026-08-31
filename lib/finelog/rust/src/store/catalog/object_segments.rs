@@ -40,6 +40,7 @@ pub struct PublishedObjectSegment {
     pub row: SegmentRow,
     pub table_spec_version: u64,
     pub source: ObjectRef,
+    pub artifacts: ArtifactReferences,
     pub migration_backfill: bool,
     pub migration_source_id: Option<String>,
     pub migration_source_rows: Option<i64>,
@@ -189,14 +190,15 @@ impl Catalog {
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO object_segments
-                        (namespace, path, table_spec_version, source_json, migration_backfill,
-                         migration_source_id, migration_source_rows)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        (namespace, path, table_spec_version, source_json, artifacts_json,
+                         migration_backfill, migration_source_id, migration_source_rows)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
                         namespace,
                         segment.row.path,
                         segment.table_spec_version as i64,
                         source_json,
+                        artifacts_json(&segment.artifacts)?,
                         segment.migration_backfill,
                         segment.migration_source_id,
                         segment.migration_source_rows,

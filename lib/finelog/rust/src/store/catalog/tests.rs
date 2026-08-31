@@ -12,12 +12,14 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::{
-    ColumnType, MigrationPhase, OperatingPolicy, SourceLayout, TableSpec as ProtoTableSpec,
+    ColumnType, MigrationPhase, NamespaceCatalog, ObjectRef, OperatingPolicy, SourceLayout,
+    TableSpec as ProtoTableSpec,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_proto_owned, with_implicit_seq, Column, Schema};
 use crate::store::table_spec::canonical_json_bytes;
-use crate::store::types::{NamespaceStats, SegmentRow};
+use crate::store::table_state::{ArtifactReferences, SourceBinding};
+use crate::store::types::{NamespaceStats, SegmentLocation, SegmentRow};
 
 fn worker_stored() -> Schema {
     with_implicit_seq(Schema::new(
@@ -418,6 +420,72 @@ fn opening_an_old_catalog_adds_partition_metadata_without_losing_segments() {
         Some(partition)
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn published_snapshot_rebuild_preserves_segment_artifacts() {
+    let catalog = Catalog::open(None).unwrap();
+    let artifacts = ArtifactReferences {
+        binding: SourceBinding {
+            segment_uuid: Some("uuid-1".to_string()),
+            row_count: 3,
+        },
+        bundle: Some(ObjectRef {
+            object_id: Some("_finelog/tables/a/indices/abc.fidx".to_string()),
+            ..Default::default()
+        }),
+        projections: BTreeMap::from([(
+            "by_worker".to_string(),
+            ObjectRef {
+                object_id: Some("_finelog/tables/a/projections/def.parquet".to_string()),
+                ..Default::default()
+            },
+        )]),
+    };
+    let segment = PublishedObjectSegment {
+        row: SegmentRow {
+            namespace: "a".to_string(),
+            path: "/cache/a/abc.parquet".to_string(),
+            level: 1,
+            min_seq: 1,
+            max_seq: 3,
+            row_count: 3,
+            byte_size: 64,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            partition: None,
+            location: SegmentLocation::Remote,
+        },
+        table_spec_version: 1,
+        source: ObjectRef {
+            object_id: Some("_finelog/tables/a/objects/abc.parquet".to_string()),
+            byte_size: Some(64),
+            sha256: Some(vec![7u8; 32]),
+            ..Default::default()
+        },
+        artifacts: artifacts.clone(),
+        migration_backfill: false,
+        migration_source_id: None,
+        migration_source_rows: None,
+    };
+    let snapshot = NamespaceCatalog {
+        catalog_generation: Some(5),
+        active_table_spec_version: Some(1),
+        ..Default::default()
+    };
+    catalog
+        .replace_with_published_snapshot(
+            "a",
+            worker_stored(),
+            StoragePolicy::default(),
+            &snapshot,
+            &[segment],
+        )
+        .unwrap();
+    let records = catalog.object_segments("a").unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].artifacts, artifacts);
 }
 
 fn tempdir() -> std::path::PathBuf {

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
-use crate::proto::finelog::stats::{NamespaceCatalog, ObjectRef};
+use crate::proto::finelog::stats::{CatalogSegment, NamespaceCatalog, ObjectRef};
 use crate::store::object_store::ObjectVersion;
 use crate::store::state_store::{BackendToken, StoredTableState};
 use crate::store::types::SegmentRow;
@@ -219,6 +219,24 @@ pub struct ArtifactReferences {
 impl ArtifactReferences {
     pub fn is_empty(&self) -> bool {
         self.bundle.is_none() && self.projections.is_empty()
+    }
+
+    /// The artifact references a published segment carries.
+    pub fn from_catalog_segment(segment: &CatalogSegment) -> Self {
+        Self {
+            binding: SourceBinding {
+                segment_uuid: segment.source_segment_uuid.clone(),
+                row_count: segment.row_count.unwrap_or(0),
+            },
+            bundle: segment.index_bundle.as_option().cloned(),
+            projections: segment
+                .projections
+                .iter()
+                .filter_map(|artifact| {
+                    Some((artifact.name.clone()?, artifact.object.as_option()?.clone()))
+                })
+                .collect(),
+        }
     }
 }
 

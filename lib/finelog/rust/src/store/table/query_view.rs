@@ -17,7 +17,7 @@ use crate::errors::StatsError;
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::CatalogSegment;
 use crate::store::object_store::{ObjectReference, ObjectStore};
-use crate::store::table_state::{ArtifactReferences, LocalArtifacts, SourceBinding, TableSnapshot};
+use crate::store::table_state::{ArtifactReferences, LocalArtifacts, TableSnapshot};
 
 /// The immutable objects one planned segment resolves to.
 #[derive(Clone, Debug)]
@@ -81,7 +81,7 @@ fn plan_segment(
     })?;
     let reference = ObjectReference::try_from(source)?;
     let path = store.planned_local_path(&reference.id)?;
-    let artifacts = artifact_references(segment);
+    let artifacts = ArtifactReferences::from_catalog_segment(segment);
     let partition = segment
         .partition_json
         .as_deref()
@@ -112,21 +112,4 @@ fn key_bounds(segment: &CatalogSegment) -> Option<(i64, i64)> {
     let minimum: i64 = segment.min_key_value.as_deref()?.parse().ok()?;
     let maximum: i64 = segment.max_key_value.as_deref()?.parse().ok()?;
     Some((minimum, maximum))
-}
-
-fn artifact_references(segment: &CatalogSegment) -> ArtifactReferences {
-    ArtifactReferences {
-        binding: SourceBinding {
-            segment_uuid: segment.source_segment_uuid.clone(),
-            row_count: segment.row_count.unwrap_or(0),
-        },
-        bundle: segment.index_bundle.as_option().cloned(),
-        projections: segment
-            .projections
-            .iter()
-            .filter_map(|artifact| {
-                Some((artifact.name.clone()?, artifact.object.as_option()?.clone()))
-            })
-            .collect(),
-    }
 }

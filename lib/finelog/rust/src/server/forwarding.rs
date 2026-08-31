@@ -65,7 +65,6 @@ use tokio::task::JoinHandle;
 use crate::errors::StatsError;
 use crate::policies::storage_policy_for;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
-use crate::query::provider::NamespaceProvider;
 use crate::query::{
     make_ctx, query_timeout, run_query_over, run_within_query_timeout, QueryResult,
     RegisteredProvider,
@@ -685,16 +684,7 @@ where
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
-            .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
-            .with_segment_artifacts(snapshot.artifacts)
-            .with_exact_postings_policy(snapshot.exact_postings_policy)
-            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
-            .with_segment_seq_bounds(snapshot.seq_bounds);
-        let provider = match snapshot.sources {
-            Some((store, segments)) => provider.with_object_sources(store, segments),
-            None => provider,
-        };
+        let provider = self.store.namespace_provider(name, snapshot)?;
 
         let table = quote_ident(name);
         let mut sql =

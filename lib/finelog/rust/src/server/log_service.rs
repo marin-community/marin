@@ -13,7 +13,6 @@ use crate::proto::finelog::logging::{
 };
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
-use crate::query::provider::NamespaceProvider;
 use crate::query::{query_timeout, run_within_query_timeout};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::store::log_read::{
@@ -260,12 +259,10 @@ impl LogService for LogServiceImpl {
         let store = Arc::clone(&self.store);
         let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
         let table_bound = self.store.object_query_bound();
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
-            .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?
-            .with_segment_artifacts(snapshot.artifacts)
-            .with_exact_postings_policy(snapshot.exact_postings_policy)
-            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
-            .with_segment_seq_bounds(snapshot.seq_bounds);
+        let provider = self
+            .store
+            .namespace_provider(LOG_NAMESPACE_NAME, snapshot)
+            .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
 
         // Run the read (DataFusion schedules its own CPU tasks; await directly),
         // under the same effective deadline the Query RPC uses. An object-backed

@@ -53,7 +53,7 @@ use crate::store::table::query_view::SegmentObjectMap;
 use crate::store::table::{TableManager, TABLE_LIFECYCLE_SHUTDOWN_TIMEOUT};
 use crate::store::table_spec::TablePolicy;
 use crate::store::table_spec::ValidatedTableSpec;
-use crate::store::table_state::{TableRevision, TableSnapshot, WriterFence};
+use crate::store::table_state::{ArtifactReferences, TableRevision, TableSnapshot, WriterFence};
 use crate::store::types::NamespaceStats;
 use crate::telemetry_policy::{TelemetryRootWriteMode, TELEMETRY_NAMESPACE};
 
@@ -715,6 +715,7 @@ impl Store {
                         },
                         table_spec_version,
                         source: source.clone(),
+                        artifacts: ArtifactReferences::from_catalog_segment(segment),
                         migration_backfill: segment.migration_backfill.unwrap_or(false),
                         migration_source_id: segment.migration_source_id.clone(),
                         migration_source_rows: segment.migration_source_rows,
@@ -1207,37 +1208,43 @@ impl Store {
     pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            let Some(engine) = self.tables.get(&ns.name) else {
+            if self.tables.get(&ns.name).is_none() {
                 // A registry entry with no runtime is a transient state during
                 // (re)build; skip it rather than fail the whole query.
                 continue;
-            };
-            let arrow_schema = Arc::clone(engine.arrow_schema());
-            let exact_postings_policy = engine.schema().exact_postings_policy();
-            let key_column = engine.key_column().to_string();
-            let segments = engine.query_snapshot()?;
-            let provider = NamespaceProvider::build(
-                arrow_schema,
-                &segments.paths,
-                Arc::clone(self.tables.indices()),
-            )
-            .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?
-            .with_segment_artifacts(segments.artifacts)
-            .with_segment_indexes_enabled(segment_indexes_enabled_for(&ns.name))
-            .with_exact_postings_policy(exact_postings_policy)
-            .with_segment_key_bounds(key_column, segments.key_bounds)
-            .with_segment_seq_bounds(segments.seq_bounds)
-            .with_segment_partitions(physical_partition_policy_for(&ns.name), segments.partitions);
-            let provider = match self.object_store.clone() {
-                Some(store) => provider.with_object_sources(store, segments.sources),
-                None => provider,
-            };
+            }
+            let snapshot = self.query_snapshot(&ns.name)?;
+            let provider = self.namespace_provider(&ns.name, snapshot)?;
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
             });
         }
         Ok(out)
+    }
+
+    /// Assemble the scan provider for one namespace from its snapshot.
+    ///
+    /// Every read surface — `Query`, `FetchLogs`, and the forwarder — plans
+    /// through this one assembly so segment-index policy, partition pruning,
+    /// and object-source resolution cannot diverge between them.
+    pub fn namespace_provider(
+        &self,
+        name: &str,
+        snapshot: NamespaceSnapshot,
+    ) -> Result<NamespaceProvider, StatsError> {
+        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
+            .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
+            .with_segment_artifacts(snapshot.artifacts)
+            .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
+            .with_exact_postings_policy(snapshot.exact_postings_policy)
+            .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_seq_bounds(snapshot.seq_bounds)
+            .with_segment_partitions(physical_partition_policy_for(name), snapshot.partitions);
+        Ok(match snapshot.sources {
+            Some((store, segments)) => provider.with_object_sources(store, segments),
+            None => provider,
+        })
     }
 
     /// The tightest maximum query time among the object-backed tables a server

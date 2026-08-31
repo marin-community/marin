@@ -25,6 +25,8 @@ use crate::proto::finelog::stats::ObjectRef as ProtoObjectRef;
 
 pub const FINELOG_ROOT_COMPONENT: &str = "_finelog";
 pub const TABLES_COMPONENT: &str = "tables";
+/// The two components above joined: the prefix every table-scoped key carries.
+const TABLE_ROOT_PREFIX: &str = "_finelog/tables/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredObject {
@@ -81,20 +83,13 @@ pub struct ObjectId(String);
 
 impl ObjectId {
     pub fn parse(value: &str) -> Result<Self, StatsError> {
-        let value = validate_relative_key(value)?;
-        let mut components = value.split('/');
-        if components.next() != Some(FINELOG_ROOT_COMPONENT)
-            || components.next() != Some(TABLES_COMPONENT)
-        {
-            return Err(StatsError::Internal(format!(
-                "object ID {value:?} is outside {FINELOG_ROOT_COMPONENT}/{TABLES_COMPONENT}"
-            )));
-        }
-        let table = components
-            .next()
-            .ok_or_else(|| StatsError::Internal(format!("object ID {value:?} has no table")))?;
-        validate_component(table, "table")?;
-        if components.next().is_none() {
+        validate_relative_prefix(value)?;
+        let rest = value.strip_prefix(TABLE_ROOT_PREFIX).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "object ID {value:?} is outside {TABLE_ROOT_PREFIX}"
+            ))
+        })?;
+        if !rest.contains('/') {
             return Err(StatsError::Internal(format!(
                 "object ID {value:?} has no table-relative key"
             )));
@@ -105,33 +100,31 @@ impl ObjectId {
     pub fn table(table: &str, relative_key: &str) -> Result<Self, StatsError> {
         validate_component(table, "table")?;
         let relative_key = validate_relative_key(relative_key)?;
-        Ok(Self(format!(
-            "{FINELOG_ROOT_COMPONENT}/{TABLES_COMPONENT}/{table}/{relative_key}"
-        )))
+        Ok(Self(format!("{TABLE_ROOT_PREFIX}{table}/{relative_key}")))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// The `(table, table-relative key)` pair every constructor guarantees.
+    fn split(&self) -> (&str, &str) {
+        self.0[TABLE_ROOT_PREFIX.len()..]
+            .split_once('/')
+            .expect("object IDs carry a table and key by construction")
+    }
+
     pub fn table_relative<'a>(&'a self, table: &str) -> Option<&'a str> {
-        self.0.strip_prefix(&format!(
-            "{FINELOG_ROOT_COMPONENT}/{TABLES_COMPONENT}/{table}/"
-        ))
+        let (name, key) = self.split();
+        (name == table).then_some(key)
     }
 
     pub fn table_name(&self) -> &str {
-        self.0
-            .split('/')
-            .nth(2)
-            .expect("validated object IDs contain a table")
+        self.split().0
     }
 
     pub fn relative_key(&self) -> &str {
-        self.0
-            .splitn(4, '/')
-            .nth(3)
-            .expect("validated object IDs contain a table-relative key")
+        self.split().1
     }
 }
 
@@ -143,7 +136,7 @@ impl ObjectPrefix {
     pub fn table(table: &str, relative_prefix: &str) -> Result<Self, StatsError> {
         validate_component(table, "table")?;
         let suffix = validate_relative_prefix(relative_prefix)?;
-        let root = format!("{FINELOG_ROOT_COMPONENT}/{TABLES_COMPONENT}/{table}");
+        let root = format!("{TABLE_ROOT_PREFIX}{table}");
         Ok(Self(if suffix.is_empty() {
             root
         } else {
@@ -155,15 +148,19 @@ impl ObjectPrefix {
         &self.0
     }
 
+    /// The `(table, relative prefix)` pair the constructor guarantees; the
+    /// prefix is empty for a whole-table listing.
+    fn split(&self) -> (&str, &str) {
+        let rest = &self.0[TABLE_ROOT_PREFIX.len()..];
+        rest.split_once('/').unwrap_or((rest, ""))
+    }
+
     pub fn table_name(&self) -> &str {
-        self.0
-            .split('/')
-            .nth(2)
-            .expect("validated object prefixes contain a table")
+        self.split().0
     }
 
     pub fn relative_prefix(&self) -> &str {
-        self.0.splitn(4, '/').nth(3).unwrap_or("")
+        self.split().1
     }
 }
 
@@ -274,8 +271,7 @@ fn validate_relative_key(value: &str) -> Result<&str, StatsError> {
             "object key must not be empty".to_string(),
         ));
     }
-    validate_relative_prefix(value)?;
-    Ok(value.trim_matches('/'))
+    validate_relative_prefix(value)
 }
 
 fn validate_relative_prefix(value: &str) -> Result<&str, StatsError> {

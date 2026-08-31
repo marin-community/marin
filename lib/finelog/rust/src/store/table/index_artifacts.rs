@@ -82,7 +82,12 @@ pub async fn publish_segment_artifacts(
         }
     }
     let Some(bundle) = built.bundle.as_ref() else {
-        return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
+        // No index bundle was built; the projections that did upload are still
+        // referenced rather than orphaned and re-uploaded next cycle.
+        if references.is_empty() {
+            return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
+        }
+        return Ok((references, local));
     };
     match controller
         .write_staged_object(INDICES_PREFIX, "fidx", bundle)
